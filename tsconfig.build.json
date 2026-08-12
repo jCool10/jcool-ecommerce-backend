@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "**/*spec.ts",
+    "drizzle.config.ts",
+    "src/shared/infrastructure/database/migrate.ts",
+    "src/shared/infrastructure/database/seed.ts"
+  ]
+}

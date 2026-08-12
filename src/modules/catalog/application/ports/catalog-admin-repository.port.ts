@@ -1,0 +1,76 @@
+import type { ProductStatus } from '../../domain/entities/product.entity';
+import type { AdminProduct, Category, Price, Sku } from '../../domain/entities/catalog-admin.entities';
+
+// Write-side port for the admin paths, separate from the read-only
+// ProductRepositoryPort (CQRS-lite). Existence/authorization decisions (404/409)
+// live in the service; the adapter owns the atomic mutation and maps 23505 → 409.
+export const CATALOG_ADMIN_REPOSITORY = Symbol('CATALOG_ADMIN_REPOSITORY');
+
+export interface CreateCategoryData {
+  name: string;
+  slug: string;
+  parentId?: string | null;
+}
+export interface UpdateCategoryData {
+  name?: string;
+  slug?: string;
+  parentId?: string | null;
+}
+
+export interface CreateProductData {
+  name: string;
+  slug: string;
+  description?: string | null;
+  status?: ProductStatus;
+  categoryId: string;
+}
+export interface UpdateProductData {
+  name?: string;
+  slug?: string;
+  description?: string | null;
+  status?: ProductStatus;
+  categoryId?: string;
+}
+
+export interface CreateSkuData {
+  sku: string;
+  name: string;
+}
+export interface UpdateSkuData {
+  sku?: string;
+  name?: string;
+}
+
+export interface SetPriceData {
+  currency: string;
+  amountMinor: number;
+}
+
+export interface CatalogAdminRepositoryPort {
+  // ----- Category -----
+  findCategoryById(id: string): Promise<Category | null>;
+  createCategory(data: CreateCategoryData): Promise<Category>;
+  /** Patch the row; null if no category has that id. Empty patch = no-op fetch. */
+  updateCategory(id: string, data: UpdateCategoryData): Promise<Category | null>;
+  /** Idempotent soft-delete (keeps the first archivedAt); null if id unknown. */
+  archiveCategory(id: string): Promise<Category | null>;
+  /** Count non-archived (DRAFT or ACTIVE) products still under the category. */
+  countActiveProductsInCategory(categoryId: string): Promise<number>;
+
+  // ----- Product -----
+  findProductById(id: string): Promise<AdminProduct | null>;
+  createProduct(data: CreateProductData): Promise<AdminProduct>;
+  updateProduct(id: string, data: UpdateProductData): Promise<AdminProduct | null>;
+  /** Soft-delete via status='ARCHIVED'; null if id unknown. */
+  archiveProduct(id: string): Promise<AdminProduct | null>;
+
+  // ----- Sku (product variant) -----
+  findSkuById(id: string): Promise<Sku | null>;
+  createSku(productId: string, data: CreateSkuData): Promise<Sku>;
+  updateSku(id: string, data: UpdateSkuData): Promise<Sku | null>;
+  archiveSku(id: string): Promise<Sku | null>;
+
+  // ----- Price -----
+  /** Upsert the (variant, currency) price — set or replace the current amount. */
+  setPrice(variantId: string, data: SetPriceData): Promise<Price>;
+}

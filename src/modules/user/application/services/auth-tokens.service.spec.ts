@@ -1,0 +1,88 @@
+import { createHash } from 'node:crypto';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { User } from '../../domain/entities/user.entity';
+import type {
+  CreateRefreshTokenInput,
+  RefreshTokenRepositoryPort,
+  RotateOutcome,
+} from '../ports/refresh-token-repository.port';
+import { AuthTokensService } from './auth-tokens.service';
+
+class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
+  last?: CreateRefreshTokenInput;
+  create(input: CreateRefreshTokenInput): Promise<void> {
+    this.last = input;
+    return Promise.resolve();
+  }
+  // Rotation/revoke aren't exercised here (issuance only) — stub as unused.
+  rotate(): Promise<RotateOutcome> {
+    return Promise.reject(new Error('unused'));
+  }
+  revoke(): Promise<void> {
+    return Promise.reject(new Error('unused'));
+  }
+}
+
+const ttls: Record<string, string> = {
+  'auth.jwtAccessTtl': '15m',
+  'auth.refreshTokenTtl': '7d',
+};
+const config = { getOrThrow: (key: string) => ttls[key] } as unknown as ConfigService;
+
+describe('AuthTokensService', () => {
+  const jwt = new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } });
+  const user = new User('u1', 'user@example.com', '$argon2id$hash', 'CUSTOMER', new Date(), new Date());
+  let repo: MockRefreshTokenRepository;
+  let service: AuthTokensService;
+
+  beforeEach(() => {
+    repo = new MockRefreshTokenRepository();
+    service = new AuthTokensService(jwt, config, repo);
+  });
+
+  it('signs an access JWT carrying sub + role', async () => {
+    const { accessToken } = await service.issuePair(user);
+
+    const payload = jwt.verify<{ sub: string; role: string }>(accessToken);
+    expect(payload.sub).toBe('u1');
+    expect(payload.role).toBe('CUSTOMER');
+  });
+
+  it('returns expiresIn in seconds derived from the access TTL', async () => {
+    const { expiresIn } = await service.issuePair(user);
+    expect(expiresIn).toBe(900);
+  });
+
+  it('returns an opaque refresh token and persists ONLY its sha256 hash', async () => {
+    const { refreshToken } = await service.issuePair(user);
+
+    expect(refreshToken).toHaveLength(64); // 48 random bytes -> base64url
+    const expectedHash = createHash('sha256').update(refreshToken).digest('hex');
+    expect(repo.last?.tokenHash).toBe(expectedHash);
+    expect(repo.last?.tokenHash).not.toBe(refreshToken); // never the raw token
+    expect(repo.last?.userId).toBe('u1');
+    expect(repo.last?.familyId).toEqual(expect.any(String));
+    expect(repo.last?.familyId.length).toBeGreaterThan(0);
+  });
+
+  it('sets the refresh expiry ~7d in the future', async () => {
+    const sevenDays = 7 * 86_400_000;
+    const before = Date.now();
+    await service.issuePair(user);
+    const expiresAt = repo.last?.expiresAt.getTime() ?? 0;
+
+    expect(expiresAt).toBeGreaterThanOrEqual(before + sevenDays - 1_000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + sevenDays + 1_000);
+  });
+
+  it('issues a distinct refresh token + familyId per call', async () => {
+    const a = await service.issuePair(user);
+    const familyA = repo.last?.familyId;
+    const b = await service.issuePair(user);
+    const familyB = repo.last?.familyId;
+
+    expect(a.refreshToken).not.toBe(b.refreshToken);
+    expect(familyA).not.toBe(familyB);
+  });
+});

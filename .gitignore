@@ -1,0 +1,37 @@
+# Dependencies
+/node_modules
+
+# Build output
+/dist
+/build
+
+# Coverage / test artifacts
+/coverage
+/.nyc_output
+
+# Environment (never commit real secrets; .env.example is the committed template)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+logs
+
+# Editor / OS
+.DS_Store
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+!README.md
+plans/
+docs/
+
+.agentkit/
+.claude/

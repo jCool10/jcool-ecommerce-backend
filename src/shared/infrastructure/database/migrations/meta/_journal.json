@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786462296911,
+      "tag": "0000_smooth_magik",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786497043754,
+      "tag": "0001_careful_blue_shield",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786514027479,
+      "tag": "0002_add_catalog_soft_delete_fields",
+      "breakpoints": true
+    }
+  ]
+}

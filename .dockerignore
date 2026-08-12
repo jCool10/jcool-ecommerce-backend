@@ -1,0 +1,30 @@
+# Keep the build context small and never leak secrets into the image.
+
+node_modules
+npm-debug.log*
+dist
+build
+coverage
+.nyc_output
+
+.git
+.gitignore
+
+# Secrets: only the committed template is allowed in.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+.idea
+.vscode
+*.log
+
+# Repo-only material not needed to build or run the app.
+.claude
+plans
+docs
+README.md
+Dockerfile
+.dockerignore
+docker-compose.yml

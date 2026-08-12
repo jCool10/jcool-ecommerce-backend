@@ -1,0 +1,96 @@
+# Local development infrastructure for the JCool E-commerce backend.
+#
+# Deterministic host ports (5433/6380) avoid clashes with any host-installed
+# Postgres/Redis and prevent port auto-increment / ghost processes
+# (see .claude/rules/process-management.md and plan phase-02).
+#
+# All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here.
+#   Infra only (this week):  docker compose up -d postgres redis
+#   Full stack (from P3+):   docker compose up -d
+#   Reset everything:        docker compose down -v
+
+name: jcool-ecommerce
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: jcool-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: jcool-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_HOST_PORT:-6380}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # Convenience: run the whole stack in-network. Not required to be up this week
+  # (the app has no DB access until Phase 3); brought up from P3+ once it uses the DB.
+  # Inside the compose network the app reaches services by NAME, never localhost.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jcool-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Liveness probe (dependency-free) so `compose up --wait` confirms the app is
+    # actually serving HTTP. Uses node (present in the image) — alpine has no
+    # curl/wget. start_period covers boot before failures are counted.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/live',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  jcool-net:
+    driver: bridge
