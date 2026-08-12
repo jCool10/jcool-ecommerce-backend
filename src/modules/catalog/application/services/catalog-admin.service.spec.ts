@@ -1,4 +1,5 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { type Mock, vi } from 'vitest';
 import type { AdminProduct, Category, Price, Sku } from '../../domain/entities/catalog-admin.entities';
 import type { CatalogAdminRepositoryPort } from '../ports/catalog-admin-repository.port';
 import { CatalogAdminService } from './catalog-admin.service';
@@ -36,25 +37,25 @@ describe('CatalogAdminService', () => {
     ...over,
   });
 
-  // Members typed as plain `jest.Mock` so `expect(repo.method)` isn't flagged as
+  // Members typed as plain `Mock` so `expect(repo.method)` isn't flagged as
   // an unbound method; `keyof` still pins the port shape.
-  type MockRepo = Record<keyof CatalogAdminRepositoryPort, jest.Mock>;
+  type MockRepo = Record<keyof CatalogAdminRepositoryPort, Mock>;
   function makeRepo(): MockRepo {
     return {
-      findCategoryById: jest.fn(),
-      createCategory: jest.fn(),
-      updateCategory: jest.fn(),
-      archiveCategory: jest.fn(),
-      countActiveProductsInCategory: jest.fn(),
-      findProductById: jest.fn(),
-      createProduct: jest.fn(),
-      updateProduct: jest.fn(),
-      archiveProduct: jest.fn(),
-      findSkuById: jest.fn(),
-      createSku: jest.fn(),
-      updateSku: jest.fn(),
-      archiveSku: jest.fn(),
-      setPrice: jest.fn(),
+      findCategoryById: vi.fn(),
+      createCategory: vi.fn(),
+      updateCategory: vi.fn(),
+      archiveCategory: vi.fn(),
+      countActiveProductsInCategory: vi.fn(),
+      findProductById: vi.fn(),
+      createProduct: vi.fn(),
+      updateProduct: vi.fn(),
+      archiveProduct: vi.fn(),
+      findSkuById: vi.fn(),
+      createSku: vi.fn(),
+      updateSku: vi.fn(),
+      archiveSku: vi.fn(),
+      setPrice: vi.fn(),
     };
   }
 

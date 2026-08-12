@@ -90,31 +90,31 @@ describe('RefreshTokensUseCase', () => {
 
   it('reuse of a SUPERSEDED token (replaced) warns loud (theft signal) and issues no token', async () => {
     repo.outcome = { status: 'reuse', userId: 'u1', familyId: 'fam1', replaced: true };
-    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    const debug = jest.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
 
     await expect(useCase.execute(PRESENTED_RAW)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(debug).not.toHaveBeenCalled();
     expect(authTokens.signAccessCalls).toHaveLength(0);
 
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('replay of a merely-revoked token (logout/killed family) logs debug, not a theft warn', async () => {
     repo.outcome = { status: 'reuse', userId: 'u1', familyId: 'fam1', replaced: false };
-    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    const debug = jest.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
 
     await expect(useCase.execute(PRESENTED_RAW)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(warn).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalledTimes(1);
 
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('uses the same generic 401 message for invalid and reuse (no reason leaked)', async () => {
-    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
     repo.outcome = { status: 'invalid' };
     const invalid = await useCase.execute(PRESENTED_RAW).catch((e: Error) => e);
@@ -122,6 +122,6 @@ describe('RefreshTokensUseCase', () => {
     const reuse = await useCase.execute(PRESENTED_RAW).catch((e: Error) => e);
 
     expect((invalid as Error).message).toBe((reuse as Error).message);
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 });

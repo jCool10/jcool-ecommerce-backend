@@ -21,8 +21,10 @@ describe('JwtAuthGuard', () => {
     const guard = new JwtAuthGuard(reflector);
 
     // Parent canActivate must NOT run on a public route.
-    const parentProto = Object.getPrototypeOf(JwtAuthGuard.prototype) as { canActivate: unknown };
-    const parentSpy = jest.spyOn(parentProto, 'canActivate' as never);
+    const parentProto = Object.getPrototypeOf(JwtAuthGuard.prototype) as {
+      canActivate: (ctx: ExecutionContext) => unknown;
+    };
+    const parentSpy = vi.spyOn(parentProto, 'canActivate');
 
     expect(guard.canActivate(makeContext())).toBe(true);
     expect(parentSpy).not.toHaveBeenCalled();
@@ -33,8 +35,10 @@ describe('JwtAuthGuard', () => {
     const reflector = { getAllAndOverride: () => false } as unknown as Reflector;
     const guard = new JwtAuthGuard(reflector);
 
-    const parentProto = Object.getPrototypeOf(JwtAuthGuard.prototype) as { canActivate: unknown };
-    const parentSpy = jest.spyOn(parentProto, 'canActivate' as never).mockReturnValue(true as never);
+    const parentProto = Object.getPrototypeOf(JwtAuthGuard.prototype) as {
+      canActivate: (ctx: ExecutionContext) => unknown;
+    };
+    const parentSpy = vi.spyOn(parentProto, 'canActivate').mockReturnValue(true);
 
     expect(guard.canActivate(makeContext())).toBe(true);
     expect(parentSpy).toHaveBeenCalledTimes(1);
