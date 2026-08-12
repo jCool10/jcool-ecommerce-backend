@@ -75,3 +75,33 @@ export async function createTestProduct(app: INestApplication, options: TestProd
     priceMinor,
   };
 }
+
+export interface SeedProductsOptions {
+  categoryId?: string;
+  status?: 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
+}
+
+// Bulk-insert `count` products under a single category in one INSERT, for
+// pagination tests. Variants/prices are omitted on purpose: the public list
+// left-joins them, so a product appears on ACTIVE status + a live category alone.
+export async function seedProducts(
+  app: INestApplication,
+  count: number,
+  options: SeedProductsOptions = {},
+): Promise<{ categoryId: string; productIds: string[] }> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  const suffix = uniq();
+  const categoryId = options.categoryId ?? (await createTestCategory(app)).id;
+  const status = options.status ?? 'ACTIVE';
+
+  const values = Array.from({ length: count }, (_, i) => ({
+    name: `Seed Product ${suffix} ${i}`,
+    slug: `seed-product-${suffix}-${i}`,
+    description: null,
+    status,
+    categoryId,
+  }));
+
+  const rows = await db.insert(schema.products).values(values).returning({ id: schema.products.id });
+  return { categoryId, productIds: rows.map((row) => row.id) };
+}
