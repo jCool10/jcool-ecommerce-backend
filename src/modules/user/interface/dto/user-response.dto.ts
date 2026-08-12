@@ -7,7 +7,7 @@ import { ROLES } from '../../../../shared/rbac/role.enum';
  * so `passwordHash` (and any future internal field) can never leak.
  */
 export class UserResponseDto {
-  @ApiProperty({ example: 'clx0abc123...', description: 'User id (cuid2).' })
+  @ApiProperty({ example: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f', description: 'User id (UUID v7).' })
   id!: string;
 
   @ApiProperty({ example: 'user@example.com', format: 'email' })

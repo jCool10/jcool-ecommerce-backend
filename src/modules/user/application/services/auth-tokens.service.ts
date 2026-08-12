@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { createId } from '@paralleldrive/cuid2';
+import { v7 as uuidv7 } from 'uuid';
 import type { User } from '../../domain/entities/user.entity';
 import type { Role } from '../../../../shared/rbac/role.enum';
 import type { AccessTokenClaims } from '../access-token-claims';
@@ -76,7 +76,7 @@ export class AuthTokensService {
     await this.refreshTokens.create({
       userId: user.id,
       tokenHash: refresh.hash,
-      familyId: createId(),
+      familyId: uuidv7(),
       expiresAt: refresh.expiresAt,
     });
 

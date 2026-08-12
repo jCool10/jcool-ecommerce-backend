@@ -1,16 +1,16 @@
-import { index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
-import { createId } from '@paralleldrive/cuid2';
+import { index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { v7 as uuidv7 } from 'uuid';
 
 // Catalog schema (products/variants/prices/categories). Infrastructure, never
 // imported by domain. Money is integer `amount_minor` (smallest unit, no float);
-// ids are app-generated cuid2.
+// ids are app-generated UUID v7 (time-sortable, native `uuid` column).
 
 export const productStatus = pgEnum('product_status', ['DRAFT', 'ACTIVE', 'ARCHIVED']);
 
 const id = () =>
-  text('id')
+  uuid('id')
     .primaryKey()
-    .$defaultFn(() => createId());
+    .$defaultFn(() => uuidv7());
 
 // Timezone-aware audit stamps; `updatedAt` bumped app-side on every UPDATE.
 const stamps = {
@@ -30,7 +30,7 @@ export const categories = pgTable('categories', {
   name: text('name').notNull(),
   slug: text('slug').notNull().unique(),
   // Self-reference for nested categories; no FK yet (YAGNI).
-  parentId: text('parent_id'),
+  parentId: uuid('parent_id'),
   archivedAt: archivedAt(),
   ...stamps,
 });
@@ -43,7 +43,7 @@ export const products = pgTable(
     slug: text('slug').notNull().unique(),
     description: text('description'),
     status: productStatus('status').notNull().default('DRAFT'),
-    categoryId: text('category_id')
+    categoryId: uuid('category_id')
       .notNull()
       .references(() => categories.id),
     ...stamps,
@@ -59,7 +59,7 @@ export const productVariants = pgTable(
     id: id(),
     sku: text('sku').notNull().unique(),
     name: text('name').notNull(),
-    productId: text('product_id')
+    productId: uuid('product_id')
       .notNull()
       .references(() => products.id),
     archivedAt: archivedAt(),
@@ -72,7 +72,7 @@ export const prices = pgTable(
   'prices',
   {
     id: id(),
-    variantId: text('variant_id')
+    variantId: uuid('variant_id')
       .notNull()
       .references(() => productVariants.id),
     currency: text('currency').notNull().default('VND'),

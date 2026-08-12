@@ -12,12 +12,10 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.spec.ts'],
     alias: {
-      // cuid2 v3 is ESM-only. The deterministic test double keeps generated ids
-      // stable within a run (their exact format is never asserted). Mirrors the
-      // former Jest `moduleNameMapper` entry.
-      '@paralleldrive/cuid2': fileURLToPath(
-        new URL('./test/mocks/cuid2.js', import.meta.url),
-      ),
+      // The deterministic test double keeps generated ids stable within a run
+      // (their exact value is never asserted). Real uuid v7 is timestamp+random,
+      // so it is aliased out for reproducible unit tests; e2e uses the real one.
+      uuid: fileURLToPath(new URL('./test/mocks/uuid.js', import.meta.url)),
     },
     coverage: {
       provider: 'v8',

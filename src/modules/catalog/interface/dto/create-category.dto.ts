@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
 
 // URL-safe lowercase kebab slug (letters/digits, single hyphens between groups).
 // Shared shape for category + product slugs; the DB also enforces uniqueness.
@@ -19,9 +19,8 @@ export class CreateCategoryDto {
   @Matches(SLUG_PATTERN, { message: SLUG_MESSAGE })
   slug!: string;
 
-  @ApiPropertyOptional({ description: 'Parent category id (cuid2) for nesting' })
+  @ApiPropertyOptional({ description: 'Parent category id (UUID v7) for nesting' })
   @IsOptional()
-  @IsString()
-  @MaxLength(40)
+  @IsUUID()
   parentId?: string;
 }

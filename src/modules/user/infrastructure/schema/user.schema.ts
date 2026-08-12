@@ -1,16 +1,16 @@
-import { index, pgEnum, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
-import { createId } from '@paralleldrive/cuid2';
+import { index, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { v7 as uuidv7 } from 'uuid';
 
 // User/Auth schema (users + refresh-token sessions). Infrastructure, never
-// imported by domain. Same conventions as catalog.schema.ts (cuid2 ids, tz stamps).
+// imported by domain. Same conventions as catalog.schema.ts (UUID v7 ids, tz stamps).
 
 // Matches the Role union (src/shared/rbac/role.enum.ts).
 export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 
 const id = () =>
-  text('id')
+  uuid('id')
     .primaryKey()
-    .$defaultFn(() => createId());
+    .$defaultFn(() => uuidv7());
 
 // Timezone-aware audit stamps; `updatedAt` bumped app-side on every UPDATE.
 const stamps = {
@@ -39,12 +39,12 @@ export const refreshTokens = pgTable(
   'refresh_tokens',
   {
     id: id(),
-    userId: text('user_id')
+    userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull().unique(),
-    familyId: text('family_id').notNull(),
-    replacedByTokenId: text('replaced_by_token_id').unique(),
+    familyId: uuid('family_id').notNull(),
+    replacedByTokenId: uuid('replaced_by_token_id').unique(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

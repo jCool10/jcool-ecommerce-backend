@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import * as schema from './schema';
 
 // Idempotent Catalog seed: inserts use onConflictDoNothing, then rows are read
-// back by natural key (slug/sku) to resolve the generated cuid2 ids.
+// back by natural key (slug/sku) to resolve the generated UUID v7 ids.
 
 // Fail loudly if a prerequisite row is missing instead of inserting bad FKs.
 function must<T>(value: T | undefined, label: string): T {
