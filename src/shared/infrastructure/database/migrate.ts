@@ -3,25 +3,22 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
-// Programmatic migration runner so CI / Testcontainers can apply the same
-// committed SQL migrations without the drizzle-kit CLI. Reads DATABASE_URL.
+// Programmatic migration runner (no drizzle-kit CLI) for CI / Testcontainers.
+// Pure module — no self-execution — so global-setup can import runMigrations().
+// Folder is relative to the process CWD (repo root).
 const MIGRATIONS_FOLDER = 'src/shared/infrastructure/database/migrations';
 
-async function runMigrations(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
+// Defaults to DATABASE_URL; tests pass the container connection string.
+export async function runMigrations(connectionString = process.env.DATABASE_URL): Promise<void> {
   if (!connectionString) {
     throw new Error('DATABASE_URL is required to run migrations');
   }
   const pool = new Pool({ connectionString });
+  // 'error' listener (parity with DrizzleModule) — an idle-client error would else crash the process.
+  pool.on('error', (err: Error) => console.error('Migration pool client error:', err.message));
   try {
     await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
-    console.log('Migrations applied.');
   } finally {
     await pool.end();
   }
 }
-
-void runMigrations().catch((error: unknown) => {
-  console.error('Migration failed:', error);
-  process.exit(1);
-});

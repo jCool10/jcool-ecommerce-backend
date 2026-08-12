@@ -12,6 +12,9 @@ export default defineConfig({
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['test/**/*.e2e-spec.ts'],
     passWithNoTests: true,
+    // Boot Postgres + Redis containers once per run and migrate; connection URLs
+    // reach tests via provide()/inject() (globalSetup runs in its own process).
+    globalSetup: ['./test/setup/global-setup.ts'],
     // Testcontainers spins real Postgres/Redis — give containers room and avoid
     // cross-file races on shared ports.
     testTimeout: 60_000,

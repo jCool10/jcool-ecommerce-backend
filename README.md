@@ -307,16 +307,26 @@ npm run db:seed        # seed sample data
 
 ## Testing
 
+Two tiers, kept separate on purpose:
+
+- **Unit** (`*.spec.ts`, next to the code) — fast, hermetic, no I/O. Run by `npm test`; needs no Docker.
+- **Integration** (`test/**/*.e2e-spec.ts`) — the app wired to **real Postgres + Redis** via
+  [Testcontainers](https://testcontainers.com/) (no DB mocking). A single `globalSetup`
+  boots both containers once per run, applies the committed Drizzle migrations, and hands the
+  connection URLs to tests; `resetDatabase()` truncates between tests for isolation.
+  Run by `npm run test:e2e`; **requires Docker running**.
+
 ```bash
-npm test               # run all unit tests once (Vitest)
-npm run test:watch     # watch mode
-npm run test:cov       # coverage report
-npm run test:e2e       # end-to-end tests
+npm test               # run all unit tests once (Vitest) — no Docker needed
+npm run test:watch     # unit watch mode
+npm run test:cov       # unit coverage report
+npm run test:e2e       # integration tests (Testcontainers Postgres + Redis) — needs Docker
 ```
 
-Unit tests live next to the code as `*.spec.ts`. Vitest runs through **SWC**, which
-emits the decorator metadata NestJS DI requires. Because SWC is transpile-only,
-`tsc --noEmit` (via `nest build`) is the separate type-check gate.
+Reusable integration helpers live in `test/setup/` (`global-setup`, `test-app.factory`,
+`reset-database`, and `fixtures/`). Vitest runs through **SWC**, which emits the decorator
+metadata NestJS DI requires. Because SWC is transpile-only, `tsc --noEmit` (via `nest build`)
+is the separate type-check gate.
 
 ## Available Scripts
 
