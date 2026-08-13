@@ -1,4 +1,4 @@
-import { ValueObject, DomainError } from '../../../shared/kernel';
+import { ValueObject, DomainError } from '@shared/kernel';
 import { normalizeEmail } from './normalize-email';
 
 interface EmailProps {

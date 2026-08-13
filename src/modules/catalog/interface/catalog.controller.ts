@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiNotFoundResponse, ApiOkResponse, ApiParam, ApiTags } from '@nestjs/swagger';
-import { Public } from '../../user/interface/decorators';
+import { Public } from '@modules/user/interface/decorators';
 import { GetProductDetailUseCase, ListProductsUseCase } from '../application/use-cases';
 import { ListProductsQueryDto, PaginatedProductsResponseDto, ProductResponseDto } from './dto';
 

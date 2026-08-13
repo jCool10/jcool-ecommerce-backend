@@ -6,8 +6,8 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { CSRF_HEADER } from './modules/user/interface/security';
-import { HttpExceptionFilter } from './shared/interface/filters/http-exception.filter';
+import { CSRF_HEADER } from '@modules/user/interface/security';
+import { HttpExceptionFilter } from '@shared/interface/filters/http-exception.filter';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);

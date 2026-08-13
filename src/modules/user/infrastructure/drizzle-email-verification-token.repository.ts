@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, gt, isNull } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
+import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { emailVerificationTokens } from './schema/user.schema';
 import type {
   ConsumeEmailVerificationOutcome,

@@ -34,7 +34,7 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
-import { LOGIN_THROTTLE, REFRESH_THROTTLE, REGISTER_THROTTLE } from '../../../shared/infrastructure/throttler';
+import { LOGIN_THROTTLE, REFRESH_THROTTLE, REGISTER_THROTTLE } from '@shared/infrastructure/throttler';
 import { AUTH_AUDIT, type AuthAuditPort } from '../application/ports';
 import { EmailVerificationService, PasswordResetService, SessionService } from '../application/services';
 import {

@@ -1,4 +1,4 @@
-import { ValueObject, DomainError, assertNonEmpty } from '../../../shared/kernel';
+import { ValueObject, DomainError, assertNonEmpty } from '@shared/kernel';
 
 interface SlugProps {
   value: string;

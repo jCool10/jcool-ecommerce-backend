@@ -1,4 +1,4 @@
-import type { Role } from '../../../../shared/rbac';
+import type { Role } from '@shared/rbac';
 
 /** User domain entity — pure, no framework/DB imports; `passwordHash` is the stored argon2id digest (never plaintext), identity + timestamps are DB-generated. */
 export class User {

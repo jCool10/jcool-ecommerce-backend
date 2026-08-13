@@ -1,4 +1,4 @@
-import type { Role } from '../../../shared/rbac';
+import type { Role } from '@shared/rbac';
 
 /** Custom access-token claims — the shared contract for signing (AuthTokensService) and verifying (JwtStrategy). */
 export interface AccessTokenClaims {

@@ -1,5 +1,5 @@
 import { Email } from './email.vo';
-import { DomainError } from '../../../shared/kernel';
+import { DomainError } from '@shared/kernel';
 
 describe('Email', () => {
   it('normalizes trim + lowercase', () => {

@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
+import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { users } from './schema/user.schema';
 import { User } from '../domain/entities/user.entity';
 import type { CreateUserInput, UserRepositoryPort } from '../application/ports';

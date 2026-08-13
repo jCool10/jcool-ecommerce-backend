@@ -1,7 +1,7 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import { and, count, eq, ne, sql } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
-import { Money } from '../../../shared/kernel';
+import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
+import { Money } from '@shared/kernel';
 import { categories, prices, productVariants, products } from './schema/catalog.schema';
 import type { AdminProduct, Category, Price, Sku } from '../domain/entities';
 import type {

@@ -1,4 +1,4 @@
-import type { RedisService } from '../../../shared/infrastructure/redis';
+import type { RedisService } from '@shared/infrastructure/redis';
 import { RedisTokenDenylist } from './redis-token-denylist';
 
 // Minimal fake of the ioredis client surface the adapter touches (set/exists).

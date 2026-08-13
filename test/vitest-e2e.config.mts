@@ -12,8 +12,11 @@ export default defineConfig({
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['test/**/*.e2e-spec.ts'],
     passWithNoTests: true,
-    // Path alias `@/* -> src/*` (mirrors tsconfig paths) for the e2e runner.
+    // Path aliases (mirror tsconfig paths) for the e2e runner. Semantic aliases
+    // first (`@modules`/`@shared`), `@` catch-all last.
     alias: {
+      '@modules': fileURLToPath(new URL('../src/modules', import.meta.url)),
+      '@shared': fileURLToPath(new URL('../src/shared', import.meta.url)),
       '@': fileURLToPath(new URL('../src', import.meta.url)),
     },
     // Boot Postgres + Redis containers once per run and migrate; connection URLs

@@ -16,8 +16,12 @@ export default defineConfig({
       // (their exact value is never asserted). Real uuid v7 is timestamp+random,
       // so it is aliased out for reproducible unit tests; e2e uses the real one.
       uuid: fileURLToPath(new URL('./test/mocks/uuid.js', import.meta.url)),
-      // Path alias `@/* -> src/*` (mirrors tsconfig paths). SWC/Vite don't read
-      // tsconfig, so resolution is declared here for the test runner.
+      // Path aliases (mirror tsconfig paths). SWC/Vite don't read tsconfig, so
+      // resolution is declared here for the test runner. Semantic aliases first
+      // (`@modules`/`@shared`), `@` catch-all last; prefixes are disjoint by
+      // rollup-alias word-boundary matching so order is cosmetic.
+      '@modules': fileURLToPath(new URL('./src/modules', import.meta.url)),
+      '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)),
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
     coverage: {

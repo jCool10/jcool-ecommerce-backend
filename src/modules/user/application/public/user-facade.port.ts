@@ -1,4 +1,4 @@
-import type { Role } from '../../../../shared/rbac';
+import type { Role } from '@shared/rbac';
 
 /** User's published language — the only surface other bounded contexts may import (enforced by `.dependency-cruiser.cjs`); returns a safe DTO summary, never the `User` entity (which carries `passwordHash`) or a row. */
 export const USER_FACADE = Symbol('USER_FACADE');

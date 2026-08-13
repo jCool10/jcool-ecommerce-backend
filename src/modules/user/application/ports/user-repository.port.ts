@@ -1,4 +1,4 @@
-import type { Role } from '../../../../shared/rbac';
+import type { Role } from '@shared/rbac';
 import type { User } from '../../domain/entities/user.entity';
 
 // Port the application depends on; the Drizzle adapter implements it in

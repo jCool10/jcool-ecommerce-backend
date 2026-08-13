@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { v7 as uuidv7 } from 'uuid';
 import type { User } from '../../domain/entities/user.entity';
-import type { Role } from '@/shared/rbac';
+import type { Role } from '@shared/rbac';
 import { type AccessTokenClaims, durationToMs, hashRefreshToken } from '..';
 import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../ports';
 

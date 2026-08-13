@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { RedisService } from '../../../shared/infrastructure/redis';
+import { RedisService } from '@shared/infrastructure/redis';
 import type { TokenDenylistPort } from '../application/ports';
 
 // Redis adapter for the access-token denylist: one key per denylisted jti with a PX TTL

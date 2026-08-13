@@ -40,7 +40,7 @@ import {
 } from './infrastructure';
 import { AuthController } from './interface/auth.controller';
 import { JwtAuthGuard } from './interface/guards/jwt-auth.guard';
-import { RolesGuard } from '../../shared/rbac';
+import { RolesGuard } from '@shared/rbac';
 import { AuthCookieService, CsrfGuard, CsrfTokenService } from './interface/security';
 import { JwtStrategy } from './interface/strategies/jwt.strategy';
 import { UserModule } from './user.module';

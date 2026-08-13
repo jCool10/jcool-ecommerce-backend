@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
+import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { categories, prices, productVariants, products } from './schema/catalog.schema';
 import type { Product } from '../domain/entities';
 import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../application/ports';

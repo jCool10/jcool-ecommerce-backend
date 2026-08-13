@@ -1,4 +1,4 @@
-import { Money } from '../../../../shared/kernel';
+import { Money } from '@shared/kernel';
 
 // Catalog domain entities — pure, no framework/DB imports. Price is the shared `Money`
 // value object (integer smallest-unit, currency-checked), so cross-currency mistakes can't compile.
