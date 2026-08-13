@@ -1,4 +1,5 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { User } from '../../domain/entities/user.entity';
 import type { PasswordHasherPort } from '../ports/password-hasher.port';
 import type { UserRepositoryPort } from '../ports/user-repository.port';
@@ -7,8 +8,13 @@ import { LoginUserUseCase } from './login-user.use-case';
 
 const TOKENS: AuthTokens = { accessToken: 'access', refreshToken: 'refresh', expiresIn: 900 };
 
-function makeUser(passwordHash: string): User {
-  return new User('u1', 'user@example.com', passwordHash, 'CUSTOMER', new Date(), new Date());
+function makeUser(passwordHash: string, emailVerifiedAt: Date | null = null): User {
+  return new User('u1', 'user@example.com', passwordHash, 'CUSTOMER', new Date(), new Date(), emailVerifiedAt);
+}
+
+// Config stub exposing only `auth.requireVerifiedEmail` (the gate flag).
+function makeConfig(requireVerifiedEmail: boolean): ConfigService {
+  return { get: () => requireVerifiedEmail } as unknown as ConfigService;
 }
 
 class MockUserRepository implements UserRepositoryPort {
@@ -24,6 +30,12 @@ class MockUserRepository implements UserRepositoryPort {
   }
   create(): Promise<User> {
     return Promise.reject(new Error('unused'));
+  }
+  markEmailVerified(): Promise<void> {
+    return Promise.resolve();
+  }
+  updatePassword(): Promise<void> {
+    return Promise.resolve();
   }
 }
 
@@ -61,7 +73,8 @@ describe('LoginUserUseCase', () => {
     repo = new MockUserRepository();
     hasher = new MockPasswordHasher();
     authTokens = new MockAuthTokensService();
-    useCase = new LoginUserUseCase(repo, hasher, authTokens as unknown as AuthTokensService);
+    // Gate off by default; the gate suite builds its own use case with it on.
+    useCase = new LoginUserUseCase(repo, hasher, authTokens as unknown as AuthTokensService, makeConfig(false));
   });
 
   it('issues a token pair on valid credentials', async () => {
@@ -109,5 +122,38 @@ describe('LoginUserUseCase', () => {
     expect(wrongPw).toBeInstanceOf(UnauthorizedException);
     expect(unknown).toBeInstanceOf(UnauthorizedException);
     expect((wrongPw as Error).message).toBe((unknown as Error).message);
+  });
+
+  describe('verified-email gate (auth.requireVerifiedEmail=true)', () => {
+    function gatedUseCase(): LoginUserUseCase {
+      return new LoginUserUseCase(repo, hasher, authTokens as unknown as AuthTokensService, makeConfig(true));
+    }
+
+    it('refuses an unverified account with 403 and issues no tokens', async () => {
+      repo.user = makeUser('hashed:correct-password', null);
+
+      await expect(
+        gatedUseCase().execute({ email: 'user@example.com', password: 'correct-password' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(authTokens.issuedFor).toHaveLength(0);
+    });
+
+    it('lets a verified account through', async () => {
+      repo.user = makeUser('hashed:correct-password', new Date());
+
+      await expect(gatedUseCase().execute({ email: 'user@example.com', password: 'correct-password' })).resolves.toBe(
+        TOKENS,
+      );
+    });
+
+    it('still returns the generic 401 (not 403) on a wrong password', async () => {
+      repo.user = makeUser('hashed:correct-password', null);
+
+      // The gate only applies after credentials pass — a bad password must not
+      // leak that the account merely needs verification.
+      await expect(gatedUseCase().execute({ email: 'user@example.com', password: 'wrong' })).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    });
   });
 });

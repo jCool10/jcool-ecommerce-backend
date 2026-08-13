@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, HttpCode, HttpStatus, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
@@ -26,16 +27,12 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSkuDto } from './dto/update-sku.dto';
 
-/**
- * Catalog admin write paths. Class-level `@Roles(Role.Admin)`: global guards
- * authenticate (401) then authorize (403 for a non-admin). Thin — validate,
- * call the service, map to a response DTO. DELETE is a soft-delete (archive) and
- * echoes the archived resource (200, not 204) so an admin sees the result.
- */
+/** Catalog admin write paths — class-level `@Roles(Role.Admin)` (global guards authenticate 401 then authorize 403), thin (validate, call the service, map to a DTO); DELETE is a soft-delete that echoes the archived resource (200, not 204). */
 @ApiTags('admin-catalog')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
 @ApiForbiddenResponse({ description: 'Authenticated but not an admin' })
+@ApiBadRequestResponse({ description: 'Malformed id (not a UUID) or invalid body' })
 @Roles(Role.Admin)
 @Controller('admin')
 export class AdminCatalogController {
@@ -54,7 +51,10 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminCategoryResponseDto })
   @ApiNotFoundResponse({ description: 'Category not found' })
   @ApiConflictResponse({ description: 'Slug already exists' })
-  async updateCategory(@Param('id') id: string, @Body() dto: UpdateCategoryDto): Promise<AdminCategoryResponseDto> {
+  async updateCategory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCategoryDto,
+  ): Promise<AdminCategoryResponseDto> {
     return AdminCategoryResponseDto.fromEntity(await this.admin.updateCategory(id, dto));
   }
 
@@ -63,7 +63,7 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminCategoryResponseDto, description: 'Category archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'Category not found' })
   @ApiConflictResponse({ description: 'Category still has active products' })
-  async deleteCategory(@Param('id') id: string): Promise<AdminCategoryResponseDto> {
+  async deleteCategory(@Param('id', ParseUUIDPipe) id: string): Promise<AdminCategoryResponseDto> {
     return AdminCategoryResponseDto.fromEntity(await this.admin.archiveCategory(id));
   }
 
@@ -81,7 +81,10 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminProductResponseDto })
   @ApiNotFoundResponse({ description: 'Product or referenced category not found' })
   @ApiConflictResponse({ description: 'Slug already exists' })
-  async updateProduct(@Param('id') id: string, @Body() dto: UpdateProductDto): Promise<AdminProductResponseDto> {
+  async updateProduct(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateProductDto,
+  ): Promise<AdminProductResponseDto> {
     return AdminProductResponseDto.fromEntity(await this.admin.updateProduct(id, dto));
   }
 
@@ -89,7 +92,7 @@ export class AdminCatalogController {
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: AdminProductResponseDto, description: 'Product archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'Product not found' })
-  async deleteProduct(@Param('id') id: string): Promise<AdminProductResponseDto> {
+  async deleteProduct(@Param('id', ParseUUIDPipe) id: string): Promise<AdminProductResponseDto> {
     return AdminProductResponseDto.fromEntity(await this.admin.archiveProduct(id));
   }
 
@@ -99,7 +102,10 @@ export class AdminCatalogController {
   @ApiCreatedResponse({ type: AdminSkuResponseDto })
   @ApiNotFoundResponse({ description: 'Product not found' })
   @ApiConflictResponse({ description: 'SKU code already exists' })
-  async createSku(@Param('productId') productId: string, @Body() dto: CreateSkuDto): Promise<AdminSkuResponseDto> {
+  async createSku(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Body() dto: CreateSkuDto,
+  ): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.createSku(productId, dto));
   }
 
@@ -107,7 +113,7 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminSkuResponseDto })
   @ApiNotFoundResponse({ description: 'SKU not found' })
   @ApiConflictResponse({ description: 'SKU code already exists' })
-  async updateSku(@Param('id') id: string, @Body() dto: UpdateSkuDto): Promise<AdminSkuResponseDto> {
+  async updateSku(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSkuDto): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.updateSku(id, dto));
   }
 
@@ -115,7 +121,7 @@ export class AdminCatalogController {
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: AdminSkuResponseDto, description: 'SKU archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'SKU not found' })
-  async deleteSku(@Param('id') id: string): Promise<AdminSkuResponseDto> {
+  async deleteSku(@Param('id', ParseUUIDPipe) id: string): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.archiveSku(id));
   }
 
@@ -124,7 +130,10 @@ export class AdminCatalogController {
   @Put('skus/:skuId/price')
   @ApiOkResponse({ type: AdminPriceResponseDto, description: 'Price set or replaced (upsert per currency)' })
   @ApiNotFoundResponse({ description: 'SKU not found' })
-  async setPrice(@Param('skuId') skuId: string, @Body() dto: SetPriceDto): Promise<AdminPriceResponseDto> {
+  async setPrice(
+    @Param('skuId', ParseUUIDPipe) skuId: string,
+    @Body() dto: SetPriceDto,
+  ): Promise<AdminPriceResponseDto> {
     return AdminPriceResponseDto.fromEntity(await this.admin.setPrice(skuId, dto));
   }
 }

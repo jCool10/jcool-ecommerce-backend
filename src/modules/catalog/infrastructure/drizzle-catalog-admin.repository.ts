@@ -15,9 +15,8 @@ import type {
   UpdateSkuData,
 } from '../application/ports/catalog-admin-repository.port';
 
-// Postgres unique_violation. We catch the constraint hit (the only race-safe
-// check) rather than pre-SELECT. drizzle-orm wraps the driver error, so the pg
-// `code` lives on `.cause` — walk the cause chain.
+// Catch the unique-constraint hit (the only race-safe check) rather than pre-SELECT;
+// drizzle wraps the driver error, so the pg `code` lives down the `.cause` chain.
 const PG_UNIQUE_VIOLATION = '23505';
 function isUniqueViolation(error: unknown): boolean {
   let current: unknown = error;
@@ -34,11 +33,7 @@ function isUniqueViolation(error: unknown): boolean {
   return false;
 }
 
-/**
- * Drizzle adapter for the Catalog admin write paths. Create/update returns the
- * persisted row as a flat domain record; update/archive returns `null` when the
- * id matches no row (the service maps that to 404).
- */
+/** Drizzle adapter for the Catalog admin write paths — create/update returns the persisted row as a flat domain record; update/archive returns `null` when the id matches no row (the service maps that to 404). */
 @Injectable()
 export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -195,9 +190,8 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   // ----- Price -----
 
   async setPrice(variantId: string, data: SetPriceData): Promise<Price> {
-    // Enforce the Money invariant at the write boundary too (integer amount,
-    // canonical 3-letter currency) so a malformed price can never be persisted
-    // and later 500 the read path — symmetric with product-row.mapper.
+    // Enforce the Money invariant at the write boundary too (integer amount, canonical currency)
+    // so a malformed price can never persist and later 500 the read path — symmetric with the mapper.
     const money = Money.of(data.amountMinor, data.currency);
     // Upsert on the (variant, currency) unique index → idempotent set/replace.
     const [row] = await this.db

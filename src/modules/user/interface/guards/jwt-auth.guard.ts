@@ -3,11 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
-/**
- * Global authentication guard: every route protected by default, `@Public()`
- * opts out. Fail-safe — forgetting the decorator leaves an endpoint protected,
- * never open. Delegates to Passport's `AuthGuard('jwt')` otherwise.
- */
+/** Global authentication guard — every route protected by default, `@Public()` opts out (fail-safe: forgetting the decorator leaves an endpoint protected, never open); delegates to Passport's `AuthGuard('jwt')` otherwise. */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   constructor(private readonly reflector: Reflector) {

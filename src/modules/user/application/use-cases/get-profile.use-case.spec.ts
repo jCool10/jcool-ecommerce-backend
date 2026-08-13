@@ -20,6 +20,14 @@ class MockUserRepository implements UserRepositoryPort {
   create(): Promise<User> {
     throw new Error('not used in these tests');
   }
+
+  markEmailVerified(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  updatePassword(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 function makeUser(): User {

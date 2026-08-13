@@ -7,11 +7,7 @@ import { ListProductsQueryDto } from './dto/list-products-query.dto';
 import { PaginatedProductsResponseDto } from './dto/paginated-response.dto';
 import { ProductResponseDto } from './dto/product-response.dto';
 
-/**
- * Catalog read paths. Thin: validate input, call a use case, map to a response
- * DTO. `@Public()` is applied per handler (not the class) so any future write
- * handler here defaults to protected — fail-safe against an accidentally open mutation.
- */
+/** Catalog read paths — thin (validate, call a use case, map to a response DTO); `@Public()` is applied per handler so any future write handler here defaults to protected. */
 @ApiTags('catalog')
 @Controller('products')
 export class CatalogController {

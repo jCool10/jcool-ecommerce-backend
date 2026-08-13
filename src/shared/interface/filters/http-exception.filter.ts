@@ -4,11 +4,7 @@ import { Request, Response } from 'express';
 // Plain number so comparisons don't mix enum/number (no-unsafe-enum-comparison).
 const SERVER_ERROR_MIN: number = HttpStatus.INTERNAL_SERVER_ERROR;
 
-/**
- * Unified error envelope: < 500 keep their developer-chosen payload, >= 500 are
- * masked to a generic message (real error logged) so internals never leak.
- * Terminus health results pass through unchanged.
- */
+/** Unified error envelope — < 500 keep their developer-chosen payload, >= 500 are masked to a generic message (real error logged) so internals never leak, and Terminus health results pass through unchanged. See docs/engineering-notes.md (Shared — Unified exception filter). */
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);

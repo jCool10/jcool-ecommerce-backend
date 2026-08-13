@@ -7,13 +7,7 @@ interface MoneyProps {
   currency: string;
 }
 
-/**
- * Money as an integer count of the currency's smallest unit (VND đồng, USD
- * cents) — never a float, so arithmetic is exact. Immutable: every operation
- * returns a new Money. Cross-currency `add`/`subtract`/`compare` throw a
- * `DomainError` rather than silently coercing. No `toFloat`/`toString(locale)`:
- * presentation formatting belongs in the interface layer, not the domain.
- */
+/** Money as an integer count of the currency's smallest unit (VND đồng, USD cents) — never a float, so arithmetic stays exact; immutable, with cross-currency operations throwing `DomainError` rather than coercing, and no locale formatting (that belongs in the interface layer). */
 export class Money extends ValueObject<MoneyProps> {
   private constructor(props: MoneyProps) {
     super(props);
@@ -28,8 +22,7 @@ export class Money extends ValueObject<MoneyProps> {
     return Money.of(0, currency);
   }
 
-  // ISO-4217 alphabetic code, stored canonical upper-case so equality is
-  // case-insensitive on input ('vnd' === 'VND').
+  // Canonical upper-case ISO-4217 code so equality is case-insensitive ('vnd' === 'VND').
   private static normalizeCurrency(currency: string): string {
     assertNonEmpty(currency, 'Money.currency');
     const code = currency.trim().toUpperCase();

@@ -9,11 +9,7 @@ import { DrizzleProductRepository } from './infrastructure/drizzle-product.repos
 import { AdminCatalogController } from './interface/admin-catalog.controller';
 import { CatalogController } from './interface/catalog.controller';
 
-/**
- * Catalog bounded context: public read paths + admin write paths (`@Roles(Role.Admin)`).
- * Read and write use separate ports (CQRS-lite); each port→adapter binding is a
- * single swap point (cache/search later). RBAC comes from shared/rbac.
- */
+/** Catalog bounded context — public read paths + admin write paths (`@Roles(Role.Admin)`), read and write behind separate ports (CQRS-lite) so each port→adapter binding is a single swap point. */
 @Module({
   controllers: [CatalogController, AdminCatalogController],
   providers: [

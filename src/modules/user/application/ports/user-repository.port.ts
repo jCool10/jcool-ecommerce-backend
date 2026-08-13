@@ -21,4 +21,10 @@ export interface UserRepositoryPort {
 
   /** Insert a new user and return the persisted entity (id/timestamps filled). */
   create(input: CreateUserInput): Promise<User>;
+
+  /** Stamp the user's email as verified now. Idempotent (a no-op if already set). */
+  markEmailVerified(userId: string): Promise<void>;
+
+  /** Replace the user's stored password hash (password reset / change password). */
+  updatePassword(userId: string, passwordHash: string): Promise<void>;
 }

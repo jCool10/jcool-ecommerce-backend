@@ -1,31 +1,73 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Ip,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Res,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiAcceptedResponse,
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
+  ApiParam,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
+import {
+  LOGIN_THROTTLE,
+  REFRESH_THROTTLE,
+  REGISTER_THROTTLE,
+} from '../../../shared/infrastructure/throttler/throttler.constants';
+import { AUTH_AUDIT, type AuthAuditPort } from '../application/ports/auth-audit.port';
+import { EmailVerificationService } from '../application/services/email-verification.service';
+import { PasswordResetService } from '../application/services/password-reset.service';
+import { SessionService } from '../application/services/session.service';
+import { ChangePasswordUseCase } from '../application/use-cases/change-password.use-case';
+import { ForgotPasswordUseCase } from '../application/use-cases/forgot-password.use-case';
 import { GetProfileUseCase } from '../application/use-cases/get-profile.use-case';
 import { LoginUserUseCase } from '../application/use-cases/login-user.use-case';
 import { LogoutUserUseCase } from '../application/use-cases/logout-user.use-case';
 import { RefreshTokensUseCase } from '../application/use-cases/refresh-tokens.use-case';
 import { RegisterUserUseCase } from '../application/use-cases/register-user.use-case';
+import { ResendVerificationUseCase } from '../application/use-cases/resend-verification.use-case';
 import { CurrentUser, type AuthenticatedUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
+import { RefreshTokenCookie } from './decorators/refresh-token-cookie.decorator';
 import { AuthTokensResponseDto } from './dto/auth-tokens.response.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SessionResponseDto } from './dto/session-response.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { VerifyEmailDto } from './dto/verify-email.dto';
+import { AuthCookieService } from './security/auth-cookie.service';
+import { CsrfGuard } from './security/csrf.guard';
 
-/**
- * Auth endpoints. Thin: validate DTO, call a use case, map to a response DTO.
- * Register/login/refresh are `@Public()` (each carries its own credential);
- * `/auth/me` and `/auth/logout` are protected by the global JwtAuthGuard.
- */
+/** Auth endpoints — thin (validate DTO, call a use case, map to a response DTO); access token in the JSON body (Bearer, CSRF-immune), refresh token only in an httpOnly cookie (refresh/logout add CSRF). */
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -35,24 +77,124 @@ export class AuthController {
     private readonly getProfile: GetProfileUseCase,
     private readonly refreshTokens: RefreshTokensUseCase,
     private readonly logoutUser: LogoutUserUseCase,
+    private readonly authCookies: AuthCookieService,
+    @Inject(AUTH_AUDIT) private readonly audit: AuthAuditPort,
+    private readonly emailVerification: EmailVerificationService,
+    private readonly resendVerification: ResendVerificationUseCase,
+    private readonly passwordReset: PasswordResetService,
+    private readonly forgotPassword: ForgotPasswordUseCase,
+    private readonly changePassword: ChangePasswordUseCase,
+    private readonly sessions: SessionService,
   ) {}
 
   @Public()
   @Post('register')
+  @Throttle(REGISTER_THROTTLE)
   @ApiCreatedResponse({ type: UserResponseDto })
   @ApiConflictResponse({ description: 'Email already registered' })
-  async register(@Body() dto: RegisterDto): Promise<UserResponseDto> {
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async register(
+    @Body() dto: RegisterDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<UserResponseDto> {
     const user = await this.registerUser.execute({ email: dto.email, password: dto.password });
+    this.audit.record({
+      event: 'user.registered',
+      outcome: 'success',
+      userId: user.id,
+      email: user.email,
+      ip,
+      userAgent,
+    });
     return UserResponseDto.fromEntity(user);
+  }
+
+  @Public() // carries its own credential (the raw token) — no session needed.
+  @Post('verify-email')
+  @Throttle(REFRESH_THROTTLE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse({ description: 'Email verified' })
+  @ApiBadRequestResponse({ description: 'Invalid or expired verification token' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async verifyEmail(
+    @Body() dto: VerifyEmailDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<void> {
+    const { userId } = await this.emailVerification.verify(dto.token);
+    this.audit.record({ event: 'email.verified', outcome: 'success', userId, ip, userAgent });
+  }
+
+  @Public()
+  @Post('resend-verification')
+  @Throttle(REGISTER_THROTTLE)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiAcceptedResponse({ description: 'If the address needs verification, an email has been sent' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async resendVerificationEmail(@Body() dto: ResendVerificationDto): Promise<void> {
+    // Enumeration-safe: always 202, whether or not a mail was actually dispatched.
+    await this.resendVerification.execute(dto.email);
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @Throttle(REGISTER_THROTTLE)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiAcceptedResponse({ description: 'If the address has an account, a reset email has been sent' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async forgotPasswordRequest(@Body() dto: ForgotPasswordDto): Promise<void> {
+    // Enumeration-safe: always 202, whether or not a mail was actually dispatched.
+    await this.forgotPassword.execute(dto.email);
+  }
+
+  @Public() // carries its own credential (the raw token) — no session needed.
+  @Post('reset-password')
+  @Throttle(REFRESH_THROTTLE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse({ description: 'Password reset — all sessions revoked' })
+  @ApiBadRequestResponse({ description: 'Invalid or expired password-reset token' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<void> {
+    const { userId } = await this.passwordReset.reset(dto.token, dto.password);
+    this.audit.record({ event: 'password.reset', outcome: 'success', userId, ip, userAgent });
   }
 
   @Public()
   @Post('login')
+  @Throttle(LOGIN_THROTTLE)
   @HttpCode(HttpStatus.OK) // POST defaults to 201; login is not a creation.
   @ApiOkResponse({ type: AuthTokensResponseDto })
   @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
-  async login(@Body() dto: LoginDto): Promise<AuthTokensResponseDto> {
-    return this.loginUser.execute({ email: dto.email, password: dto.password });
+  @ApiForbiddenResponse({ description: 'Email not verified (when verification is enforced)' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async login(
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<AuthTokensResponseDto> {
+    try {
+      const tokens = await this.loginUser.execute({ email: dto.email, password: dto.password });
+      this.authCookies.setSession(res, tokens.refreshToken);
+      this.audit.record({ event: 'login.succeeded', outcome: 'success', email: dto.email, ip, userAgent });
+      return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
+    } catch (error) {
+      // Audit the failure (brute-force signal), then rethrow unchanged — the response reveals nothing beyond status.
+      this.audit.record({
+        event: 'login.failed',
+        outcome: 'failure',
+        email: dto.email,
+        ip,
+        userAgent,
+        reason: loginFailureReason(error),
+      });
+      throw error;
+    }
   }
 
   @Get('me')
@@ -64,21 +206,138 @@ export class AuthController {
     return UserResponseDto.fromEntity(user);
   }
 
-  @Public() // carries its own credential (the refresh token) — no access token needed.
+  // Bearer-authenticated → CSRF-immune (a browser never auto-attaches the Authorization header cross-site).
+  @Post('change-password')
+  @Throttle(REFRESH_THROTTLE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiNoContentResponse({ description: 'Password changed — every session revoked, re-login required' })
+  @ApiUnauthorizedResponse({ description: 'Missing/invalid access token, or wrong current password' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async changePasswordRequest(
+    @CurrentUser() current: AuthenticatedUser,
+    @Body() dto: ChangePasswordDto,
+    @Res({ passthrough: true }) res: Response,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<void> {
+    await this.changePassword.execute({
+      userId: current.userId,
+      currentPassword: dto.currentPassword,
+      newPassword: dto.newPassword,
+    });
+    // Every session (this one included) is now revoked — drop the stale cookies.
+    this.authCookies.clear(res);
+    this.audit.record({ event: 'password.changed', outcome: 'success', userId: current.userId, ip, userAgent });
+  }
+
+  @Get('sessions')
+  @ApiBearerAuth()
+  @ApiOkResponse({ type: SessionResponseDto, isArray: true })
+  @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid token' })
+  async listSessions(
+    @CurrentUser() current: AuthenticatedUser,
+    @RefreshTokenCookie() refreshToken: string | undefined,
+  ): Promise<SessionResponseDto[]> {
+    const sessions = await this.sessions.listActiveSessions(current.userId, refreshToken ?? null);
+    return sessions.map((session) => SessionResponseDto.fromActive(session));
+  }
+
+  @Delete('sessions/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiParam({ name: 'id', description: 'Session id (token family) from GET /auth/sessions.' })
+  @ApiNoContentResponse({ description: 'Session revoked' })
+  @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid token' })
+  @ApiNotFoundResponse({ description: 'No such session for this user' })
+  async revokeSession(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<void> {
+    const revoked = await this.sessions.revokeSession(current.userId, id);
+    if (!revoked) throw new NotFoundException('Session not found');
+    this.audit.record({
+      event: 'session.revoked',
+      outcome: 'success',
+      userId: current.userId,
+      ip,
+      userAgent,
+      metadata: { sessionId: id },
+    });
+  }
+
+  // Bearer-authenticated (revokes by user id, not the presented cookie) → CSRF-immune.
+  @Post('logout-all')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiNoContentResponse({ description: 'All sessions revoked (this device included)' })
+  @ApiUnauthorizedResponse({ description: 'Missing, expired, revoked, or invalid access token' })
+  async logoutAll(
+    @CurrentUser() current: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<void> {
+    await this.sessions.revokeAll(current.userId);
+    this.authCookies.clear(res);
+    this.audit.record({ event: 'logout.all', outcome: 'success', userId: current.userId, ip, userAgent });
+  }
+
+  @Public() // carries its own credential (the refresh cookie) — no access token needed.
   @Post('refresh')
+  @UseGuards(CsrfGuard)
+  @Throttle(REFRESH_THROTTLE)
   @HttpCode(HttpStatus.OK) // POST defaults to 201; refresh returns, not creates.
   @ApiOkResponse({ type: AuthTokensResponseDto })
   @ApiUnauthorizedResponse({ description: 'Invalid, expired, revoked, or reused refresh token' })
-  async refresh(@Body() dto: RefreshTokenDto): Promise<AuthTokensResponseDto> {
-    return this.refreshTokens.execute(dto.refreshToken);
+  @ApiForbiddenResponse({ description: 'Missing or invalid CSRF token' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async refresh(
+    @RefreshTokenCookie() refreshToken: string | undefined,
+    @Res({ passthrough: true }) res: Response,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<AuthTokensResponseDto> {
+    // No cookie → generic 401, same message the use case uses for a bad token.
+    if (!refreshToken) throw new UnauthorizedException('Invalid refresh token');
+
+    const tokens = await this.refreshTokens.execute(refreshToken);
+    this.authCookies.setSession(res, tokens.refreshToken);
+    this.audit.record({ event: 'token.refreshed', outcome: 'success', ip, userAgent });
+    return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
   }
 
   @Post('logout')
+  @UseGuards(CsrfGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth()
-  @ApiNoContentResponse({ description: 'Session revoked (idempotent — always 204)' })
-  @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
-  async logout(@CurrentUser() current: AuthenticatedUser, @Body() dto: RefreshTokenDto): Promise<void> {
-    await this.logoutUser.execute(current.userId, dto.refreshToken);
+  @ApiNoContentResponse({ description: 'Session revoked — access token denylisted + refresh token revoked' })
+  @ApiUnauthorizedResponse({ description: 'Missing, expired, revoked, or invalid access token' })
+  @ApiForbiddenResponse({ description: 'Missing or invalid CSRF token' })
+  async logout(
+    @CurrentUser() current: AuthenticatedUser,
+    @RefreshTokenCookie() refreshToken: string | undefined,
+    @Res({ passthrough: true }) res: Response,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<void> {
+    await this.logoutUser.execute({
+      userId: current.userId,
+      accessJti: current.jti,
+      accessExp: current.exp,
+      // No cookie is a no-op revoke; the access jti is still denylisted below.
+      rawRefreshToken: refreshToken ?? '',
+    });
+    this.authCookies.clear(res);
+    this.audit.record({ event: 'logout', outcome: 'success', userId: current.userId, ip, userAgent });
   }
+}
+
+// Machine-readable audit reason for a failed login.
+function loginFailureReason(error: unknown): string {
+  if (error instanceof UnauthorizedException) return 'invalid_credentials';
+  if (error instanceof ForbiddenException) return 'email_not_verified';
+  return 'error';
 }

@@ -1,8 +1,7 @@
 import type { Product } from '../../domain/entities/product.entity';
 
-// Read-side port; the Drizzle adapter implements it in infrastructure/. This
-// boundary is the swap point for a cache or search index later. Application must
-// not import drizzle-orm/schema.
+// Read-side port; the Drizzle adapter implements it in infrastructure/ and this boundary is the
+// swap point for a cache or search index later (application must not import drizzle-orm/schema).
 export const PRODUCT_REPOSITORY = Symbol('PRODUCT_REPOSITORY');
 
 export interface FindManyActiveCriteria {

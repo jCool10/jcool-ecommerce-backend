@@ -1,11 +1,6 @@
 import type { ProductStatus } from './product.entity';
 
-/**
- * Flat domain read-models for the admin write paths — each mirrors one persisted
- * row after a create/update/archive (distinct from the rich `Product` read
- * aggregate). Pure. Soft-delete is `archivedAt` on Category/Sku; Product uses
- * `status = 'ARCHIVED'`, so it carries no archivedAt.
- */
+/** Flat domain read-models for the admin write paths — each mirrors one persisted row after a create/update/archive (distinct from the rich `Product` read aggregate); soft-delete is `archivedAt` on Category/Sku, while Product uses `status = 'ARCHIVED'`. */
 
 export interface Category {
   id: string;

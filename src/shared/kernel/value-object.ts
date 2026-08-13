@@ -1,9 +1,4 @@
-/**
- * Base for immutable value objects compared by structure, not identity. Props
- * are frozen on construction; `equals` does a shallow per-key comparison, which
- * is sufficient for flat VOs (Money, Email, Slug). A VO with nested VO props
- * would override `equals` to recurse.
- */
+/** Base for immutable value objects compared by structure, not identity: props are frozen on construction and `equals` does a shallow per-key comparison (nested-VO props would override `equals` to recurse). */
 export abstract class ValueObject<TProps extends object> {
   protected readonly props: TProps;
 

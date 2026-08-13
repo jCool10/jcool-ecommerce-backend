@@ -12,7 +12,7 @@ import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../po
 
 /** Token pair returned to the client on register-then-login / login / refresh. */
 export interface AuthTokens {
-  /** Signed JWT (HS256); payload `{ sub, role }`. */
+  /** Signed JWT (HS256). */
   accessToken: string;
   /** Opaque high-entropy string; only the SHA-256 hash is persisted. */
   refreshToken: string;
@@ -30,9 +30,8 @@ export interface IssuedRefreshToken {
 }
 
 /**
- * Issues the access + refresh token pair, keeping token mechanics out of the
- * login use case. Refresh tokens are hashed with SHA-256 (not argon2) — they are
- * high-entropy random, so lookups must be fast + deterministic.
+ * Issues the access + refresh token pair, keeping token mechanics out of the use cases.
+ * See docs/engineering-notes.md (Auth — Token model).
  */
 @Injectable()
 export class AuthTokensService {
@@ -55,21 +54,20 @@ export class AuthTokensService {
     return this.accessExpiresInSeconds;
   }
 
-  // Typed against the shared claims contract so sign/verify sides can't drift.
-  signAccess(sub: string, role: Role): Promise<string> {
-    const claims: AccessTokenClaims = { sub, role };
+  // Fresh jti per token (so logout can denylist exactly this one) + the user's session epoch at issue time.
+  signAccess(sub: string, role: Role, epoch = 0): Promise<string> {
+    const claims: AccessTokenClaims = { sub, role, jti: uuidv7(), epoch };
     return this.jwt.signAsync(claims);
   }
 
-  // Mint an opaque refresh token; the raw value is returned once, only its hash
-  // is persisted. Family assignment + persistence is the caller's job.
+  // Mint an opaque refresh token; raw returned once, only its hash persisted. Caller owns family + persistence.
   newRefreshToken(): IssuedRefreshToken {
     const raw = randomBytes(48).toString('base64url');
     return { raw, hash: hashRefreshToken(raw), expiresAt: new Date(Date.now() + this.refreshTtlMs) };
   }
 
   async issuePair(user: User): Promise<AuthTokens> {
-    const accessToken = await this.signAccess(user.id, user.role);
+    const accessToken = await this.signAccess(user.id, user.role, user.tokenEpoch);
 
     // Login opens a fresh token family (= one session/device).
     const refresh = this.newRefreshToken();

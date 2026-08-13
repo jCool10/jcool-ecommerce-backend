@@ -9,7 +9,7 @@ describe('currentUserFactory', () => {
   }
 
   it('returns request.user set by the strategy', () => {
-    const user: AuthenticatedUser = { userId: 'user-1', role: 'CUSTOMER' };
+    const user: AuthenticatedUser = { userId: 'user-1', role: 'CUSTOMER', jti: 'jti-1', exp: 100 };
     expect(currentUserFactory(undefined, contextWithUser(user))).toBe(user);
   });
 

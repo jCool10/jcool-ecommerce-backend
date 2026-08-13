@@ -1,9 +1,8 @@
 import type { ProductStatus } from '../../domain/entities/product.entity';
 import type { AdminProduct, Category, Price, Sku } from '../../domain/entities/catalog-admin.entities';
 
-// Write-side port for the admin paths, separate from the read-only
-// ProductRepositoryPort (CQRS-lite). Existence/authorization decisions (404/409)
-// live in the service; the adapter owns the atomic mutation and maps 23505 → 409.
+// Write-side port for the admin paths, separate from the read-only ProductRepositoryPort
+// (CQRS-lite); the service owns 404/409 decisions, the adapter owns the atomic mutation (23505 → 409).
 export const CATALOG_ADMIN_REPOSITORY = Symbol('CATALOG_ADMIN_REPOSITORY');
 
 export interface CreateCategoryData {

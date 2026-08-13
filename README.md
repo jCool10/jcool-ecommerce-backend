@@ -81,12 +81,19 @@ Currently implemented:
 
 - **Authentication & Authorization**
   - Register / login with **Argon2id** password hashing (OWASP-minimum cost params, tunable).
-  - Stateless **JWT** access tokens (HS256) + **refresh-token rotation** with server-side hashing.
+  - Short-lived **JWT** access tokens (HS256) with a **Redis `jti` denylist** for immediate logout, + **refresh-token rotation** with server-side hashing.
+  - **Cookie-based refresh delivery**: refresh token in an `httpOnly; Secure; SameSite=Strict` cookie (XSS can't read it), with a **signed double-submit CSRF** token guarding the cookie-authenticated routes.
   - **RBAC** via a cross-cutting `@Roles` guard (roles carried in the JWT).
+  - **Rate limiting / brute-force protection** (Redis-backed, cross-instance): a global per-IP floor plus tighter, progressive limits on `login` / `register` / `refresh` — the account tier is keyed per (IP, account) so a brute-force run can't lock out other users behind the same NAT.
+  - **Auth audit trail**: structured security events (login ok/fail, logout, refresh, refresh-token **reuse**, email verification) emitted as JSON on a dedicated `AuthAudit` log context for SIEM ingestion.
+  - **Email verification**: register creates an **unverified** account and sends a single-use, hashed, expiring token; `verify-email` redeems it and `resend-verification` re-issues one (enumeration-safe). An optional gate (`AUTH_REQUIRE_VERIFIED_EMAIL`) refuses login until the address is verified. Mail goes through a `MailerPort` (dev **log** transport; SMTP adapter pluggable).
+  - **Password reset**: `forgot-password` emails a single-use, hashed, short-lived reset token (enumeration-safe — always `202`); `reset-password` redeems it, sets the new password, and **revokes every session** (all refresh tokens) so a suspected compromise is fully evicted.
+  - **Change password + session management**: `change-password` re-verifies the current credential then signs out everywhere; `sessions` lists a user's active sessions and revokes any one; `logout-all` kills every session at once. Global revocation uses a **per-user session epoch** (a monotonic counter stamped into each access token) so a bump invalidates every outstanding access token immediately — the thing a per-`jti` denylist can't do without tracking every token.
 - **Catalog**
   - Public read paths: list products (paginated) and product detail by id or slug.
   - Admin write paths (RBAC `ADMIN`): full CRUD for categories, products, and SKUs, plus price management, with soft-delete support.
 - **Platform**
+  - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
   - **Liveness / readiness** health checks (Terminus) probing Postgres and Redis.
   - **Fail-fast config**: the environment schema is validated at boot; a missing or invalid var crashes the process immediately.
@@ -239,11 +246,19 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `DATABASE_URL`       |   Yes    | —                | PostgreSQL connection string                |
 | `REDIS_URL`          |   Yes    | —                | Redis connection string                     |
 | `JWT_ACCESS_SECRET`  |   Yes    | —                | HS256 secret, **min 32 chars** (no default) |
-| `JWT_ACCESS_TTL`     |    No    | `15m`            | Access-token lifetime                       |
+| `JWT_ACCESS_TTL`     |    No    | `5m`             | Access-token lifetime                       |
 | `REFRESH_TOKEN_TTL`  |    No    | `7d`             | Refresh-token lifetime                      |
 | `ARGON2_MEMORY_COST` |    No    | `19456`          | Argon2id memory cost (KiB)                  |
 | `ARGON2_TIME_COST`   |    No    | `2`              | Argon2id time cost                          |
 | `ARGON2_PARALLELISM` |    No    | `1`              | Argon2id parallelism                        |
+| `THROTTLE_ENABLED`   |    No    | `true`           | Rate limiting on/off (`false` to disable)   |
+| `COOKIE_SECURE`      |    No    | on in prod       | `Secure` flag on auth cookies (override for TLS-proxy staging) |
+| `CORS_ORIGINS`       |    No    | — (off)          | Comma-separated CORS allow-list; empty = same-origin only |
+| `TRUST_PROXY`        |    No    | — (off)          | Express `trust proxy` for `req.ip` (rate-limit + audit); set behind a proxy (hop count / subnet). **Required when deployed behind a reverse proxy** |
+| `APP_PUBLIC_URL`     |    No    | `http://localhost:3000` | Base URL for links in outbound email        |
+| `EMAIL_VERIFICATION_TTL` | No   | `24h`            | Email-verification token lifetime           |
+| `AUTH_REQUIRE_VERIFIED_EMAIL` | No | `false`        | Refuse login until the email is verified (403) |
+| `PASSWORD_RESET_TTL` | No       | `1h`             | Password-reset token lifetime               |
 
 Docker Compose additionally reads `POSTGRES_USER`, `POSTGRES_PASSWORD`,
 `POSTGRES_DB`, `POSTGRES_HOST_PORT`, and `REDIS_HOST_PORT` from `.env`.
@@ -255,13 +270,27 @@ No global prefix — routes are served at the root. Full, always-current contrac
 
 ### Auth — `/auth`
 
-| Method | Path             | Auth     | Description                                 |
-| ------ | ---------------- | -------- | ------------------------------------------- |
-| `POST` | `/auth/register` | Public   | Create an account                           |
-| `POST` | `/auth/login`    | Public   | Obtain access + refresh tokens              |
-| `GET`  | `/auth/me`       | Bearer   | Current user profile                        |
-| `POST` | `/auth/refresh`  | Public\* | Rotate tokens (\*carries the refresh token) |
-| `POST` | `/auth/logout`   | Bearer   | Revoke the current refresh token            |
+| Method | Path             | Auth       | Description                                 |
+| ------ | ---------------- | ---------- | ------------------------------------------- |
+| `POST` | `/auth/register` | Public     | Create an (unverified) account; sends a verification email |
+| `POST` | `/auth/verify-email` | Public | Redeem a single-use verification token (`204`) |
+| `POST` | `/auth/resend-verification` | Public | Re-issue a verification email (`202`, enumeration-safe) |
+| `POST` | `/auth/forgot-password` | Public | Email a single-use reset token (`202`, enumeration-safe) |
+| `POST` | `/auth/reset-password` | Public | Redeem a reset token, set new password, revoke all sessions (`204`) |
+| `POST` | `/auth/login`    | Public     | Access token in body; refresh + CSRF set as cookies |
+| `GET`  | `/auth/me`       | Bearer     | Current user profile                        |
+| `POST` | `/auth/change-password` | Bearer | Re-verify current password, set a new one, revoke every session (`204`) |
+| `GET`  | `/auth/sessions` | Bearer     | List the user's active sessions (the current one flagged) |
+| `DELETE` | `/auth/sessions/:id` | Bearer | Revoke one session by id (`204`; `404` if not the caller's) |
+| `POST` | `/auth/logout-all` | Bearer   | Revoke every session, this device included (session-epoch bump, `204`) |
+| `POST` | `/auth/refresh`  | Cookie + CSRF | Rotate tokens (reads the refresh cookie; needs the `x-csrf-token` header) |
+| `POST` | `/auth/logout`   | Bearer + CSRF | Revoke the session (denylist access token + refresh token) and clear cookies |
+
+The **refresh token** is delivered only in an `httpOnly; Secure; SameSite=Strict`
+cookie (`Path=/auth`) — never in a response body, so JS can't read it. The two
+cookie-authenticated routes (`refresh`, `logout`) require a **double-submit CSRF
+token**: read the readable `csrf_token` cookie set on login/refresh and echo it in
+the `x-csrf-token` header.
 
 ### Catalog (public) — `/products`
 

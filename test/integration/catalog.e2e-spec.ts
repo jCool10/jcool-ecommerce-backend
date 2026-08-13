@@ -101,6 +101,21 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       const res = await request(app.getHttpServer()).get('/products/0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f');
       expect(res.status).toBe(404);
     });
+
+    it('resolves the product by slug (200) — the id-or-slug path, not just uuid', async () => {
+      const { productId, slug } = await createTestProduct(app);
+
+      const res = await request(app.getHttpServer()).get(`/products/${slug}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(productId);
+      expect(res.body.slug).toBe(slug);
+    });
+
+    it('returns 404 for an unknown slug (no text→uuid cast 500)', async () => {
+      const res = await request(app.getHttpServer()).get('/products/no-such-slug');
+      expect(res.status).toBe(404);
+    });
   });
 
   describe('Admin CRUD (RBAC + validation)', () => {
@@ -143,6 +158,16 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
         .post('/admin/products')
         .set(authHeader(accessToken))
         .send({ slug: 'no-name', categoryId: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f' });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a malformed product id with 400, not a 500', async () => {
+      const { accessToken } = await createTestAdmin(app);
+      const res = await request(app.getHttpServer())
+        .patch('/admin/products/not-a-uuid')
+        .set(authHeader(accessToken))
+        .send({ name: 'x' });
 
       expect(res.status).toBe(400);
     });

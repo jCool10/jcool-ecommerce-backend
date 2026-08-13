@@ -1,10 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsOptional, IsString, Length, Matches, Min } from 'class-validator';
 
-/**
- * Set/replace a SKU's price for one currency. Upsert keyed on (variantId,
- * currency), so PUT is idempotent. Money is an integer in the smallest unit.
- */
+/** Set/replace a SKU's price for one currency — upsert keyed on (variantId, currency) so PUT is idempotent; money is an integer in the smallest unit. */
 export class SetPriceDto {
   @ApiProperty({ example: 2490000, minimum: 0, description: 'Amount in minor units (integer)' })
   @IsInt()

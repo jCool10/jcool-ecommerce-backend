@@ -1,11 +1,7 @@
 import { Money } from '../../../shared/kernel';
 import { Product, type ProductStatus, type ProductVariant } from '../domain/entities/product.entity';
 
-/**
- * One flattened product×variant×price row (product/category inner-joined so
- * always present; variant/price left-joined so nullable). A plain shape so
- * `assembleProducts` stays pure and Drizzle-independent.
- */
+/** One flattened product×variant×price row (product/category inner-joined so always present; variant/price left-joined so nullable) — a plain shape so `assembleProducts` stays pure and Drizzle-independent. */
 export interface ProductFlatRow {
   productId: string;
   productName: string;
@@ -35,10 +31,7 @@ interface ProductAcc {
   variants: Map<string, VariantAcc>;
 }
 
-/**
- * Collapse flattened join rows into Product entities, deduping variants (by id)
- * and prices (by id). Product order = first-seen, so the query's ORDER BY controls it.
- */
+/** Collapse flattened join rows into Product entities, deduping variants and prices by id; product order = first-seen, so the query's ORDER BY controls it. */
 export function assembleProducts(rows: ProductFlatRow[]): Product[] {
   const acc = new Map<string, ProductAcc>();
 
@@ -70,9 +63,8 @@ export function assembleProducts(rows: ProductFlatRow[]): Product[] {
       row.priceAmountMinor !== null &&
       !variant.prices.has(row.priceId)
     ) {
-      // Money.of enforces the integer + 3-letter-currency invariant at the
-      // persistence boundary; every persisted price already satisfies it (write
-      // DTO gates currency `^[A-Z]{3}$`, amount `@IsInt`).
+      // Money.of re-checks the integer + 3-letter-currency invariant at the persistence
+      // boundary; every persisted price already satisfies it (the write DTO gates both).
       variant.prices.set(row.priceId, Money.of(row.priceAmountMinor, row.priceCurrency));
     }
   }

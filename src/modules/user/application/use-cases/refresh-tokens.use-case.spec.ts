@@ -1,10 +1,13 @@
 import { Logger, UnauthorizedException } from '@nestjs/common';
+import type { AuthAuditPort, AuthAuditRecord } from '../ports/auth-audit.port';
 import { hashRefreshToken } from '../hash-refresh-token';
 import type {
+  ActiveSession,
   RefreshTokenRepositoryPort,
   RotateOutcome,
   RotateRefreshTokenInput,
 } from '../ports/refresh-token-repository.port';
+import type { SessionEpochPort } from '../ports/session-epoch.port';
 import type { AuthTokens, AuthTokensService, IssuedRefreshToken } from '../services/auth-tokens.service';
 import { RefreshTokensUseCase } from './refresh-tokens.use-case';
 
@@ -32,10 +35,19 @@ class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
   revoke(): Promise<void> {
     return Promise.reject(new Error('unused'));
   }
+  revokeAllForUser(): Promise<void> {
+    return Promise.reject(new Error('unused'));
+  }
+  listActiveSessions(): Promise<ActiveSession[]> {
+    return Promise.reject(new Error('unused'));
+  }
+  revokeFamily(): Promise<boolean> {
+    return Promise.reject(new Error('unused'));
+  }
 }
 
 class MockAuthTokensService {
-  signAccessCalls: Array<{ sub: string; role: string }> = [];
+  signAccessCalls: Array<{ sub: string; role: string; epoch: number }> = [];
 
   get accessExpiresIn(): number {
     return 900;
@@ -43,9 +55,29 @@ class MockAuthTokensService {
   newRefreshToken(): IssuedRefreshToken {
     return SUCCESSOR;
   }
-  signAccess(sub: string, role: string): Promise<string> {
-    this.signAccessCalls.push({ sub, role });
+  signAccess(sub: string, role: string, epoch = 0): Promise<string> {
+    this.signAccessCalls.push({ sub, role, epoch });
     return Promise.resolve('signed-access-token');
+  }
+}
+
+// Records whatever the use case audits so tests can assert the reuse event.
+class MockAuthAudit implements AuthAuditPort {
+  readonly records: AuthAuditRecord[] = [];
+  record(entry: AuthAuditRecord): void {
+    this.records.push(entry);
+  }
+}
+
+// Records epoch bumps so tests can assert the theft response kills access tokens too.
+class MockSessionEpoch implements SessionEpochPort {
+  readonly bumps: string[] = [];
+  current(): Promise<number | null> {
+    return Promise.reject(new Error('unused'));
+  }
+  bump(userId: string): Promise<number> {
+    this.bumps.push(userId);
+    return Promise.resolve(this.bumps.length);
   }
 }
 
@@ -53,16 +85,20 @@ describe('RefreshTokensUseCase', () => {
   const PRESENTED_RAW = 'presented-raw-refresh-token';
   let repo: MockRefreshTokenRepository;
   let authTokens: MockAuthTokensService;
+  let audit: MockAuthAudit;
+  let sessionEpoch: MockSessionEpoch;
   let useCase: RefreshTokensUseCase;
 
   beforeEach(() => {
     repo = new MockRefreshTokenRepository();
     authTokens = new MockAuthTokensService();
-    useCase = new RefreshTokensUseCase(repo, authTokens as unknown as AuthTokensService);
+    audit = new MockAuthAudit();
+    sessionEpoch = new MockSessionEpoch();
+    useCase = new RefreshTokensUseCase(repo, authTokens as unknown as AuthTokensService, audit, sessionEpoch);
   });
 
   it('rotates a valid token: hashes the presented token, passes the successor, returns the new pair', async () => {
-    repo.outcome = { status: 'rotated', userId: 'u1', role: 'CUSTOMER' };
+    repo.outcome = { status: 'rotated', userId: 'u1', role: 'CUSTOMER', tokenEpoch: 3 };
 
     const result: AuthTokens = await useCase.execute(PRESENTED_RAW);
 
@@ -72,8 +108,8 @@ describe('RefreshTokensUseCase', () => {
       newTokenHash: SUCCESSOR.hash,
       newExpiresAt: SUCCESSOR.expiresAt,
     });
-    // Access token signed with the *fresh* role read during rotation.
-    expect(authTokens.signAccessCalls).toEqual([{ sub: 'u1', role: 'CUSTOMER' }]);
+    // Access token signed with the *fresh* role + session epoch read during rotation.
+    expect(authTokens.signAccessCalls).toEqual([{ sub: 'u1', role: 'CUSTOMER', epoch: 3 }]);
     expect(result).toEqual({
       accessToken: 'signed-access-token',
       refreshToken: SUCCESSOR.raw,
@@ -97,6 +133,18 @@ describe('RefreshTokensUseCase', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(debug).not.toHaveBeenCalled();
     expect(authTokens.signAccessCalls).toHaveLength(0);
+    // Real reuse is audited as a security event, tagged with the family.
+    expect(audit.records).toEqual([
+      {
+        event: 'token.reuse_detected',
+        outcome: 'failure',
+        userId: 'u1',
+        reason: 'refresh_token_reuse',
+        metadata: { familyId: 'fam1' },
+      },
+    ]);
+    // Theft response also bumps the epoch → the thief's outstanding access token dies now.
+    expect(sessionEpoch.bumps).toEqual(['u1']);
 
     vi.restoreAllMocks();
   });
@@ -109,6 +157,10 @@ describe('RefreshTokensUseCase', () => {
     await expect(useCase.execute(PRESENTED_RAW)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(warn).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalledTimes(1);
+    // Benign revoked-token replay is a diagnostic, not an audited security event.
+    expect(audit.records).toHaveLength(0);
+    // ...and does not bump the epoch, so a user's other live sessions stay signed in.
+    expect(sessionEpoch.bumps).toHaveLength(0);
 
     vi.restoreAllMocks();
   });

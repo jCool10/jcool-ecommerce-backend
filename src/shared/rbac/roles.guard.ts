@@ -3,13 +3,7 @@ import { Reflector } from '@nestjs/core';
 import type { Role } from './role.enum';
 import { ROLES_KEY } from './roles.decorator';
 
-/**
- * Global authorization guard, registered after JwtAuthGuard so `request.user` is
- * already populated. No `@Roles` → allow; role listed → allow; otherwise 403.
- * The no-user branch is a fail-safe against a route marked both `@Roles` and
- * `@Public()`. Reads only `{ role }` off request.user to stay decoupled from the
- * User context.
- */
+/** Global authorization guard (runs after JwtAuthGuard, so `request.user` is populated) — no `@Roles` allows, a listed role allows, otherwise 403; reads only `{ role }` to stay decoupled from the User context. See docs/engineering-notes.md (Shared — RBAC). */
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
