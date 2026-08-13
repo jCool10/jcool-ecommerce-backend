@@ -10,4 +10,6 @@ export interface AccessTokenClaims {
   sub: string;
   /** Authorization role, mirrored from the user at issue time. */
   role: Role;
+  /** Unique token id (uuid v7) — the handle a logout denylists to revoke this token. */
+  jti: string;
 }

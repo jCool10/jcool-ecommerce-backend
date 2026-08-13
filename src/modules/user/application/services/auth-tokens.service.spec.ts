@@ -41,12 +41,20 @@ describe('AuthTokensService', () => {
     service = new AuthTokensService(jwt, config, repo);
   });
 
-  it('signs an access JWT carrying sub + role', async () => {
+  it('signs an access JWT carrying sub + role + a unique jti', async () => {
     const { accessToken } = await service.issuePair(user);
 
-    const payload = jwt.verify<{ sub: string; role: string }>(accessToken);
+    const payload = jwt.verify<{ sub: string; role: string; jti: string }>(accessToken);
     expect(payload.sub).toBe('u1');
     expect(payload.role).toBe('CUSTOMER');
+    expect(payload.jti).toEqual(expect.any(String));
+    expect(payload.jti.length).toBeGreaterThan(0);
+  });
+
+  it('mints a distinct jti per access token (so logout can target one token)', async () => {
+    const a = jwt.verify<{ jti: string }>((await service.issuePair(user)).accessToken);
+    const b = jwt.verify<{ jti: string }>((await service.issuePair(user)).accessToken);
+    expect(a.jti).not.toBe(b.jti);
   });
 
   it('returns expiresIn in seconds derived from the access TTL', async () => {

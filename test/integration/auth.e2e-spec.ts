@@ -2,8 +2,18 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  CSRF_TOKEN_COOKIE,
+  REFRESH_TOKEN_COOKIE,
+} from '../../src/modules/user/interface/security/auth-cookie.constants';
 import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { authHeader, loginAs } from '../setup/auth.helper';
+import {
+  authHeader,
+  cookieValueOf,
+  loginAs,
+  sessionHeaders,
+  setCookieEntry,
+} from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -70,14 +80,24 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
     });
 
-    it('returns a token pair on correct credentials, usable on a protected route (200)', async () => {
+    it('returns an access token in the body + refresh/csrf as cookies, usable on a protected route (200)', async () => {
       const res = await request(app.getHttpServer()).post('/auth/login').send({ email, password });
 
       expect(res.status).toBe(200);
       expect(res.body.accessToken.split('.')).toHaveLength(3); // header.payload.signature
-      expect(typeof res.body.refreshToken).toBe('string');
-      expect(res.body.refreshToken.length).toBeGreaterThan(0);
       expect(res.body.expiresIn).toBeGreaterThan(0);
+
+      // Refresh token is NOT in the body anymore — it's an httpOnly cookie.
+      expect(res.body).not.toHaveProperty('refreshToken');
+      const refreshCookie = setCookieEntry(res, REFRESH_TOKEN_COOKIE);
+      expect(refreshCookie).toContain('HttpOnly');
+      expect(refreshCookie).toContain('SameSite=Strict');
+      expect(cookieValueOf(res, REFRESH_TOKEN_COOKIE)!.length).toBeGreaterThan(0);
+
+      // The CSRF cookie is readable (no HttpOnly) so the client can echo it back.
+      const csrfCookie = setCookieEntry(res, CSRF_TOKEN_COOKIE);
+      expect(csrfCookie).toBeDefined();
+      expect(csrfCookie).not.toContain('HttpOnly');
 
       // The login-issued access token authenticates a protected route end-to-end.
       const me = await request(app.getHttpServer()).get('/auth/me').set(authHeader(res.body.accessToken));
@@ -103,25 +123,119 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
     });
 
-    it('rotates the token pair on a valid refresh token (200, new token issued)', async () => {
+    it('rotates the token pair on a valid refresh cookie (200, new refresh cookie issued)', async () => {
       const first = await loginAs(app, { email, password });
 
-      const res = await request(app.getHttpServer()).post('/auth/refresh').send({ refreshToken: first.refreshToken });
+      const res = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first));
 
       expect(res.status).toBe(200);
-      expect(res.body.refreshToken).not.toBe(first.refreshToken); // rotated
       expect(res.body.accessToken.split('.')).toHaveLength(3);
+      // A fresh refresh cookie is set, different from the one we presented.
+      expect(cookieValueOf(res, REFRESH_TOKEN_COOKIE)).not.toBe(first.refreshToken);
     });
 
-    it('rejects reuse of a rotated-away refresh token with 401', async () => {
+    it('rejects reuse of a rotated-away refresh cookie with 401', async () => {
       const first = await loginAs(app, { email, password });
 
-      // Rotate once: `first.refreshToken` is now superseded.
-      await request(app.getHttpServer()).post('/auth/refresh').send({ refreshToken: first.refreshToken }).expect(200);
+      // Rotate once: `first`'s refresh cookie is now superseded.
+      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(200);
 
-      // Replaying the old token is the stolen-token signature → 401.
-      const reuse = await request(app.getHttpServer()).post('/auth/refresh').send({ refreshToken: first.refreshToken });
+      // Replaying the old cookie is the stolen-token signature → 401.
+      const reuse = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first));
       expect(reuse.status).toBe(401);
+    });
+
+    it('rejects a refresh with no cookie at all with 401', async () => {
+      // No refresh cookie and no CSRF token → CSRF guard rejects first (403).
+      const res = await request(app.getHttpServer()).post('/auth/refresh');
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('POST /auth/refresh (CSRF double-submit)', () => {
+    const email = 'csrf@test.local';
+
+    beforeEach(async () => {
+      await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
+    });
+
+    it('rejects refresh when the CSRF header is missing even though the cookie is present (403)', async () => {
+      const session = await loginAs(app, { email, password });
+      const cookie = session.setCookies.map((c) => c.split(';')[0].trim()).join('; ');
+
+      // Cookies sent (incl. csrf_token) but no x-csrf-token header to match it.
+      const res = await request(app.getHttpServer()).post('/auth/refresh').set('Cookie', cookie);
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects refresh when the CSRF header does not match the cookie (403)', async () => {
+      const session = await loginAs(app, { email, password });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set(sessionHeaders(session))
+        .set('x-csrf-token', 'forged.value');
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('POST /auth/logout (immediate revocation)', () => {
+    const email = 'logout@test.local';
+
+    beforeEach(async () => {
+      await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
+    });
+
+    it('revokes the access token immediately + clears the refresh cookie', async () => {
+      const session = await loginAs(app, { email, password });
+
+      // Sanity: the token works before logout.
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(200);
+
+      const out = await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set(authHeader(session.accessToken))
+        .set(sessionHeaders(session))
+        .expect(204);
+
+      // The response clears the refresh cookie (expiry in the past).
+      expect(setCookieEntry(out, REFRESH_TOKEN_COOKIE)).toContain('Expires=Thu, 01 Jan 1970');
+
+      // The reported bug: this used to still return 200 until the token expired.
+      const me = await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken));
+      expect(me.status).toBe(401);
+    });
+
+    it('revokes the refresh token — it can no longer rotate after logout (401)', async () => {
+      const session = await loginAs(app, { email, password });
+
+      await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set(authHeader(session.accessToken))
+        .set(sessionHeaders(session))
+        .expect(204);
+
+      // CSRF token still validates; the refresh token itself is revoked → 401.
+      const res = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session));
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects a repeat logout with the now-revoked token (401 at the guard)', async () => {
+      const session = await loginAs(app, { email, password });
+
+      await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set(authHeader(session.accessToken))
+        .set(sessionHeaders(session))
+        .expect(204);
+
+      // The access token is denylisted, so the global JwtAuthGuard rejects the
+      // second attempt (before the route's CsrfGuard). Revoke idempotency is unit-tested.
+      const res = await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set(authHeader(session.accessToken))
+        .set(sessionHeaders(session));
+      expect(res.status).toBe(401);
     });
   });
 

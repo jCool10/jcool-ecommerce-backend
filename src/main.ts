@@ -2,11 +2,15 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './shared/interface/filters/http-exception.filter';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
+
+  // Parse cookies so the auth routes can read the refresh + CSRF cookies.
+  app.use(cookieParser());
 
   // Validate DTOs at the edge: strip unknown props and reject any that are sent
   // so a malformed request fails loudly instead of being silently trimmed.

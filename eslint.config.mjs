@@ -32,6 +32,12 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-unsafe-argument': 'error',
+      // Honour the `_`-prefix convention for deliberately-unused bindings (e.g. a
+      // fake implementing a wider signature than it needs).
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
       // Prettier options come solely from .prettierrc (single source of truth);
       // no inline overrides so `eslint --fix` and `prettier --write` never fight.
       'prettier/prettier': 'error',

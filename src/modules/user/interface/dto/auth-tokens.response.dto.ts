@@ -1,17 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import type { AuthTokens } from '../../application/services/auth-tokens.service';
 
 /**
- * Response for login/refresh: the token pair + access lifetime. `refreshToken`
- * is the raw opaque token (returned once). Mirrors the AuthTokens type so the
- * Swagger schema stays the contract.
+ * Response for login/refresh: the access token + its lifetime. The refresh token
+ * is NOT in the body (Phase 2) — it's delivered only in an httpOnly cookie, so it
+ * can't be read by JS. Client holds the access token in memory and sends it as a
+ * Bearer header.
  */
-export class AuthTokensResponseDto implements AuthTokens {
+export class AuthTokensResponseDto {
   @ApiProperty({ description: 'Signed JWT access token (HS256).' })
   accessToken!: string;
-
-  @ApiProperty({ description: 'Opaque refresh token — send to /auth/refresh.' })
-  refreshToken!: string;
 
   @ApiProperty({ example: 900, description: 'Access-token lifetime in seconds.' })
   expiresIn!: number;

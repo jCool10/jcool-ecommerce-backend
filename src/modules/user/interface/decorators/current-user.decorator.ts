@@ -1,11 +1,16 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import type { Role } from '../../../../shared/rbac/role.enum';
 
-// Shape JwtStrategy.validate attaches to request.user — minimal (id + role), no
-// DB round-trip. A handler needing more (e.g. email) loads it explicitly.
+// Shape JwtStrategy.validate attaches to request.user — no DB round-trip. Carries
+// the access token's jti + exp so logout can denylist exactly this token. A
+// handler needing more (e.g. email) loads it explicitly.
 export interface AuthenticatedUser {
   userId: string;
   role: Role;
+  /** Access-token id — logout denylists this to revoke the token. */
+  jti: string;
+  /** Access-token expiry (epoch seconds) — the denylist TTL horizon. */
+  exp: number;
 }
 
 // Named function so it's unit-testable without Nest's decorator machinery.

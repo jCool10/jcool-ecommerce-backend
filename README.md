@@ -81,8 +81,10 @@ Currently implemented:
 
 - **Authentication & Authorization**
   - Register / login with **Argon2id** password hashing (OWASP-minimum cost params, tunable).
-  - Stateless **JWT** access tokens (HS256) + **refresh-token rotation** with server-side hashing.
+  - Short-lived **JWT** access tokens (HS256) with a **Redis `jti` denylist** for immediate logout, + **refresh-token rotation** with server-side hashing.
+  - **Cookie-based refresh delivery**: refresh token in an `httpOnly; Secure; SameSite=Strict` cookie (XSS can't read it), with a **signed double-submit CSRF** token guarding the cookie-authenticated routes.
   - **RBAC** via a cross-cutting `@Roles` guard (roles carried in the JWT).
+  - **Rate limiting / brute-force protection** (Redis-backed, cross-instance): a global per-IP floor plus tighter, progressive limits on `login` / `register` / `refresh` — the account tier is keyed per (IP, account) so a brute-force run can't lock out other users behind the same NAT.
 - **Catalog**
   - Public read paths: list products (paginated) and product detail by id or slug.
   - Admin write paths (RBAC `ADMIN`): full CRUD for categories, products, and SKUs, plus price management, with soft-delete support.
@@ -239,11 +241,13 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `DATABASE_URL`       |   Yes    | —                | PostgreSQL connection string                |
 | `REDIS_URL`          |   Yes    | —                | Redis connection string                     |
 | `JWT_ACCESS_SECRET`  |   Yes    | —                | HS256 secret, **min 32 chars** (no default) |
-| `JWT_ACCESS_TTL`     |    No    | `15m`            | Access-token lifetime                       |
+| `JWT_ACCESS_TTL`     |    No    | `5m`             | Access-token lifetime                       |
 | `REFRESH_TOKEN_TTL`  |    No    | `7d`             | Refresh-token lifetime                      |
 | `ARGON2_MEMORY_COST` |    No    | `19456`          | Argon2id memory cost (KiB)                  |
 | `ARGON2_TIME_COST`   |    No    | `2`              | Argon2id time cost                          |
 | `ARGON2_PARALLELISM` |    No    | `1`              | Argon2id parallelism                        |
+| `THROTTLE_ENABLED`   |    No    | `true`           | Rate limiting on/off (`false` to disable)   |
+| `COOKIE_SECURE`      |    No    | on in prod       | `Secure` flag on auth cookies (override for TLS-proxy staging) |
 
 Docker Compose additionally reads `POSTGRES_USER`, `POSTGRES_PASSWORD`,
 `POSTGRES_DB`, `POSTGRES_HOST_PORT`, and `REDIS_HOST_PORT` from `.env`.
@@ -255,13 +259,19 @@ No global prefix — routes are served at the root. Full, always-current contrac
 
 ### Auth — `/auth`
 
-| Method | Path             | Auth     | Description                                 |
-| ------ | ---------------- | -------- | ------------------------------------------- |
-| `POST` | `/auth/register` | Public   | Create an account                           |
-| `POST` | `/auth/login`    | Public   | Obtain access + refresh tokens              |
-| `GET`  | `/auth/me`       | Bearer   | Current user profile                        |
-| `POST` | `/auth/refresh`  | Public\* | Rotate tokens (\*carries the refresh token) |
-| `POST` | `/auth/logout`   | Bearer   | Revoke the current refresh token            |
+| Method | Path             | Auth       | Description                                 |
+| ------ | ---------------- | ---------- | ------------------------------------------- |
+| `POST` | `/auth/register` | Public     | Create an account                           |
+| `POST` | `/auth/login`    | Public     | Access token in body; refresh + CSRF set as cookies |
+| `GET`  | `/auth/me`       | Bearer     | Current user profile                        |
+| `POST` | `/auth/refresh`  | Cookie + CSRF | Rotate tokens (reads the refresh cookie; needs the `x-csrf-token` header) |
+| `POST` | `/auth/logout`   | Bearer + CSRF | Revoke the session (denylist access token + refresh token) and clear cookies |
+
+The **refresh token** is delivered only in an `httpOnly; Secure; SameSite=Strict`
+cookie (`Path=/auth`) — never in a response body, so JS can't read it. The two
+cookie-authenticated routes (`refresh`, `logout`) require a **double-submit CSRF
+token**: read the readable `csrf_token` cookie set on login/refresh and echo it in
+the `x-csrf-token` header.
 
 ### Catalog (public) — `/products`
 

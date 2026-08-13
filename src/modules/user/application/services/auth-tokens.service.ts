@@ -56,8 +56,9 @@ export class AuthTokensService {
   }
 
   // Typed against the shared claims contract so sign/verify sides can't drift.
+  // A fresh jti per token is what lets logout denylist exactly this access token.
   signAccess(sub: string, role: Role): Promise<string> {
-    const claims: AccessTokenClaims = { sub, role };
+    const claims: AccessTokenClaims = { sub, role, jti: uuidv7() };
     return this.jwt.signAsync(claims);
   }
 

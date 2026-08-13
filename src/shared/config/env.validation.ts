@@ -48,6 +48,16 @@ export class EnvironmentVariables {
   @IsBooleanString()
   SWAGGER_ENABLED?: string;
 
+  // Overrides the Secure flag on auth cookies; defaults to on in production only.
+  @IsOptional()
+  @IsBooleanString()
+  COOKIE_SECURE?: string;
+
+  // Rate-limiting kill-switch; defaults to enabled (configuration.ts).
+  @IsOptional()
+  @IsBooleanString()
+  THROTTLE_ENABLED?: string;
+
   // HMAC secret for access tokens. No safe default → missing fails boot.
   // MinLength(32) enforces a ~256-bit floor for HS256.
   @IsString()
