@@ -1,5 +1,15 @@
 // Typed config factory grouped by concern; callers read via config.get('app.port').
 // Env is already validated (env.validation.ts). Defaults applied here when omitted.
+
+// Express `trust proxy` value: false (off), true (trust all — spoofable), a hop count,
+// or a subnet/CSV. Off unless TRUST_PROXY is set.
+function parseTrustProxy(raw: string | undefined): boolean | number | string {
+  if (!raw || raw === 'false') return false;
+  if (raw === 'true') return true;
+  const hops = Number(raw);
+  return Number.isInteger(hops) && hops >= 0 ? hops : raw;
+}
+
 export default () => ({
   app: {
     env: process.env.NODE_ENV,
@@ -19,6 +29,9 @@ export default () => ({
       .filter(Boolean),
     // Public base URL used to build links in outbound email (verification, etc.).
     publicUrl: process.env.APP_PUBLIC_URL ?? 'http://localhost:3000',
+    // Reverse-proxy trust for req.ip (throttle + audit key on it). Off by default so a
+    // direct deploy can't be spoofed via X-Forwarded-For; set behind a trusted proxy.
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   },
   database: {
     url: process.env.DATABASE_URL,

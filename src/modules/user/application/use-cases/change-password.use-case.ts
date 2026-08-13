@@ -9,10 +9,7 @@ export interface ChangePasswordInput {
   newPassword: string;
 }
 
-/**
- * Change an authenticated user's password: re-verify the current password (a valid
- * access token isn't enough), store the new hash, then revoke every session.
- */
+/** Change an authenticated user's password — re-verify the current password (a valid access token isn't enough), store the new hash, then revoke every session. */
 @Injectable()
 export class ChangePasswordUseCase {
   constructor(

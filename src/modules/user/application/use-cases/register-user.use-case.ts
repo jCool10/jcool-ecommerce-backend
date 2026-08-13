@@ -10,10 +10,7 @@ export interface RegisterUserInput {
   password: string;
 }
 
-/**
- * Register a new CUSTOMER: 409 on a taken email, else hash (argon2id), persist as
- * unverified, and send a verification token. The DB unique index is the real guard.
- */
+/** Register a new CUSTOMER — 409 on a taken email (the DB unique index is the real guard), else hash (argon2id), persist as unverified, and send a verification token. */
 @Injectable()
 export class RegisterUserUseCase {
   constructor(

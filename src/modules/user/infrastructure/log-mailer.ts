@@ -2,11 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { EmailVerificationMessage, MailerPort, PasswordResetMessage } from '../application/ports/mailer.port';
 
-/**
- * Default mail transport: logs the message on a dedicated `Mailer` context instead of
- * hitting SMTP. A real sink (not a mock), so the full flow runs without mail infra; a
- * production SMTP adapter can replace it behind {@link MailerPort} with no caller change.
- */
+/** Default mail transport that logs the message on a dedicated `Mailer` context instead of hitting SMTP — a real sink (not a mock), replaceable by a production SMTP adapter behind {@link MailerPort} with no caller change. */
 @Injectable()
 export class LogMailer implements MailerPort {
   private readonly logger = new Logger('Mailer');

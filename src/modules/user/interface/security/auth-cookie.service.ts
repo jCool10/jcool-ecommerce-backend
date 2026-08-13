@@ -6,10 +6,9 @@ import { AUTH_COOKIE_PATH, CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from './aut
 import { CsrfTokenService } from './csrf-token.service';
 
 /**
- * Owns the auth-cookie contract: on login/refresh it sets the httpOnly refresh
- * cookie plus a paired readable CSRF cookie; on logout it clears both. Cookie
- * options are the security surface — httpOnly (refresh only), Secure (prod),
- * SameSite=Strict, Path=/auth — so they live in exactly one place.
+ * Owns the auth-cookie contract in one place: sets the httpOnly refresh cookie + paired readable
+ * CSRF cookie on login/refresh, clears both on logout (httpOnly/Secure/SameSite=Strict/Path=/auth).
+ * See docs/engineering-notes.md (Auth — Token delivery (cookie) & CSRF).
  */
 @Injectable()
 export class AuthCookieService {
@@ -24,10 +23,7 @@ export class AuthCookieService {
     this.maxAgeMs = durationToMs(config.getOrThrow<string>('auth.refreshTokenTtl'));
   }
 
-  /**
-   * Set the refresh cookie (httpOnly) and a fresh CSRF cookie (readable, so the
-   * client can echo it in the x-csrf-token header). Called on login and refresh.
-   */
+  /** Set the refresh cookie (httpOnly) + a fresh readable CSRF cookie (echoed in x-csrf-token). */
   setSession(res: Response, refreshToken: string): void {
     res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, this.cookieOptions(true));
     res.cookie(CSRF_TOKEN_COOKIE, this.csrf.issue(), this.cookieOptions(false));

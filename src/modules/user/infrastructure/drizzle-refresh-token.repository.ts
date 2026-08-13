@@ -24,11 +24,7 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
     });
   }
 
-  /**
-   * Rotation + reuse detection in one transaction: lock the presented row (`FOR UPDATE`),
-   * then unknown/expired → invalid; revoked/replaced → revoke the family (reuse); live leaf →
-   * insert a successor and point the old row at it. The row lock serializes concurrent rotations.
-   */
+  /** Rotation + reuse detection in one transaction — lock the presented row (`FOR UPDATE`), then unknown/expired → invalid, revoked/replaced → revoke the family (reuse), live leaf → insert a successor and point the old row at it. See docs/engineering-notes.md (Auth — Refresh token rotation & reuse detection). */
   async rotate(input: RotateRefreshTokenInput): Promise<RotateOutcome> {
     return this.db.transaction(async (tx) => {
       const [record] = await tx

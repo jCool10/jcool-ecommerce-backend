@@ -5,11 +5,7 @@ import { Pool } from 'pg';
 import * as schema from './schema';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
 
-/**
- * Global Drizzle provider: one pg Pool + `db` opened at startup, pool closed on
- * shutdown. Pool connects lazily so boot doesn't need the DB up. Two providers
- * split lifecycle — PG_POOL (internal, closed here) and DRIZZLE (exported).
- */
+/** Global Drizzle provider — one lazily-connecting pg Pool + `db` opened at startup and closed on shutdown, split into PG_POOL (internal, closed here) and DRIZZLE (exported). See docs/engineering-notes.md (Shared — Database (Drizzle + node-postgres)). */
 @Global()
 @Module({
   providers: [

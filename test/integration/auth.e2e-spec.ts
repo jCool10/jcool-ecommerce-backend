@@ -337,6 +337,21 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(reuse.status).toBe(401);
     });
 
+    it('reuse detection also kills the rotated-out access token (epoch bump, not just the family)', async () => {
+      const first = await loginAs(app, { email, password });
+
+      // Rotate once → the successor session's access token, valid right now.
+      const rotated = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(200);
+      const successorAccess = rotated.body.accessToken as string;
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(200);
+
+      // Replay the superseded cookie → reuse detected: family revoked AND epoch bumped.
+      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(401);
+
+      // The successor access token is now rejected immediately, not left alive for its TTL.
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(401);
+    });
+
     it('rejects a refresh with no cookie at all with 401', async () => {
       // No refresh cookie and no CSRF token → CSRF guard rejects first (403).
       const res = await request(app.getHttpServer()).post('/auth/refresh');

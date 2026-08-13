@@ -1,5 +1,6 @@
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
@@ -21,10 +22,14 @@ export async function createTestApp(): Promise<INestApplication> {
   process.env.THROTTLE_ENABLED ??= 'false';
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication();
+  const app = moduleRef.createNestApplication<NestExpressApplication>();
 
   // Mirror main.ts edge config so the e2e app exercises the same middleware.
   const configService = app.get(ConfigService);
+  const trustProxy = configService.get<boolean | number | string>('app.trustProxy');
+  if (trustProxy !== false) {
+    app.set('trust proxy', trustProxy);
+  }
   const swaggerEnabled = configService.get<boolean>('app.swaggerEnabled');
   app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? false : undefined }));
   const corsOrigins = configService.get<string[]>('app.corsOrigins') ?? [];

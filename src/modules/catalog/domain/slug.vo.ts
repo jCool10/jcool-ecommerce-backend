@@ -4,16 +4,7 @@ interface SlugProps {
   value: string;
 }
 
-/**
- * URL-safe identifier for catalog products/categories. The domain home for the
- * slug rule: trim + lowercase, then a single canonical shape check. Lives in
- * catalog only (YAGNI — no other context needs slugs).
- *
- * The interface DTO's `@Matches` stays the primary HTTP gate (returns 400); this
- * VO is the defense-in-depth backstop and the normalizer for any non-HTTP caller.
- * Pattern mirrors the DTO's `SLUG_PATTERN` (lowercase alphanumeric groups joined
- * by single hyphens).
- */
+/** URL-safe identifier for catalog products/categories (trim + lowercase, single canonical shape check mirroring the DTO's `SLUG_PATTERN`); the DTO's `@Matches` is the primary HTTP gate (400), this VO is the backstop and normalizer for non-HTTP callers. */
 export class Slug extends ValueObject<SlugProps> {
   private static readonly PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 

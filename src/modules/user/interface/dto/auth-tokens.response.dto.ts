@@ -1,9 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-/**
- * Response for login/refresh: the access token + its lifetime. The refresh token is
- * never in the body — it's delivered only in an httpOnly cookie (unreadable by JS).
- */
+/** Response for login/refresh — the access token + its lifetime; the refresh token is never in the body, only in an httpOnly cookie (unreadable by JS). */
 export class AuthTokensResponseDto {
   @ApiProperty({ description: 'Signed JWT access token (HS256).' })
   accessToken!: string;

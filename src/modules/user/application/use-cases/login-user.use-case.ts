@@ -17,11 +17,7 @@ const INVALID_CREDENTIALS = 'Invalid credentials';
 // doesn't distinguish "no user" from "wrong password". Not a secret.
 const DUMMY_PASSWORD = 'dummy-password-for-constant-time-login';
 
-/**
- * Authenticate email/password and issue a token pair; generic 401 on failure (the
- * unknown-email branch runs a real argon2 verify against a dummy hash for constant time).
- * With `auth.requireVerifiedEmail` on, a correct login for an unverified address gets a 403.
- */
+/** Authenticate email/password and issue a token pair — generic 401 on failure (constant-time via a real argon2 verify against a dummy hash on the unknown-email branch), 403 when `auth.requireVerifiedEmail` blocks an unverified address. See docs/engineering-notes.md (Auth — Login, register, logout, profile). */
 @Injectable()
 export class LoginUserUseCase {
   private dummyHashPromise?: Promise<string>;

@@ -1,8 +1,4 @@
-/**
- * Base for entities compared by identity: two entities are equal when they are
- * the same concrete type and share the same id, regardless of attribute drift.
- * Contrast with `ValueObject`, compared by structure.
- */
+/** Base for entities compared by identity — same concrete type and same id, regardless of attribute drift — in contrast to `ValueObject`, compared by structure. */
 export abstract class Entity<TId> {
   readonly id: TId;
 

@@ -3,9 +3,8 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
-// Programmatic migration runner (no drizzle-kit CLI) for CI / Testcontainers.
-// Pure module — no self-execution — so global-setup can import runMigrations().
-// Folder is relative to the process CWD (repo root).
+// Programmatic migration runner (no drizzle-kit CLI) for CI / Testcontainers; pure module
+// (no self-execution) so global-setup can import runMigrations(). Folder is relative to the CWD.
 const MIGRATIONS_FOLDER = 'src/shared/infrastructure/database/migrations';
 
 // Defaults to DATABASE_URL; tests pass the container connection string.

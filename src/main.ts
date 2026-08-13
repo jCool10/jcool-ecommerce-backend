@@ -1,6 +1,7 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
@@ -9,8 +10,15 @@ import { CSRF_HEADER } from './modules/user/interface/security/auth-cookie.const
 import { HttpExceptionFilter } from './shared/interface/filters/http-exception.filter';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
+
+  // Behind a reverse proxy, trust it so `req.ip` is the real client IP (rate-limit + audit key);
+  // env-gated, off by default so a direct deploy can't be spoofed via X-Forwarded-For.
+  const trustProxy = configService.get<boolean | number | string>('app.trustProxy');
+  if (trustProxy !== false) {
+    app.set('trust proxy', trustProxy);
+  }
 
   // Security headers (HSTS, X-Content-Type-Options, frameguard…). The default CSP blocks
   // Swagger UI's inline assets, so it's disabled only when the docs are served.

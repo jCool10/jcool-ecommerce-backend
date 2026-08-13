@@ -3,16 +3,10 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
- * Signed double-submit CSRF tokens. A token is `random.hmac(random)`; the same
- * value is set in a readable cookie AND must be echoed in a request header. The
- * guard requires cookie === header (so a cross-site caller, unable to read the
- * cookie under the same-origin policy, can't forge the header) and a valid
- * signature (so an attacker who can *write* a cookie — subdomain/MITM — still
- * can't mint one without the key). SameSite=Strict on the refresh cookie is the
- * primary defence; this is the belt-and-suspenders layer.
- *
- * The signing key is derived from JWT_ACCESS_SECRET via a labelled HMAC, so it's
- * cryptographically separate from the JWT key without introducing a new env var.
+ * Signed double-submit CSRF tokens (`random.hmac(random)`): the same value sits in a readable
+ * cookie and must be echoed in a header; the guard requires cookie === header AND a valid
+ * signature (key derived from JWT_ACCESS_SECRET). Constant-time throughout.
+ * See docs/engineering-notes.md (Auth — Token delivery (cookie) & CSRF).
  */
 @Injectable()
 export class CsrfTokenService {
@@ -29,10 +23,7 @@ export class CsrfTokenService {
     return `${random}.${this.sign(random)}`;
   }
 
-  /**
-   * Valid when both values are present, identical (double-submit), and the
-   * presented token carries an authentic signature. Constant-time throughout.
-   */
+  /** Valid when both values are present, identical (double-submit), and signed authentically. */
   verify(cookieValue: string | undefined, headerValue: string | undefined): boolean {
     if (!cookieValue || !headerValue) return false;
     if (!this.constantTimeEquals(cookieValue, headerValue)) return false;

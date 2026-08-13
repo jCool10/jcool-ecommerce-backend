@@ -21,6 +21,7 @@ export interface TestProductOptions {
 export interface TestProduct {
   categoryId: string;
   productId: string;
+  slug: string;
   variantId: string;
   sku: string;
   priceId: string;
@@ -69,6 +70,7 @@ export async function createTestProduct(app: INestApplication, options: TestProd
   return {
     categoryId,
     productId: product.id,
+    slug: product.slug,
     variantId: variant.id,
     sku: variant.sku,
     priceId: price.id,

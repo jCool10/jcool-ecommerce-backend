@@ -3,10 +3,7 @@ import { Email } from '../../domain/email.vo';
 import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
 import { PasswordResetService } from '../services/password-reset.service';
 
-/**
- * Start the "forgot password" flow — enumeration-safe (always the same generic response);
- * a reset token is issued only for an existing account, independent of email verification.
- */
+/** Start the "forgot password" flow, enumeration-safe (always the same generic response); a reset token is issued only for an existing account, independent of email verification. */
 @Injectable()
 export class ForgotPasswordUseCase {
   constructor(

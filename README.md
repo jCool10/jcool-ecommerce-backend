@@ -254,6 +254,7 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `THROTTLE_ENABLED`   |    No    | `true`           | Rate limiting on/off (`false` to disable)   |
 | `COOKIE_SECURE`      |    No    | on in prod       | `Secure` flag on auth cookies (override for TLS-proxy staging) |
 | `CORS_ORIGINS`       |    No    | — (off)          | Comma-separated CORS allow-list; empty = same-origin only |
+| `TRUST_PROXY`        |    No    | — (off)          | Express `trust proxy` for `req.ip` (rate-limit + audit); set behind a proxy (hop count / subnet). **Required when deployed behind a reverse proxy** |
 | `APP_PUBLIC_URL`     |    No    | `http://localhost:3000` | Base URL for links in outbound email        |
 | `EMAIL_VERIFICATION_TTL` | No   | `24h`            | Email-verification token lifetime           |
 | `AUTH_REQUIRE_VERIFIED_EMAIL` | No | `false`        | Refuse login until the email is verified (403) |

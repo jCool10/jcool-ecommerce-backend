@@ -8,8 +8,7 @@ import { CatalogModule } from './modules/catalog/catalog.module';
 import { UserModule } from './modules/user/user.module';
 import { AuthModule } from './modules/user/auth.module';
 
-// Root module. Global infrastructure (config, database, redis) + feature modules.
-// DrizzleModule/RedisModule are @Global so repositories inject them without re-importing.
+// Root module: global infrastructure (config, database, redis @Global) + feature modules;
 // ThrottlerSecurityModule precedes AuthModule so its rate-limit guard runs before the auth guards.
 @Module({
   imports: [

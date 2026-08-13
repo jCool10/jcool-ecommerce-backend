@@ -2,9 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 
-// Redis readiness: a real PING per call, not ioredis' cached status (which can
-// report "up" while commands still fail). enableOfflineQueue=false → PING rejects
-// fast when down, so readiness returns 503 without blocking.
+// Redis readiness: a real PING per call, not ioredis' cached status (which can report "up" while
+// commands still fail); enableOfflineQueue=false makes PING reject fast when down, so readiness 503s.
 @Injectable()
 export class RedisHealthIndicator {
   private readonly logger = new Logger(RedisHealthIndicator.name);

@@ -39,11 +39,7 @@ import { CsrfTokenService } from './interface/security/csrf-token.service';
 import { JwtStrategy } from './interface/strategies/jwt.strategy';
 import { UserModule } from './user.module';
 
-/**
- * Auth surface for the User context: register/login, token issuance + rotation, and
- * the two global guards (JwtAuthGuard then RolesGuard). Imports UserModule for its
- * ports; configures JwtModule (HS256).
- */
+/** Auth surface for the User context — register/login, token issuance + rotation, and the two global guards (JwtAuthGuard then RolesGuard); imports UserModule for its ports and configures JwtModule (HS256). */
 @Module({
   imports: [
     UserModule,

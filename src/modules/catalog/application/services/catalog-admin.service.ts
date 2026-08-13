@@ -15,12 +15,7 @@ import {
 
 const DEFAULT_CURRENCY = 'VND';
 
-/**
- * Catalog admin write orchestration. One service rather than ~10 near-identical
- * use-case classes since the operations share the same ref-existence checks
- * (404) and archive guard (409). The service owns those business decisions; the
- * adapter owns the atomic writes.
- */
+/** Catalog admin write orchestration — one service (not ~10 near-identical use-case classes) since the operations share the same ref-existence checks (404) and archive guard (409); it owns those business decisions, the adapter owns the atomic writes. See docs/engineering-notes.md (Catalog — Admin write path). */
 @Injectable()
 export class CatalogAdminService {
   constructor(
@@ -124,9 +119,8 @@ export class CatalogAdminService {
 
   // ----- helpers -----
 
-  // First-line check: a product may only reference a live category. It can't
-  // catch a status-only PATCH or an archive/publish race, so the public read
-  // filters archived categories independently. Missing OR archived → same 404.
+  // A product may only reference a live category; this can't catch a status-only PATCH
+  // or archive/publish race, so the public read filters archived categories independently.
   private async assertCategoryUsable(categoryId: string): Promise<void> {
     const category = await this.repo.findCategoryById(categoryId);
     if (!category || category.archivedAt !== null) {

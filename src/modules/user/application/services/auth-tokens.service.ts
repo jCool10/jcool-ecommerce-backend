@@ -29,7 +29,10 @@ export interface IssuedRefreshToken {
   expiresAt: Date;
 }
 
-/** Issues the access + refresh token pair, keeping token mechanics out of the use cases. */
+/**
+ * Issues the access + refresh token pair, keeping token mechanics out of the use cases.
+ * See docs/engineering-notes.md (Auth — Token model).
+ */
 @Injectable()
 export class AuthTokensService {
   private readonly accessExpiresInSeconds: number;

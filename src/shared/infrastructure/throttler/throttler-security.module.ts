@@ -7,15 +7,7 @@ import { RedisService } from '../redis/redis.service';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import { GLOBAL_THROTTLERS } from './throttler.constants';
 
-/**
- * App-wide rate limiting (brute-force + DoS protection). Counters live in Redis
- * on the shared client, so limits hold across instances and process restarts
- * rather than per-process memory. Registered before AuthModule in AppModule so
- * its global guard runs ahead of the auth guards and floods are shed early.
- *
- * `THROTTLE_ENABLED=false` turns enforcement off via `skipIf` (used by the
- * default e2e harness and available as an operational kill-switch).
- */
+/** App-wide rate limiting (brute-force + DoS) with counters in shared Redis so limits hold across instances and restarts; registered before AuthModule so its global guard sheds floods ahead of the auth guards, and `THROTTLE_ENABLED=false` turns enforcement off via `skipIf`. See docs/engineering-notes.md (Auth — Rate limiting / brute-force protection). */
 @Module({
   imports: [
     ThrottlerModule.forRootAsync({

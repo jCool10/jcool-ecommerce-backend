@@ -4,10 +4,9 @@ import { CSRF_HEADER, CSRF_TOKEN_COOKIE } from './auth-cookie.constants';
 import { CsrfTokenService } from './csrf-token.service';
 
 /**
- * Enforces the signed double-submit CSRF check on routes that authenticate via
- * the refresh cookie (refresh/logout). Bearer-only routes don't need it — the
- * browser never auto-attaches an Authorization header. Runs after the global
- * JwtAuthGuard, so an invalid access token 401s before this 403s.
+ * Enforces the signed double-submit CSRF check on the cookie-authenticated routes (refresh/logout);
+ * runs after the global JwtAuthGuard, so an invalid access token 401s before this 403s.
+ * See docs/engineering-notes.md (Auth — Token delivery (cookie) & CSRF).
  */
 @Injectable()
 export class CsrfGuard implements CanActivate {

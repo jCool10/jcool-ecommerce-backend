@@ -1,8 +1,4 @@
-/**
- * Parse a compact duration ("15m", "7d", "3600s", "500ms", or a bare number =
- * ms) into milliseconds — the TTL form used by JWT_ACCESS_TTL / REFRESH_TOKEN_TTL.
- * Throws on an unrecognized format so a misconfigured TTL fails fast.
- */
+/** Parse a compact duration ("15m", "7d", "3600s", "500ms", or a bare number = ms) into milliseconds; throws on an unrecognized format so a misconfigured TTL fails fast. */
 const UNIT_TO_MS: Record<string, number> = {
   ms: 1,
   s: 1_000,

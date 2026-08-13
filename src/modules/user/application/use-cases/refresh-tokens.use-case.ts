@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/commo
 import { hashRefreshToken } from '../hash-refresh-token';
 import { AUTH_AUDIT, type AuthAuditPort } from '../ports/auth-audit.port';
 import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../ports/refresh-token-repository.port';
+import { SESSION_EPOCH, type SessionEpochPort } from '../ports/session-epoch.port';
 import { AuthTokensService, type AuthTokens } from '../services/auth-tokens.service';
 
 // One generic message for every failure branch so a caller can't probe validity.
@@ -19,6 +20,7 @@ export class RefreshTokensUseCase {
     @Inject(REFRESH_TOKEN_REPOSITORY) private readonly refreshTokens: RefreshTokenRepositoryPort,
     private readonly authTokens: AuthTokensService,
     @Inject(AUTH_AUDIT) private readonly audit: AuthAuditPort,
+    @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochPort,
   ) {}
 
   async execute(rawRefreshToken: string): Promise<AuthTokens> {
@@ -42,6 +44,9 @@ export class RefreshTokensUseCase {
           metadata: { familyId: outcome.familyId },
         });
         this.logger.warn(`Refresh token reuse detected — session revoked (${context})`);
+        // Also bump the epoch so the access token the thief already rotated out is
+        // rejected now, not left alive until its TTL — rotate only revoked refresh rows.
+        await this.sessionEpoch.bump(outcome.userId);
       } else {
         // Merely-revoked token replayed (post-logout) — benign, diagnostic only.
         this.logger.debug(`Revoked refresh token replayed — session already ended (${context})`);

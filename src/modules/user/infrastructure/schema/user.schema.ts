@@ -66,11 +66,7 @@ export const passwordResetTokens = pgTable(
   (t) => [index('idx_password_reset_tokens_user').on(t.userId)],
 );
 
-/**
- * Stateful refresh tokens, one row per issued token (immediate revoke + rotation lineage):
- * `tokenHash` = SHA-256, `familyId` groups a login session (a detected reuse revokes the
- * family), `replacedByTokenId` points at the successor.
- */
+/** Stateful refresh tokens, one row per issued token (immediate revoke + rotation lineage) — `tokenHash` = SHA-256, `familyId` groups a login session (a detected reuse revokes the family), `replacedByTokenId` points at the successor. */
 export const refreshTokens = pgTable(
   'refresh_tokens',
   {

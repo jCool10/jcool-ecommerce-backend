@@ -19,11 +19,7 @@ export enum NodeEnv {
   Production = 'production',
 }
 
-/**
- * Environment schema, validated once at startup (fail-fast). Required:
- * NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET. Optional vars fall back
- * to defaults applied in configuration.ts.
- */
+/** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET; optional vars fall back to defaults applied in configuration.ts. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
   NODE_ENV!: NodeEnv;
@@ -63,6 +59,13 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   CORS_ORIGINS?: string;
+
+  // Express `trust proxy` for req.ip (throttle + audit); off unless set. Accepts a hop
+  // count, a subnet/CSV, or "true"/"false".
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  TRUST_PROXY?: string;
 
   // Rate-limiting kill-switch; defaults to enabled (configuration.ts).
   @IsOptional()

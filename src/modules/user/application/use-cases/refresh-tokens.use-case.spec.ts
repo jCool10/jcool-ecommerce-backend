@@ -7,6 +7,7 @@ import type {
   RotateOutcome,
   RotateRefreshTokenInput,
 } from '../ports/refresh-token-repository.port';
+import type { SessionEpochPort } from '../ports/session-epoch.port';
 import type { AuthTokens, AuthTokensService, IssuedRefreshToken } from '../services/auth-tokens.service';
 import { RefreshTokensUseCase } from './refresh-tokens.use-case';
 
@@ -68,18 +69,32 @@ class MockAuthAudit implements AuthAuditPort {
   }
 }
 
+// Records epoch bumps so tests can assert the theft response kills access tokens too.
+class MockSessionEpoch implements SessionEpochPort {
+  readonly bumps: string[] = [];
+  current(): Promise<number | null> {
+    return Promise.reject(new Error('unused'));
+  }
+  bump(userId: string): Promise<number> {
+    this.bumps.push(userId);
+    return Promise.resolve(this.bumps.length);
+  }
+}
+
 describe('RefreshTokensUseCase', () => {
   const PRESENTED_RAW = 'presented-raw-refresh-token';
   let repo: MockRefreshTokenRepository;
   let authTokens: MockAuthTokensService;
   let audit: MockAuthAudit;
+  let sessionEpoch: MockSessionEpoch;
   let useCase: RefreshTokensUseCase;
 
   beforeEach(() => {
     repo = new MockRefreshTokenRepository();
     authTokens = new MockAuthTokensService();
     audit = new MockAuthAudit();
-    useCase = new RefreshTokensUseCase(repo, authTokens as unknown as AuthTokensService, audit);
+    sessionEpoch = new MockSessionEpoch();
+    useCase = new RefreshTokensUseCase(repo, authTokens as unknown as AuthTokensService, audit, sessionEpoch);
   });
 
   it('rotates a valid token: hashes the presented token, passes the successor, returns the new pair', async () => {
@@ -128,6 +143,8 @@ describe('RefreshTokensUseCase', () => {
         metadata: { familyId: 'fam1' },
       },
     ]);
+    // Theft response also bumps the epoch → the thief's outstanding access token dies now.
+    expect(sessionEpoch.bumps).toEqual(['u1']);
 
     vi.restoreAllMocks();
   });
@@ -142,6 +159,8 @@ describe('RefreshTokensUseCase', () => {
     expect(debug).toHaveBeenCalledTimes(1);
     // Benign revoked-token replay is a diagnostic, not an audited security event.
     expect(audit.records).toHaveLength(0);
+    // ...and does not bump the epoch, so a user's other live sessions stay signed in.
+    expect(sessionEpoch.bumps).toHaveLength(0);
 
     vi.restoreAllMocks();
   });

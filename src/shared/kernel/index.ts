@@ -1,6 +1,5 @@
-// Shared kernel barrel: pure DDD building blocks reused by ≥2 bounded contexts.
-// Zero framework/DB imports — importable from any layer. No context-specific
-// business rules live here.
+// Shared kernel barrel: pure DDD building blocks reused by ≥2 bounded contexts, zero
+// framework/DB imports (importable from any layer) and no context-specific business rules.
 export * from './domain-error';
 export * from './guard';
 export * from './value-object';

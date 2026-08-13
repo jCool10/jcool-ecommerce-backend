@@ -26,9 +26,8 @@ export class SessionService {
     return this.refreshTokens.revokeFamily(userId, sessionId);
   }
 
-  // Sign out everywhere: revoke refresh tokens (durable) + bump the epoch, which rejects
-  // every outstanding access token at once. Revoking a single session only stops its
-  // refresh; that session's short-lived access token lives out its TTL.
+  // Sign out everywhere: revoke all refresh tokens (durable) + bump the epoch to reject
+  // every outstanding access token at once (revoking one session only stops its refresh).
   async revokeAll(userId: string): Promise<void> {
     await this.refreshTokens.revokeAllForUser(userId);
     await this.sessionEpoch.bump(userId);

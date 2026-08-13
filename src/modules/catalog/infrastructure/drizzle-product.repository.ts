@@ -35,11 +35,11 @@ function escapeLike(input: string): string {
   return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
-/**
- * Drizzle adapter for ProductRepositoryPort. Explicit SQL-first joins (readable
- * `EXPLAIN ANALYZE`) and integer money passthrough. This is also the seam for a
- * future cache-aside layer.
- */
+// A product id is a UUID; a slug never is. Probe the uuid `id` column only for
+// UUID-shaped input — comparing it against a slug throws on Postgres' text→uuid cast.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Drizzle adapter for ProductRepositoryPort — explicit SQL-first joins (readable `EXPLAIN ANALYZE`) with integer money passthrough, and the seam for a future cache-aside layer. */
 @Injectable()
 export class DrizzleProductRepository implements ProductRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -47,9 +47,8 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
   async findManyActive(criteria: FindManyActiveCriteria): Promise<FindManyActiveResult> {
     const { page, pageSize, categorySlug, q } = criteria;
 
-    // Live products in live categories only. Filtering the inner-joined category
-    // here is the authoritative archived-category guard (the write-side check is
-    // just the first line). Also blocks ?categorySlug=<archived>.
+    // Live products in live categories only — filtering the inner-joined category here is the
+    // authoritative archived-category guard (the write-side check is just the first line).
     const conditions: SQL[] = [eq(products.status, 'ACTIVE'), isNull(categories.archivedAt)];
     if (categorySlug) {
       conditions.push(eq(categories.slug, categorySlug));
@@ -59,9 +58,8 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
     }
     const where = and(...conditions);
 
-    // One snapshot for page + count. Two-step pagination: LIMIT/OFFSET on
-    // products alone (a LIMIT over the flattened join would count join rows),
-    // then hydrate children for exactly that page of ids.
+    // One snapshot for page + count; two-step pagination — LIMIT/OFFSET on products alone
+    // (a LIMIT over the flattened join would count join rows), then hydrate that page's ids.
     return this.db.transaction(
       async (tx) => {
         const idRows = await tx
@@ -116,6 +114,7 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
   }
 
   async findActiveByIdOrSlug(idOrSlug: string): Promise<Product | null> {
+    const byId = UUID_PATTERN.test(idOrSlug);
     const rows = await this.db
       .select(flatColumns)
       .from(products)
@@ -128,14 +127,13 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
         and(
           eq(products.status, 'ACTIVE'),
           isNull(categories.archivedAt),
-          or(eq(products.id, idOrSlug), eq(products.slug, idOrSlug)),
+          byId ? or(eq(products.id, idOrSlug), eq(products.slug, idOrSlug)) : eq(products.slug, idOrSlug),
         ),
       )
-      // Id-precedence: if one product's slug equals another's id, the exact id
-      // match wins. The CASE is the primary sort key so that product's rows sort
-      // first and assembleProducts()[0] is it. `${idOrSlug}` binds as a param.
+      // Id-precedence: when the input is a UUID and one product's slug equals another's
+      // id, the exact id match sorts first so assembleProducts()[0] is the id winner.
       .orderBy(
-        sql`case when ${products.id} = ${idOrSlug} then 0 else 1 end`,
+        ...(byId ? [sql`case when ${products.id} = ${idOrSlug} then 0 else 1 end`] : []),
         productVariants.createdAt,
         productVariants.id,
         prices.currency,

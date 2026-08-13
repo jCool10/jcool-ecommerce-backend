@@ -13,13 +13,7 @@ export interface LogoutInput {
   rawRefreshToken: string;
 }
 
-/**
- * Log out one session by revoking BOTH halves: denylist the stateless access
- * token (until its exp) so it stops working now, and revoke the presented
- * refresh token so it can't mint new access tokens. Idempotent — an unknown/
- * foreign/already-revoked token is a silent no-op, so the controller always
- * returns 204. Scope is this session only, not the whole token family.
- */
+/** Log out one session by revoking both halves — denylist the stateless access token until its exp, revoke the presented refresh token — idempotent (unknown/foreign/already-revoked is a silent no-op → always 204) and scoped to this session only. See docs/engineering-notes.md (Auth — Login, register, logout, profile). */
 @Injectable()
 export class LogoutUserUseCase {
   constructor(

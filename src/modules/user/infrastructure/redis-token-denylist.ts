@@ -2,10 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { RedisService } from '../../../shared/infrastructure/redis/redis.service';
 import type { TokenDenylistPort } from '../application/ports/token-denylist.port';
 
-// Redis adapter for the access-token denylist. One key per denylisted jti, set
-// with a millisecond (PX) TTL equal to the token's remaining life, so Redis
-// evicts the entry exactly when the token would have expired anyway — the
-// denylist self-trims and can never grow past the live-token set.
+// Redis adapter for the access-token denylist: one key per denylisted jti with a PX TTL
+// equal to the token's remaining life, so the denylist self-trims and never outgrows the live-token set.
 const KEY_PREFIX = 'auth:denylist:';
 
 @Injectable()

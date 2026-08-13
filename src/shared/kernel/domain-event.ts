@@ -1,10 +1,4 @@
-/**
- * A fact that happened inside a bounded context, raised by an aggregate. Concrete
- * events live in `modules/<ctx>/domain/events/` and implement this interface;
- * they are collected via `AggregateRoot.addDomainEvent` and later flushed to the
- * transactional outbox (see the deferred outbox phase) in the same transaction
- * that persists the aggregate.
- */
+/** A fact that happened inside a bounded context, raised by an aggregate; concrete events live in `modules/<ctx>/domain/events/`, implement this interface, and are collected via `AggregateRoot.addDomainEvent`. */
 export interface DomainEvent {
   readonly eventName: string;
   readonly aggregateId: string;

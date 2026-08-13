@@ -67,12 +67,7 @@ import { VerifyEmailDto } from './dto/verify-email.dto';
 import { AuthCookieService } from './security/auth-cookie.service';
 import { CsrfGuard } from './security/csrf.guard';
 
-/**
- * Auth endpoints — thin: validate DTO, call a use case, map to a response DTO. The
- * access token is returned in the JSON body (held in memory, sent as a Bearer header —
- * CSRF-immune); the refresh token travels only in an httpOnly cookie, so the
- * cookie-authenticated routes (refresh/logout) carry a double-submit CSRF token.
- */
+/** Auth endpoints — thin (validate DTO, call a use case, map to a response DTO); access token in the JSON body (Bearer, CSRF-immune), refresh token only in an httpOnly cookie (refresh/logout add CSRF). */
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {

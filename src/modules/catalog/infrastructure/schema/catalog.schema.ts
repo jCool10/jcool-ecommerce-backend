@@ -1,9 +1,8 @@
 import { index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
-// Catalog schema (products/variants/prices/categories). Infrastructure, never
-// imported by domain. Money is integer `amount_minor` (smallest unit, no float);
-// ids are app-generated UUID v7 (time-sortable, native `uuid` column).
+// Catalog schema (products/variants/prices/categories) — infrastructure, never imported by
+// domain. Money is integer `amount_minor` (no float); ids are app-generated UUID v7 (native `uuid`).
 
 export const productStatus = pgEnum('product_status', ['DRAFT', 'ACTIVE', 'ARCHIVED']);
 

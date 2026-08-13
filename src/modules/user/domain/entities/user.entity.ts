@@ -1,9 +1,6 @@
 import type { Role } from '../../../../shared/rbac/role.enum';
 
-/**
- * User domain entity — pure, no framework/DB imports. `passwordHash` is the stored
- * argon2id digest (never plaintext); identity + timestamps are DB-generated.
- */
+/** User domain entity — pure, no framework/DB imports; `passwordHash` is the stored argon2id digest (never plaintext), identity + timestamps are DB-generated. */
 export class User {
   constructor(
     public readonly id: string,

@@ -13,11 +13,7 @@ interface AccessTokenPayload extends AccessTokenClaims {
   exp: number;
 }
 
-/**
- * Passport strategy for Bearer access tokens; `algorithms: ['HS256']` is pinned to block
- * algorithm-confusion. Two stateful checks make revocation immediate: the jti denylist
- * (one logged-out token) and the session epoch (every token before a logout-all / change-password).
- */
+/** Passport strategy for Bearer access tokens with `algorithms: ['HS256']` pinned (blocks algorithm-confusion); two stateful checks make revocation immediate — the jti denylist (one logged-out token) and the session epoch (every token before a logout-all / change-password). See docs/engineering-notes.md (Auth — Token model). */
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(

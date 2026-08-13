@@ -18,10 +18,9 @@ export interface RotateRefreshTokenInput {
 }
 
 /**
- * Outcome of an atomic rotation. `rotated` carries the owner's current `role` and
- * `tokenEpoch` (read in the same transaction) to sign the successor access token.
- * `reuse` means an already-rotated token was replayed and the whole family is now
- * revoked; `replaced` marks the theft signal (a superseded token) vs a benign replay.
+ * Outcome of an atomic rotation: `rotated` carries the owner's `role`+`tokenEpoch` (same-tx) for the
+ * successor token; `reuse` means a retired token was replayed (family revoked), `replaced` = theft signal.
+ * See docs/engineering-notes.md (Auth — Refresh token rotation & reuse detection).
  */
 export type RotateOutcome =
   | { status: 'rotated'; userId: string; role: Role; tokenEpoch: number }
