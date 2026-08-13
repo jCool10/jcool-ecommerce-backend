@@ -1,4 +1,5 @@
-import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Email } from '../../domain/email.vo';
 import { PASSWORD_HASHER, type PasswordHasherPort } from '../ports/password-hasher.port';
 import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
@@ -17,19 +18,23 @@ const INVALID_CREDENTIALS = 'Invalid credentials';
 const DUMMY_PASSWORD = 'dummy-password-for-constant-time-login';
 
 /**
- * Authenticate email/password and issue a token pair; generic 401 on failure.
- * The unknown-email branch runs a real argon2 verify against a cached dummy hash
- * so both failure paths cost the same.
+ * Authenticate email/password and issue a token pair; generic 401 on failure (the
+ * unknown-email branch runs a real argon2 verify against a dummy hash for constant time).
+ * With `auth.requireVerifiedEmail` on, a correct login for an unverified address gets a 403.
  */
 @Injectable()
 export class LoginUserUseCase {
   private dummyHashPromise?: Promise<string>;
+  private readonly requireVerifiedEmail: boolean;
 
   constructor(
     @Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort,
     @Inject(PASSWORD_HASHER) private readonly hasher: PasswordHasherPort,
     private readonly authTokens: AuthTokensService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.requireVerifiedEmail = config.get<boolean>('auth.requireVerifiedEmail') ?? false;
+  }
 
   async execute(input: LoginUserInput): Promise<AuthTokens> {
     const email = Email.of(input.email).value;
@@ -43,6 +48,10 @@ export class LoginUserUseCase {
 
     if (!(await this.hasher.verify(user.passwordHash, input.password))) {
       throw new UnauthorizedException(INVALID_CREDENTIALS);
+    }
+
+    if (this.requireVerifiedEmail && !user.isEmailVerified) {
+      throw new ForbiddenException('Email not verified');
     }
 
     return this.authTokens.issuePair(user);

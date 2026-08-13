@@ -1,5 +1,5 @@
 import { hashRefreshToken } from '../hash-refresh-token';
-import type { RefreshTokenRepositoryPort, RotateOutcome } from '../ports/refresh-token-repository.port';
+import type { ActiveSession, RefreshTokenRepositoryPort, RotateOutcome } from '../ports/refresh-token-repository.port';
 import type { TokenDenylistPort } from '../ports/token-denylist.port';
 import { LogoutUserUseCase } from './logout-user.use-case';
 
@@ -15,6 +15,15 @@ class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
   revoke(userId: string, tokenHash: string): Promise<void> {
     this.revokeCalls.push({ userId, tokenHash });
     return Promise.resolve();
+  }
+  revokeAllForUser(): Promise<void> {
+    return Promise.reject(new Error('unused'));
+  }
+  listActiveSessions(): Promise<ActiveSession[]> {
+    return Promise.reject(new Error('unused'));
+  }
+  revokeFamily(): Promise<boolean> {
+    return Promise.reject(new Error('unused'));
   }
 }
 

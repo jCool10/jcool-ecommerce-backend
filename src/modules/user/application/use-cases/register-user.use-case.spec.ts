@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { User } from '../../domain/entities/user.entity';
 import type { PasswordHasherPort } from '../ports/password-hasher.port';
 import type { CreateUserInput, UserRepositoryPort } from '../ports/user-repository.port';
+import type { EmailVerificationService, VerificationRecipient } from '../services/email-verification.service';
 import { RegisterUserUseCase } from './register-user.use-case';
 
 class MockUserRepository implements UserRepositoryPort {
@@ -22,6 +23,21 @@ class MockUserRepository implements UserRepositoryPort {
       new User('new-id', input.email, input.passwordHash, input.role ?? 'CUSTOMER', new Date(), new Date()),
     );
   }
+  markEmailVerified(): Promise<void> {
+    return Promise.resolve();
+  }
+  updatePassword(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+// Captures who a verification token was issued + sent for.
+class MockEmailVerification {
+  sentTo: VerificationRecipient[] = [];
+  issueAndSend(recipient: VerificationRecipient): Promise<void> {
+    this.sentTo.push(recipient);
+    return Promise.resolve();
+  }
 }
 
 const hasher: PasswordHasherPort = {
@@ -31,11 +47,13 @@ const hasher: PasswordHasherPort = {
 
 describe('RegisterUserUseCase', () => {
   let repo: MockUserRepository;
+  let emailVerification: MockEmailVerification;
   let useCase: RegisterUserUseCase;
 
   beforeEach(() => {
     repo = new MockUserRepository();
-    useCase = new RegisterUserUseCase(repo, hasher);
+    emailVerification = new MockEmailVerification();
+    useCase = new RegisterUserUseCase(repo, hasher, emailVerification as unknown as EmailVerificationService);
   });
 
   it('hashes the password and creates a user when the email is free', async () => {
@@ -45,6 +63,13 @@ describe('RegisterUserUseCase', () => {
     expect(repo.created?.role).toBeUndefined(); // DB default CUSTOMER applies
     expect(user.email).toBe('user@example.com');
     expect(user.role).toBe('CUSTOMER');
+    expect(user.isEmailVerified).toBe(false); // new accounts start unverified
+  });
+
+  it('issues + sends a verification token for the new user', async () => {
+    const user = await useCase.execute({ email: 'user@example.com', password: 'supersecret' });
+
+    expect(emailVerification.sentTo).toEqual([user]);
   });
 
   it('normalizes the email (trim + lowercase) before lookup and create', async () => {
@@ -54,12 +79,13 @@ describe('RegisterUserUseCase', () => {
     expect(repo.created?.email).toBe('user@example.com');
   });
 
-  it('throws ConflictException and does not create when the email is taken', async () => {
+  it('throws ConflictException, does not create, and sends no email when the email is taken', async () => {
     repo.existing = new User('u1', 'user@example.com', 'hashed:x', 'CUSTOMER', new Date(), new Date());
 
     await expect(useCase.execute({ email: 'user@example.com', password: 'supersecret' })).rejects.toBeInstanceOf(
       ConflictException,
     );
     expect(repo.created).toBeUndefined();
+    expect(emailVerification.sentTo).toHaveLength(0);
   });
 });

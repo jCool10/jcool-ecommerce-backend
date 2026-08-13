@@ -1,7 +1,17 @@
+import { randomBytes } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  EMAIL_VERIFICATION_TOKEN_REPOSITORY,
+  type EmailVerificationTokenRepositoryPort,
+} from '../../src/modules/user/application/ports/email-verification-token-repository.port';
+import {
+  PASSWORD_RESET_TOKEN_REPOSITORY,
+  type PasswordResetTokenRepositoryPort,
+} from '../../src/modules/user/application/ports/password-reset-token-repository.port';
+import { sha256Hex } from '../../src/modules/user/application/sha256-hex';
 import {
   CSRF_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,
@@ -40,13 +50,26 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     await resetDatabase(pool);
   });
 
+  describe('Security headers (helmet)', () => {
+    it('rides hardening headers on every response and strips X-Powered-By', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: 'nobody@test.local', password: 'whatever' });
+
+      // The 401 body is irrelevant; helmet's headers are what we assert here.
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+      expect(res.headers['x-frame-options']).toBeDefined();
+      expect(res.headers['x-powered-by']).toBeUndefined();
+    });
+  });
+
   describe('POST /auth/register', () => {
-    it('creates an account (201) and never leaks passwordHash', async () => {
+    it('creates an unverified account (201) and never leaks passwordHash', async () => {
       const email = 'new-user@test.local';
       const res = await request(app.getHttpServer()).post('/auth/register').send({ email, password });
 
       expect(res.status).toBe(201);
-      expect(res.body).toMatchObject({ email, role: 'CUSTOMER' });
+      expect(res.body).toMatchObject({ email, role: 'CUSTOMER', emailVerified: false });
       expect(res.body.id).toBeTruthy();
       expect(res.body).not.toHaveProperty('passwordHash');
       expect(res.body).not.toHaveProperty('password');
@@ -69,6 +92,175 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       const res = await request(app.getHttpServer())
         .post('/auth/register')
         .send({ email: 'shortpw@test.local', password: 'short' });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /auth/verify-email', () => {
+    // The raw token is emailed, never returned by an endpoint — mint one directly
+    // (only its hash is stored) and present the raw value to the API.
+    async function issueToken(userId: string, expiresAt = new Date(Date.now() + 3_600_000)): Promise<string> {
+      const raw = randomBytes(32).toString('base64url');
+      const repo = app.get<EmailVerificationTokenRepositoryPort>(EMAIL_VERIFICATION_TOKEN_REPOSITORY);
+      await repo.create({ userId, tokenHash: sha256Hex(raw), expiresAt });
+      return raw;
+    }
+
+    it('verifies the email with a valid token (204) and flips emailVerified', async () => {
+      const { user, accessToken } = await createTestUser(app);
+      const token = await issueToken(user.id);
+
+      await request(app.getHttpServer()).post('/auth/verify-email').send({ token }).expect(204);
+
+      const me = await request(app.getHttpServer()).get('/auth/me').set(authHeader(accessToken)).expect(200);
+      expect(me.body.emailVerified).toBe(true);
+    });
+
+    it('rejects a second use of the same token (single-use → 400)', async () => {
+      const { user } = await createTestUser(app);
+      const token = await issueToken(user.id);
+
+      await request(app.getHttpServer()).post('/auth/verify-email').send({ token }).expect(204);
+      const replay = await request(app.getHttpServer()).post('/auth/verify-email').send({ token });
+      expect(replay.status).toBe(400);
+    });
+
+    it('rejects an expired token with 400', async () => {
+      const { user } = await createTestUser(app);
+      const token = await issueToken(user.id, new Date(Date.now() - 1_000));
+
+      const res = await request(app.getHttpServer()).post('/auth/verify-email').send({ token });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects an unknown token with 400', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/verify-email')
+        .send({ token: randomBytes(32).toString('base64url') });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /auth/resend-verification', () => {
+    it('returns the same generic 202 for unknown, unverified, and already-verified addresses', async () => {
+      const { user } = await createTestUser(app); // unverified
+      const verified = await createTestUser(app, { emailVerified: true });
+
+      const unknown = await request(app.getHttpServer())
+        .post('/auth/resend-verification')
+        .send({ email: 'nobody@test.local' });
+      const unverified = await request(app.getHttpServer())
+        .post('/auth/resend-verification')
+        .send({ email: user.email });
+      const already = await request(app.getHttpServer())
+        .post('/auth/resend-verification')
+        .send({ email: verified.user.email });
+
+      expect(unknown.status).toBe(202);
+      expect(unverified.status).toBe(202);
+      expect(already.status).toBe(202);
+    });
+
+    it('rejects a malformed email with 400', async () => {
+      const res = await request(app.getHttpServer()).post('/auth/resend-verification').send({ email: 'not-an-email' });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /auth/forgot-password', () => {
+    it('returns the same generic 202 for both a known and an unknown address', async () => {
+      const { user } = await createTestUser(app);
+
+      const known = await request(app.getHttpServer()).post('/auth/forgot-password').send({ email: user.email });
+      const unknown = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ email: 'nobody@test.local' });
+
+      expect(known.status).toBe(202);
+      expect(unknown.status).toBe(202);
+    });
+
+    it('rejects a malformed email with 400', async () => {
+      const res = await request(app.getHttpServer()).post('/auth/forgot-password').send({ email: 'not-an-email' });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /auth/reset-password', () => {
+    const newPassword = 'NewPassword456!';
+
+    // The raw token is emailed, never returned — mint one directly (only its hash
+    // is stored) and present the raw value to the API.
+    async function issueResetToken(userId: string, expiresAt = new Date(Date.now() + 3_600_000)): Promise<string> {
+      const raw = randomBytes(32).toString('base64url');
+      const repo = app.get<PasswordResetTokenRepositoryPort>(PASSWORD_RESET_TOKEN_REPOSITORY);
+      await repo.create({ userId, tokenHash: sha256Hex(raw), expiresAt });
+      return raw;
+    }
+
+    it('resets the password (204): new password logs in, old one is rejected', async () => {
+      const { user, password } = await createTestUser(app);
+      const token = await issueResetToken(user.id);
+
+      await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: newPassword }).expect(204);
+
+      const withNew = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: user.email, password: newPassword });
+      expect(withNew.status).toBe(200);
+
+      const withOld = await request(app.getHttpServer()).post('/auth/login').send({ email: user.email, password });
+      expect(withOld.status).toBe(401);
+    });
+
+    it('revokes all existing sessions — the pre-reset access token and refresh cookie both stop working', async () => {
+      const { user, password } = await createTestUser(app);
+      const session = await loginAs(app, { email: user.email, password });
+      const token = await issueResetToken(user.id);
+
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(200);
+
+      await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: newPassword }).expect(204);
+
+      // The session predates the reset: its access token dies via the epoch bump and its refresh can't rotate.
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(401);
+      const rotate = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session));
+      expect(rotate.status).toBe(401);
+    });
+
+    it('rejects a second use of the same token (single-use → 400)', async () => {
+      const { user } = await createTestUser(app);
+      const token = await issueResetToken(user.id);
+
+      await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: newPassword }).expect(204);
+      const replay = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({ token, password: 'AnotherPass789!' });
+      expect(replay.status).toBe(400);
+    });
+
+    it('rejects an expired token with 400', async () => {
+      const { user } = await createTestUser(app);
+      const token = await issueResetToken(user.id, new Date(Date.now() - 1_000));
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({ token, password: newPassword });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects an unknown token with 400', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({ token: randomBytes(32).toString('base64url'), password: newPassword });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a too-short new password with 400', async () => {
+      const { user } = await createTestUser(app);
+      const token = await issueResetToken(user.id);
+
+      const res = await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: 'short' });
       expect(res.status).toBe(400);
     });
   });

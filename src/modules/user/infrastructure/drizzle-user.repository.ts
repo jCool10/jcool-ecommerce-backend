@@ -15,6 +15,8 @@ function toDomain(row: UserRow): User {
     role: row.role,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    emailVerifiedAt: row.emailVerifiedAt,
+    tokenEpoch: row.tokenEpoch,
   });
 }
 
@@ -45,5 +47,13 @@ export class DrizzleUserRepository implements UserRepositoryPort {
       })
       .returning();
     return toDomain(row);
+  }
+
+  async markEmailVerified(userId: string): Promise<void> {
+    await this.db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, userId));
+  }
+
+  async updatePassword(userId: string, passwordHash: string): Promise<void> {
+    await this.db.update(users).set({ passwordHash }).where(eq(users.id, userId));
   }
 }

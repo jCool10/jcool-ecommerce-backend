@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { AccessTokenClaims } from '../../application/access-token-claims';
+import { SESSION_EPOCH, type SessionEpochPort } from '../../application/ports/session-epoch.port';
 import { TOKEN_DENYLIST, type TokenDenylistPort } from '../../application/ports/token-denylist.port';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 
@@ -13,16 +14,16 @@ interface AccessTokenPayload extends AccessTokenClaims {
 }
 
 /**
- * Passport strategy for Bearer access tokens. `algorithms: ['HS256']` is pinned
- * to block algorithm-confusion attacks. Signature + expiry are stateless; the
- * one stateful check is the `jti` denylist, so a logged-out token is rejected
- * immediately instead of surviving until its `exp`.
+ * Passport strategy for Bearer access tokens; `algorithms: ['HS256']` is pinned to block
+ * algorithm-confusion. Two stateful checks make revocation immediate: the jti denylist
+ * (one logged-out token) and the session epoch (every token before a logout-all / change-password).
  */
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     config: ConfigService,
     @Inject(TOKEN_DENYLIST) private readonly denylist: TokenDenylistPort,
+    @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochPort,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -33,11 +34,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: AccessTokenPayload): Promise<AuthenticatedUser> {
-    // A revoked (logged-out) access token stays cryptographically valid until
-    // exp — the denylist is what makes logout take effect right away.
+    // A logged-out token stays cryptographically valid until exp — the denylist makes logout immediate.
     if (await this.denylist.isDenylisted(payload.jti)) {
       throw new UnauthorizedException('Token has been revoked');
     }
+
+    // Reject a token whose epoch predates the user's current one; null = user gone (reject),
+    // missing claim = treated as epoch 0.
+    const currentEpoch = await this.sessionEpoch.current(payload.sub);
+    if (currentEpoch === null || (payload.epoch ?? 0) < currentEpoch) {
+      throw new UnauthorizedException('Session has been revoked');
+    }
+
     return { userId: payload.sub, role: payload.role, jti: payload.jti, exp: payload.exp };
   }
 }

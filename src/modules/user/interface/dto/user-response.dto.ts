@@ -16,11 +16,15 @@ export class UserResponseDto {
   @ApiProperty({ enum: ROLES, example: 'CUSTOMER' })
   role!: string;
 
+  @ApiProperty({ example: false, description: 'Whether the email address has been verified.' })
+  emailVerified!: boolean;
+
   static fromEntity(user: User): UserResponseDto {
     const dto = new UserResponseDto();
     dto.id = user.id;
     dto.email = user.email;
     dto.role = user.role;
+    dto.emailVerified = user.isEmailVerified;
     return dto;
   }
 }

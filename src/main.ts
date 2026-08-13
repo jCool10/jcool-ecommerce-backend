@@ -3,28 +3,44 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { CSRF_HEADER } from './modules/user/interface/security/auth-cookie.constants';
 import { HttpExceptionFilter } from './shared/interface/filters/http-exception.filter';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
+  const configService = app.get(ConfigService);
+
+  // Security headers (HSTS, X-Content-Type-Options, frameguard…). The default CSP blocks
+  // Swagger UI's inline assets, so it's disabled only when the docs are served.
+  const swaggerEnabled = configService.get<boolean>('app.swaggerEnabled');
+  app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? false : undefined }));
+
+  // CORS off unless an explicit allow-list is configured; credentials on so auth cookies
+  // can ride cross-origin XHR from a whitelisted origin.
+  const corsOrigins = configService.get<string[]>('app.corsOrigins') ?? [];
+  app.enableCors({
+    origin: corsOrigins.length > 0 ? corsOrigins : false,
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
+  });
 
   // Parse cookies so the auth routes can read the refresh + CSRF cookies.
   app.use(cookieParser());
 
-  // Validate DTOs at the edge: strip unknown props and reject any that are sent
-  // so a malformed request fails loudly instead of being silently trimmed.
+  // Validate DTOs at the edge: strip unknown props and reject any sent (fail loud, not silent).
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
 
   // Let SIGTERM/SIGINT run lifecycle hooks (DrizzleModule drains the pg pool).
   app.enableShutdownHooks();
 
-  const configService = app.get(ConfigService);
   const port = configService.get<number>('app.port') ?? 3000;
 
   // OpenAPI docs at /docs, gated by config (off in production unless enabled).
-  if (configService.get<boolean>('app.swaggerEnabled')) {
+  if (swaggerEnabled) {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('JCool E-commerce API')
       .setDescription(

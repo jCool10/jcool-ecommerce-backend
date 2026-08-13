@@ -1,10 +1,6 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex } from './sha256-hex';
 
-/**
- * SHA-256 (hex) of an opaque refresh token — the single hashing rule shared by
- * issue (persist) and verify (refresh/logout lookup). A pure module so the two
- * sides can't drift to a different digest.
- */
+/** SHA-256 (hex) of an opaque refresh token; delegates to {@link sha256Hex} so every digest stays identical. */
 export function hashRefreshToken(rawToken: string): string {
-  return createHash('sha256').update(rawToken).digest('hex');
+  return sha256Hex(rawToken);
 }

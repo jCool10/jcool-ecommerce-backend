@@ -3,6 +3,7 @@ import type { User } from '../../domain/entities/user.entity';
 import { Email } from '../../domain/email.vo';
 import { PASSWORD_HASHER, type PasswordHasherPort } from '../ports/password-hasher.port';
 import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
+import { EmailVerificationService } from '../services/email-verification.service';
 
 export interface RegisterUserInput {
   email: string;
@@ -10,15 +11,15 @@ export interface RegisterUserInput {
 }
 
 /**
- * Register a new CUSTOMER: 409 on a taken email, else hash (argon2id) and persist.
- * No auto-login. The DB unique index is the real guard; the pre-check just gives
- * a clean 409 for the common non-concurrent case.
+ * Register a new CUSTOMER: 409 on a taken email, else hash (argon2id), persist as
+ * unverified, and send a verification token. The DB unique index is the real guard.
  */
 @Injectable()
 export class RegisterUserUseCase {
   constructor(
     @Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort,
     @Inject(PASSWORD_HASHER) private readonly hasher: PasswordHasherPort,
+    private readonly emailVerification: EmailVerificationService,
   ) {}
 
   async execute(input: RegisterUserInput): Promise<User> {
@@ -29,7 +30,9 @@ export class RegisterUserUseCase {
     }
 
     const passwordHash = await this.hasher.hash(input.password);
-    // `role` omitted → DB default CUSTOMER applies.
-    return this.users.create({ email, passwordHash });
+    // `role` omitted → DB default CUSTOMER; new accounts are unverified until the emailed token is redeemed.
+    const user = await this.users.create({ email, passwordHash });
+    await this.emailVerification.issueAndSend(user);
+    return user;
   }
 }

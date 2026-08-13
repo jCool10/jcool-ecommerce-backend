@@ -1,8 +1,11 @@
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { inject } from 'vitest';
 import { AppModule } from '../../src/app.module';
+import { CSRF_HEADER } from '../../src/modules/user/interface/security/auth-cookie.constants';
 import { HttpExceptionFilter } from '../../src/shared/interface/filters/http-exception.filter';
 
 // Real INestApplication on the container URLs, mirroring main.ts edge config.
@@ -19,7 +22,19 @@ export async function createTestApp(): Promise<INestApplication> {
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication();
-  app.use(cookieParser()); // mirror main.ts so auth routes can read the cookies
+
+  // Mirror main.ts edge config so the e2e app exercises the same middleware.
+  const configService = app.get(ConfigService);
+  const swaggerEnabled = configService.get<boolean>('app.swaggerEnabled');
+  app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? false : undefined }));
+  const corsOrigins = configService.get<string[]>('app.corsOrigins') ?? [];
+  app.enableCors({
+    origin: corsOrigins.length > 0 ? corsOrigins : false,
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
+  });
+  app.use(cookieParser()); // so auth routes can read the refresh + CSRF cookies
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
   await app.init();

@@ -9,5 +9,5 @@ export function refreshTokenCookieFactory(_data: unknown, ctx: ExecutionContext)
   return request.cookies?.[REFRESH_TOKEN_COOKIE] as string | undefined;
 }
 
-/** Inject the raw refresh token read from the httpOnly cookie (Phase 2 delivery). */
+/** Inject the raw refresh token read from the httpOnly cookie (undefined if absent). */
 export const RefreshTokenCookie = createParamDecorator(refreshTokenCookieFactory);

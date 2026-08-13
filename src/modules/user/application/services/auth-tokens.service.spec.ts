@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '../../domain/entities/user.entity';
 import type {
+  ActiveSession,
   CreateRefreshTokenInput,
   RefreshTokenRepositoryPort,
   RotateOutcome,
@@ -20,6 +21,15 @@ class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
     return Promise.reject(new Error('unused'));
   }
   revoke(): Promise<void> {
+    return Promise.reject(new Error('unused'));
+  }
+  revokeAllForUser(): Promise<void> {
+    return Promise.reject(new Error('unused'));
+  }
+  listActiveSessions(): Promise<ActiveSession[]> {
+    return Promise.reject(new Error('unused'));
+  }
+  revokeFamily(): Promise<boolean> {
     return Promise.reject(new Error('unused'));
   }
 }
@@ -41,14 +51,32 @@ describe('AuthTokensService', () => {
     service = new AuthTokensService(jwt, config, repo);
   });
 
-  it('signs an access JWT carrying sub + role + a unique jti', async () => {
+  it('signs an access JWT carrying sub + role + a unique jti + the session epoch', async () => {
     const { accessToken } = await service.issuePair(user);
 
-    const payload = jwt.verify<{ sub: string; role: string; jti: string }>(accessToken);
+    const payload = jwt.verify<{ sub: string; role: string; jti: string; epoch: number }>(accessToken);
     expect(payload.sub).toBe('u1');
     expect(payload.role).toBe('CUSTOMER');
     expect(payload.jti).toEqual(expect.any(String));
     expect(payload.jti.length).toBeGreaterThan(0);
+    expect(payload.epoch).toBe(0); // fresh user → epoch 0
+  });
+
+  it('stamps the user’s current session epoch into the access token', async () => {
+    const bumped = User.create({
+      id: 'u2',
+      email: 'bumped@example.com',
+      passwordHash: '$argon2id$hash',
+      role: 'CUSTOMER',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      tokenEpoch: 5,
+    });
+
+    const { accessToken } = await service.issuePair(bumped);
+
+    const payload = jwt.verify<{ epoch: number }>(accessToken);
+    expect(payload.epoch).toBe(5);
   });
 
   it('mints a distinct jti per access token (so logout can target one token)', async () => {

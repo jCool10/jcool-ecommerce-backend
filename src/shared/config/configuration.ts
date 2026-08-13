@@ -8,12 +8,17 @@ export default () => ({
     swaggerEnabled:
       process.env.SWAGGER_ENABLED === 'true' ||
       (process.env.SWAGGER_ENABLED !== 'false' && process.env.NODE_ENV !== 'production'),
-    // Secure flag on auth cookies. Defaults to on in production (HTTPS) and off
-    // otherwise so http dev/e2e can round-trip cookies; COOKIE_SECURE overrides
-    // (e.g. staging behind a TLS proxy).
+    // Secure flag on auth cookies: on in production, off elsewhere (so http dev/e2e round-trips); COOKIE_SECURE overrides.
     cookieSecure: process.env.COOKIE_SECURE
       ? process.env.COOKIE_SECURE === 'true'
       : process.env.NODE_ENV === 'production',
+    // Cross-origin allow-list (comma-separated); empty → CORS off (same-origin only), the safe default.
+    corsOrigins: (process.env.CORS_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+    // Public base URL used to build links in outbound email (verification, etc.).
+    publicUrl: process.env.APP_PUBLIC_URL ?? 'http://localhost:3000',
   },
   database: {
     url: process.env.DATABASE_URL,
@@ -23,10 +28,15 @@ export default () => ({
   },
   auth: {
     jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
-    // Short access-token life (defense-in-depth): the jti denylist makes logout
-    // immediate regardless, this caps the window if the denylist is ever bypassed.
+    // Short access-token life (defense-in-depth): caps exposure if the jti denylist is ever bypassed.
     jwtAccessTtl: process.env.JWT_ACCESS_TTL ?? '5m',
     refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '7d',
+    // Lifetime of an email-verification token (duration form, e.g. "24h").
+    emailVerificationTtl: process.env.EMAIL_VERIFICATION_TTL ?? '24h',
+    // Password-reset token lifetime — short by design (high-value credential), defaults to 1h.
+    passwordResetTtl: process.env.PASSWORD_RESET_TTL ?? '1h',
+    // When true, an unverified account cannot log in (403 after correct creds). Off by default.
+    requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
   },
   argon2: {
     // OWASP-minimum argon2id params (m=19 MiB, t=2, p=1); override via env to tune.
@@ -35,8 +45,7 @@ export default () => ({
     parallelism: parseInt(process.env.ARGON2_PARALLELISM ?? '1', 10),
   },
   throttle: {
-    // Rate-limiting kill-switch. On by default; set THROTTLE_ENABLED=false to
-    // disable enforcement (load tests, or the default e2e harness).
+    // Rate-limiting kill-switch; on by default (THROTTLE_ENABLED=false disables — load tests, e2e).
     enabled: process.env.THROTTLE_ENABLED !== 'false',
   },
 });

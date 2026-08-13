@@ -17,6 +17,8 @@ export interface TestUserOptions {
   email?: string;
   password?: string;
   role?: Role;
+  /** Stamp the account as email-verified after creation (default false). */
+  emailVerified?: boolean;
 }
 
 export interface TestUser {
@@ -35,7 +37,11 @@ export async function createTestUser(app: INestApplication, options: TestUserOpt
   const tokens = app.get(AuthTokensService);
 
   const passwordHash = await hasher.hash(password);
-  const user = await users.create({ email, passwordHash, role: options.role });
+  let user = await users.create({ email, passwordHash, role: options.role });
+  if (options.emailVerified) {
+    await users.markEmailVerified(user.id);
+    user = (await users.findById(user.id)) ?? user; // reflect the verified stamp
+  }
   const accessToken = await tokens.signAccess(user.id, user.role);
 
   return { user, accessToken, password };

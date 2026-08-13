@@ -1,6 +1,8 @@
 import { Logger, UnauthorizedException } from '@nestjs/common';
+import type { AuthAuditPort, AuthAuditRecord } from '../ports/auth-audit.port';
 import { hashRefreshToken } from '../hash-refresh-token';
 import type {
+  ActiveSession,
   RefreshTokenRepositoryPort,
   RotateOutcome,
   RotateRefreshTokenInput,
@@ -32,10 +34,19 @@ class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
   revoke(): Promise<void> {
     return Promise.reject(new Error('unused'));
   }
+  revokeAllForUser(): Promise<void> {
+    return Promise.reject(new Error('unused'));
+  }
+  listActiveSessions(): Promise<ActiveSession[]> {
+    return Promise.reject(new Error('unused'));
+  }
+  revokeFamily(): Promise<boolean> {
+    return Promise.reject(new Error('unused'));
+  }
 }
 
 class MockAuthTokensService {
-  signAccessCalls: Array<{ sub: string; role: string }> = [];
+  signAccessCalls: Array<{ sub: string; role: string; epoch: number }> = [];
 
   get accessExpiresIn(): number {
     return 900;
@@ -43,9 +54,17 @@ class MockAuthTokensService {
   newRefreshToken(): IssuedRefreshToken {
     return SUCCESSOR;
   }
-  signAccess(sub: string, role: string): Promise<string> {
-    this.signAccessCalls.push({ sub, role });
+  signAccess(sub: string, role: string, epoch = 0): Promise<string> {
+    this.signAccessCalls.push({ sub, role, epoch });
     return Promise.resolve('signed-access-token');
+  }
+}
+
+// Records whatever the use case audits so tests can assert the reuse event.
+class MockAuthAudit implements AuthAuditPort {
+  readonly records: AuthAuditRecord[] = [];
+  record(entry: AuthAuditRecord): void {
+    this.records.push(entry);
   }
 }
 
@@ -53,16 +72,18 @@ describe('RefreshTokensUseCase', () => {
   const PRESENTED_RAW = 'presented-raw-refresh-token';
   let repo: MockRefreshTokenRepository;
   let authTokens: MockAuthTokensService;
+  let audit: MockAuthAudit;
   let useCase: RefreshTokensUseCase;
 
   beforeEach(() => {
     repo = new MockRefreshTokenRepository();
     authTokens = new MockAuthTokensService();
-    useCase = new RefreshTokensUseCase(repo, authTokens as unknown as AuthTokensService);
+    audit = new MockAuthAudit();
+    useCase = new RefreshTokensUseCase(repo, authTokens as unknown as AuthTokensService, audit);
   });
 
   it('rotates a valid token: hashes the presented token, passes the successor, returns the new pair', async () => {
-    repo.outcome = { status: 'rotated', userId: 'u1', role: 'CUSTOMER' };
+    repo.outcome = { status: 'rotated', userId: 'u1', role: 'CUSTOMER', tokenEpoch: 3 };
 
     const result: AuthTokens = await useCase.execute(PRESENTED_RAW);
 
@@ -72,8 +93,8 @@ describe('RefreshTokensUseCase', () => {
       newTokenHash: SUCCESSOR.hash,
       newExpiresAt: SUCCESSOR.expiresAt,
     });
-    // Access token signed with the *fresh* role read during rotation.
-    expect(authTokens.signAccessCalls).toEqual([{ sub: 'u1', role: 'CUSTOMER' }]);
+    // Access token signed with the *fresh* role + session epoch read during rotation.
+    expect(authTokens.signAccessCalls).toEqual([{ sub: 'u1', role: 'CUSTOMER', epoch: 3 }]);
     expect(result).toEqual({
       accessToken: 'signed-access-token',
       refreshToken: SUCCESSOR.raw,
@@ -97,6 +118,16 @@ describe('RefreshTokensUseCase', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(debug).not.toHaveBeenCalled();
     expect(authTokens.signAccessCalls).toHaveLength(0);
+    // Real reuse is audited as a security event, tagged with the family.
+    expect(audit.records).toEqual([
+      {
+        event: 'token.reuse_detected',
+        outcome: 'failure',
+        userId: 'u1',
+        reason: 'refresh_token_reuse',
+        metadata: { familyId: 'fam1' },
+      },
+    ]);
 
     vi.restoreAllMocks();
   });
@@ -109,6 +140,8 @@ describe('RefreshTokensUseCase', () => {
     await expect(useCase.execute(PRESENTED_RAW)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(warn).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalledTimes(1);
+    // Benign revoked-token replay is a diagnostic, not an audited security event.
+    expect(audit.records).toHaveLength(0);
 
     vi.restoreAllMocks();
   });
