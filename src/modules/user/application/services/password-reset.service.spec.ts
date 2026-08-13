@@ -1,16 +1,19 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { AuthAuditPort, AuthAuditRecord } from '../ports/auth-audit.port';
-import type { EmailVerificationMessage, MailerPort, PasswordResetMessage } from '../ports/mailer.port';
-import type { PasswordHasherPort } from '../ports/password-hasher.port';
 import type {
+  AuthAuditPort,
+  AuthAuditRecord,
   ConsumePasswordResetOutcome,
   CreatePasswordResetTokenInput,
+  EmailVerificationMessage,
+  MailerPort,
+  PasswordHasherPort,
+  PasswordResetMessage,
   PasswordResetTokenRepositoryPort,
-} from '../ports/password-reset-token-repository.port';
-import type { UserRepositoryPort } from '../ports/user-repository.port';
-import { sha256Hex } from '../sha256-hex';
+  UserRepositoryPort,
+} from '../ports';
+import { sha256Hex } from '..';
 import { PasswordResetService } from './password-reset.service';
 import { SessionService } from './session.service';
 

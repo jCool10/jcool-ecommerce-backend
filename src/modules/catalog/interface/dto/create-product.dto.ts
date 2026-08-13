@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
-import { PRODUCT_STATUSES, type ProductStatus } from '../../domain/entities/product.entity';
+import { PRODUCT_STATUSES, type ProductStatus } from '../../domain/entities';
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
 
 export class CreateProductDto {

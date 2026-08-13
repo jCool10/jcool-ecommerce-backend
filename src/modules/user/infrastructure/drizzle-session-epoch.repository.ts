@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database/drizzle.tokens';
+import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
 import { users } from './schema/user.schema';
-import type { SessionEpochPort } from '../application/ports/session-epoch.port';
+import type { SessionEpochPort } from '../application/ports';
 
 /** Drizzle adapter for the session epoch on `users.token_epoch`; `bump` is a single atomic `token_epoch + 1`, so concurrent logout-all calls can't lose an increment. */
 @Injectable()

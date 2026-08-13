@@ -1,16 +1,19 @@
 import { randomBytes } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { durationToMs } from '../duration-to-ms';
-import { sha256Hex } from '../sha256-hex';
-import { AUTH_AUDIT, type AuthAuditPort } from '../ports/auth-audit.port';
-import { MAILER, type MailerPort } from '../ports/mailer.port';
-import { PASSWORD_HASHER, type PasswordHasherPort } from '../ports/password-hasher.port';
+import { durationToMs, sha256Hex } from '..';
 import {
+  AUTH_AUDIT,
+  type AuthAuditPort,
+  MAILER,
+  type MailerPort,
+  PASSWORD_HASHER,
+  type PasswordHasherPort,
   PASSWORD_RESET_TOKEN_REPOSITORY,
   type PasswordResetTokenRepositoryPort,
-} from '../ports/password-reset-token-repository.port';
-import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
+  USER_REPOSITORY,
+  type UserRepositoryPort,
+} from '../ports';
 import { SessionService } from './session.service';
 
 /** Minimal recipient shape needed to issue + send a password-reset token. */

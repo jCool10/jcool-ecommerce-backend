@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { hashRefreshToken } from '../hash-refresh-token';
-import type { ActiveSession, RefreshTokenRepositoryPort } from '../ports/refresh-token-repository.port';
-import type { SessionEpochPort } from '../ports/session-epoch.port';
+import { hashRefreshToken } from '..';
+import type { ActiveSession, RefreshTokenRepositoryPort, SessionEpochPort } from '../ports';
 import { SessionService } from './session.service';
 
 const SESSIONS: ActiveSession[] = [

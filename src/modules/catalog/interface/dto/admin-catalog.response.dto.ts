@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { PRODUCT_STATUSES } from '../../domain/entities/product.entity';
-import type { AdminProduct, Category, Price, Sku } from '../../domain/entities/catalog-admin.entities';
+import { PRODUCT_STATUSES, type AdminProduct, type Category, type Price, type Sku } from '../../domain/entities';
 
 // Response shapes for the admin write paths, always mapped via `fromEntity` so DB
 // internals never leak. `archivedAt` is a nullable ISO string (null = active).

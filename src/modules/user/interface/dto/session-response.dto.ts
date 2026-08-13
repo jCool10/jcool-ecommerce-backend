@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import type { ActiveSession } from '../../application/ports/refresh-token-repository.port';
+import type { ActiveSession } from '../../application/ports';
 
 /** Public view of one active session for GET /auth/sessions; `id` is passed to DELETE /auth/sessions/:id. */
 export class SessionResponseDto {

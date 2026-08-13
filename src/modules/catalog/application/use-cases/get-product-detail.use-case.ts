@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { Product } from '../../domain/entities/product.entity';
-import { PRODUCT_REPOSITORY, type ProductRepositoryPort } from '../ports/product-repository.port';
+import type { Product } from '../../domain/entities';
+import { PRODUCT_REPOSITORY, type ProductRepositoryPort } from '../ports';
 
 // Fetch one ACTIVE product by id or slug; absent (or non-ACTIVE) → 404.
 @Injectable()

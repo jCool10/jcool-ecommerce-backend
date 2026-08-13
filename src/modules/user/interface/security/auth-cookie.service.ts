@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Response } from 'express';
-import { durationToMs } from '../../application/duration-to-ms';
+import { durationToMs } from '../../application';
 import { AUTH_COOKIE_PATH, CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from './auth-cookie.constants';
 import { CsrfTokenService } from './csrf-token.service';
 

@@ -1,6 +1,6 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { User } from '../../domain/entities/user.entity';
-import type { UserRepositoryPort } from '../ports/user-repository.port';
+import type { UserRepositoryPort } from '../ports';
 import { GetProfileUseCase } from './get-profile.use-case';
 
 class MockUserRepository implements UserRepositoryPort {

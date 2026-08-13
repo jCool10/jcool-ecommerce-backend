@@ -1,5 +1,4 @@
-import type { ProductStatus } from '../../domain/entities/product.entity';
-import type { AdminProduct, Category, Price, Sku } from '../../domain/entities/catalog-admin.entities';
+import type { AdminProduct, Category, Price, ProductStatus, Sku } from '../../domain/entities';
 
 // Write-side port for the admin paths, separate from the read-only ProductRepositoryPort
 // (CQRS-lite); the service owns 404/409 decisions, the adapter owns the atomic mutation (23505 → 409).

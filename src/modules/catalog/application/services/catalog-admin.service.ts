@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Slug } from '../../domain/slug.vo';
-import type { AdminProduct, Category, Price, Sku } from '../../domain/entities/catalog-admin.entities';
+import type { AdminProduct, Category, Price, Sku } from '../../domain/entities';
 import {
   CATALOG_ADMIN_REPOSITORY,
   type CatalogAdminRepositoryPort,
@@ -11,7 +11,7 @@ import {
   type UpdateCategoryData,
   type UpdateProductData,
   type UpdateSkuData,
-} from '../ports/catalog-admin-repository.port';
+} from '../ports';
 
 const DEFAULT_CURRENCY = 'VND';
 

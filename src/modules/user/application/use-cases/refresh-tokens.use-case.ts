@@ -1,9 +1,14 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { hashRefreshToken } from '../hash-refresh-token';
-import { AUTH_AUDIT, type AuthAuditPort } from '../ports/auth-audit.port';
-import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../ports/refresh-token-repository.port';
-import { SESSION_EPOCH, type SessionEpochPort } from '../ports/session-epoch.port';
-import { AuthTokensService, type AuthTokens } from '../services/auth-tokens.service';
+import { hashRefreshToken } from '..';
+import {
+  AUTH_AUDIT,
+  type AuthAuditPort,
+  REFRESH_TOKEN_REPOSITORY,
+  type RefreshTokenRepositoryPort,
+  SESSION_EPOCH,
+  type SessionEpochPort,
+} from '../ports';
+import { type AuthTokens, AuthTokensService } from '../services';
 
 // One generic message for every failure branch so a caller can't probe validity.
 const INVALID_REFRESH_TOKEN = 'Invalid refresh token';

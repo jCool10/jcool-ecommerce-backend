@@ -1,15 +1,17 @@
 import { randomBytes } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { durationToMs } from '../duration-to-ms';
-import { sha256Hex } from '../sha256-hex';
-import { AUTH_AUDIT, type AuthAuditPort } from '../ports/auth-audit.port';
+import { durationToMs, sha256Hex } from '..';
 import {
+  AUTH_AUDIT,
+  type AuthAuditPort,
   EMAIL_VERIFICATION_TOKEN_REPOSITORY,
   type EmailVerificationTokenRepositoryPort,
-} from '../ports/email-verification-token-repository.port';
-import { MAILER, type MailerPort } from '../ports/mailer.port';
-import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
+  MAILER,
+  type MailerPort,
+  USER_REPOSITORY,
+  type UserRepositoryPort,
+} from '../ports';
 
 /** Minimal recipient shape needed to issue + send a verification token. */
 export interface VerificationRecipient {

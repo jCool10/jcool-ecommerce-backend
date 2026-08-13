@@ -1,7 +1,6 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
-import { PASSWORD_HASHER, type PasswordHasherPort } from '../ports/password-hasher.port';
-import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
-import { SessionService } from '../services/session.service';
+import { PASSWORD_HASHER, type PasswordHasherPort, USER_REPOSITORY, type UserRepositoryPort } from '../ports';
+import { SessionService } from '../services';
 
 export interface ChangePasswordInput {
   userId: string;

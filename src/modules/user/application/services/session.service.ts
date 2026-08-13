@@ -1,11 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { hashRefreshToken } from '../hash-refresh-token';
+import { hashRefreshToken } from '..';
 import {
   REFRESH_TOKEN_REPOSITORY,
   type ActiveSession,
   type RefreshTokenRepositoryPort,
-} from '../ports/refresh-token-repository.port';
-import { SESSION_EPOCH, type SessionEpochPort } from '../ports/session-epoch.port';
+  SESSION_EPOCH,
+  type SessionEpochPort,
+} from '../ports';
 
 /** Account-owner session management: list active sessions, revoke one, or sign out everywhere. */
 @Injectable()

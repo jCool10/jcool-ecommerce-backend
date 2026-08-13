@@ -1,9 +1,8 @@
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { User } from '../../domain/entities/user.entity';
-import type { PasswordHasherPort } from '../ports/password-hasher.port';
-import type { UserRepositoryPort } from '../ports/user-repository.port';
-import type { AuthTokens, AuthTokensService } from '../services/auth-tokens.service';
+import type { PasswordHasherPort, UserRepositoryPort } from '../ports';
+import type { AuthTokens, AuthTokensService } from '../services';
 import { LoginUserUseCase } from './login-user.use-case';
 
 const TOKENS: AuthTokens = { accessToken: 'access', refreshToken: 'refresh', expiresIn: 900 };

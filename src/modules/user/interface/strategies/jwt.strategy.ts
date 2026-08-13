@@ -2,10 +2,9 @@ import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import type { AccessTokenClaims } from '../../application/access-token-claims';
-import { SESSION_EPOCH, type SessionEpochPort } from '../../application/ports/session-epoch.port';
-import { TOKEN_DENYLIST, type TokenDenylistPort } from '../../application/ports/token-denylist.port';
-import type { AuthenticatedUser } from '../decorators/current-user.decorator';
+import type { AccessTokenClaims } from '../../application';
+import { SESSION_EPOCH, type SessionEpochPort, TOKEN_DENYLIST, type TokenDenylistPort } from '../../application/ports';
+import type { AuthenticatedUser } from '../decorators';
 
 // Verified payload: our custom claims plus the registered iat/exp.
 interface AccessTokenPayload extends AccessTokenClaims {

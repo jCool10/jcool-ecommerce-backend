@@ -1,9 +1,8 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckResult, HealthCheckService } from '@nestjs/terminus';
-import { Public } from '../../modules/user/interface/decorators/public.decorator';
-import { DrizzleHealthIndicator } from './indicators/drizzle.health-indicator';
-import { RedisHealthIndicator } from './indicators/redis.health-indicator';
+import { Public } from '../../modules/user/interface/decorators';
+import { DrizzleHealthIndicator, RedisHealthIndicator } from './indicators';
 
 // Liveness/readiness must answer without a token — orchestrators probe these
 // unauthenticated. `@Public()` opts the whole controller out of the global guard.

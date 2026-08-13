@@ -1,8 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { User } from '../../domain/entities/user.entity';
-import type { PasswordHasherPort } from '../ports/password-hasher.port';
-import type { CreateUserInput, UserRepositoryPort } from '../ports/user-repository.port';
-import type { EmailVerificationService, VerificationRecipient } from '../services/email-verification.service';
+import type { CreateUserInput, PasswordHasherPort, UserRepositoryPort } from '../ports';
+import type { EmailVerificationService, VerificationRecipient } from '../services';
 import { RegisterUserUseCase } from './register-user.use-case';
 
 class MockUserRepository implements UserRepositoryPort {

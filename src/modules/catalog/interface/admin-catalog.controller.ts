@@ -10,22 +10,21 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Role } from '../../../shared/rbac/role.enum';
-import { Roles } from '../../../shared/rbac/roles.decorator';
+import { Role, Roles } from '../../../shared/rbac';
 import { CatalogAdminService } from '../application/services/catalog-admin.service';
 import {
   AdminCategoryResponseDto,
   AdminPriceResponseDto,
   AdminProductResponseDto,
   AdminSkuResponseDto,
-} from './dto/admin-catalog.response.dto';
-import { CreateCategoryDto } from './dto/create-category.dto';
-import { CreateProductDto } from './dto/create-product.dto';
-import { CreateSkuDto } from './dto/create-sku.dto';
-import { SetPriceDto } from './dto/set-price.dto';
-import { UpdateCategoryDto } from './dto/update-category.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
-import { UpdateSkuDto } from './dto/update-sku.dto';
+  CreateCategoryDto,
+  CreateProductDto,
+  CreateSkuDto,
+  SetPriceDto,
+  UpdateCategoryDto,
+  UpdateProductDto,
+  UpdateSkuDto,
+} from './dto';
 
 /** Catalog admin write paths — class-level `@Roles(Role.Admin)` (global guards authenticate 401 then authorize 403), thin (validate, call the service, map to a DTO); DELETE is a soft-delete that echoes the archived resource (200, not 204). */
 @ApiTags('admin-catalog')

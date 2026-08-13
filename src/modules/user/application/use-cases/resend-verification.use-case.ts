@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { Email } from '../../domain/email.vo';
-import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
-import { EmailVerificationService } from '../services/email-verification.service';
+import { Email } from '../../domain';
+import { USER_REPOSITORY, type UserRepositoryPort } from '../ports';
+import { EmailVerificationService } from '../services';
 
 /** Resend the email-verification message, enumeration-safe (always the same generic response); a token is issued only for an existing, still-unverified account. */
 @Injectable()

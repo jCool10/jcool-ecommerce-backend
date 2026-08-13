@@ -1,7 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { hashRefreshToken } from '../hash-refresh-token';
-import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../ports/refresh-token-repository.port';
-import { TOKEN_DENYLIST, type TokenDenylistPort } from '../ports/token-denylist.port';
+import { hashRefreshToken } from '..';
+import {
+  REFRESH_TOKEN_REPOSITORY,
+  type RefreshTokenRepositoryPort,
+  TOKEN_DENYLIST,
+  type TokenDenylistPort,
+} from '../ports';
 
 export interface LogoutInput {
   userId: string;

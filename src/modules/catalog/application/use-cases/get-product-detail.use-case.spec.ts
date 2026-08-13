@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
-import { Product } from '../../domain/entities/product.entity';
-import type { FindManyActiveResult, ProductRepositoryPort } from '../ports/product-repository.port';
+import { Product } from '../../domain/entities';
+import type { FindManyActiveResult, ProductRepositoryPort } from '../ports';
 import { GetProductDetailUseCase } from './get-product-detail.use-case';
 
 class MockProductRepository implements ProductRepositoryPort {

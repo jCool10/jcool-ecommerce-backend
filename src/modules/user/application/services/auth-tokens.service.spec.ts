@@ -2,12 +2,7 @@ import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '../../domain/entities/user.entity';
-import type {
-  ActiveSession,
-  CreateRefreshTokenInput,
-  RefreshTokenRepositoryPort,
-  RotateOutcome,
-} from '../ports/refresh-token-repository.port';
+import type { ActiveSession, CreateRefreshTokenInput, RefreshTokenRepositoryPort, RotateOutcome } from '../ports';
 import { AuthTokensService } from './auth-tokens.service';
 
 class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {

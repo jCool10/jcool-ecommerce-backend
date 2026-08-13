@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../domain/entities/user.entity';
-import type { UserRepositoryPort } from '../ports/user-repository.port';
-import type { EmailVerificationService, VerificationRecipient } from '../services/email-verification.service';
+import type { UserRepositoryPort } from '../ports';
+import type { EmailVerificationService, VerificationRecipient } from '../services';
 import { ResendVerificationUseCase } from './resend-verification.use-case';
 
 function makeUser(emailVerifiedAt: Date | null): User {

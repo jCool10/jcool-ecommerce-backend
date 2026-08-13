@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import type { Product } from '../../domain/entities/product.entity';
+import type { Product } from '../../domain/entities';
 
 // Product response shape. Always mapped from the domain entity via `fromEntity`
 // so DB internals never leak. Money stays integer `amountMinor`.

@@ -1,11 +1,8 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiNotFoundResponse, ApiOkResponse, ApiParam, ApiTags } from '@nestjs/swagger';
-import { Public } from '../../user/interface/decorators/public.decorator';
-import { GetProductDetailUseCase } from '../application/use-cases/get-product-detail.use-case';
-import { ListProductsUseCase } from '../application/use-cases/list-products.use-case';
-import { ListProductsQueryDto } from './dto/list-products-query.dto';
-import { PaginatedProductsResponseDto } from './dto/paginated-response.dto';
-import { ProductResponseDto } from './dto/product-response.dto';
+import { Public } from '../../user/interface/decorators';
+import { GetProductDetailUseCase, ListProductsUseCase } from '../application/use-cases';
+import { ListProductsQueryDto, PaginatedProductsResponseDto, ProductResponseDto } from './dto';
 
 /** Catalog read paths — thin (validate, call a use case, map to a response DTO); `@Public()` is applied per handler so any future write handler here defaults to protected. */
 @ApiTags('catalog')

@@ -1,9 +1,9 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import { and, count, eq, ne, sql } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database/drizzle.tokens';
+import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
 import { Money } from '../../../shared/kernel';
 import { categories, prices, productVariants, products } from './schema/catalog.schema';
-import type { AdminProduct, Category, Price, Sku } from '../domain/entities/catalog-admin.entities';
+import type { AdminProduct, Category, Price, Sku } from '../domain/entities';
 import type {
   CatalogAdminRepositoryPort,
   CreateCategoryData,
@@ -13,7 +13,7 @@ import type {
   UpdateCategoryData,
   UpdateProductData,
   UpdateSkuData,
-} from '../application/ports/catalog-admin-repository.port';
+} from '../application/ports';
 
 // Catch the unique-constraint hit (the only race-safe check) rather than pre-SELECT;
 // drizzle wraps the driver error, so the pg `code` lives down the `.cause` chain.

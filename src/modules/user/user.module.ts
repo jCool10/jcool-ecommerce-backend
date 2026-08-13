@@ -1,8 +1,6 @@
 import { Module } from '@nestjs/common';
-import { PASSWORD_HASHER } from './application/ports/password-hasher.port';
-import { USER_REPOSITORY } from './application/ports/user-repository.port';
-import { Argon2PasswordHasher } from './infrastructure/argon2-password-hasher';
-import { DrizzleUserRepository } from './infrastructure/drizzle-user.repository';
+import { PASSWORD_HASHER, USER_REPOSITORY } from './application/ports';
+import { Argon2PasswordHasher, DrizzleUserRepository } from './infrastructure';
 
 /** User persistence foundation — repository + password hasher behind DI tokens, exported so the auth layer injects the ports without depending on the adapters. */
 @Module({

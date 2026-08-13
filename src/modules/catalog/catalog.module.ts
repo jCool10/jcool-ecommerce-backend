@@ -1,11 +1,8 @@
 import { Module } from '@nestjs/common';
-import { CATALOG_ADMIN_REPOSITORY } from './application/ports/catalog-admin-repository.port';
-import { PRODUCT_REPOSITORY } from './application/ports/product-repository.port';
+import { CATALOG_ADMIN_REPOSITORY, PRODUCT_REPOSITORY } from './application/ports';
 import { CatalogAdminService } from './application/services/catalog-admin.service';
-import { GetProductDetailUseCase } from './application/use-cases/get-product-detail.use-case';
-import { ListProductsUseCase } from './application/use-cases/list-products.use-case';
-import { DrizzleCatalogAdminRepository } from './infrastructure/drizzle-catalog-admin.repository';
-import { DrizzleProductRepository } from './infrastructure/drizzle-product.repository';
+import { GetProductDetailUseCase, ListProductsUseCase } from './application/use-cases';
+import { DrizzleCatalogAdminRepository, DrizzleProductRepository } from './infrastructure';
 import { AdminCatalogController } from './interface/admin-catalog.controller';
 import { CatalogController } from './interface/catalog.controller';
 

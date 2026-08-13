@@ -1,10 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { Product } from '../../domain/entities/product.entity';
-import {
-  PRODUCT_REPOSITORY,
-  type FindManyActiveCriteria,
-  type ProductRepositoryPort,
-} from '../ports/product-repository.port';
+import type { Product } from '../../domain/entities';
+import { type FindManyActiveCriteria, PRODUCT_REPOSITORY, type ProductRepositoryPort } from '../ports';
 
 export interface ListProductsResult {
   items: Product[];

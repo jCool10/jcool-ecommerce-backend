@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
-import type { PasswordHasherPort } from '../application/ports/password-hasher.port';
+import type { PasswordHasherPort } from '../application/ports';
 
 /** argon2id password hasher (memory-hard, OWASP-recommended); params come from config and the digest embeds salt + params, so raising them later still verifies old hashes. See docs/engineering-notes.md (Auth — Password hashing (argon2id)). */
 @Injectable()

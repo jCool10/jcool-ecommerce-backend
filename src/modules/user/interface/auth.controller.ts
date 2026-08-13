@@ -34,38 +34,33 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
+import { LOGIN_THROTTLE, REFRESH_THROTTLE, REGISTER_THROTTLE } from '../../../shared/infrastructure/throttler';
+import { AUTH_AUDIT, type AuthAuditPort } from '../application/ports';
+import { EmailVerificationService, PasswordResetService, SessionService } from '../application/services';
 import {
-  LOGIN_THROTTLE,
-  REFRESH_THROTTLE,
-  REGISTER_THROTTLE,
-} from '../../../shared/infrastructure/throttler/throttler.constants';
-import { AUTH_AUDIT, type AuthAuditPort } from '../application/ports/auth-audit.port';
-import { EmailVerificationService } from '../application/services/email-verification.service';
-import { PasswordResetService } from '../application/services/password-reset.service';
-import { SessionService } from '../application/services/session.service';
-import { ChangePasswordUseCase } from '../application/use-cases/change-password.use-case';
-import { ForgotPasswordUseCase } from '../application/use-cases/forgot-password.use-case';
-import { GetProfileUseCase } from '../application/use-cases/get-profile.use-case';
-import { LoginUserUseCase } from '../application/use-cases/login-user.use-case';
-import { LogoutUserUseCase } from '../application/use-cases/logout-user.use-case';
-import { RefreshTokensUseCase } from '../application/use-cases/refresh-tokens.use-case';
-import { RegisterUserUseCase } from '../application/use-cases/register-user.use-case';
-import { ResendVerificationUseCase } from '../application/use-cases/resend-verification.use-case';
-import { CurrentUser, type AuthenticatedUser } from './decorators/current-user.decorator';
-import { Public } from './decorators/public.decorator';
-import { RefreshTokenCookie } from './decorators/refresh-token-cookie.decorator';
-import { AuthTokensResponseDto } from './dto/auth-tokens.response.dto';
-import { ChangePasswordDto } from './dto/change-password.dto';
-import { ForgotPasswordDto } from './dto/forgot-password.dto';
-import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
-import { ResendVerificationDto } from './dto/resend-verification.dto';
-import { ResetPasswordDto } from './dto/reset-password.dto';
-import { SessionResponseDto } from './dto/session-response.dto';
-import { UserResponseDto } from './dto/user-response.dto';
-import { VerifyEmailDto } from './dto/verify-email.dto';
-import { AuthCookieService } from './security/auth-cookie.service';
-import { CsrfGuard } from './security/csrf.guard';
+  ChangePasswordUseCase,
+  ForgotPasswordUseCase,
+  GetProfileUseCase,
+  LoginUserUseCase,
+  LogoutUserUseCase,
+  RefreshTokensUseCase,
+  RegisterUserUseCase,
+  ResendVerificationUseCase,
+} from '../application/use-cases';
+import { CurrentUser, type AuthenticatedUser, Public, RefreshTokenCookie } from './decorators';
+import {
+  AuthTokensResponseDto,
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  LoginDto,
+  RegisterDto,
+  ResendVerificationDto,
+  ResetPasswordDto,
+  SessionResponseDto,
+  UserResponseDto,
+  VerifyEmailDto,
+} from './dto';
+import { AuthCookieService, CsrfGuard } from './security';
 
 /** Auth endpoints — thin (validate DTO, call a use case, map to a response DTO); access token in the JSON body (Bearer, CSRF-immune), refresh token only in an httpOnly cookie (refresh/logout add CSRF). */
 @ApiTags('auth')

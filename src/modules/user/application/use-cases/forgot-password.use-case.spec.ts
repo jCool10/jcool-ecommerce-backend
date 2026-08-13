@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../domain/entities/user.entity';
-import type { UserRepositoryPort } from '../ports/user-repository.port';
-import type { PasswordResetService, ResetRecipient } from '../services/password-reset.service';
+import type { UserRepositoryPort } from '../ports';
+import type { PasswordResetService, ResetRecipient } from '../services';
 import { ForgotPasswordUseCase } from './forgot-password.use-case';
 
 function makeUser(emailVerifiedAt: Date | null = null): User {

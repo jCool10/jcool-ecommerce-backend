@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database/drizzle.tokens';
+import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
 import { refreshTokens, users } from './schema/user.schema';
 import type {
   ActiveSession,
@@ -8,7 +8,7 @@ import type {
   RefreshTokenRepositoryPort,
   RotateOutcome,
   RotateRefreshTokenInput,
-} from '../application/ports/refresh-token-repository.port';
+} from '../application/ports';
 
 // Drizzle adapter for RefreshTokenRepositoryPort (only tokenHash is stored, never the raw token).
 @Injectable()

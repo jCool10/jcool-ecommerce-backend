@@ -1,6 +1,6 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';
-import { REFRESH_TOKEN_COOKIE } from '../security/auth-cookie.constants';
+import { REFRESH_TOKEN_COOKIE } from '../security';
 
 // Named function so it's unit-testable without Nest's decorator machinery.
 // Returns undefined when the cookie is absent; the handler maps that to a 401.

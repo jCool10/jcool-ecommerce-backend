@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AuthAuditRecord } from '../application/ports/auth-audit.port';
+import type { AuthAuditRecord } from '../application/ports';
 import { AuthAuditLogger } from './auth-audit.logger';
 
 // Capture whatever the audit logger emits, per level, and parse the JSON payload.

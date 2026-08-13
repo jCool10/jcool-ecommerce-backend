@@ -1,9 +1,8 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import type { User } from '../../domain/entities/user.entity';
-import { Email } from '../../domain/email.vo';
-import { PASSWORD_HASHER, type PasswordHasherPort } from '../ports/password-hasher.port';
-import { USER_REPOSITORY, type UserRepositoryPort } from '../ports/user-repository.port';
-import { EmailVerificationService } from '../services/email-verification.service';
+import { Email } from '../../domain';
+import { PASSWORD_HASHER, type PasswordHasherPort, USER_REPOSITORY, type UserRepositoryPort } from '../ports';
+import { EmailVerificationService } from '../services';
 
 export interface RegisterUserInput {
   email: string;

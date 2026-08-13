@@ -1,6 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import type { SessionEpochPort } from '../../application/ports/session-epoch.port';
-import type { TokenDenylistPort } from '../../application/ports/token-denylist.port';
+import type { SessionEpochPort, TokenDenylistPort } from '../../application/ports';
 import { JwtStrategy } from './jwt.strategy';
 
 /**

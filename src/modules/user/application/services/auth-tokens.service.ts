@@ -4,11 +4,9 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { v7 as uuidv7 } from 'uuid';
 import type { User } from '../../domain/entities/user.entity';
-import type { Role } from '../../../../shared/rbac/role.enum';
-import type { AccessTokenClaims } from '../access-token-claims';
-import { durationToMs } from '../duration-to-ms';
-import { hashRefreshToken } from '../hash-refresh-token';
-import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../ports/refresh-token-repository.port';
+import type { Role } from '@/shared/rbac';
+import { type AccessTokenClaims, durationToMs, hashRefreshToken } from '..';
+import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../ports';
 
 /** Token pair returned to the client on register-then-login / login / refresh. */
 export interface AuthTokens {

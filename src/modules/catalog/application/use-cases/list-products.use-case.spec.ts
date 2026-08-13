@@ -1,9 +1,5 @@
-import { Product } from '../../domain/entities/product.entity';
-import type {
-  FindManyActiveCriteria,
-  FindManyActiveResult,
-  ProductRepositoryPort,
-} from '../ports/product-repository.port';
+import { Product } from '../../domain/entities';
+import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../ports';
 import { ListProductsUseCase } from './list-products.use-case';
 
 class MockProductRepository implements ProductRepositoryPort {

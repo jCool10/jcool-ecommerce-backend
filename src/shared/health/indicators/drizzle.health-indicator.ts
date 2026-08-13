@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
 import { sql } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../infrastructure/database/drizzle.tokens';
+import { DRIZZLE, type DrizzleDB } from '../../infrastructure/database';
 
 // Postgres readiness: a `SELECT 1` per call so the result reflects real
 // connectivity, not a cached pool state.

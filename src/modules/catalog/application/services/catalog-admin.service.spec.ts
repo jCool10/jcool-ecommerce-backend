@@ -1,7 +1,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { type Mock, vi } from 'vitest';
-import type { AdminProduct, Category, Price, Sku } from '../../domain/entities/catalog-admin.entities';
-import type { CatalogAdminRepositoryPort } from '../ports/catalog-admin-repository.port';
+import type { AdminProduct, Category, Price, Sku } from '../../domain/entities';
+import type { CatalogAdminRepositoryPort } from '../ports';
 import { CatalogAdminService } from './catalog-admin.service';
 
 // Pins the service's business decisions over a mocked port: 404 for missing refs

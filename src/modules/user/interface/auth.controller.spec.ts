@@ -1,23 +1,26 @@
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { AuthAuditPort, AuthAuditRecord } from '../application/ports/auth-audit.port';
-import type { EmailVerificationService } from '../application/services/email-verification.service';
-import type { PasswordResetService } from '../application/services/password-reset.service';
-import type { SessionService } from '../application/services/session.service';
-import type { ChangePasswordUseCase } from '../application/use-cases/change-password.use-case';
-import type { ForgotPasswordUseCase } from '../application/use-cases/forgot-password.use-case';
-import type { GetProfileUseCase } from '../application/use-cases/get-profile.use-case';
-import type { LoginUserUseCase } from '../application/use-cases/login-user.use-case';
-import type { LogoutUserUseCase } from '../application/use-cases/logout-user.use-case';
-import type { RefreshTokensUseCase } from '../application/use-cases/refresh-tokens.use-case';
-import type { RegisterUserUseCase } from '../application/use-cases/register-user.use-case';
-import type { ResendVerificationUseCase } from '../application/use-cases/resend-verification.use-case';
-import type { ActiveSession } from '../application/ports/refresh-token-repository.port';
-import type { AuthTokens } from '../application/services/auth-tokens.service';
+import type { ActiveSession, AuthAuditPort, AuthAuditRecord } from '../application/ports';
+import type {
+  AuthTokens,
+  EmailVerificationService,
+  PasswordResetService,
+  SessionService,
+} from '../application/services';
+import type {
+  ChangePasswordUseCase,
+  ForgotPasswordUseCase,
+  GetProfileUseCase,
+  LoginUserUseCase,
+  LogoutUserUseCase,
+  RefreshTokensUseCase,
+  RegisterUserUseCase,
+  ResendVerificationUseCase,
+} from '../application/use-cases';
 import { AuthController } from './auth.controller';
-import type { AuthenticatedUser } from './decorators/current-user.decorator';
-import type { AuthCookieService } from './security/auth-cookie.service';
+import type { AuthenticatedUser } from './decorators';
+import type { AuthCookieService } from './security';
 
 // Verifies the controller emits the right audit event at each auth boundary —
 // the one place with request context (IP/UA) and the success/failure outcome.

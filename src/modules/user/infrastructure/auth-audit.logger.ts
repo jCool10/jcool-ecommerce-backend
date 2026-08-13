@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { AuthAuditPort, AuthAuditRecord } from '../application/ports/auth-audit.port';
+import type { AuthAuditPort, AuthAuditRecord } from '../application/ports';
 
 // Structured-log sink for the auth audit trail: one JSON line per event under the
 // dedicated `AuthAudit` context (SIEM-filterable); failures log at `warn`, the rest at `log`.

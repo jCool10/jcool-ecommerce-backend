@@ -1,9 +1,8 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../domain/entities/user.entity';
-import type { PasswordHasherPort } from '../ports/password-hasher.port';
-import type { UserRepositoryPort } from '../ports/user-repository.port';
-import type { SessionService } from '../services/session.service';
+import type { PasswordHasherPort, UserRepositoryPort } from '../ports';
+import type { SessionService } from '../services';
 import { ChangePasswordUseCase } from './change-password.use-case';
 
 // Hasher that encodes plaintext as `hashed:<plain>` so verify is deterministic.

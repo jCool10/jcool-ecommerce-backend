@@ -1,12 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, gt, isNull } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database/drizzle.tokens';
+import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
 import { passwordResetTokens } from './schema/user.schema';
 import type {
   ConsumePasswordResetOutcome,
   CreatePasswordResetTokenInput,
   PasswordResetTokenRepositoryPort,
-} from '../application/ports/password-reset-token-repository.port';
+} from '../application/ports';
 
 // Drizzle adapter for PasswordResetTokenRepositoryPort (only tokenHash is stored, never the raw token).
 @Injectable()

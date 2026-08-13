@@ -1,5 +1,5 @@
 import { Money } from '../../../shared/kernel';
-import { Product, type ProductStatus, type ProductVariant } from '../domain/entities/product.entity';
+import { Product, type ProductStatus, type ProductVariant } from '../domain/entities';
 
 /** One flattened product×variant×price row (product/category inner-joined so always present; variant/price left-joined so nullable) — a plain shape so `assembleProducts` stays pure and Drizzle-independent. */
 export interface ProductFlatRow {

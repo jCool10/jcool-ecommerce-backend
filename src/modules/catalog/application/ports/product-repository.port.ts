@@ -1,4 +1,4 @@
-import type { Product } from '../../domain/entities/product.entity';
+import type { Product } from '../../domain/entities';
 
 // Read-side port; the Drizzle adapter implements it in infrastructure/ and this boundary is the
 // swap point for a cache or search index later (application must not import drizzle-orm/schema).

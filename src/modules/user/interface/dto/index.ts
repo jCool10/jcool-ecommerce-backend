@@ -1,0 +1,11 @@
+// Barrel: User (auth) interface DTOs.
+export * from './auth-tokens.response.dto';
+export * from './change-password.dto';
+export * from './forgot-password.dto';
+export * from './login.dto';
+export * from './register.dto';
+export * from './resend-verification.dto';
+export * from './reset-password.dto';
+export * from './session-response.dto';
+export * from './user-response.dto';
+export * from './verify-email.dto';

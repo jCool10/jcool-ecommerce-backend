@@ -12,6 +12,10 @@ export default defineConfig({
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['test/**/*.e2e-spec.ts'],
     passWithNoTests: true,
+    // Path alias `@/* -> src/*` (mirrors tsconfig paths) for the e2e runner.
+    alias: {
+      '@': fileURLToPath(new URL('../src', import.meta.url)),
+    },
     // Boot Postgres + Redis containers once per run and migrate; connection URLs
     // reach tests via provide()/inject() (globalSetup runs in its own process).
     globalSetup: ['./test/setup/global-setup.ts'],

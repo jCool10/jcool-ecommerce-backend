@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
-import { RedisService } from '../redis/redis.service';
+import { RedisService } from '../redis';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import { GLOBAL_THROTTLERS } from './throttler.constants';
 

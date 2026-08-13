@@ -1,12 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, gt, isNull } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database/drizzle.tokens';
+import { DRIZZLE, type DrizzleDB } from '../../../shared/infrastructure/database';
 import { emailVerificationTokens } from './schema/user.schema';
 import type {
   ConsumeEmailVerificationOutcome,
   CreateEmailVerificationTokenInput,
   EmailVerificationTokenRepositoryPort,
-} from '../application/ports/email-verification-token-repository.port';
+} from '../application/ports';
 
 // Drizzle adapter for EmailVerificationTokenRepositoryPort (only tokenHash is stored, never the raw token).
 @Injectable()
