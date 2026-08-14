@@ -6,6 +6,7 @@ import { PinoLogger } from 'nestjs-pino';
 import {
   REQUEST_ID_HEADER,
   formatDevRequestLine,
+  getActiveTraceId,
   getCorrelationId,
   getDbQueryCount,
   getRequestDurationMs,
@@ -17,7 +18,7 @@ const SERVER_ERROR_MIN: number = HttpStatus.INTERNAL_SERVER_ERROR;
 // pino `context` label; passed per-call because the base PinoLogger is a shared singleton.
 const LOG_CONTEXT = 'HttpExceptionFilter';
 
-/** Unified error envelope — < 500 keep their developer-chosen payload, >= 500 are masked to a generic message (real error logged) so internals never leak, and Terminus health results pass through unchanged. Every response carries the correlation `requestId` (envelope field + `x-request-id` header); the exception is logged ONCE — 4xx at warn, 5xx at error. See docs/engineering-notes.md (Shared — Unified exception filter) and ADR-0013. */
+/** Unified error envelope: <500 keep their payload, >=500 are masked to a generic message (real error logged); Terminus health results pass through. Every response carries the correlation requestId; the exception is logged once (4xx warn, 5xx error). See docs/engineering-notes.md and ADR-0013. */
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly devPretty: boolean;
@@ -38,8 +39,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const status = exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
     const requestId = getCorrelationId(this.cls);
 
-    // Terminus payload IS the HealthCheckResult — return as-is so the 503 body
-    // stays symmetric with the 200. Terminus already logged it.
+    // Terminus payload IS the HealthCheckResult — return as-is; Terminus already logged it.
     if (this.isHealthCheckResult(exception)) {
       this.setRequestIdHeader(response, requestId);
       response.status(status).json(exception.getResponse());
@@ -78,12 +78,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
       else this.logger.warn(logFields, 'request rejected');
     }
 
+    // Separate from requestId; only present when tracing is on. Added to the envelope only —
+    // logs already carry it via the pino mixin.
+    const traceId = getActiveTraceId();
+
     this.setRequestIdHeader(response, requestId);
     response.status(status).json({
       statusCode: status,
       path: request.url,
       timestamp: new Date().toISOString(),
       requestId,
+      ...(traceId ? { traceId } : {}),
       message: this.resolveMessage(exception, status),
     });
   }

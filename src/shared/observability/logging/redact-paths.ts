@@ -1,18 +1,15 @@
 /**
- * Secret/credential paths scrubbed at the LOGGER layer (pino `redact`), so protection
- * does not depend on every call site remembering to omit them (ADR-0013). The list
- * includes a genuinely nested path — `req.body.user.password` (2 levels) — which a flat
- * `*.password` wildcard would NOT catch; the redaction spec proves exactly that (DoD-2).
- *
- * PII such as email is intentionally NOT redacted here: the auth audit trail records it
- * on purpose. Masking (vs removal) of email is deferred (see plan's open questions).
+ * Secret/credential paths scrubbed at the logger layer (pino `redact`), so protection doesn't
+ * depend on every call site remembering to omit them. Includes a nested path
+ * (`req.body.user.password`) that a flat `*.password` wildcard would miss. Email/PII is left
+ * intact on purpose (the auth audit trail records it). See ADR-0013.
  */
 export const redactPaths: string[] = [
   // Transport-level credentials.
   'req.headers.authorization',
   'req.headers.cookie',
   'res.headers["set-cookie"]',
-  // Request-body credentials — flat, plus the nested case that motivates the DoD-2 test.
+  // Request-body credentials — flat, plus the nested case a wildcard would miss.
   'req.body.password',
   'req.body.newPassword',
   'req.body.currentPassword',

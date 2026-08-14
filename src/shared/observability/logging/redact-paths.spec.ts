@@ -19,8 +19,8 @@ function serialize(payload: Record<string, unknown>): string {
 }
 
 describe('redactPaths', () => {
-  // DoD-2: the motivating case. A flat `*.password` wildcard matches only one level deep,
-  // so a genuinely nested credential slips through unless the explicit path is listed.
+  // A flat `*.password` wildcard matches only one level deep, so a nested credential slips
+  // through unless the explicit path is listed.
   it('redacts a nested req.body.user.password (2 levels deep)', () => {
     const line = serialize({ req: { body: { user: { password: 'super-secret' } } } });
     expect(line).toContain('[Redacted]');

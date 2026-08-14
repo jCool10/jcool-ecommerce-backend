@@ -18,10 +18,8 @@ export function getDbQueryCount(cls: ClsService): number {
 }
 
 /**
- * A Drizzle logger whose sole job is to tally queries per request into CLS — it emits
- * nothing. Wired into the Drizzle instance so the canonical log line can report
- * `db.queries` (e.g. to spot an N+1) without touching the repository layer. Real SQL
- * spans arrive with OpenTelemetry in Phase 3.
+ * A Drizzle logger that only tallies queries per request into CLS (emits nothing), so the
+ * canonical log line can report `db.queries` (an N+1 signal) without touching repositories.
  */
 export function createDbQueryCounterLogger(cls: ClsService): DrizzleQueryLogger {
   return {

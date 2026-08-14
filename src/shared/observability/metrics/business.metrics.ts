@@ -13,11 +13,8 @@ import {
 const LOG_CONTEXT = 'BusinessMetrics';
 
 /**
- * prom-client implementation of MetricsPort. Every record is fire-and-forget: wrapped in
- * `safely()` so a metric can never break the business flow (ADR-0014 principle — telemetry
- * failure must not fail the request). prom-client's inc/observe don't throw for the bounded
- * labels used here, but the guard makes that structural rather than a caller assumption —
- * e.g. `order.service.place()` records AFTER the order is persisted. Injected as `METRICS`.
+ * prom-client implementation of MetricsPort. Every record is wrapped in `safely()` so a
+ * telemetry failure can never break the business flow (ADR-0014). Injected as `METRICS`.
  */
 @Injectable()
 export class BusinessMetrics implements MetricsPort {

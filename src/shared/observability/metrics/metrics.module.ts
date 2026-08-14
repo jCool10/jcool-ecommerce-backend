@@ -8,20 +8,16 @@ import { MetricsController } from './metrics.controller';
 import { MetricsTokenGuard } from './metrics.guard';
 import { METRICS } from './metrics.port';
 
-// Node/process default metrics (process_*, nodejs_eventloop_lag_seconds = saturation, heap).
-// Registered once per process: module evaluation is cached by Node, and the guard makes a
-// second import idempotent instead of throwing "already registered" (matters for e2e, which
-// builds several Nest apps in one process against this global registry).
+// Node/process default metrics. Guarded so a second import (e.g. e2e builds several Nest apps
+// in one process) is idempotent instead of throwing "already registered".
 if (!register.getSingleMetric('process_cpu_seconds_total')) {
   collectDefaultMetrics();
 }
 
 /**
- * Metrics pillar (ADR-0014). Global so the cross-cutting `METRICS` port injects into any
- * context (order/cart/auth) without each feature module importing this. Registers default +
- * RED + business metrics, the RED interceptor (global via APP_INTERCEPTOR), and the guarded
- * `/metrics` controller. prom-client's registry is the process-global one, so metrics survive
- * independently of this module — removing it doesn't touch the request path (rollback-safe).
+ * Metrics pillar (ADR-0014). Global so the `METRICS` port injects anywhere without each module
+ * importing it. Registers default + RED + business metrics, the RED interceptor (APP_INTERCEPTOR),
+ * and the guarded `/metrics` controller.
  */
 @Global()
 @Module({

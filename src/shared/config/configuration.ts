@@ -29,8 +29,7 @@ export default () => ({
       .filter(Boolean),
     // Public base URL used to build links in outbound email (verification, etc.).
     publicUrl: process.env.APP_PUBLIC_URL ?? 'http://localhost:3000',
-    // Reverse-proxy trust for req.ip (throttle + audit key on it). Off by default so a
-    // direct deploy can't be spoofed via X-Forwarded-For; set behind a trusted proxy.
+    // Reverse-proxy trust for req.ip (throttle + audit). Off by default (anti-spoof); set behind a trusted proxy.
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   },
   log: {
@@ -40,6 +39,12 @@ export default () => ({
   metrics: {
     // Bearer token for GET /metrics. Undefined → open in dev, hidden in prod (MetricsTokenGuard).
     token: process.env.METRICS_TOKEN,
+  },
+  tracing: {
+    // Mirrors instrumentation.ts (which reads process.env directly, before this runs) for a typed config surface.
+    enabled: process.env.OTEL_ENABLED === 'true',
+    serviceName: process.env.OTEL_SERVICE_NAME ?? 'jcool-api',
+    otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
   },
   database: {
     url: process.env.DATABASE_URL,

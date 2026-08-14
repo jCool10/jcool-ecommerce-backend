@@ -11,8 +11,7 @@ export const REQUEST_ID_KEY = 'requestId';
 /** CLS key holding the request-start timestamp (`process.hrtime.bigint()`) for durationMs. */
 export const REQUEST_START_KEY = 'requestStart';
 
-// Trust a caller-supplied x-request-id when present (lets a gateway/proxy stitch hops),
-// otherwise mint a v4 UUID. Exactly one id per request, owned by CLS.
+// Trust a caller-supplied x-request-id (lets a proxy stitch hops); otherwise mint a UUID.
 function resolveRequestId(req: Request): string {
   const header = req.headers[REQUEST_ID_HEADER];
   const supplied = Array.isArray(header) ? header[0] : header;
@@ -20,9 +19,8 @@ function resolveRequestId(req: Request): string {
 }
 
 /**
- * AsyncLocalStorage-backed correlation context. Mounted as middleware and imported
- * FIRST in AppModule (before the pino logger) so its middleware runs early and every
- * downstream log — and, from Phase 3, span — shares one requestId. See ADR-0013.
+ * AsyncLocalStorage-backed correlation context. Import FIRST in AppModule (before the pino
+ * logger) so every downstream log shares one requestId. See ADR-0013.
  */
 export const clsModuleOptions: ClsModuleOptions = {
   global: true,
@@ -33,30 +31,22 @@ export const clsModuleOptions: ClsModuleOptions = {
     setup: (cls: ClsService, req: Request, res: Response): void => {
       const id = cls.getId();
       cls.set(REQUEST_ID_KEY, id);
-      // Stamped here (before guards/pipes) so durationMs on both the success line and the
-      // error line covers the whole request, not just the handler.
+      // Stamp before guards/pipes so durationMs covers the whole request, not just the handler.
       cls.set(REQUEST_START_KEY, process.hrtime.bigint());
-      // Echo the id so a client can line up its request with server logs/traces.
       res.setHeader(REQUEST_ID_HEADER, id);
     },
   },
 };
 
 /**
- * Correlation id for the active request: the CLS request id today, and — once the
- * OpenTelemetry SDK lands in Phase 3 — the active span's trace id in preference to it
- * (`trace.getActiveSpan()?.spanContext().traceId ?? cls.getId()`). Returns undefined
- * outside a request (startup, CLI scripts).
+ * Client-facing correlation id for the active request (the CLS request id), or undefined
+ * outside a request. Distinct from the trace id ({@link getActiveTraceId}). See ADR-0013.
  */
 export function getCorrelationId(cls: ClsService): string | undefined {
   return cls.isActive() ? cls.getId() : undefined;
 }
 
-/**
- * Milliseconds elapsed since the request-start stamp (3-decimal precision), or undefined
- * outside a request / before the stamp is set. Shared by the canonical log line and the
- * exception filter so success and error paths report duration the same way.
- */
+/** Milliseconds since the request-start stamp (3-decimal), or undefined outside a request. */
 export function getRequestDurationMs(cls: ClsService): number | undefined {
   if (!cls.isActive()) return undefined;
   const start = cls.get<bigint>(REQUEST_START_KEY);

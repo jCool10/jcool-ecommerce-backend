@@ -1,9 +1,7 @@
-// morgan 'dev'-style request line for the local pretty console:
+// morgan 'dev'-style request line for the local pretty console, e.g.
 //   GET /products/:idOrSlug 200 12.345 ms - 431
-// Status is colored by class (2xx green, 3xx cyan, 4xx yellow, 5xx red) exactly like morgan's
-// `dev` format; the trailing `db=N` (this interceptor's per-request query tally, not a morgan
-// token) is dimmed so it reads as an aside. The ANSI codes only make sense on the dev pretty
-// console — production emits structured JSON and never calls this. See ADR-0013.
+// Status is colored by class; the trailing dimmed `db=N` is our per-request query tally.
+// Dev-only — production emits structured JSON. See ADR-0013.
 
 const RESET = '\x1b[0m';
 const DIM = '\x1b[2m';

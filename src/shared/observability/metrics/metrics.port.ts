@@ -1,7 +1,5 @@
-// Application-facing metrics seam. This file is PURE (no prom-client / framework import) so
-// application code may depend on it without pulling infrastructure — the prom-client
-// implementation lives in business.metrics.ts, wired via DI. Mirrors the auth-audit
-// port/adapter split; keeps `npm run arch:check` green (ADR-0014).
+// Application-facing metrics seam. Pure (no prom-client/framework import) so application code
+// can depend on it without pulling infrastructure; the implementation is business.metrics.ts. ADR-0014.
 
 export const METRICS = Symbol('METRICS');
 

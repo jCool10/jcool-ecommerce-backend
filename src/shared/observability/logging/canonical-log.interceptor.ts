@@ -10,17 +10,13 @@ import { resolveRouteTemplate } from '../http-route.util';
 import { getDbQueryCount } from './db-query-counter';
 import { formatDevRequestLine } from './dev-request-line.format';
 
-// High-frequency operational endpoints logged every few seconds by orchestrators/Prometheus:
-// health probes and the metrics scrape. A canonical line for each is pure noise, so skip them
-// (the RED metrics interceptor skips /metrics for the same reason).
+// Skip high-frequency probes (health, metrics scrape) — a canonical line each is pure noise.
 const SKIP_ROUTE_PREFIXES = ['/health', '/metrics'];
 
 /**
- * Emits exactly one canonical "request completed" line per successfully handled HTTP
- * request: method, route TEMPLATE (not the concrete URL — keeps the id a log field, not
- * a label, and matches the Phase 2 metric label), status, durationMs and db.queries.
- * Errors are logged by HttpExceptionFilter instead (4xx warn / 5xx error), so a request
- * never yields two summary lines. See ADR-0013.
+ * Emits one canonical "request completed" line per successful HTTP request: method, route
+ * template, status, durationMs, db.queries. Errors are logged by HttpExceptionFilter instead,
+ * so a request never yields two summary lines. See ADR-0013.
  */
 @Injectable()
 export class CanonicalLogInterceptor implements NestInterceptor {

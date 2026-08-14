@@ -7,16 +7,13 @@ import { type Observable, tap } from 'rxjs';
 import { resolveRouteTemplate } from '../http-route.util';
 import { HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS } from './metric-definitions';
 
-// The scrape endpoint measures itself into noise; skip it. Every other route (health
-// included) is measured so probe traffic is visible.
+// Skip the scrape endpoint (it would measure itself); every other route is measured.
 const METRICS_ROUTE = '/metrics';
 
 /**
  * RED (Rate · Errors · Duration) for HTTP: observes `http_request_duration_seconds` and
- * increments `http_requests_total`, labelled by method, route TEMPLATE (not the concrete
- * URL — the cardinality iron rule) and status_code. Records on BOTH success and error: on
- * error the status is derived from the exception (the filter hasn't set response.statusCode
- * yet at this point in the chain), so a 500 is counted as a 500. ADR-0014.
+ * increments `http_requests_total`, labelled by method, route template and status_code.
+ * Records on success and error; on error the status is derived from the exception. ADR-0014.
  */
 @Injectable()
 export class HttpMetricsInterceptor implements NestInterceptor {
@@ -57,8 +54,7 @@ export class HttpMetricsInterceptor implements NestInterceptor {
   }
 }
 
-// On the error path the response status isn't set yet, so derive it from the exception —
-// matching what HttpExceptionFilter will ultimately send (non-HttpException → 500).
+// On the error path response.statusCode isn't set yet; derive it from the exception (non-HttpException → 500).
 function statusFromError(err: unknown): number {
   return err instanceof HttpException ? err.getStatus() : 500;
 }

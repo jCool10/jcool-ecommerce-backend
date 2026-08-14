@@ -58,12 +58,29 @@ export class EnvironmentVariables {
   @IsEnum(LogLevel)
   LOG_LEVEL?: LogLevel;
 
-  // Bearer token guarding GET /metrics (ADR-0018). Optional in dev (endpoint open locally);
-  // in production a missing token hides the endpoint. MinLength keeps it non-trivial.
+  // Bearer token for GET /metrics (ADR-0018); optional in dev, MinLength keeps it non-trivial.
   @IsOptional()
   @IsString()
   @MinLength(16)
   METRICS_TOKEN?: string;
+
+  // Tracing kill-switch (ADR-0015); the OTel SDK (instrumentation.ts) starts only when "true".
+  @IsOptional()
+  @IsBooleanString()
+  OTEL_ENABLED?: string;
+
+  // service.name on every span; read in instrumentation.ts, declared here to fail-fast if invalid.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  OTEL_SERVICE_NAME?: string;
+
+  // OTLP/HTTP base endpoint of the Collector; the traces path (/v1/traces) is appended.
+  // Defaults to http://localhost:4318 (instrumentation.ts).
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string;
 
   // Public base URL for links in outbound email; plain string so localhost/non-TLD hosts validate.
   @IsOptional()

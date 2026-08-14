@@ -1,0 +1,56 @@
+# OpenTelemetry Collector — sits between the app and Jaeger (ADR-0015). The app exports OTLP
+# here; the Collector buffers, redacts PII, and forwards to Jaeger. Redaction lives HERE, not
+# in the app, so an operator can strip an attribute without a code change or redeploy.
+#
+# Consumed once the observability stack is wired into docker-compose (otel-collector service);
+# the app's OTEL_EXPORTER_OTLP_ENDPOINT then points at http://otel-collector:4318.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # MUST be first: refuses new data before the Collector OOMs under a span flood, so telemetry
+  # pressure can never take the Collector (or the box) down.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  # PII scrub: drop identifying attributes before they ever reach Jaeger's store.
+  # `delete` removes the key; switch to `hash` to keep a correlatable-but-opaque value.
+  # Nothing in the app changes — flip these lines and restart the Collector.
+  attributes/redact:
+    actions:
+      - key: user.email
+        action: delete
+      - key: enduser.id
+        action: delete
+      - key: db.user
+        action: delete
+
+  # Batch after limiting/redacting to cut export overhead.
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # Jaeger v2 (all-in-one) ingests OTLP natively — no legacy jaeger exporter needed.
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  # Local visibility while learning; drop in production.
+  debug:
+    verbosity: normal
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlp/jaeger, debug]

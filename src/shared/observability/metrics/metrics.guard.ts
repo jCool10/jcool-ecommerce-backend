@@ -4,11 +4,9 @@ import { timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
 
 /**
- * Guards `/metrics` with a bearer token (ADR-0018, option A). A missing/invalid token throws
- * 404 — not 401 — so an unauthenticated probe can't even confirm the endpoint exists (it
- * shares the public API port, so a 401 would leak the route map + error ratios for recon).
- * Comparison is constant-time. When no token is configured: allowed outside production (local
- * scraping convenience), hidden in production (a missing token there is a misconfiguration).
+ * Guards `/metrics` with a bearer token (ADR-0018). Invalid/missing token → 404 (not 401) so a
+ * probe can't confirm the endpoint exists. Constant-time compare. With no token configured:
+ * allowed outside production, hidden (404) in production.
  */
 @Injectable()
 export class MetricsTokenGuard implements CanActivate {
@@ -45,8 +43,7 @@ function extractBearer(header: string | undefined): string | undefined {
   return scheme?.toLowerCase() === 'bearer' && value ? value : undefined;
 }
 
-// Constant-time compare. Length is checked first (timingSafeEqual requires equal lengths);
-// a length difference is an immediate mismatch — acceptable, and the standard pattern.
+// Constant-time compare; length checked first (timingSafeEqual requires equal lengths).
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
