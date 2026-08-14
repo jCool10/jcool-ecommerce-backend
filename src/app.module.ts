@@ -6,6 +6,7 @@ import { ThrottlerSecurityModule } from '@shared/infrastructure/throttler';
 import { HealthModule } from '@shared/health';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { CartModule } from '@modules/cart/cart.module';
+import { OrderModule } from '@modules/order/order.module';
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/user/auth.module';
 
@@ -20,6 +21,7 @@ import { AuthModule } from '@modules/user/auth.module';
     HealthModule,
     CatalogModule,
     CartModule,
+    OrderModule,
     UserModule,
     AuthModule,
   ],
