@@ -1,5 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Money } from '@shared/kernel';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { Cart } from '../domain/cart.entity';
 import { CART_REPOSITORY, type CartRepositoryPort } from './ports/cart-repository.port';
 import { CATALOG_QUERY, type CartSkuView, type CatalogQueryPort } from './ports/catalog-query.port';
@@ -38,6 +39,8 @@ export class CartService {
     private readonly repo: CartRepositoryPort,
     @Inject(CATALOG_QUERY)
     private readonly catalog: CatalogQueryPort,
+    @Inject(METRICS)
+    private readonly metrics: MetricsPort,
   ) {}
 
   async view(userId: string): Promise<CartView> {
@@ -53,6 +56,7 @@ export class CartService {
     }
     const cartId = await this.repo.ensureCartId(userId);
     await this.repo.addItem(cartId, skuId, quantity);
+    this.metrics.recordCartOperation('add');
     return this.buildView(cartId);
   }
 
@@ -63,6 +67,7 @@ export class CartService {
     if (!updated) {
       throw new NotFoundException(`Cart item not found: ${skuId}`);
     }
+    this.metrics.recordCartOperation('update');
     return this.buildView(cartId);
   }
 
@@ -70,12 +75,14 @@ export class CartService {
   async removeItem(userId: string, skuId: string): Promise<CartView> {
     const cartId = await this.repo.ensureCartId(userId);
     await this.repo.removeItem(cartId, skuId);
+    this.metrics.recordCartOperation('remove');
     return this.buildView(cartId);
   }
 
   async clear(userId: string): Promise<CartView> {
     const cartId = await this.repo.ensureCartId(userId);
     await this.repo.clear(cartId);
+    this.metrics.recordCartOperation('clear');
     return this.buildView(cartId);
   }
 

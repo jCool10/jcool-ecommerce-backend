@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { Order } from '../domain/order.entity';
 import { OrderItem } from '../domain/order-item.entity';
 import type { OrderStatus } from '../domain/order-status';
@@ -45,6 +46,8 @@ export class OrderService {
     private readonly catalog: CatalogQueryPort,
     @Inject(INVENTORY_RESERVATION)
     private readonly reservation: InventoryReservationPort,
+    @Inject(METRICS)
+    private readonly metrics: MetricsPort,
   ) {}
 
   /** Snapshot the user's cart into a new DRAFT order. Empty/unpurchasable cart → 400. */
@@ -119,6 +122,9 @@ export class OrderService {
       // Lost a race: someone else moved it out of DRAFT between the read and the update.
       throw new ConflictException('Order is no longer in DRAFT');
     }
+    // Count the placement + its value (status is the bounded enum, not an id).
+    this.metrics.recordOrderCreated(placed.status);
+    this.metrics.observeOrderValue(placed.total().amountMinor);
     return this.buildView(orderId, userId);
   }
 
