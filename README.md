@@ -255,6 +255,8 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `NODE_ENV`           |   Yes    | —                | `development` \| `test` \| `production`     |
 | `PORT`               |    No    | `3000`           | HTTP port                                   |
 | `SWAGGER_ENABLED`    |    No    | on (off in prod) | Serve OpenAPI docs at `/docs`               |
+| `LOG_LEVEL`          |    No    | `debug` dev / `info` prod | pino log level: `trace`\|`debug`\|`info`\|`warn`\|`error` |
+| `METRICS_TOKEN`      |    No    | — (open dev / hidden prod) | Bearer token for `GET /metrics` (min 16 chars); wrong/missing → 404 |
 | `DATABASE_URL`       |   Yes    | —                | PostgreSQL connection string                |
 | `REDIS_URL`          |   Yes    | —                | Redis connection string                     |
 | `JWT_ACCESS_SECRET`  |   Yes    | —                | HS256 secret, **min 32 chars** (no default) |

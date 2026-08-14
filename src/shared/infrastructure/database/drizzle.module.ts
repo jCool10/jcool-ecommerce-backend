@@ -1,7 +1,9 @@
 import { Global, Inject, Logger, Module, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { ClsService } from 'nestjs-cls';
 import { Pool } from 'pg';
+import { createDbQueryCounterLogger } from '@shared/observability';
 import * as schema from './schema';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
 
@@ -27,8 +29,11 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
     },
     {
       provide: DRIZZLE,
-      inject: [PG_POOL],
-      useFactory: (pool: Pool): DrizzleDB => drizzle(pool, { schema }),
+      inject: [PG_POOL, ClsService],
+      // The CLS-backed logger only tallies queries per request (no output) so the
+      // canonical log line can report db.queries — e.g. to surface an N+1 (Phase 1).
+      useFactory: (pool: Pool, cls: ClsService): DrizzleDB =>
+        drizzle(pool, { schema, logger: createDbQueryCounterLogger(cls) }),
     },
   ],
   exports: [DRIZZLE],

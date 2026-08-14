@@ -19,6 +19,15 @@ export enum NodeEnv {
   Production = 'production',
 }
 
+// pino log levels (ascending severity). Default applied in configuration.ts.
+export enum LogLevel {
+  Trace = 'trace',
+  Debug = 'debug',
+  Info = 'info',
+  Warn = 'warn',
+  Error = 'error',
+}
+
 /** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET; optional vars fall back to defaults applied in configuration.ts. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
@@ -43,6 +52,18 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsBooleanString()
   SWAGGER_ENABLED?: string;
+
+  // pino log level; defaults to debug in dev, info in prod (configuration.ts).
+  @IsOptional()
+  @IsEnum(LogLevel)
+  LOG_LEVEL?: LogLevel;
+
+  // Bearer token guarding GET /metrics (ADR-0018). Optional in dev (endpoint open locally);
+  // in production a missing token hides the endpoint. MinLength keeps it non-trivial.
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  METRICS_TOKEN?: string;
 
   // Public base URL for links in outbound email; plain string so localhost/non-TLD hosts validate.
   @IsOptional()

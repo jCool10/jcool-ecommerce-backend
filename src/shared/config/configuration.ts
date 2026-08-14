@@ -33,6 +33,14 @@ export default () => ({
     // direct deploy can't be spoofed via X-Forwarded-For; set behind a trusted proxy.
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   },
+  log: {
+    // pino level: verbose in dev, lean in prod; LOG_LEVEL overrides either way.
+    level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+  },
+  metrics: {
+    // Bearer token for GET /metrics. Undefined → open in dev, hidden in prod (MetricsTokenGuard).
+    token: process.env.METRICS_TOKEN,
+  },
   database: {
     url: process.env.DATABASE_URL,
   },
