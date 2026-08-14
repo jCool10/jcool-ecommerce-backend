@@ -43,6 +43,7 @@
     - [Catalog (public) — `/products`](#catalog-public--products)
     - [Catalog admin — `/admin` (RBAC `ADMIN`)](#catalog-admin--admin-rbac-admin)
     - [Cart — `/cart`](#cart--cart)
+    - [Order — `/orders`](#order--orders)
     - [Health — `/health`](#health--health)
   - [Database \& Migrations](#database--migrations)
   - [Testing](#testing)
@@ -97,6 +98,10 @@ Currently implemented:
   - Per-user shopping cart (one active cart per user): add (upsert-accumulate on a repeat SKU), update quantity, remove a line, view, and clear — every mutation returns the full cart.
   - Prices and names are read **live** from Catalog through a published cross-context port (anti-corruption boundary) — the cart never snapshots a price, so the subtotal always reflects the current price; freezing happens only at Order.
   - Scratch space by design: no stock reservation at add-to-cart (that is Order/Inventory in Week 4), and an item whose product was archived after it was added stays in the cart, flagged `isActive: false`.
+- **Order**
+  - Create an order from the current cart: each line's name and price are **snapshotted** into the order — a later Catalog price change never alters a placed order's total (the order is the transaction source of truth).
+  - A pure, table-driven **state machine** (`DRAFT → PENDING`, `DRAFT → CANCELLED` wired; later states declared but not yet enabled) — an illegal transition is rejected with `409`.
+  - `place` runs the status change in a DB transaction with reserved seams (a no-op inventory reservation, a declared `OrderPlaced` event, reserved `version` / `idempotency_key` columns) so overselling (BF#1), idempotency (BF#2), and outbox/saga (BF#4) attach in later weeks without a rewrite.
 - **Platform**
   - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
@@ -105,8 +110,8 @@ Currently implemented:
   - Global validation pipe (whitelist + reject unknown fields) and a unified HTTP exception filter.
   - Graceful shutdown hooks (drains the Postgres pool on `SIGTERM`/`SIGINT`).
 
-Bounded contexts scaffolded and on the roadmap: **Inventory**, **Order**,
-**Payment** (see [Roadmap](#roadmap)).
+Bounded contexts scaffolded and on the roadmap: **Inventory**, **Payment**
+(see [Roadmap](#roadmap)).
 
 ## Architecture
 
@@ -173,7 +178,9 @@ src/
 │   │   ├── domain/              # Entities, value objects
 │   │   └── infrastructure/      # Drizzle repositories, schema, mappers
 │   ├── user/                    # Auth context (register/login/refresh/RBAC)
-│   ├── cart/  inventory/  order/  payment/   # Scaffolded (roadmap)
+│   ├── cart/                     # Per-user scratch cart (live Catalog pricing)
+│   ├── order/                    # Order + state machine (DRAFT→PENDING, price snapshot)
+│   ├── inventory/  payment/      # Scaffolded (roadmap)
 └── shared/
     ├── kernel/                  # Framework-free DDD building blocks
     ├── rbac/                    # Roles decorator + guard
@@ -338,6 +345,27 @@ The cart is **scratch space, not the transaction source**: the subtotal always
 reflects the current Catalog price (a price change is visible on the next read),
 and stock/availability are validated only when an Order is placed — an item whose
 product was archived after it was added stays in the cart, flagged `isActive: false`.
+
+### Order — `/orders` (Bearer)
+
+The order is the **transaction source of truth** — unlike the cart, an order
+**snapshots** each line's price and product name at creation, so a later Catalog
+reprice never moves an existing order's total. Every endpoint requires a valid
+access token, and orders are **per-user** (another user's order reads as `404`).
+
+| Method | Path                | Description                                                                                          |
+| ------ | ------------------- | -------------------------------------------------------------------------------------------------- |
+| `POST` | `/orders`           | Create a `DRAFT` order from the current cart (snapshots price + name). `400` if the cart is empty or a line's SKU is unavailable |
+| `POST` | `/orders/:id/place` | Place the order (`DRAFT → PENDING`). `409` on an illegal transition, `404` if not found              |
+| `GET`  | `/orders`           | List the current user's orders                                                                       |
+| `GET`  | `/orders/:id`       | View one order (`404` if unknown or owned by another user)                                           |
+
+The state machine is a pure, table-driven function — Week 3 wires only
+`DRAFT → PENDING` (and `DRAFT → CANCELLED`); all later states (`PAID`, `FAILED`,
+`EXPIRED`) are declared but not yet reachable. Placement runs in a **DB
+transaction** and the order carries reserved seams (`version`, `idempotencyKey`,
+an inventory-reservation port, an `OrderPlaced` event) for later boss-fight work,
+none of which is implemented yet.
 
 ### Health — `/health`
 
