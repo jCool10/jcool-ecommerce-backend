@@ -42,6 +42,7 @@
     - [Auth — `/auth`](#auth--auth)
     - [Catalog (public) — `/products`](#catalog-public--products)
     - [Catalog admin — `/admin` (RBAC `ADMIN`)](#catalog-admin--admin-rbac-admin)
+    - [Cart — `/cart`](#cart--cart)
     - [Health — `/health`](#health--health)
   - [Database \& Migrations](#database--migrations)
   - [Testing](#testing)
@@ -92,6 +93,10 @@ Currently implemented:
 - **Catalog**
   - Public read paths: list products (paginated) and product detail by id or slug.
   - Admin write paths (RBAC `ADMIN`): full CRUD for categories, products, and SKUs, plus price management, with soft-delete support.
+- **Cart**
+  - Per-user shopping cart (one active cart per user): add (upsert-accumulate on a repeat SKU), update quantity, remove a line, view, and clear — every mutation returns the full cart.
+  - Prices and names are read **live** from Catalog through a published cross-context port (anti-corruption boundary) — the cart never snapshots a price, so the subtotal always reflects the current price; freezing happens only at Order.
+  - Scratch space by design: no stock reservation at add-to-cart (that is Order/Inventory in Week 4), and an item whose product was archived after it was added stays in the cart, flagged `isActive: false`.
 - **Platform**
   - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
@@ -100,8 +105,8 @@ Currently implemented:
   - Global validation pipe (whitelist + reject unknown fields) and a unified HTTP exception filter.
   - Graceful shutdown hooks (drains the Postgres pool on `SIGTERM`/`SIGINT`).
 
-Bounded contexts scaffolded and on the roadmap: **Inventory**, **Cart**,
-**Order**, **Payment** (see [Roadmap](#roadmap)).
+Bounded contexts scaffolded and on the roadmap: **Inventory**, **Order**,
+**Payment** (see [Roadmap](#roadmap)).
 
 ## Architecture
 
@@ -313,6 +318,26 @@ the `x-csrf-token` header.
 | `PATCH`  | `/admin/skus/:id`                 | Update SKU           |
 | `DELETE` | `/admin/skus/:id`                 | Delete SKU           |
 | `PUT`    | `/admin/skus/:skuId/price`        | Set SKU price        |
+
+### Cart — `/cart` (Bearer)
+
+Per-user scratch cart — every endpoint requires a valid access token, and `skuId`
+is a **product-variant id** (SKU). Prices/names are read **live** from Catalog
+(never snapshotted), quantity is an integer `1..10000`, and every mutation returns
+the full cart so the client always sees current state.
+
+| Method   | Path                  | Description                                                              |
+| -------- | --------------------- | ----------------------------------------------------------------------- |
+| `GET`    | `/cart`               | View the current user's cart (items + subtotal from live prices)        |
+| `POST`   | `/cart/items`         | Add `{ skuId, quantity }`; a repeat SKU accumulates (upsert). `404` if the SKU is unknown |
+| `PATCH`  | `/cart/items/:skuId`  | Set a line's absolute quantity (`404` if the SKU is not in the cart)     |
+| `DELETE` | `/cart/items/:skuId`  | Remove one line (idempotent — `200` even if absent)                      |
+| `DELETE` | `/cart`               | Clear the cart                                                          |
+
+The cart is **scratch space, not the transaction source**: the subtotal always
+reflects the current Catalog price (a price change is visible on the next read),
+and stock/availability are validated only when an Order is placed — an item whose
+product was archived after it was added stays in the cart, flagged `isActive: false`.
 
 ### Health — `/health`
 

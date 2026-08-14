@@ -3,3 +3,4 @@
 // NOT a shared data model — cross-context code must never reach a table through it.
 export * from '../../../../modules/catalog/infrastructure/schema/catalog.schema';
 export * from '../../../../modules/user/infrastructure/schema/user.schema';
+export * from '../../../../modules/cart/infrastructure/schema/cart.schema';

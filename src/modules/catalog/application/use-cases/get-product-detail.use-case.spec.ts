@@ -15,6 +15,11 @@ class MockProductRepository implements ProductRepositoryPort {
     this.lastArg = idOrSlug;
     return Promise.resolve(this.detailResult);
   }
+
+  // Unused by this use-case; present to satisfy the read port.
+  findSkuView(): Promise<null> {
+    return Promise.resolve(null);
+  }
 }
 
 describe('GetProductDetailUseCase', () => {

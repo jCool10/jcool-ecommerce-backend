@@ -14,6 +14,11 @@ class MockProductRepository implements ProductRepositoryPort {
   findActiveByIdOrSlug(): Promise<Product | null> {
     return Promise.resolve(null);
   }
+
+  // Unused by this use-case; present to satisfy the read port.
+  findSkuView(): Promise<null> {
+    return Promise.resolve(null);
+  }
 }
 
 function product(id: string): Product {
