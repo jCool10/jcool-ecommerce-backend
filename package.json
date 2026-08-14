@@ -16,6 +16,7 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"src/**/*.ts\" --fix",
+    "lint:check": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "arch:check": "depcruise --config .dependency-cruiser.cjs src",
     "test": "vitest run",

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Supersede in-flight runs on the same ref so a rapid push sequence doesn't queue
+# stale jobs (a new push cancels the previous run for that branch/PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only reads the checkout. It needs no write scopes and no
+# secrets — the test DB is an ephemeral Testcontainers instance, not a shared one.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint · Typecheck · Arch · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20 # pinned to package.json engines (>=20)
+          cache: npm
+      - run: npm ci
+      # Ordered fastest-failing first: lint → typecheck → boundary check → build.
+      - run: npm run lint:check # eslint, no --fix (CI must report, not mutate)
+      - run: npm run typecheck # tsc --noEmit (SWC build emits without checking types)
+      - run: npm run arch:check # dependency-cruiser: layer/context boundaries
+      - run: npm run build
+
+  test:
+    name: Test (unit + integration · Testcontainers)
+    runs-on: ubuntu-latest # GitHub-hosted runner ships a Docker daemon → Testcontainers works
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test # unit (Vitest) — fast, hermetic, no Docker
+      - run: npm run test:e2e # integration — Testcontainers spins real Postgres/Redis + programmatic migrate
+        env:
+          # Job is ephemeral (fresh runner, torn down after), so skip Ryuk's reaper
+          # container. Trades auto-cleanup (unneeded here) for reliability on runners
+          # that restrict spawning the reaper.
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
