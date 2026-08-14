@@ -4,7 +4,13 @@ import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { categories, prices, productVariants, products } from './schema/catalog.schema';
 import type { Product } from '../domain/entities';
 import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../application/ports';
+import type { SkuView } from '../application/public/catalog-sku-query.port';
 import { assembleProducts } from './product-row.mapper';
+
+// System default pricing currency (schema default + admin write default). The SKU
+// view reads the price in this currency; a SKU priced only in another currency
+// reads as unpriced here — acceptable while VND is the sole currency.
+const DEFAULT_CURRENCY = 'VND';
 
 // Column projection for the flattened product×variant×price read, shared by the
 // list and detail queries (matches ProductFlatRow). Left-joined columns are nullable.
@@ -136,5 +142,38 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
       );
 
     return assembleProducts(rows)[0] ?? null;
+  }
+
+  async findSkuView(skuId: string): Promise<SkuView | null> {
+    // Inner-join the product (a variant always has one) for name + status; the
+    // price is left-joined at the default currency (unique per variant+currency,
+    // so at most one row), leaving unitPriceMinor null when the SKU is unpriced.
+    // No ACTIVE filter: a SKU whose product was archived after add still resolves,
+    // flagged isActive=false — the cart shows it, Order re-validates at checkout.
+    const [row] = await this.db
+      .select({
+        skuId: productVariants.id,
+        productName: products.name,
+        productStatus: products.status,
+        variantArchivedAt: productVariants.archivedAt,
+        amountMinor: prices.amountMinor,
+        currency: prices.currency,
+      })
+      .from(productVariants)
+      .innerJoin(products, eq(productVariants.productId, products.id))
+      .leftJoin(prices, and(eq(prices.variantId, productVariants.id), eq(prices.currency, DEFAULT_CURRENCY)))
+      .where(eq(productVariants.id, skuId))
+      .limit(1);
+
+    if (!row) {
+      return null;
+    }
+    return {
+      skuId: row.skuId,
+      productName: row.productName,
+      unitPriceMinor: row.amountMinor ?? null,
+      currency: row.currency ?? DEFAULT_CURRENCY,
+      isActive: row.productStatus === 'ACTIVE' && row.variantArchivedAt === null,
+    };
   }
 }

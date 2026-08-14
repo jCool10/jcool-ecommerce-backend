@@ -5,6 +5,7 @@ import { RedisModule } from '@shared/infrastructure/redis';
 import { ThrottlerSecurityModule } from '@shared/infrastructure/throttler';
 import { HealthModule } from '@shared/health';
 import { CatalogModule } from '@modules/catalog/catalog.module';
+import { CartModule } from '@modules/cart/cart.module';
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/user/auth.module';
 
@@ -18,6 +19,7 @@ import { AuthModule } from '@modules/user/auth.module';
     ThrottlerSecurityModule,
     HealthModule,
     CatalogModule,
+    CartModule,
     UserModule,
     AuthModule,
   ],
