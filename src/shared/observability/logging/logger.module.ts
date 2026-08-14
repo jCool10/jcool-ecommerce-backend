@@ -35,7 +35,16 @@ export const ObservabilityLoggerModule = LoggerModule.forRootAsync({
           return requestId ? { requestId } : {};
         },
         ...(pretty
-          ? { transport: { target: 'pino-pretty', options: { singleLine: true, translateTime: 'SYS:standard' } } }
+          ? {
+              transport: {
+                target: 'pino-pretty',
+                options: {
+                  singleLine: true,
+                  translateTime: 'SYS:standard',
+                  ignore: 'pid,hostname',
+                },
+              },
+            }
           : {}),
       },
     };

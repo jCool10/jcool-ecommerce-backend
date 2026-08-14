@@ -1,4 +1,5 @@
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import type { Reflector } from '@nestjs/core';
 import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
@@ -10,13 +11,18 @@ import { CanonicalLogInterceptor } from './canonical-log.interceptor';
 // matching the `as unknown as` mocking style used across the repo's guard specs.
 function httpContext(controller: object, handler: () => void, statusCode: number): ExecutionContext {
   const request = { method: 'GET', path: '/concrete' };
-  const response = { statusCode };
+  const response = { statusCode, getHeader: () => '431' };
   return {
     getType: () => 'http',
     switchToHttp: () => ({ getRequest: () => request, getResponse: () => response }),
     getClass: () => controller,
     getHandler: () => handler,
   } as unknown as ExecutionContext;
+}
+
+// ConfigService fake returning a fixed `app.env`; drives the dev (morgan) vs prod (JSON) branch.
+function configFor(env: string): ConfigService {
+  return { get: () => env } as unknown as ConfigService;
 }
 
 // CLS stub: a real bigint start (so getRequestDurationMs yields a number) and a fixed query tally.
@@ -44,6 +50,7 @@ describe('CanonicalLogInterceptor', () => {
       logger,
       clsStub(),
       reflectorFor(controller, 'products', ':idOrSlug'),
+      configFor('production'),
     );
 
     const next = { handle: () => of({ id: 'abc' }) } as unknown as CallHandler;
@@ -63,12 +70,48 @@ describe('CanonicalLogInterceptor', () => {
     expect(typeof fields.durationMs).toBe('number');
   });
 
+  it('logs a morgan dev-style one-line string (not a structured object) in development', async () => {
+    const info = vi.fn<(objOrMsg: unknown, msg?: string) => void>();
+    const logger = { info } as unknown as PinoLogger;
+    const controller = class ProductsController {};
+    const handler = function findOne(): void {};
+    const interceptor = new CanonicalLogInterceptor(
+      logger,
+      clsStub(),
+      reflectorFor(controller, 'products', ':idOrSlug'),
+      configFor('development'),
+    );
+
+    const next = { handle: () => of({ id: 'abc' }) } as unknown as CallHandler;
+    await new Promise<void>((resolve) => {
+      interceptor.intercept(httpContext(controller, handler, 200), next).subscribe({ complete: () => resolve() });
+    });
+
+    expect(info).toHaveBeenCalledTimes(1);
+    const [line, second] = info.mock.calls[0];
+    // Single string arg (message only) — no structured fields object in dev.
+    expect(typeof line).toBe('string');
+    expect(second).toBeUndefined();
+    // Morgan shape: `GET /products/:idOrSlug <200> 12.345 ms - 431 db=3`. Status and db are wrapped
+    // in ANSI color, so assert only substrings that stay contiguous around those codes.
+    const text = line as string;
+    expect(text).toContain('GET /products/:idOrSlug ');
+    expect(text).toContain('200');
+    expect(text).toContain(' ms - 431');
+    expect(text).toContain('db=3');
+  });
+
   it('does not log for health-probe routes (noise from orchestrator liveness/readiness)', async () => {
     const info = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
     const logger = { info } as unknown as PinoLogger;
     const controller = class HealthController {};
     const handler = function live(): void {};
-    const interceptor = new CanonicalLogInterceptor(logger, clsStub(), reflectorFor(controller, 'health', 'live'));
+    const interceptor = new CanonicalLogInterceptor(
+      logger,
+      clsStub(),
+      reflectorFor(controller, 'health', 'live'),
+      configFor('production'),
+    );
 
     const next = { handle: () => of({ status: 'ok' }) } as unknown as CallHandler;
     await new Promise<void>((resolve) => {
@@ -83,7 +126,7 @@ describe('CanonicalLogInterceptor', () => {
     const logger = { info } as unknown as PinoLogger;
     const reflector = { get: () => '' } as unknown as Reflector;
 
-    const interceptor = new CanonicalLogInterceptor(logger, clsStub(), reflector);
+    const interceptor = new CanonicalLogInterceptor(logger, clsStub(), reflector, configFor('production'));
     const context = { getType: () => 'rpc' } as unknown as ExecutionContext;
     const next = { handle: () => of('x') } as unknown as CallHandler;
 

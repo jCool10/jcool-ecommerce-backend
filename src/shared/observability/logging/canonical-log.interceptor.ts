@@ -1,4 +1,5 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { ClsService } from 'nestjs-cls';
@@ -7,6 +8,7 @@ import { type Observable, tap } from 'rxjs';
 import { getRequestDurationMs } from '../correlation/cls.setup';
 import { resolveRouteTemplate } from '../http-route.util';
 import { getDbQueryCount } from './db-query-counter';
+import { formatDevRequestLine } from './dev-request-line.format';
 
 // High-frequency operational endpoints logged every few seconds by orchestrators/Prometheus:
 // health probes and the metrics scrape. A canonical line for each is pure noise, so skip them
@@ -22,11 +24,16 @@ const SKIP_ROUTE_PREFIXES = ['/health', '/metrics'];
  */
 @Injectable()
 export class CanonicalLogInterceptor implements NestInterceptor {
+  private readonly devPretty: boolean;
+
   constructor(
     private readonly logger: PinoLogger,
     private readonly cls: ClsService,
     private readonly reflector: Reflector,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.devPretty = config.get<string>('app.env') === 'development';
+  }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'http') {
@@ -44,14 +51,32 @@ export class CanonicalLogInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(() => {
+        const statusCode = response.statusCode;
+        const durationMs = getRequestDurationMs(this.cls);
+        const dbQueries = getDbQueryCount(this.cls);
+
+        if (this.devPretty) {
+          this.logger.info(
+            formatDevRequestLine({
+              method: request.method,
+              route,
+              statusCode,
+              durationMs,
+              contentLength: response.getHeader('content-length'),
+              dbQueries,
+            }),
+          );
+          return;
+        }
+
         this.logger.info(
           {
             context: CanonicalLogInterceptor.name,
             method: request.method,
             route,
-            statusCode: response.statusCode,
-            durationMs: getRequestDurationMs(this.cls),
-            'db.queries': getDbQueryCount(this.cls),
+            statusCode,
+            durationMs,
+            'db.queries': dbQueries,
           },
           'request completed',
         );

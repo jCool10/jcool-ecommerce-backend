@@ -1,8 +1,15 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
-import { REQUEST_ID_HEADER, getCorrelationId, getDbQueryCount, getRequestDurationMs } from '@shared/observability';
+import {
+  REQUEST_ID_HEADER,
+  formatDevRequestLine,
+  getCorrelationId,
+  getDbQueryCount,
+  getRequestDurationMs,
+} from '@shared/observability';
 
 // Plain number so comparisons don't mix enum/number (no-unsafe-enum-comparison).
 const SERVER_ERROR_MIN: number = HttpStatus.INTERNAL_SERVER_ERROR;
@@ -13,10 +20,15 @@ const LOG_CONTEXT = 'HttpExceptionFilter';
 /** Unified error envelope — < 500 keep their developer-chosen payload, >= 500 are masked to a generic message (real error logged) so internals never leak, and Terminus health results pass through unchanged. Every response carries the correlation `requestId` (envelope field + `x-request-id` header); the exception is logged ONCE — 4xx at warn, 5xx at error. See docs/engineering-notes.md (Shared — Unified exception filter) and ADR-0013. */
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly devPretty: boolean;
+
   constructor(
     private readonly logger: PinoLogger,
     private readonly cls: ClsService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.devPretty = config.get<string>('app.env') === 'development';
+  }
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
@@ -34,23 +46,36 @@ export class HttpExceptionFilter implements ExceptionFilter {
       return;
     }
 
-    // Log ONCE (anti log-and-throw): 4xx at warn, 5xx at error. requestId rides on the
-    // line via the pino mixin; route + status keep it self-contained.
-    // durationMs + db.queries mirror the canonical success line so a failed request can be
-    // profiled from its log the same way a successful one can (e.g. a slow query that 500s).
-    const logFields = {
-      context: LOG_CONTEXT,
-      statusCode: status,
-      method: request.method,
-      route: request.url,
-      durationMs: getRequestDurationMs(this.cls),
-      'db.queries': getDbQueryCount(this.cls),
-    };
-    if (status >= SERVER_ERROR_MIN) {
-      const err = exception instanceof Error ? exception : new Error(String(exception));
-      this.logger.error({ ...logFields, err }, 'request failed');
+    const method = request.method;
+    const route = request.url;
+    const durationMs = getRequestDurationMs(this.cls);
+    const dbQueries = getDbQueryCount(this.cls);
+    const isServerError = status >= SERVER_ERROR_MIN;
+    const err = isServerError ? (exception instanceof Error ? exception : new Error(String(exception))) : undefined;
+
+    if (this.devPretty) {
+      const line = formatDevRequestLine({
+        method,
+        route,
+        statusCode: status,
+        durationMs,
+        contentLength: response.getHeader('content-length'),
+        dbQueries,
+      });
+      // 5xx still carries the stack (as an object) so the pretty console prints it below the line.
+      if (isServerError) this.logger.error({ err }, line);
+      else this.logger.warn(line);
     } else {
-      this.logger.warn(logFields, 'request rejected');
+      const logFields = {
+        context: LOG_CONTEXT,
+        statusCode: status,
+        method,
+        route,
+        durationMs,
+        'db.queries': dbQueries,
+      };
+      if (isServerError) this.logger.error({ ...logFields, err }, 'request failed');
+      else this.logger.warn(logFields, 'request rejected');
     }
 
     this.setRequestIdHeader(response, requestId);

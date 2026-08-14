@@ -6,5 +6,6 @@ export * from './correlation/cls.setup';
 export * from './logging/logger.module';
 export * from './logging/redact-paths';
 export * from './logging/db-query-counter';
+export * from './logging/dev-request-line.format';
 export * from './logging/canonical-log.interceptor';
 export * from './http-route.util';
