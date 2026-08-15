@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   Max,
@@ -81,6 +82,22 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
+
+  // Sentry DSN (ADR-0016); unset (dev/test) → the SDK never initializes and captureException is a
+  // silent no-op. Read in instrumentation.ts; declared here to fail-fast if blank.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  SENTRY_DSN?: string;
+
+  // Fraction (0–1) of transactions sampled for Sentry performance; 0/absent → errors only (no perf
+  // spans, so no duplicate http spans in Jaeger — see instrumentation.ts).
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  SENTRY_TRACES_SAMPLE_RATE?: number;
 
   // Public base URL for links in outbound email; plain string so localhost/non-TLD hosts validate.
   @IsOptional()

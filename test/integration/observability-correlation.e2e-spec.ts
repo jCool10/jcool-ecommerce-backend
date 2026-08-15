@@ -72,4 +72,18 @@ describe('Correlation id (integration)', () => {
     expect(typeof res.body.timestamp).toBe('string');
     expect(res.body.message).toBeDefined();
   });
+
+  it('serves the public /debug/boom route as a masked 5xx envelope (error pipeline)', async () => {
+    // The debug endpoint throws on purpose; it is @Public() (reachable without a token) and gated
+    // to non-prod. This drives the same filter path that reports to Sentry (a no-op without a DSN),
+    // proving the 5xx envelope stays masked + correlated. Live Sentry.io delivery is verified
+    // separately with a real DSN.
+    const res = await request(server).get('/debug/boom').expect(500);
+
+    const headerId = res.headers['x-request-id'] as string;
+    expect(res.body.requestId).toBe(headerId);
+    expect(res.body).toMatchObject({ statusCode: 500, path: '/debug/boom', message: 'Internal server error' });
+    // The real error message must never leak to the client.
+    expect(JSON.stringify(res.body)).not.toContain('Intentional boom');
+  });
 });

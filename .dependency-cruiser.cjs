@@ -43,10 +43,10 @@ module.exports = {
       name: 'app-domain-telemetry-free',
       severity: 'error',
       comment:
-        'domain/application stay telemetry-free (ADR-0013/0014/0015): no OTel/pino/prom-client, and observability only through the pure metrics port. The shared/observability barrel now transitively pulls @opentelemetry/api, so this keeps a stray `withSpan`/logger import from leaking telemetry into the core.',
+        'domain/application stay telemetry-free (ADR-0013/0014/0015/0016): no OTel/pino/prom-client/Sentry, and observability only through the pure metrics port. The shared/observability barrel now transitively pulls @opentelemetry/api, so this keeps a stray `withSpan`/logger/captureException import from leaking telemetry into the core.',
       from: { path: '^src/modules/[^/]+/(domain|application)/' },
       to: {
-        path: 'node_modules/(@opentelemetry|pino|nestjs-pino|prom-client)/|^src/shared/observability/',
+        path: 'node_modules/(@opentelemetry|@sentry|pino|nestjs-pino|prom-client)/|^src/shared/observability/',
         pathNot: '^src/shared/observability/metrics/metrics\\.port',
       },
     },

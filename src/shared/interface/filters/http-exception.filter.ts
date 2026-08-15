@@ -1,5 +1,6 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/nestjs';
 import type { Request, Response } from 'express';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
@@ -81,6 +82,27 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // Separate from requestId; only present when tracing is on. Added to the envelope only —
     // logs already carry it via the pino mixin.
     const traceId = getActiveTraceId();
+
+    // Report server errors to Sentry (no-op when SENTRY_DSN is unset, so tests/dev are unaffected).
+    // traceId/spanId also land on the event natively via the Sentry context manager; the tags make
+    // requestId/traceId searchable in issue search. 4xx are client errors — not reported (noise).
+    if (isServerError && err) {
+      // Fire-and-forget: reporting must never break the error response. captureException is
+      // contractually non-throwing (no-op without a DSN), but guard the masking path regardless.
+      try {
+        const routeTemplate = (request.route as { path?: string } | undefined)?.path;
+        Sentry.captureException(err, {
+          tags: {
+            request_id: requestId,
+            trace_id: traceId,
+            // Route template (low-cardinality, no query PII); falls back to the pathname.
+            route: `${method} ${routeTemplate ?? request.path}`,
+          },
+        });
+      } catch {
+        // swallow — a telemetry failure must not affect the error response
+      }
+    }
 
     this.setRequestIdHeader(response, requestId);
     response.status(status).json({

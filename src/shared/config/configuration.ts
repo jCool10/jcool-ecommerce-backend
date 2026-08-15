@@ -10,6 +10,14 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string {
   return Number.isInteger(hops) && hops >= 0 ? hops : raw;
 }
 
+// Sentry performance sampling: a positive fraction enables tracing; 0/absent → errors only. Returns
+// undefined (never literal 0) so callers can omit the key — an explicit 0 turns Sentry's own http
+// spans on and duplicates our OTel spans (see instrumentation.ts).
+function parseTracesSampleRate(raw: string | undefined): number | undefined {
+  const rate = Number(raw);
+  return Number.isFinite(rate) && rate > 0 ? rate : undefined;
+}
+
 export default () => ({
   app: {
     env: process.env.NODE_ENV,
@@ -45,6 +53,14 @@ export default () => ({
     enabled: process.env.OTEL_ENABLED === 'true',
     serviceName: process.env.OTEL_SERVICE_NAME ?? 'jcool-api',
     otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
+  },
+  sentry: {
+    // Typed mirror of the Sentry gating in instrumentation.ts (which inits before this runs).
+    enabled: Boolean(process.env.SENTRY_DSN),
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV,
+    // Positive fraction → performance tracing; 0/absent → error-only (undefined, not literal 0).
+    tracesSampleRate: parseTracesSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE),
   },
   database: {
     url: process.env.DATABASE_URL,
