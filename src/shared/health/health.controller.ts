@@ -2,7 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckResult, HealthCheckService } from '@nestjs/terminus';
 import { Public } from '@modules/user/interface/decorators';
-import { DrizzleHealthIndicator, RedisHealthIndicator } from './indicators';
+import { DrizzleHealthIndicator, RedisHealthIndicator, ShutdownHealthIndicator } from './indicators';
 
 // Liveness/readiness must answer without a token — orchestrators probe these
 // unauthenticated. `@Public()` opts the whole controller out of the global guard.
@@ -14,6 +14,7 @@ export class HealthController {
     private readonly health: HealthCheckService,
     private readonly drizzle: DrizzleHealthIndicator,
     private readonly redis: RedisHealthIndicator,
+    private readonly shutdown: ShutdownHealthIndicator,
   ) {}
 
   // Liveness: process responsive? Checks no dependency — a flaky DB/Redis must
@@ -25,14 +26,20 @@ export class HealthController {
     return this.health.check([]);
   }
 
-  // Readiness: can we serve traffic? Any dependency down → Terminus 503 naming it.
+  // Readiness: can we serve traffic? The shutdown gate is checked first so a draining
+  // process 503s immediately (LB stops routing before we close); then any dependency down
+  // → Terminus 503 naming it.
   @Get('ready')
   @HealthCheck()
-  @ApiOkResponse({ description: 'Postgres and Redis are reachable.' })
+  @ApiOkResponse({ description: 'Not shutting down; Postgres and Redis are reachable.' })
   @ApiServiceUnavailableResponse({
-    description: 'At least one dependency is down.',
+    description: 'Shutting down, or at least one dependency is down.',
   })
   ready(): Promise<HealthCheckResult> {
-    return this.health.check([() => this.drizzle.isHealthy('database'), () => this.redis.isHealthy('redis')]);
+    return this.health.check([
+      () => this.shutdown.isHealthy('shutdown'),
+      () => this.drizzle.isHealthy('database'),
+      () => this.redis.isHealthy('redis'),
+    ]);
   }
 }

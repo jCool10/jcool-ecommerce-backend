@@ -42,6 +42,15 @@ export class EnvironmentVariables {
   @Max(65535)
   PORT?: number;
 
+  // Grace period (ms) the process keeps returning /health/ready 503 after SIGTERM before the
+  // HTTP server closes, so a load balancer drains this instance first. Default 0 (configuration.ts)
+  // → instant shutdown in tests/dev; set a few seconds under an orchestrator.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  SHUTDOWN_GRACE_PERIOD_MS?: number;
+
   @IsString()
   @IsNotEmpty()
   DATABASE_URL!: string;

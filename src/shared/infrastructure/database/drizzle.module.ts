@@ -1,4 +1,4 @@
-import { Global, Inject, Logger, Module, OnModuleDestroy } from '@nestjs/common';
+import { Global, Inject, Logger, Module, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { ClsService } from 'nestjs-cls';
@@ -38,10 +38,14 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
   ],
   exports: [DRIZZLE],
 })
-export class DrizzleModule implements OnModuleDestroy {
+export class DrizzleModule implements OnApplicationShutdown {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  async onModuleDestroy(): Promise<void> {
+  // Drain on onApplicationShutdown (the last shutdown hook, after the HTTP server has closed) rather
+  // than onModuleDestroy (the first): this keeps the pool alive through the readiness-drain grace
+  // window and until in-flight requests finish, so a load balancer can stop routing before the DB
+  // connections go away — otherwise late requests would 500 at the data layer mid-drain.
+  async onApplicationShutdown(): Promise<void> {
     await this.pool.end();
   }
 }

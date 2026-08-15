@@ -39,6 +39,9 @@ export default () => ({
     publicUrl: process.env.APP_PUBLIC_URL ?? 'http://localhost:3000',
     // Reverse-proxy trust for req.ip (throttle + audit). Off by default (anti-spoof); set behind a trusted proxy.
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    // How long /health/ready keeps 503-ing after SIGTERM before the server closes (graceful
+    // drain). 0 = shut down immediately (tests/dev); set ~5000 under a load balancer.
+    shutdownGracePeriodMs: parseInt(process.env.SHUTDOWN_GRACE_PERIOD_MS ?? '0', 10),
   },
   log: {
     // pino level: verbose in dev, lean in prod; LOG_LEVEL overrides either way.
