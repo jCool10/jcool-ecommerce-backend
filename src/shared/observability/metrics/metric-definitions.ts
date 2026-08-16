@@ -28,8 +28,8 @@ export const HTTP_LATENCY_BUCKETS = [
 // order ≈ 21M and ~95% of orders land between 10M and 50M, so resolution is concentrated there
 // (the old 10M ceiling was blind above it — most orders overflowed into +Inf).
 export const ORDER_VALUE_BUCKETS = [
-  100_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000, 15_000_000, 20_000_000,
-  30_000_000, 50_000_000, 100_000_000,
+  100_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000, 15_000_000, 20_000_000, 30_000_000, 50_000_000,
+  100_000_000,
 ];
 
 /**
