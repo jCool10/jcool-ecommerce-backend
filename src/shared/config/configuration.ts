@@ -93,4 +93,9 @@ export default () => ({
     // Rate-limiting kill-switch; on by default (THROTTLE_ENABLED=false disables — load tests, e2e).
     enabled: process.env.THROTTLE_ENABLED !== 'false',
   },
+  inventory: {
+    // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or
+    // 'optimistic' (version CAS + retry). Default pessimistic.
+    lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',
+  },
 });

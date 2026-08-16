@@ -43,6 +43,13 @@
       "when": 1786680715168,
       "tag": "0005_regular_marvel_zombies",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786851839601,
+      "tag": "0006_windy_blindfold",
+      "breakpoints": true
     }
   ]
 }
