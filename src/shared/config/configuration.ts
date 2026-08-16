@@ -100,5 +100,10 @@ export default () => ({
     // How long a HELD reservation stamps `expiresAt` ahead (duration form). Written now;
     // the sweep that reclaims an expired unpaid hold is a later concern.
     reservationTtl: process.env.INVENTORY_RESERVATION_TTL ?? '15m',
+    // Optimistic reserve: how many times to re-CAS after losing a version race before
+    // giving up with a 409 (0 = never retry). Real shortfalls never consume a retry.
+    optimisticMaxRetries: parseInt(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES ?? '3', 10),
+    // Base backoff (ms) between optimistic retries; grows 2^attempt and gets random jitter.
+    optimisticBackoffMs: parseInt(process.env.INVENTORY_OPTIMISTIC_BACKOFF_MS ?? '20', 10),
   },
 });

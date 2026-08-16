@@ -153,6 +153,22 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   INVENTORY_RESERVATION_TTL?: string;
 
+  // Optimistic reserve retry budget after a lost version CAS; default 3 (configuration.ts).
+  // Capped so a misconfig can't blow up 2^attempt backoff and pin the stock row's write-lock.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10)
+  INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
+
+  // Base backoff (ms) between optimistic retries; default 20 (configuration.ts).
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  INVENTORY_OPTIMISTIC_BACKOFF_MS?: number;
+
   // HMAC secret for access tokens; MinLength(32) enforces a ~256-bit floor for HS256 (no default → missing fails boot).
   @IsString()
   @MinLength(32)

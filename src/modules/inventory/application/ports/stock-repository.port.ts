@@ -35,6 +35,12 @@ export interface StockRepositoryPort {
    * Optimistic hold: `UPDATE ... WHERE id=? AND version=?` (+ available guard) inside
    * `tx`, bounded retry on a lost version race, throw `InsufficientStockError` on a
    * real shortfall (no retry).
+   *
+   * Unlike the pessimistic path, the idempotency check is not lock-guarded: two
+   * concurrent reserves for the same `orderId` can each raise reserved once (never an
+   * oversell — the available guard + CHECK still cap it — but the surplus hold has no
+   * reservation row to release). Callers must dedupe order submission (single-flight
+   * per order, or an idempotency key upstream).
    */
   reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void>;
 
