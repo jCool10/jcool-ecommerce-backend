@@ -5,9 +5,16 @@
 # (see .claude/rules/process-management.md and plan phase-02).
 #
 # All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here.
-#   Infra only (this week):  docker compose up -d postgres redis
-#   Full stack (from P3+):   docker compose up -d
-#   Reset everything:        docker compose down -v
+# PREREQUISITE: copy `.env.example` → `.env` first. The `app` service reads it via `env_file`, so a
+# missing `.env` fails `up` fast (clearer than a later env-validation crash inside the container).
+#   Core (dev default):     docker compose up -d                            # postgres + redis + app
+#   Infra only:             docker compose up -d postgres redis
+#   + observability stack:  docker compose --profile observability up -d    # + collector/jaeger/prometheus/grafana
+#   Reset everything:       docker compose down -v
+#
+# The 4 observability services sit behind the `observability` profile so the default `up` stays
+# light. To trace/scrape the app container, set OTEL_ENABLED=true + METRICS_TOKEN in .env first
+# (the app loads .env via env_file), and provision infra/prometheus/secrets/metrics-token to match.
 
 name: jcool-ecommerce
 
@@ -59,11 +66,23 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
+    # Load .env for the app's own secrets/config (JWT_ACCESS_SECRET, METRICS_TOKEN, SENTRY_DSN,
+    # OTEL_ENABLED, LOG_LEVEL, …). The network-specific values below then override any
+    # host-oriented ones from .env (e.g. DATABASE_URL/REDIS_URL point at localhost in .env).
+    env_file:
+      - .env
     environment:
       NODE_ENV: development
       PORT: 3000
+      # Inside the compose network the app reaches services by NAME, not the host-mapped ports.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       REDIS_URL: redis://redis:6379
+      # Traces export to the Collector service (only up under `--profile observability`). Harmless
+      # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    # Preload the OTel/Sentry instrumentation before the app (no-op unless OTEL_ENABLED=true /
+    # SENTRY_DSN set). Mirrors `npm run start:prod`; the Dockerfile CMD stays plain for other runs.
+    command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,9 +106,89 @@ services:
     networks:
       - jcool-net
 
+  # --- Observability stack (opt-in: `docker compose --profile observability up -d`) ---------------
+  # Internal UIs bind to 127.0.0.1 only — no service is exposed on all interfaces.
+
+  # OTel Collector: receives OTLP from the app, redacts PII, forwards to Jaeger (config in
+  # infra/otel-collector/config.yaml). Distroless (no shell) → no healthcheck; started, not waited on.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.109.0
+    container_name: jcool-otel-collector
+    profiles: [observability]
+    restart: unless-stopped
+    command: ['--config=/etc/otelcol-contrib/config.yaml']
+    volumes:
+      - ./infra/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP
+    depends_on:
+      jaeger:
+        condition: service_started
+    networks:
+      - jcool-net
+
+  # Jaeger v2 (all-in-one): ingests OTLP natively from the Collector; trace UI on 16686.
+  jaeger:
+    image: jaegertracing/jaeger:2.1.0
+    container_name: jcool-jaeger
+    profiles: [observability]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16686:16686" # Jaeger UI
+    networks:
+      - jcool-net
+
+  # Prometheus: scrapes the app's guarded /metrics (bearer token from a mounted secret file),
+  # evaluates the SLO recording + burn-rate rules. depends_on app with service_started (NOT
+  # healthy) — Prometheus must be up to observe the app failing, not blocked by it.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: jcool-prometheus
+    profiles: [observability]
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
+      - ./infra/prometheus/secrets:/etc/prometheus/secrets:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      app:
+        condition: service_started
+    networks:
+      - jcool-net
+
+  # Grafana: provisioned datasources (Prometheus + Jaeger) + the 3-tier dashboard. Admin password
+  # from .env; UI on 3001 (host) to avoid clashing with the app on 3000.
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: jcool-grafana
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks:
+      - jcool-net
+
 volumes:
   pgdata:
   redisdata:
+  promdata:
+  grafanadata:
 
 networks:
   jcool-net:

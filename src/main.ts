@@ -1,16 +1,20 @@
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger as NestLogger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { CSRF_HEADER } from '@modules/user/interface/security';
-import { HttpExceptionFilter } from '@shared/interface/filters/http-exception.filter';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Buffer bootstrap logs until the pino logger is installed, then replay them through it
+  // (so early logs are JSON too, not NestJS's default console format).
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+  const logger = app.get(Logger);
+  app.useLogger(logger);
   const configService = app.get(ConfigService);
 
   // Behind a reverse proxy, trust it so `req.ip` is the real client IP (rate-limit + audit key);
@@ -39,8 +43,8 @@ async function bootstrap(): Promise<void> {
   app.use(cookieParser());
 
   // Validate DTOs at the edge: strip unknown props and reject any sent (fail loud, not silent).
+  // The global exception filter is wired via APP_FILTER (app.module) so it can inject CLS.
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
-  app.useGlobalFilters(new HttpExceptionFilter());
 
   // Let SIGTERM/SIGINT run lifecycle hooks (DrizzleModule drains the pg pool).
   app.enableShutdownHooks();
@@ -59,15 +63,16 @@ async function bootstrap(): Promise<void> {
       .build();
     const document = SwaggerModule.createDocument(app, swaggerConfig);
     SwaggerModule.setup('docs', app, document);
-    Logger.log('Swagger UI available at /docs', 'Bootstrap');
+    logger.log('Swagger UI available at /docs', 'Bootstrap');
   }
 
   await app.listen(port);
-  Logger.log(`Application running on http://localhost:${port}`, 'Bootstrap');
+  logger.log(`Application running on http://localhost:${port}`, 'Bootstrap');
 }
 
-// Fail-fast: any bootstrap failure (e.g. env validation) exits non-zero.
+// Fail-fast: any bootstrap failure (e.g. env validation) exits non-zero. The pino logger
+// may not exist yet here, so fall back to NestJS's default logger for this last line.
 void bootstrap().catch((error: unknown) => {
-  Logger.error(error instanceof Error ? error.message : String(error), undefined, 'Bootstrap');
+  NestLogger.error(error instanceof Error ? error.message : String(error), undefined, 'Bootstrap');
   process.exit(1);
 });

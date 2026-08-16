@@ -10,6 +10,14 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string {
   return Number.isInteger(hops) && hops >= 0 ? hops : raw;
 }
 
+// Sentry performance sampling: a positive fraction enables tracing; 0/absent → errors only. Returns
+// undefined (never literal 0) so callers can omit the key — an explicit 0 turns Sentry's own http
+// spans on and duplicates our OTel spans (see instrumentation.ts).
+function parseTracesSampleRate(raw: string | undefined): number | undefined {
+  const rate = Number(raw);
+  return Number.isFinite(rate) && rate > 0 ? rate : undefined;
+}
+
 export default () => ({
   app: {
     env: process.env.NODE_ENV,
@@ -29,9 +37,33 @@ export default () => ({
       .filter(Boolean),
     // Public base URL used to build links in outbound email (verification, etc.).
     publicUrl: process.env.APP_PUBLIC_URL ?? 'http://localhost:3000',
-    // Reverse-proxy trust for req.ip (throttle + audit key on it). Off by default so a
-    // direct deploy can't be spoofed via X-Forwarded-For; set behind a trusted proxy.
+    // Reverse-proxy trust for req.ip (throttle + audit). Off by default (anti-spoof); set behind a trusted proxy.
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    // How long /health/ready keeps 503-ing after SIGTERM before the server closes (graceful
+    // drain). 0 = shut down immediately (tests/dev); set ~5000 under a load balancer.
+    shutdownGracePeriodMs: parseInt(process.env.SHUTDOWN_GRACE_PERIOD_MS ?? '0', 10),
+  },
+  log: {
+    // pino level: verbose in dev, lean in prod; LOG_LEVEL overrides either way.
+    level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+  },
+  metrics: {
+    // Bearer token for GET /metrics. Undefined → open in dev, hidden in prod (MetricsTokenGuard).
+    token: process.env.METRICS_TOKEN,
+  },
+  tracing: {
+    // Mirrors instrumentation.ts (which reads process.env directly, before this runs) for a typed config surface.
+    enabled: process.env.OTEL_ENABLED === 'true',
+    serviceName: process.env.OTEL_SERVICE_NAME ?? 'jcool-api',
+    otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
+  },
+  sentry: {
+    // Typed mirror of the Sentry gating in instrumentation.ts (which inits before this runs).
+    enabled: Boolean(process.env.SENTRY_DSN),
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV,
+    // Positive fraction → performance tracing; 0/absent → error-only (undefined, not literal 0).
+    tracesSampleRate: parseTracesSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE),
   },
   database: {
     url: process.env.DATABASE_URL,

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 
@@ -6,7 +6,7 @@ import { Redis } from 'ioredis';
  * Shared ioredis client, opened at startup and closed on shutdown.
  */
 @Injectable()
-export class RedisService implements OnModuleDestroy {
+export class RedisService implements OnApplicationShutdown {
   private readonly logger = new Logger(RedisService.name);
   private readonly client: Redis;
 
@@ -35,7 +35,10 @@ export class RedisService implements OnModuleDestroy {
     return this.client.ping();
   }
 
-  async onModuleDestroy(): Promise<void> {
+  // Close on onApplicationShutdown (after the HTTP server has closed), not onModuleDestroy (before
+  // it): the client stays available through the readiness-drain grace window so in-flight and
+  // just-drained requests still resolve, matching the pg pool's teardown timing.
+  async onApplicationShutdown(): Promise<void> {
     // quit() drains then closes gracefully; if Redis is unreachable it rejects,
     // so fall back to an immediate teardown to avoid hanging shutdown.
     try {

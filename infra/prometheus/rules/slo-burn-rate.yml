@@ -1,0 +1,145 @@
+# SLO recording rules + multi-window burn-rate alerts (Google SRE workbook model).
+# Two SLIs with symmetric burn-rate alerts: availability (5xx ratio) and latency (share of requests
+# slower than 250ms). SLO targets are derived from a k6 baseline (2026-08-15, ~21 req/s): global
+# p99 ≈ 22ms and the slowest route /auth/register p99 ≈ 98ms (argon2), so a 250ms latency objective
+# gives ~2.5x headroom over the worst route. Availability SLO 99.9% ⇒ 0.1% error budget; latency
+# SLO 99% ⇒ 1% budget. A 14.4x burn drains a 30-day budget in ~2 days (fast burn).
+#
+# KNOWN LIMITATION (RED source = an APP_INTERCEPTOR). Nest runs guards BEFORE interceptors, so
+# requests rejected by a global guard (JwtAuthGuard 401, RolesGuard 403, throttler 429) or that
+# 5xx from *inside* a guard (e.g. the jwt denylist Redis lookup failing) are NOT counted in
+# http_requests_total — the availability numerator misses that class of outage. Acceptable for
+# the local, qualitative Phase 2 SLO; revisit in Phase 5 (alert wiring + health hardening): move
+# RED to a res.on('finish') hook or add a guard-origin counter in HttpExceptionFilter if the SLO
+# must cover all ingress. Note too: the recording rules below aggregate globally (single scrape
+# job); add `by (job)` if a second job is ever scraped.
+groups:
+  - name: http-slo-recordings
+    interval: 15s
+    rules:
+      # Error = 5xx. Ratio of 5xx to all requests over several windows (job-wide).
+      - record: job:http_request_error_rate:ratio5m
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m]))
+      - record: job:http_request_error_rate:ratio30m
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[30m]))
+          / sum(rate(http_requests_total[30m]))
+      - record: job:http_request_error_rate:ratio1h
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[1h]))
+          / sum(rate(http_requests_total[1h]))
+      - record: job:http_request_error_rate:ratio6h
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[6h]))
+          / sum(rate(http_requests_total[6h]))
+      # p99 latency per route. histogram_quantile over the summed bucket rate BY le — the
+      # only correct way (averaging a pre-computed quantile is wrong: quantiles don't average).
+      - record: route:http_request_duration_seconds:p99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)
+          )
+
+  - name: http-latency-slo-recordings
+    interval: 15s
+    rules:
+      # Latency SLI as a VIOLATION ratio (share of requests SLOWER than the 250ms objective — the
+      # "bad" fraction, mirroring the availability error ratio above so both feed the same burn-rate
+      # shape). count - bucket{le="0.25"} = requests that fell past the 250ms boundary. The 0.25s
+      # boundary must exist in HTTP_LATENCY_BUCKETS (it does) or this rule silently reads nothing.
+      - record: job:http_request_latency_violation:ratio5m
+        expr: |
+          (
+            sum(rate(http_request_duration_seconds_count[5m]))
+            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[5m]))
+          ) / sum(rate(http_request_duration_seconds_count[5m]))
+      - record: job:http_request_latency_violation:ratio30m
+        expr: |
+          (
+            sum(rate(http_request_duration_seconds_count[30m]))
+            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[30m]))
+          ) / sum(rate(http_request_duration_seconds_count[30m]))
+      - record: job:http_request_latency_violation:ratio1h
+        expr: |
+          (
+            sum(rate(http_request_duration_seconds_count[1h]))
+            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[1h]))
+          ) / sum(rate(http_request_duration_seconds_count[1h]))
+      - record: job:http_request_latency_violation:ratio6h
+        expr: |
+          (
+            sum(rate(http_request_duration_seconds_count[6h]))
+            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[6h]))
+          ) / sum(rate(http_request_duration_seconds_count[6h]))
+
+  - name: http-slo-burn-rate-alerts
+    rules:
+      # Fast burn: 1h AND 5m windows both hot ⇒ page. 14.4 = burn that drains a 99.9%
+      # monthly budget in ~2 days. The short window makes the alert self-resolve on recovery.
+      - alert: HighErrorBudgetBurnFast
+        expr: |
+          job:http_request_error_rate:ratio1h > (14.4 * 0.001)
+          and job:http_request_error_rate:ratio5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: 'Fast error-budget burn (availability SLO 99.9%)'
+          description: '5xx burn rate >14.4x over 1h and 5m — ~2 days to exhaust the 30-day budget.'
+      # Slow burn: 6h AND 30m windows. 6 = drains the budget in ~10 days. Ticket, not page.
+      - alert: HighErrorBudgetBurnSlow
+        expr: |
+          job:http_request_error_rate:ratio6h > (6 * 0.001)
+          and job:http_request_error_rate:ratio30m > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: availability
+        annotations:
+          summary: 'Slow error-budget burn (availability SLO 99.9%)'
+          description: '5xx burn rate >6x over 6h and 30m — ~10 days to exhaust the 30-day budget.'
+
+  - name: http-latency-slo-burn-rate-alerts
+    rules:
+      # Latency SLO 99% < 250ms ⇒ 1% budget. Fast burn: 1h ∧ 5m both burn >14.4x the budget
+      # (>14.4% of requests slower than 250ms). The 5m window makes the alert self-resolve.
+      - alert: HighLatencyBudgetBurnFast
+        expr: |
+          job:http_request_latency_violation:ratio1h > (14.4 * 0.01)
+          and job:http_request_latency_violation:ratio5m > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          slo: latency
+        annotations:
+          summary: 'Fast latency-budget burn (latency SLO 99% < 250ms)'
+          description: '>14.4% of requests slower than 250ms over 1h and 5m — ~2 days to exhaust the 30-day budget.'
+      # Slow burn: 6h ∧ 30m windows burn >6x the budget. Ticket, not page.
+      - alert: HighLatencyBudgetBurnSlow
+        expr: |
+          job:http_request_latency_violation:ratio6h > (6 * 0.01)
+          and job:http_request_latency_violation:ratio30m > (6 * 0.01)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: latency
+        annotations:
+          summary: 'Slow latency-budget burn (latency SLO 99% < 250ms)'
+          description: '>6% of requests slower than 250ms over 6h and 30m — ~10 days to exhaust the 30-day budget.'
+
+  # SEAM (BF#4 outbox) — disabled until the outbox table + poller exist. Uncomment when
+  # outbox_backlog_pending / outbox_oldest_age_seconds report real values (they are 0 now).
+  # - name: outbox-alerts
+  #   rules:
+  #     - alert: OutboxBacklogGrowing
+  #       expr: outbox_backlog_pending > 100
+  #       for: 10m
+  #       labels: { severity: ticket }
+  #     - alert: OutboxMessageStale
+  #       expr: outbox_oldest_age_seconds > 300
+  #       for: 5m
+  #       labels: { severity: page }

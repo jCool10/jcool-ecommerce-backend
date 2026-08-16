@@ -1,0 +1,14 @@
+# Grafana dashboard provider: loads every dashboard JSON in this directory on start.
+apiVersion: 1
+
+providers:
+  - name: jcool
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

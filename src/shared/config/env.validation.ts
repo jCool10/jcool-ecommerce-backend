@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   Max,
@@ -19,6 +20,15 @@ export enum NodeEnv {
   Production = 'production',
 }
 
+// pino log levels (ascending severity). Default applied in configuration.ts.
+export enum LogLevel {
+  Trace = 'trace',
+  Debug = 'debug',
+  Info = 'info',
+  Warn = 'warn',
+  Error = 'error',
+}
+
 /** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET; optional vars fall back to defaults applied in configuration.ts. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
@@ -32,6 +42,15 @@ export class EnvironmentVariables {
   @Max(65535)
   PORT?: number;
 
+  // Grace period (ms) the process keeps returning /health/ready 503 after SIGTERM before the
+  // HTTP server closes, so a load balancer drains this instance first. Default 0 (configuration.ts)
+  // → instant shutdown in tests/dev; set a few seconds under an orchestrator.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  SHUTDOWN_GRACE_PERIOD_MS?: number;
+
   @IsString()
   @IsNotEmpty()
   DATABASE_URL!: string;
@@ -43,6 +62,51 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsBooleanString()
   SWAGGER_ENABLED?: string;
+
+  // pino log level; defaults to debug in dev, info in prod (configuration.ts).
+  @IsOptional()
+  @IsEnum(LogLevel)
+  LOG_LEVEL?: LogLevel;
+
+  // Bearer token for GET /metrics (ADR-0018); optional in dev, MinLength keeps it non-trivial.
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  METRICS_TOKEN?: string;
+
+  // Tracing kill-switch (ADR-0015); the OTel SDK (instrumentation.ts) starts only when "true".
+  @IsOptional()
+  @IsBooleanString()
+  OTEL_ENABLED?: string;
+
+  // service.name on every span; read in instrumentation.ts, declared here to fail-fast if invalid.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  OTEL_SERVICE_NAME?: string;
+
+  // OTLP/HTTP base endpoint of the Collector; the traces path (/v1/traces) is appended.
+  // Defaults to http://localhost:4318 (instrumentation.ts).
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string;
+
+  // Sentry DSN (ADR-0016); unset (dev/test) → the SDK never initializes and captureException is a
+  // silent no-op. Read in instrumentation.ts; declared here to fail-fast if blank.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  SENTRY_DSN?: string;
+
+  // Fraction (0–1) of transactions sampled for Sentry performance; 0/absent → errors only (no perf
+  // spans, so no duplicate http spans in Jaeger — see instrumentation.ts).
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  SENTRY_TRACES_SAMPLE_RATE?: number;
 
   // Public base URL for links in outbound email; plain string so localhost/non-TLD hosts validate.
   @IsOptional()

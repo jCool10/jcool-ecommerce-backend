@@ -1,0 +1,20 @@
+# Grafana datasource provisioning (auto-loaded on start). Both point at compose service names
+# on jcool-net. Fixed UIDs so the provisioned dashboard can reference them deterministically.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # Matches Prometheus scrape_interval so rate() windows line up.
+      timeInterval: 15s
+
+  - name: Jaeger
+    type: jaeger
+    uid: jaeger
+    access: proxy
+    url: http://jaeger:16686

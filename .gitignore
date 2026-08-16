@@ -14,6 +14,10 @@
 .env.*
 !.env.example
 
+# Local observability secret (Phase 5): the real Prometheus scrape token, mounted into the
+# Prometheus container. Must match the app's METRICS_TOKEN. Only the .example template is committed.
+infra/prometheus/secrets/metrics-token
+
 # Logs
 *.log
 npm-debug.log*

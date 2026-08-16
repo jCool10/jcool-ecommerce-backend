@@ -40,6 +40,17 @@ module.exports = {
       to: { path: '^src/modules/[^/]+/(infrastructure|interface)/' },
     },
     {
+      name: 'app-domain-telemetry-free',
+      severity: 'error',
+      comment:
+        'domain/application stay telemetry-free (ADR-0013/0014/0015/0016): no OTel/pino/prom-client/Sentry, and observability only through the pure metrics port. The shared/observability barrel now transitively pulls @opentelemetry/api, so this keeps a stray `withSpan`/logger/captureException import from leaking telemetry into the core.',
+      from: { path: '^src/modules/[^/]+/(domain|application)/' },
+      to: {
+        path: 'node_modules/(@opentelemetry|@sentry|pino|nestjs-pino|prom-client)/|^src/shared/observability/',
+        pathNot: '^src/shared/observability/metrics/metrics\\.port',
+      },
+    },
+    {
       name: 'kernel-pure',
       severity: 'error',
       comment: 'shared/kernel is the pure DDD building-block layer: it may import only itself.',
@@ -56,6 +67,8 @@ module.exports = {
           '\\.(spec|test)\\.ts$',
           '\\.d\\.ts$',
           '(^|/)main\\.ts$',
+          '(^|/)instrumentation\\.ts$', // OTel preload — loaded via `node --import`, never imported
+
           '(^|/)(migrate|seed)\\.ts$', // CLI entry scripts run by drizzle-kit / node, not imported
           '\\.module\\.ts$',
           '(^|/)index\\.ts$',
