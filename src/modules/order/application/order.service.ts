@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { Order } from '../domain/order.entity';
 import { OrderItem } from '../domain/order-item.entity';
@@ -89,8 +90,9 @@ export class OrderService {
   }
 
   /**
-   * Place an order: DRAFT → PENDING. Illegal from any non-DRAFT state → 409. Runs
-   * the status change atomically in a transaction (the seam later weeks extend).
+   * Place an order: DRAFT → PENDING, holding stock atomically. Illegal from any
+   * non-DRAFT state → 409. The stock hold runs inside the placement transaction, so a
+   * shortfall rolls everything back and the order stays DRAFT (surfaced as 409).
    */
   async place(userId: string, orderId: string): Promise<OrderView> {
     const order = await this.repo.findForUser(orderId, userId);
@@ -109,15 +111,22 @@ export class OrderService {
       throw error;
     }
 
-    // EXTENSION BF#1 (T4): reserve stock. No-op in Week 3; Week 4 supplies a real
-    // adapter and this moves into the placement transaction (shared unit of work).
-    await this.reservation.reserve(
-      orderId,
-      placed.items.map((item) => ({ skuId: item.skuId, quantity: item.quantity })),
-    );
-
-    const ok = await this.repo.markPlaced(orderId, userId, order.status, placed.placedAt as Date);
-    // EXTENSION BF#4 (T8-9): append `placed.toPlacedEvent()` to the outbox in the same transaction here.
+    const lines = placed.items.map((item) => ({ skuId: item.skuId, quantity: item.quantity }));
+    let ok: boolean;
+    try {
+      // Reserve runs inside markPlaced's transaction, so the hold and the status flip
+      // commit or roll back together.
+      ok = await this.repo.markPlaced(orderId, userId, order.status, placed.placedAt as Date, (tx) =>
+        this.reservation.reserve(tx, orderId, lines),
+      );
+    } catch (error) {
+      // Out of stock, or the optimistic retry budget was exhausted: the hold + status
+      // flip rolled back together, so the order is still DRAFT. Surface as a conflict.
+      if (error instanceof StockReservationError) {
+        throw new ConflictException(error.message);
+      }
+      throw error;
+    }
     if (!ok) {
       // Lost a race: someone else moved it out of DRAFT between the read and the update.
       throw new ConflictException('Order is no longer in DRAFT');

@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Order } from '../domain/order.entity';
 import { OrderItem } from '../domain/order-item.entity';
 import { OrderStatus } from '../domain/order-status';
@@ -11,10 +11,10 @@ type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
 
 /**
- * Drizzle adapter for OrderRepositoryPort. Writes (create, markPlaced) run inside
- * a transaction so later weeks can add reserve (BF#1) / outbox (BF#4) in the SAME
- * transaction without reshaping this layer. `markPlaced` is a conditional UPDATE
- * (WHERE status = expected) — atomic optimistic concurrency, no read-modify-write.
+ * Drizzle adapter for OrderRepositoryPort. Writes (create, markPlaced) run inside a
+ * transaction. `markPlaced` is a conditional UPDATE (WHERE status = expected) — atomic
+ * optimistic concurrency, no read-modify-write — and runs the caller's stock reserve
+ * inside the same transaction so placement and the hold commit or roll back together.
  */
 @Injectable()
 export class DrizzleOrderRepository implements OrderRepositoryPort {
@@ -91,18 +91,30 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     return orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? []));
   }
 
-  async markPlaced(orderId: string, userId: string, expectedStatus: OrderStatus, placedAt: Date): Promise<boolean> {
+  async markPlaced(
+    orderId: string,
+    userId: string,
+    expectedStatus: OrderStatus,
+    placedAt: Date,
+    reserve: (tx: DrizzleTx) => Promise<void>,
+  ): Promise<boolean> {
     return this.db.transaction(async (tx) => {
-      // Conditional update: only flips a row still in the expected status, so a
+      // Conditional update FIRST: only flips a row still in the expected status, so a
       // concurrent place loses the race (returns no row) instead of double-placing.
       const updated = await tx
         .update(orders)
         .set({ status: OrderStatus.PENDING, placedAt })
         .where(and(eq(orders.id, orderId), eq(orders.userId, userId), eq(orders.status, expectedStatus)))
         .returning({ id: orders.id });
-      // EXTENSION BF#1 (T4): reserve stock here, in this transaction, before returning.
-      // EXTENSION BF#4 (T8-9): append OrderPlaced to the outbox here, in this transaction.
-      return updated.length > 0;
+      if (updated.length === 0) {
+        // Lost the race / already placed: nothing was reserved, so nothing to undo.
+        return false;
+      }
+      // Hold stock in the SAME transaction: a shortfall throws and rolls the status
+      // flip back too, so the order stays DRAFT and stock is untouched (atomic order↔stock).
+      await reserve(tx);
+      // A later outbox write appends OrderPlaced here, in this same transaction.
+      return true;
     });
   }
 }
