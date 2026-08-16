@@ -49,6 +49,7 @@
   - [Testing](#testing)
   - [Available Scripts](#available-scripts)
   - [Docker](#docker)
+  - [Observability](#observability)
   - [Roadmap](#roadmap)
   - [Documentation](#documentation)
   - [License](#license)
@@ -257,6 +258,11 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `SWAGGER_ENABLED`    |    No    | on (off in prod) | Serve OpenAPI docs at `/docs`               |
 | `LOG_LEVEL`          |    No    | `debug` dev / `info` prod | pino log level: `trace`\|`debug`\|`info`\|`warn`\|`error` |
 | `METRICS_TOKEN`      |    No    | — (open dev / hidden prod) | Bearer token for `GET /metrics` (min 16 chars); wrong/missing → 404 |
+| `OTEL_ENABLED`       |    No    | `false`          | Turn on OpenTelemetry tracing ([`adr/0015`](./docs/adr/0015-tracing-opentelemetry-collector-jaeger.md)) |
+| `OTEL_SERVICE_NAME`  |    No    | `jcool-api`      | `service.name` stamped on every span        |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://localhost:4318` | OTLP/HTTP base endpoint of the Collector    |
+| `SENTRY_DSN`         |    No    | — (off)          | Sentry project DSN; unset → SDK never initializes ([`adr/0016`](./docs/adr/0016-error-tracking-sentry.md)) |
+| `SENTRY_TRACES_SAMPLE_RATE` | No | `0` (errors only) | Fraction (0–1) of transactions sampled for Sentry performance tracing |
 | `DATABASE_URL`       |   Yes    | —                | PostgreSQL connection string                |
 | `REDIS_URL`          |   Yes    | —                | Redis connection string                     |
 | `JWT_ACCESS_SECRET`  |   Yes    | —                | HS256 secret, **min 32 chars** (no default) |
@@ -265,6 +271,7 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `ARGON2_MEMORY_COST` |    No    | `19456`          | Argon2id memory cost (KiB)                  |
 | `ARGON2_TIME_COST`   |    No    | `2`              | Argon2id time cost                          |
 | `ARGON2_PARALLELISM` |    No    | `1`              | Argon2id parallelism                        |
+| `SHUTDOWN_GRACE_PERIOD_MS` | No | `0`         | ms `/health/ready` keeps returning 503 after SIGTERM before the HTTP server closes |
 | `THROTTLE_ENABLED`   |    No    | `true`           | Rate limiting on/off (`false` to disable)   |
 | `COOKIE_SECURE`      |    No    | on in prod       | `Secure` flag on auth cookies (override for TLS-proxy staging) |
 | `CORS_ORIGINS`       |    No    | — (off)          | Comma-separated CORS allow-list; empty = same-origin only |
@@ -275,7 +282,9 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `PASSWORD_RESET_TTL` | No       | `1h`             | Password-reset token lifetime               |
 
 Docker Compose additionally reads `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-`POSTGRES_DB`, `POSTGRES_HOST_PORT`, and `REDIS_HOST_PORT` from `.env`.
+`POSTGRES_DB`, `POSTGRES_HOST_PORT`, and `REDIS_HOST_PORT` from `.env`; the
+`observability` profile (see [Observability](#observability)) also reads
+`GRAFANA_ADMIN_PASSWORD`.
 
 ## API Reference
 
@@ -443,6 +452,53 @@ docker compose down -v
 
 Inside the Compose network the app reaches services by name (`postgres:5432`,
 `redis:6379`); from the host, use the mapped ports (`5433`, `6380`).
+
+## Observability
+
+Three pillars + error tracking, wired **around** the Clean Architecture core —
+`domain`/`application` import none of this (dependency-cruiser enforced, see
+[`adr/0009`](./docs/adr/0009-architecture-boundary-enforcement.md)):
+
+- **Logs** — structured JSON via `nestjs-pino`. Every log line of a request
+  carries the same `requestId` (correlation id, via `nestjs-cls` +
+  `AsyncLocalStorage`), also echoed back as the `x-request-id` response
+  header. See [`adr/0013`](./docs/adr/0013-structured-logging-pino-correlation.md).
+- **Metrics** — `GET /metrics` (Prometheus text format): default process
+  metrics, RED HTTP metrics (`route` as a path template, never a raw id),
+  and business counters. Guarded by `METRICS_TOKEN` — a missing/wrong token
+  returns a plain `404` (not 401/403), on purpose. See
+  [`adr/0014`](./docs/adr/0014-metrics-prometheus-cardinality-slo.md) and
+  [`adr/0018`](./docs/adr/0018-metrics-endpoint-protection.md).
+- **Traces** — OpenTelemetry, off by default (`OTEL_ENABLED=false`). When on,
+  the SDK loads via `node --import ./dist/instrumentation.js` **before** Nest
+  boots, so http/express/pg/ioredis auto-instrumentation attaches before
+  those modules load. Traces export to an OTel Collector, which forwards to
+  Jaeger. See [`adr/0015`](./docs/adr/0015-tracing-opentelemetry-collector-jaeger.md).
+- **Errors** — Sentry (`@sentry/nestjs`), off unless `SENTRY_DSN` is set;
+  reuses the app's own OTel SDK (`skipOpenTelemetrySetup`) instead of
+  starting a second one. See
+  [`adr/0016`](./docs/adr/0016-error-tracking-sentry.md).
+
+The observability stack (Collector + Prometheus + Grafana + Jaeger) is
+local-only ([`adr/0017`](./docs/adr/0017-observability-local-only.md)),
+brought up on demand alongside the core stack:
+
+```bash
+docker compose --profile observability up -d
+```
+
+| Service    | Local URL                                      |
+| ---------- | ----------------------------------------------- |
+| App        | http://localhost:3000 (`/metrics` token-guarded) |
+| Prometheus | http://localhost:9090                            |
+| Grafana    | http://localhost:3001                            |
+| Jaeger UI  | http://localhost:16686                           |
+
+Prometheus, Grafana, and Jaeger bind to `127.0.0.1` only (the app port
+follows its own `PORT` mapping, see [Docker](#docker)). New env vars are
+listed in [Environment Variables](#environment-variables); the full
+rationale and trade-offs for each pillar live in
+[`docs/adr/`](./docs/adr) 0013–0018.
 
 ## Roadmap
 

@@ -26,7 +26,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx src/shared/infrastructure/database/seed.ts"
+    "db:seed": "tsx src/shared/infrastructure/database/seed.ts",
+    "load:baseline": "k6 run k6/baseline.js"
   },
   "dependencies": {
     "@nest-lab/throttler-storage-redis": "^1.2.0",
