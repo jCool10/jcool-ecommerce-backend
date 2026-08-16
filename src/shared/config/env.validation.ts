@@ -147,6 +147,12 @@ export class EnvironmentVariables {
   @IsEnum(InventoryLockStrategy)
   INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
 
+  // How far ahead a HELD reservation stamps expires_at ("15m"/"1h"); default in configuration.ts.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  INVENTORY_RESERVATION_TTL?: string;
+
   // HMAC secret for access tokens; MinLength(32) enforces a ~256-bit floor for HS256 (no default → missing fails boot).
   @IsString()
   @MinLength(32)

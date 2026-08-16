@@ -7,7 +7,10 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 // runs inside the caller's transaction.
 export const STOCK_REPOSITORY = Symbol('STOCK_REPOSITORY');
 
-/** One SKU + quantity to hold. */
+/**
+ * One SKU + quantity to hold. Callers pass at most one line per `variantId` (the
+ * cart enforces one row per SKU); a duplicate variant would be held once, not summed.
+ */
 export interface ReserveLine {
   variantId: string;
   quantity: number;

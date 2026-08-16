@@ -97,5 +97,8 @@ export default () => ({
     // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or
     // 'optimistic' (version CAS + retry). Default pessimistic.
     lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',
+    // How long a HELD reservation stamps `expiresAt` ahead (duration form). Written now;
+    // the sweep that reclaims an expired unpaid hold is a later concern.
+    reservationTtl: process.env.INVENTORY_RESERVATION_TTL ?? '15m',
   },
 });
