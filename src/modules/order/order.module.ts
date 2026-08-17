@@ -2,7 +2,8 @@ import { Module } from '@nestjs/common';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
-import { OrderService } from './application/order.service';
+import { CreateOrderFromCartUseCase, PlaceOrderUseCase } from './application/use-cases';
+import { OrderQueryService } from './application/order-query.service';
 import { ORDER_REPOSITORY } from './application/ports/order-repository.port';
 import { CART_SNAPSHOT_READER } from './application/ports/cart-snapshot.port';
 import { CATALOG_QUERY } from './application/ports/catalog-query.port';
@@ -26,7 +27,9 @@ import { OrderController } from './interface/order.controller';
   imports: [CartModule, CatalogModule, InventoryModule],
   controllers: [OrderController],
   providers: [
-    OrderService,
+    CreateOrderFromCartUseCase,
+    PlaceOrderUseCase,
+    OrderQueryService,
     { provide: ORDER_REPOSITORY, useClass: DrizzleOrderRepository },
     { provide: CART_SNAPSHOT_READER, useClass: CartSnapshotAdapter },
     { provide: CATALOG_QUERY, useClass: CatalogQueryAdapter },

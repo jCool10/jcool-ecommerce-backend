@@ -11,7 +11,8 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
-import { OrderService } from '../application/order.service';
+import { CreateOrderFromCartUseCase, PlaceOrderUseCase } from '../application/use-cases';
+import { OrderQueryService } from '../application/order-query.service';
 import { OrderResponseDto } from './dto/order-response.dto';
 
 /**
@@ -25,13 +26,17 @@ import { OrderResponseDto } from './dto/order-response.dto';
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
 @Controller('orders')
 export class OrderController {
-  constructor(private readonly orders: OrderService) {}
+  constructor(
+    private readonly createOrderFromCart: CreateOrderFromCartUseCase,
+    private readonly placeOrder: PlaceOrderUseCase,
+    private readonly orderQuery: OrderQueryService,
+  ) {}
 
   @Post()
   @ApiCreatedResponse({ type: OrderResponseDto })
   @ApiBadRequestResponse({ description: 'Cart is empty or contains an unpurchasable item' })
   async create(@CurrentUser() user: AuthenticatedUser): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.orders.createFromCart(user.userId));
+    return OrderResponseDto.fromView(await this.createOrderFromCart.execute(user.userId));
   }
 
   @Post(':id/place')
@@ -44,13 +49,13 @@ export class OrderController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.orders.place(user.userId, id));
+    return OrderResponseDto.fromView(await this.placeOrder.execute(user.userId, id));
   }
 
   @Get()
   @ApiOkResponse({ type: [OrderResponseDto] })
   async list(@CurrentUser() user: AuthenticatedUser): Promise<OrderResponseDto[]> {
-    const views = await this.orders.list(user.userId);
+    const views = await this.orderQuery.list(user.userId);
     return views.map((view) => OrderResponseDto.fromView(view));
   }
 
@@ -62,6 +67,6 @@ export class OrderController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.orders.getOne(user.userId, id));
+    return OrderResponseDto.fromView(await this.orderQuery.getOne(user.userId, id));
   }
 }

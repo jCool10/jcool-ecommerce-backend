@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { ORDER_STATUSES, OrderStatus } from '../../domain/order-status';
-import type { OrderView } from '../../application/order.service';
+import type { OrderView } from '../../application/order-view.mapper';
 
 /** One order line — a PRICE SNAPSHOT frozen at creation (not a live Catalog price). */
 export class OrderItemResponseDto {
