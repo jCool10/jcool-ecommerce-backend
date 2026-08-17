@@ -159,8 +159,10 @@ describe('Inventory pessimistic reserve (integration, real Postgres)', () => {
   it('CHECK constraint is the last line of defense: a direct oversell write is refused', async () => {
     await seedStock(app, SKU_A, 2);
 
+    // Raw pg, not db.update(): Drizzle wraps the driver error as "Failed query: ..." and moves the
+    // constraint name to `.cause`, so the pool surfaces the constraint name in the message we assert on.
     await expect(
-      db.update(schema.stockLevels).set({ quantityReserved: 3 }).where(eq(schema.stockLevels.variantId, SKU_A)),
+      pool.query('UPDATE stock_levels SET quantity_reserved = 3 WHERE variant_id = $1', [SKU_A]),
     ).rejects.toThrow(/ck_stock_no_oversell/);
   });
 });

@@ -34,9 +34,11 @@ export const orders = pgTable(
     // aggregate can exceed int4 even when each line fits (Σ across lines / quantity).
     // `mode: 'number'` — order totals stay well inside JS safe-integer range.
     totalAmount: bigint('total_amount', { mode: 'number' }).notNull(),
-    // EXTENSION BF#1 (T4): optimistic-lock counter for inventory reservation. Reserved — unused in Week 3.
+    // Optimistic-lock counter for the order aggregate (guards concurrent transitions
+    // on the same order). Placement currently uses a status-based conditional UPDATE;
+    // this column is reserved for version-based aggregate concurrency, not yet read.
     version: integer('version').notNull().default(0),
-    // EXTENSION BF#2 (T5): idempotency key (nullable + unique). Reserved — unused in Week 3.
+    // Idempotency key for order creation (nullable + unique). Reserved — not yet read.
     idempotencyKey: text('idempotency_key').unique(),
     // Set when DRAFT → PENDING; null while still a draft.
     placedAt: timestamp('placed_at', { withTimezone: true }),
