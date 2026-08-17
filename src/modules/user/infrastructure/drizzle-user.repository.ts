@@ -20,8 +20,9 @@ function toDomain(row: UserRow): User {
   });
 }
 
-// Drizzle adapter for UserRepositoryPort. Email uniqueness is enforced by the DB;
-// the register use case pre-checks to return a clean 409.
+// Drizzle adapter for UserRepositoryPort. The unique email index is the sole
+// uniqueness guarantee: create() inserts ON CONFLICT DO NOTHING so concurrent
+// signups serialize on the index — the losing writer gets a null row, not a 23505.
 @Injectable()
 export class DrizzleUserRepository implements UserRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -36,7 +37,7 @@ export class DrizzleUserRepository implements UserRepositoryPort {
     return rows[0] ? toDomain(rows[0]) : null;
   }
 
-  async create(input: CreateUserInput): Promise<User> {
+  async create(input: CreateUserInput): Promise<User | null> {
     const [row] = await this.db
       .insert(users)
       .values({
@@ -45,8 +46,9 @@ export class DrizzleUserRepository implements UserRepositoryPort {
         // Omit `role` when unset so the column default (CUSTOMER) applies.
         ...(input.role ? { role: input.role } : {}),
       })
+      .onConflictDoNothing({ target: users.email })
       .returning();
-    return toDomain(row);
+    return row ? toDomain(row) : null; // no row ⇒ email already taken
   }
 
   async markEmailVerified(userId: string): Promise<void> {

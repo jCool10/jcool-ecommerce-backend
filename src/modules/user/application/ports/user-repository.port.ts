@@ -19,8 +19,12 @@ export interface UserRepositoryPort {
   /** One user by id; null if none. */
   findById(id: string): Promise<User | null>;
 
-  /** Insert a new user and return the persisted entity (id/timestamps filled). */
-  create(input: CreateUserInput): Promise<User>;
+  /**
+   * Insert a new user, letting the unique email index serialize concurrent
+   * writers. Returns the persisted entity (id/timestamps filled), or `null` when
+   * the email is already taken (the insert hit the unique-index conflict).
+   */
+  create(input: CreateUserInput): Promise<User | null>;
 
   /** Stamp the user's email as verified now. Idempotent (a no-op if already set). */
   markEmailVerified(userId: string): Promise<void>;

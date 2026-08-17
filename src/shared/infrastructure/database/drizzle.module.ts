@@ -17,6 +17,12 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
       useFactory: (config: ConfigService): Pool => {
         const pool = new Pool({
           connectionString: config.getOrThrow<string>('database.url'),
+          // Bounded so a connection spike can't exhaust Postgres backends; the finite
+          // connectionTimeoutMillis (vs pg's default 0 = wait forever) makes a saturated
+          // pool fail fast instead of piling requests up. See docs/engineering-notes.md.
+          max: config.get<number>('database.poolMax'),
+          connectionTimeoutMillis: config.get<number>('database.connectionTimeoutMs'),
+          idleTimeoutMillis: config.get<number>('database.idleTimeoutMs'),
         });
         // Without an 'error' listener a dead idle client crashes the process;
         // log and let pg discard it (DB restart, failover, idle timeout).

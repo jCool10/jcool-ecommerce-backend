@@ -38,6 +38,9 @@ export async function createTestUser(app: INestApplication, options: TestUserOpt
 
   const passwordHash = await hasher.hash(password);
   let user = await users.create({ email, passwordHash, role: options.role });
+  if (!user) {
+    throw new Error(`Test user could not be created — email already taken: ${email}`);
+  }
   if (options.emailVerified) {
     await users.markEmailVerified(user.id);
     user = (await users.findById(user.id)) ?? user; // reflect the verified stamp
