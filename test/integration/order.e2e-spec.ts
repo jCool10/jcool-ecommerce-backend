@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
+import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
@@ -81,7 +82,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       await addToCart(token, a.variantId, 2);
       await addToCart(token, b.variantId, 1);
 
-      const res = await request(server()).post('/orders').set(authHeader(token));
+      const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('DRAFT');
@@ -101,7 +102,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
     it('rejects creating an order from an empty cart with 400', async () => {
       const token = await newUser();
 
-      const res = await request(server()).post('/orders').set(authHeader(token));
+      const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
       expect(res.status).toBe(400);
     });
@@ -113,7 +114,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
 
       await archiveProduct(productId); // product becomes non-sellable after it was carted
 
-      const res = await request(server()).post('/orders').set(authHeader(token));
+      const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
       expect(res.status).toBe(400);
     });
@@ -127,7 +128,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       await addToCart(token, a.variantId, 10_000);
       await addToCart(token, b.variantId, 10_000);
 
-      const res = await request(server()).post('/orders').set(authHeader(token));
+      const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
       expect(res.status).toBe(201);
       expect(res.body.totalAmountMinor).toBe(3_980_000_000);
@@ -138,7 +139,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await addToCart(token, variantId, 2);
 
-      await request(server()).post('/orders').set(authHeader(token)).expect(201);
+      await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(201);
 
       const cart = await request(server()).get('/cart').set(authHeader(token));
       expect(cart.status).toBe(200);
@@ -152,7 +153,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const token = await newUser();
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await addToCart(token, variantId, 3);
-      const created = await request(server()).post('/orders').set(authHeader(token));
+      const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
       const orderId = created.body.id;
 
       const res = await request(server()).get(`/orders/${orderId}`).set(authHeader(token));
@@ -166,7 +167,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const token = await newUser();
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await addToCart(token, variantId, 1);
-      await request(server()).post('/orders').set(authHeader(token)).expect(201);
+      await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(201);
 
       const res = await request(server()).get('/orders').set(authHeader(token));
 
@@ -189,7 +190,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await seedStock(app, variantId, 5); // placement now holds stock — seed enough on-hand
       await addToCart(token, variantId, 1);
-      const created = await request(server()).post('/orders').set(authHeader(token));
+      const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
       const orderId = created.body.id;
 
       const res = await request(server()).post(`/orders/${orderId}/place`).set(authHeader(token));
@@ -204,7 +205,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await seedStock(app, variantId, 5); // first place holds stock; the second is rejected by the state machine
       await addToCart(token, variantId, 1);
-      const created = await request(server()).post('/orders').set(authHeader(token));
+      const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
       const orderId = created.body.id;
       await request(server()).post(`/orders/${orderId}/place`).set(authHeader(token)).expect(200);
 
@@ -227,7 +228,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const token = await newUser();
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await addToCart(token, variantId, 2);
-      const created = await request(server()).post('/orders').set(authHeader(token));
+      const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
       const orderId = created.body.id;
       expect(created.body.totalAmountMinor).toBe(200_000);
 
@@ -247,7 +248,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const tokenB = await newUser();
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await addToCart(tokenA, variantId, 1);
-      const created = await request(server()).post('/orders').set(authHeader(tokenA));
+      const created = await request(server()).post('/orders').set(authHeader(tokenA)).set(idempotencyKeyHeader());
       const orderId = created.body.id;
 
       const getByB = await request(server()).get(`/orders/${orderId}`).set(authHeader(tokenB));

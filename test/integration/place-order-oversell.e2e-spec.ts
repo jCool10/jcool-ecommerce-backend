@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
+import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { countHeldReservations, getStockView, seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
@@ -61,7 +62,11 @@ describe.each(['pessimistic', 'optimistic'] as const)('Place order oversell race
   async function draftFor(skuId: string, quantity: number): Promise<Draft> {
     const { accessToken } = await createTestUser(app);
     await request(server()).post('/cart/items').set(authHeader(accessToken)).send({ skuId, quantity }).expect(200);
-    const created = await request(server()).post('/orders').set(authHeader(accessToken)).expect(201);
+    const created = await request(server())
+      .post('/orders')
+      .set(authHeader(accessToken))
+      .set(idempotencyKeyHeader())
+      .expect(201);
     return { orderId: created.body.id as string, token: accessToken };
   }
 

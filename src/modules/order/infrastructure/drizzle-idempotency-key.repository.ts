@@ -68,6 +68,21 @@ export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
       );
   }
 
+  async deleteExpiredInProgress(scope: string, key: string, now: Date): Promise<number> {
+    const deleted = await this.db
+      .delete(idempotencyKeys)
+      .where(
+        and(
+          eq(idempotencyKeys.scope, scope),
+          eq(idempotencyKeys.key, key),
+          eq(idempotencyKeys.status, 'IN_PROGRESS'),
+          lt(idempotencyKeys.expiresAt, now),
+        ),
+      )
+      .returning({ id: idempotencyKeys.id });
+    return deleted.length;
+  }
+
   async deleteExpired(now: Date): Promise<number> {
     const deleted = await this.db
       .delete(idempotencyKeys)

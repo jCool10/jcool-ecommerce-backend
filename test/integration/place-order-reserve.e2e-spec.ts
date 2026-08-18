@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
+import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
@@ -48,7 +49,11 @@ describe('Place order + reserve stock (integration, atomic order↔stock)', () =
   }
 
   async function createDraft(token: string): Promise<string> {
-    const created = await request(server()).post('/orders').set(authHeader(token)).expect(201);
+    const created = await request(server())
+      .post('/orders')
+      .set(authHeader(token))
+      .set(idempotencyKeyHeader())
+      .expect(201);
     return created.body.id;
   }
 

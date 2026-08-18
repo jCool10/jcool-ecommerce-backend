@@ -65,6 +65,14 @@ export interface IdempotencyStorePort {
    */
   deleteInProgress(scope: string, key: string, tx?: DrizzleTx): Promise<void>;
 
+  /**
+   * Reclaim guard: delete an IN_PROGRESS row for (scope, key) ONLY if it is past `now` (an
+   * abandoned holder). Scoped by expiry so a racing reclaimer that already replaced it with a
+   * fresh row is left untouched — that racer's re-INSERT then wins and this caller loses on the
+   * unique index instead of two handlers running. Returns how many rows were removed.
+   */
+  deleteExpiredInProgress(scope: string, key: string, now: Date): Promise<number>;
+
   /** DELETE WHERE expires_at < now (TTL sweep). Returns how many rows were reclaimed. */
   deleteExpired(now: Date): Promise<number>;
 }

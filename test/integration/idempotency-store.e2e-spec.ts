@@ -159,4 +159,28 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'expired')).toBeNull();
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'live')).not.toBeNull();
   });
+
+  it('deleteExpiredInProgress reclaims only an expired IN_PROGRESS row, leaving a live one', async () => {
+    await repo.tryInsertInProgress(insertInput({ key: 'live', expiresAt: inDays(1) }));
+    await repo.tryInsertInProgress(insertInput({ key: 'stale', expiresAt: inDays(-1) }));
+
+    const removedLive = await repo.deleteExpiredInProgress(scopeOf(USER_A), 'live', new Date());
+    const removedStale = await repo.deleteExpiredInProgress(scopeOf(USER_A), 'stale', new Date());
+
+    // The live row survives, so a concurrent reclaimer that already refreshed it is not clobbered.
+    expect(removedLive).toBe(0);
+    expect(removedStale).toBe(1);
+    expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'live')).not.toBeNull();
+    expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'stale')).toBeNull();
+  });
+
+  it('deleteExpiredInProgress never removes a COMPLETED row even when past TTL', async () => {
+    await repo.tryInsertInProgress(insertInput({ key: 'done', expiresAt: inDays(-1) }));
+    await repo.markCompleted({ scope: scopeOf(USER_A), key: 'done', responseStatus: 201, responseBody: { ok: true } });
+
+    const removed = await repo.deleteExpiredInProgress(scopeOf(USER_A), 'done', new Date());
+
+    expect(removed).toBe(0);
+    expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'done')).not.toBeNull();
+  });
 });
