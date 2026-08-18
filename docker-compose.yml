@@ -72,7 +72,7 @@ services:
     env_file:
       - .env
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3000
       # Inside the compose network the app reaches services by NAME, not the host-mapped ports.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public

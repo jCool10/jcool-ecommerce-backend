@@ -13,6 +13,7 @@ import { HttpExceptionFilter } from '@shared/interface/filters/http-exception.fi
 import { DebugController } from '@shared/interface/controllers/debug.controller';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { CartModule } from '@modules/cart/cart.module';
+import { InventoryModule } from '@modules/inventory/inventory.module';
 import { OrderModule } from '@modules/order/order.module';
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/user/auth.module';
@@ -35,6 +36,7 @@ import { AuthModule } from '@modules/user/auth.module';
     HealthModule,
     CatalogModule,
     CartModule,
+    InventoryModule,
     OrderModule,
     UserModule,
     AuthModule,

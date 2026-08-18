@@ -29,6 +29,12 @@ export enum LogLevel {
   Error = 'error',
 }
 
+// Stock-reservation concurrency strategy. Default applied in configuration.ts.
+export enum InventoryLockStrategy {
+  Pessimistic = 'pessimistic',
+  Optimistic = 'optimistic',
+}
+
 /** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET; optional vars fall back to defaults applied in configuration.ts. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
@@ -135,6 +141,33 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsBooleanString()
   THROTTLE_ENABLED?: string;
+
+  // Stock-reservation locking strategy; defaults to pessimistic (configuration.ts).
+  @IsOptional()
+  @IsEnum(InventoryLockStrategy)
+  INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
+
+  // How far ahead a HELD reservation stamps expires_at ("15m"/"1h"); default in configuration.ts.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  INVENTORY_RESERVATION_TTL?: string;
+
+  // Optimistic reserve retry budget after a lost version CAS; default 3 (configuration.ts).
+  // Capped so a misconfig can't blow up 2^attempt backoff and pin the stock row's write-lock.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10)
+  INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
+
+  // Base backoff (ms) between optimistic retries; default 20 (configuration.ts).
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  INVENTORY_OPTIMISTIC_BACKOFF_MS?: number;
 
   // HMAC secret for access tokens; MinLength(32) enforces a ~256-bit floor for HS256 (no default → missing fails boot).
   @IsString()

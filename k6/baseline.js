@@ -14,9 +14,11 @@
 // Run:  k6 run k6/baseline.js         (or: npm run load:baseline)
 // Tunables (env):  BASE_URL, READ_PEAK_VUS, WRITE_VUS
 //
-// Preconditions: stack up (docker compose --profile observability up -d), DB seeded,
-// THROTTLE_ENABLED=false (single-host load would otherwise hit the 100 req/60s limiter), and
-// auth.requireVerifiedEmail=false (the default) so login returns a token with no email step.
+// Preconditions: stack up (docker compose --profile observability up -d), DB seeded
+// (npm run db:seed — also seeds generous inventory stock so placement, which now reserves
+// stock, stays on the success path), THROTTLE_ENABLED=false (single-host load would otherwise
+// hit the 100 req/60s limiter), and auth.requireVerifiedEmail=false (the default) so login
+// returns a token with no email step.
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -25,6 +27,11 @@ import { Counter } from 'k6/metrics';
 // Counts cart/order writes that actually executed — thresholded below so a login failure that
 // silently degrades this into a read-only run fails the run loudly instead of passing green.
 const writeOps = new Counter('sim_write_ops');
+
+// Counts order placements that returned 200. Placement now reserves stock, so an all-409 place
+// path (stock not seeded, or depleted) drops this to zero and fails the run loudly instead of
+// only surfacing as http_req_failed noise.
+const placeOps = new Counter('sim_place_ops');
 
 const BASE = __ENV.BASE_URL || 'http://localhost:3000';
 const PW = 'correct horse battery staple';
@@ -62,6 +69,9 @@ export const options = {
     // Fail loudly if the write path never ran (e.g. login returned no token): otherwise a
     // read-only run still passes the checks above and the order-value tuning rests on no data.
     sim_write_ops: ['count>50'],
+    // Fail loudly if placement never succeeded (e.g. stock not seeded → every place 409s):
+    // the order-value / place-latency tuning would otherwise rest on no successful placements.
+    sim_place_ops: ['count>20'],
   },
 };
 
@@ -134,12 +144,19 @@ export function write(data) {
   }
   if (Math.random() < 0.5) {
     const oc = http.post(`${BASE}/orders`, null, { ...auth, tags: { name: 'POST /orders' } });
+    check(oc, { 'order created 201': (r) => r.status === 201 });
     const orderId = oc.json('id');
     if (orderId) {
-      http.post(`${BASE}/orders/${orderId}/place`, null, {
+      // Placement reserves stock atomically: 200 means the hold committed. A 409 means stock
+      // wasn't seeded (or was depleted) — the check + counter surface that as a run failure
+      // instead of it hiding in http_req_failed.
+      const pl = http.post(`${BASE}/orders/${orderId}/place`, null, {
         ...auth,
         tags: { name: 'POST /orders/:id/place' },
       });
+      if (check(pl, { 'order placed 200': (r) => r.status === 200 })) {
+        placeOps.add(1);
+      }
     }
     http.get(`${BASE}/orders`, { ...auth, tags: { name: 'GET /orders' } });
   }

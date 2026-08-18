@@ -7,6 +7,7 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructur
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
+import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -186,6 +187,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
     it('places a DRAFT order (200, status PENDING, placedAt set)', async () => {
       const token = await newUser();
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+      await seedStock(app, variantId, 5); // placement now holds stock — seed enough on-hand
       await addToCart(token, variantId, 1);
       const created = await request(server()).post('/orders').set(authHeader(token));
       const orderId = created.body.id;
@@ -200,6 +202,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
     it('rejects placing an already-PENDING order with 409 (illegal transition)', async () => {
       const token = await newUser();
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+      await seedStock(app, variantId, 5); // first place holds stock; the second is rejected by the state machine
       await addToCart(token, variantId, 1);
       const created = await request(server()).post('/orders').set(authHeader(token));
       const orderId = created.body.id;

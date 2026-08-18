@@ -107,10 +107,20 @@ async function seed(): Promise<void> {
       ])
       .onConflictDoNothing();
 
+    // Placement reserves stock, so every variant needs an on-hand row or `POST
+    // /orders/:id/place` 409s. On-hand is set effectively unlimited so load tests never
+    // deplete it (held stock isn't released within a run); real inventory is managed
+    // elsewhere. Idempotent: never clobbers a live count or its reserved holds.
+    await db
+      .insert(schema.stockLevels)
+      .values(variants.map((v) => ({ variantId: v.id, quantityOnHand: 1_000_000_000 })))
+      .onConflictDoNothing();
+
     console.log('Seed complete:', {
       categories: categories.length,
       products: products.length,
       variants: variants.length,
+      stockLevels: variants.length,
     });
   } finally {
     await pool.end();
