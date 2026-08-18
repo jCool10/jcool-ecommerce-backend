@@ -50,6 +50,13 @@
       "when": 1786851839601,
       "tag": "0006_windy_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787044054272,
+      "tag": "0007_wealthy_plazm",
+      "breakpoints": true
     }
   ]
 }
