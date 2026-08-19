@@ -71,14 +71,8 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
     await seedStock(app, variantId, 5); // checkout now holds stock — seed enough on-hand
     await addToCart(token, variantId, 2);
 
-    const first = await request(server())
-      .post('/orders')
-      .set(authHeader(token))
-      .set(idempotencyKeyHeader(FIXED_KEY));
-    const second = await request(server())
-      .post('/orders')
-      .set(authHeader(token))
-      .set(idempotencyKeyHeader(FIXED_KEY));
+    const first = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader(FIXED_KEY));
+    const second = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader(FIXED_KEY));
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);

@@ -62,7 +62,10 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
 
   // Seed `onHand`, build `contenders` buyers each wanting 1 unit, then fire every checkout at once.
   // Returns the contested variant and one status per buyer.
-  async function race(onHand: number, contenders: number): Promise<{ variantId: string; statuses: (number | 'errored')[] }> {
+  async function race(
+    onHand: number,
+    contenders: number,
+  ): Promise<{ variantId: string; statuses: (number | 'errored')[] }> {
     const product = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, product.variantId, onHand);
     const tokens = await Promise.all(range(contenders).map(() => buyerFor(product.variantId, 1)));
