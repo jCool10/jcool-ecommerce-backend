@@ -77,10 +77,9 @@ export class Order {
   }
 
   /**
-   * The domain event this (placed) order represents. DECLARED for BF#4 (Weeks 8-9)
-   * — the place-order use-case will append it to an outbox in the placement
-   * transaction; Week 3 never publishes it. Only a persisted, placed order can
-   * produce one.
+   * The domain event this (placed) order represents. Declared for a future outbox/publish path
+   * (checkout would append it in the placement transaction); nothing publishes it yet. Only a
+   * persisted, placed order can produce one.
    */
   toPlacedEvent(): OrderPlacedEvent {
     if (this.id === null || this.placedAt === null) {

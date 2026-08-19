@@ -39,5 +39,6 @@ docs/
 
 .agentkit/
 .claude/
+*.txt
 
 bruno/
