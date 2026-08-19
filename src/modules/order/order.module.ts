@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
-import { CreateOrderFromCartUseCase, PlaceOrderUseCase } from './application/use-cases';
+import { CheckoutOrderUseCase } from './application/use-cases';
 import { OrderQueryService } from './application/order-query.service';
 import { ORDER_REPOSITORY } from './application/ports/order-repository.port';
 import { CART_SNAPSHOT_READER } from './application/ports/cart-snapshot.port';
@@ -31,8 +31,7 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
   imports: [CartModule, CatalogModule, InventoryModule],
   controllers: [OrderController],
   providers: [
-    CreateOrderFromCartUseCase,
-    PlaceOrderUseCase,
+    CheckoutOrderUseCase,
     OrderQueryService,
     { provide: ORDER_REPOSITORY, useClass: DrizzleOrderRepository },
     { provide: CART_SNAPSHOT_READER, useClass: CartSnapshotAdapter },

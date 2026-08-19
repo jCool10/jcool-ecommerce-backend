@@ -75,23 +75,19 @@ function throwingHandler(error: unknown): CallHandler {
 }
 
 describe('IdempotencyInterceptor', () => {
-  it('runs the handler on a fresh key, propagates the CLS context, and freezes the 2xx result', async () => {
+  it('runs the handler on a fresh key and hands the CLS context to the checkout tx (never completes the row itself)', async () => {
     const store = makeStore();
     store.tryInsertInProgress.mockResolvedValue(record());
     const { interceptor, set } = build(store);
-    const body = { id: 'o1', status: 'DRAFT' };
+    const body = { id: 'o1', status: 'PENDING' };
 
     const obs = await interceptor.intercept(context(), handlerOf(body).handler);
     const result = await firstValueFrom(obs);
 
     expect(result).toEqual(body);
     expect(set).toHaveBeenCalledWith('idempotency', { scope: SCOPE, key: KEY });
-    expect(store.markCompleted).toHaveBeenCalledWith({
-      scope: SCOPE,
-      key: KEY,
-      responseStatus: 201,
-      responseBody: body,
-    });
+    // COMPLETED is written inside the handler's checkout transaction, not here.
+    expect(store.markCompleted).not.toHaveBeenCalled();
   });
 
   it('replays a COMPLETED record without invoking the handler', async () => {
@@ -159,7 +155,8 @@ describe('IdempotencyInterceptor', () => {
     expect(result).toEqual({ id: 'o2' });
     expect(store.deleteExpiredInProgress).toHaveBeenCalledWith(SCOPE, KEY, expect.any(Date));
     expect(store.tryInsertInProgress).toHaveBeenCalledTimes(2);
-    expect(store.markCompleted).toHaveBeenCalledTimes(1);
+    // The reclaimed handler re-runs; its checkout tx (not the interceptor) marks the row COMPLETED.
+    expect(store.markCompleted).not.toHaveBeenCalled();
   });
 
   it('drops the IN_PROGRESS row and propagates an unexpected 5xx (never caches it)', async () => {
@@ -186,19 +183,5 @@ describe('IdempotencyInterceptor', () => {
     await expect(firstValueFrom(obs)).rejects.toBe(rejection);
     expect(store.deleteInProgress).toHaveBeenCalledWith(SCOPE, KEY);
     expect(store.markCompleted).not.toHaveBeenCalled();
-  });
-
-  it('keeps the row when completion fails after a successful handler (retry gets a safe 409, not a duplicate)', async () => {
-    const store = makeStore();
-    store.tryInsertInProgress.mockResolvedValue(record());
-    store.markCompleted.mockRejectedValue(new Error('db failover mid-write'));
-    const { interceptor } = build(store);
-
-    const obs = await interceptor.intercept(context(), handlerOf({ id: 'o1' }).handler);
-
-    await expect(firstValueFrom(obs)).rejects.toThrow('db failover mid-write');
-    // The handler already ran (order committed); dropping the row here would let a retry create a
-    // second order. The row must survive so the retry replays / 409s instead.
-    expect(store.deleteInProgress).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
+import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -67,6 +68,7 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
   it('replays the first order on a sequential retry with the same key (one order, not two)', async () => {
     const token = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 5); // checkout now holds stock — seed enough on-hand
     await addToCart(token, variantId, 2);
 
     const first = await request(server())

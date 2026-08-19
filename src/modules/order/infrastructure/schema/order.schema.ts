@@ -1,4 +1,4 @@
-import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
 // Order schema — the transactional source of truth. Infrastructure only, never
@@ -38,13 +38,22 @@ export const orders = pgTable(
     // on the same order). Placement currently uses a status-based conditional UPDATE;
     // this column is reserved for version-based aggregate concurrency, not yet read.
     version: integer('version').notNull().default(0),
-    // Idempotency key for order creation (nullable + unique). Reserved — not yet read.
-    idempotencyKey: text('idempotency_key').unique(),
+    // The client Idempotency-Key that created this order (nullable). Stamped at checkout as the
+    // exit-defense backstop for retry-safety. Scoped per user (see the composite unique below), so
+    // two different users may reuse the same key value without colliding — mirrors the idempotency
+    // store's per-user (scope, key) model.
+    idempotencyKey: text('idempotency_key'),
     // Set when DRAFT → PENDING; null while still a draft.
     placedAt: timestamp('placed_at', { withTimezone: true }),
     ...stamps,
   },
-  (t) => [index('idx_orders_user').on(t.userId)],
+  (t) => [
+    index('idx_orders_user').on(t.userId),
+    // Per-user idempotency, matching the store's (scope, key) scope: at most one order per
+    // (user, key). NULL keys don't collide (Postgres treats them as distinct), so pre-idempotency
+    // orders are unaffected. The final backstop behind the per-key entry gate.
+    uniqueIndex('uq_orders_user_idempotency_key').on(t.userId, t.idempotencyKey),
+  ],
 );
 
 export const orderItems = pgTable(
