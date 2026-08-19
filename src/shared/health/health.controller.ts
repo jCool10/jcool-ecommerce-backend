@@ -1,7 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckResult, HealthCheckService } from '@nestjs/terminus';
-import { Public } from '@modules/user/interface/decorators';
+import { Public } from '@shared/rbac';
 import { DrizzleHealthIndicator, RedisHealthIndicator, ShutdownHealthIndicator } from './indicators';
 
 // Liveness/readiness must answer without a token — orchestrators probe these

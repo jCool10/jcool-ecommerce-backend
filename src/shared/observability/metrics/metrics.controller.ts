@@ -2,7 +2,7 @@ import { Controller, Get, Res, UseGuards } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { register } from 'prom-client';
-import { Public } from '@modules/user/interface/decorators';
+import { Public } from '@shared/rbac';
 import { MetricsTokenGuard } from './metrics.guard';
 
 /**
