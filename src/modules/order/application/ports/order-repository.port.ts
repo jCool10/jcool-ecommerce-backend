@@ -36,6 +36,12 @@ export interface OrderRepositoryPort {
   /** One order (with items) owned by `userId`; null if absent or owned by someone else. */
   findForUser(orderId: string, userId: string): Promise<Order | null>;
 
+  /**
+   * One order (with items) by id, NOT user-scoped; null if absent. For cross-context callers
+   * (e.g. Payment) that authorize ownership themselves against the aggregate's userId.
+   */
+  findById(orderId: string): Promise<Order | null>;
+
   /** All of a user's orders (with items), newest first. */
   findAllForUser(userId: string): Promise<Order[]>;
 }

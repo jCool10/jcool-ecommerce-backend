@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -41,7 +42,15 @@ export const payments = pgTable(
     status: paymentStatus('status').notNull().default('PENDING'),
     ...stamps,
   },
-  (t) => [index('idx_payments_order').on(t.orderId)],
+  (t) => [
+    index('idx_payments_order').on(t.orderId),
+    // At most one live payment per order — the DB backstop for "never double-charge", mirroring
+    // webhook_events' unique index. Partial so a FAILED/EXPIRED attempt never blocks a legitimate
+    // retry. The app pre-checks too; this closes the concurrent-double-submit race the check can't.
+    uniqueIndex('uq_payments_one_active_per_order')
+      .on(t.orderId)
+      .where(sql`status in ('PENDING', 'SUCCEEDED')`),
+  ],
 );
 
 // Append-only log of every webhook the gateway delivers. The UNIQUE(provider,

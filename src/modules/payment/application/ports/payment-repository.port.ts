@@ -7,6 +7,18 @@ import type { Payment } from '../../domain/payment.entity';
 // payment write can join the caller's unit of work.
 export const PAYMENT_REPOSITORY = Symbol('PAYMENT_REPOSITORY');
 
+/**
+ * Raised by `create` when the active-payment partial-unique index rejects a second concurrent
+ * insert for an order — the DB backstop for "never double-charge". The application maps it to a
+ * 409, the same outcome as the pre-insert guard the race slipped past.
+ */
+export class DuplicateActivePaymentError extends Error {
+  constructor(orderId: string) {
+    super(`Order already has an active payment: ${orderId}`);
+    this.name = 'DuplicateActivePaymentError';
+  }
+}
+
 export interface UpdatePaymentStatusOptions {
   providerIntentId?: string | null;
   tx?: DrizzleTx;

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "uq_payments_one_active_per_order" ON "payments" USING btree ("order_id") WHERE status in ('PENDING', 'SUCCEEDED');

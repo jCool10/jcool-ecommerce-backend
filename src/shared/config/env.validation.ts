@@ -35,6 +35,12 @@ export enum InventoryLockStrategy {
   Optimistic = 'optimistic',
 }
 
+// Payment gateway selected at boot; Stripe is the coded path, SePay an interface-only seam.
+export enum PaymentProvider {
+  Stripe = 'stripe',
+  Sepay = 'sepay',
+}
+
 /** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET; optional vars fall back to defaults applied in configuration.ts. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
@@ -168,6 +174,25 @@ export class EnvironmentVariables {
   @IsInt()
   @Min(0)
   INVENTORY_OPTIMISTIC_BACKOFF_MS?: number;
+
+  // Payment gateway; defaults to stripe (configuration.ts). Stripe is the only coded adapter.
+  @IsOptional()
+  @IsEnum(PaymentProvider)
+  PAYMENT_PROVIDER?: PaymentProvider;
+
+  // Webhook signing secret. Optional here so a boot that doesn't touch payments isn't blocked;
+  // the Stripe adapter fail-fasts at construction when it's absent. MinLength keeps it non-trivial.
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  PAYMENT_WEBHOOK_SECRET?: string;
+
+  // Replay window (seconds) for the webhook timestamp tolerance; default 300 (configuration.ts).
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  PAYMENT_WEBHOOK_TOLERANCE_SEC?: number;
 
   // HMAC secret for access tokens; MinLength(32) enforces a ~256-bit floor for HS256 (no default → missing fails boot).
   @IsString()

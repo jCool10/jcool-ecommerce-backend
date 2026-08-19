@@ -92,6 +92,19 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     return toDomainOrder(row, itemRows);
   }
 
+  async findById(orderId: string): Promise<Order | null> {
+    const [row] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!row) {
+      return null;
+    }
+    const itemRows = await this.db
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId))
+      .orderBy(orderItems.createdAt, orderItems.id);
+    return toDomainOrder(row, itemRows);
+  }
+
   async findAllForUser(userId: string): Promise<Order[]> {
     const orderRows = await this.db
       .select()

@@ -1,10 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx, isUniqueViolation } from '@shared/infrastructure/database';
 import { Payment } from '../domain/payment.entity';
 import { PaymentStatus } from '../domain/payment-status';
-import type { PaymentRepositoryPort, UpdatePaymentStatusOptions } from '../application/ports/payment-repository.port';
+import {
+  DuplicateActivePaymentError,
+  type PaymentRepositoryPort,
+  type UpdatePaymentStatusOptions,
+} from '../application/ports/payment-repository.port';
 import { payments } from './schema/payment.schema';
+
+const ACTIVE_PAYMENT_INDEX = 'uq_payments_one_active_per_order';
 
 type PaymentRow = typeof payments.$inferSelect;
 
@@ -20,19 +26,27 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
 
   async create(payment: Payment, tx?: DrizzleTx): Promise<Payment> {
     const executor = tx ?? this.db;
-    const [row] = await executor
-      .insert(payments)
-      .values({
-        orderId: payment.orderId,
-        provider: payment.provider,
-        providerSessionId: payment.providerSessionId,
-        providerIntentId: payment.providerIntentId,
-        amountMinor: payment.amountMinor,
-        currency: payment.currency,
-        status: payment.status,
-      })
-      .returning();
-    return toDomain(row);
+    try {
+      const [row] = await executor
+        .insert(payments)
+        .values({
+          orderId: payment.orderId,
+          provider: payment.provider,
+          providerSessionId: payment.providerSessionId,
+          providerIntentId: payment.providerIntentId,
+          amountMinor: payment.amountMinor,
+          currency: payment.currency,
+          status: payment.status,
+        })
+        .returning();
+      return toDomain(row);
+    } catch (error) {
+      // The active-payment partial-unique index lost the race — surface the invariant, not a 500.
+      if (isUniqueViolation(error, ACTIVE_PAYMENT_INDEX)) {
+        throw new DuplicateActivePaymentError(payment.orderId);
+      }
+      throw error;
+    }
   }
 
   async findByOrderId(orderId: string): Promise<Payment | null> {
