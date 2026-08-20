@@ -57,14 +57,12 @@ function build(
       );
   const createSession = opts.sessionError
     ? vi.fn().mockRejectedValue(opts.sessionError)
-    : vi
-        .fn()
-        .mockResolvedValue(
-          opts.session ?? {
-            providerSessionId: 'cs_test_new',
-            redirectUrl: 'https://checkout.stripe.test/pay/cs_test_new',
-          },
-        );
+    : vi.fn().mockResolvedValue(
+        opts.session ?? {
+          providerSessionId: 'cs_test_new',
+          redirectUrl: 'https://checkout.stripe.test/pay/cs_test_new',
+        },
+      );
 
   const orders = { findForPayment } as OrderReadPort;
   const payments = { findByOrderId, create, updateStatus: vi.fn() } as unknown as PaymentRepositoryPort;
