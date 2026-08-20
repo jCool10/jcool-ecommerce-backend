@@ -179,10 +179,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
         .delete(`/auth/sessions/${randomUUID()}`)
         .set(authHeader(a.accessToken))
         .expect(404);
-      await request(app.getHttpServer())
-        .delete('/auth/sessions/not-a-uuid')
-        .set(authHeader(a.accessToken))
-        .expect(400);
+      await request(app.getHttpServer()).delete('/auth/sessions/not-a-uuid').set(authHeader(a.accessToken)).expect(400);
     });
 
     it('requires authentication to list sessions (401)', async () => {

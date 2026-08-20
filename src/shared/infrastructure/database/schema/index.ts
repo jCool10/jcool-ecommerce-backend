@@ -5,3 +5,6 @@ export * from '../../../../modules/catalog/infrastructure/schema/catalog.schema'
 export * from '../../../../modules/user/infrastructure/schema/user.schema';
 export * from '../../../../modules/cart/infrastructure/schema/cart.schema';
 export * from '../../../../modules/order/infrastructure/schema/order.schema';
+export * from '../../../../modules/order/infrastructure/schema/idempotency-key.schema';
+export * from '../../../../modules/inventory/infrastructure/schema/inventory.schema';
+export * from '../../../../modules/payment/infrastructure/schema/payment.schema';

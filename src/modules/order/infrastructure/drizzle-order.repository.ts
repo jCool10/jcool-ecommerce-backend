@@ -1,27 +1,47 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Order } from '../domain/order.entity';
 import { OrderItem } from '../domain/order-item.entity';
-import { OrderStatus } from '../domain/order-status';
-import type { OrderRepositoryPort } from '../application/ports/order-repository.port';
+import type { CheckoutPersistResult, OrderRepositoryPort } from '../application/ports/order-repository.port';
 import { orderItems, orders } from './schema/order.schema';
 
 type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
 
 /**
- * Drizzle adapter for OrderRepositoryPort. Writes (create, markPlaced) run inside
- * a transaction so later weeks can add reserve (BF#1) / outbox (BF#4) in the SAME
- * transaction without reshaping this layer. `markPlaced` is a conditional UPDATE
- * (WHERE status = expected) — atomic optimistic concurrency, no read-modify-write.
+ * Drizzle adapter for OrderRepositoryPort. `createCheckout` runs the whole checkout in ONE
+ * transaction — insert the placed order + items, then the caller's `reserve` (stock hold) and
+ * `complete` (idempotency COMPLETED) — so order, reservation, and key commit or roll back as a
+ * unit. A pre-check on the unique `orders.idempotency_key` returns an already-placed order
+ * instead of inserting a duplicate (crash-reclaim exit-defense).
  */
 @Injectable()
 export class DrizzleOrderRepository implements OrderRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
 
-  async create(order: Order): Promise<string> {
+  async createCheckout(
+    order: Order,
+    idempotencyKey: string | null,
+    reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
+    complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
+  ): Promise<CheckoutPersistResult> {
     return this.db.transaction(async (tx) => {
+      if (idempotencyKey) {
+        // Exit-defense: a prior attempt already committed an order under this key (its idempotency
+        // row was then reclaimed). Serialized by the idempotency-key entry gate — at most one
+        // checkout runs per key at a time — so this read-then-insert cannot lose a race; the unique
+        // `orders.idempotency_key` is the final backstop if that ever fails to hold.
+        const [existing] = await tx
+          .select({ id: orders.id })
+          .from(orders)
+          .where(and(eq(orders.idempotencyKey, idempotencyKey), eq(orders.userId, order.userId)))
+          .limit(1);
+        if (existing) {
+          return { orderId: existing.id, created: false };
+        }
+      }
+
       const [row] = await tx
         .insert(orders)
         .values({
@@ -29,6 +49,8 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
           status: order.status,
           currency: order.currency,
           totalAmount: order.totalAmountMinor,
+          idempotencyKey,
+          placedAt: order.placedAt,
         })
         .returning({ id: orders.id });
       const orderId = row.id;
@@ -42,7 +64,13 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
           quantity: item.quantity,
         })),
       );
-      return orderId;
+
+      // Hold stock, then freeze the idempotency result — same tx. Reserve throws on a shortfall,
+      // rolling back the order + key too; complete is the last write so any earlier failure aborts
+      // before the key is marked COMPLETED.
+      await reserve(tx, orderId);
+      await complete(tx, orderId);
+      return { orderId, created: true };
     });
   }
 
@@ -53,6 +81,19 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
       .from(orders)
       .where(and(eq(orders.id, orderId), eq(orders.userId, userId)))
       .limit(1);
+    if (!row) {
+      return null;
+    }
+    const itemRows = await this.db
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId))
+      .orderBy(orderItems.createdAt, orderItems.id);
+    return toDomainOrder(row, itemRows);
+  }
+
+  async findById(orderId: string): Promise<Order | null> {
+    const [row] = await this.db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!row) {
       return null;
     }
@@ -89,21 +130,6 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     }
 
     return orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? []));
-  }
-
-  async markPlaced(orderId: string, userId: string, expectedStatus: OrderStatus, placedAt: Date): Promise<boolean> {
-    return this.db.transaction(async (tx) => {
-      // Conditional update: only flips a row still in the expected status, so a
-      // concurrent place loses the race (returns no row) instead of double-placing.
-      const updated = await tx
-        .update(orders)
-        .set({ status: OrderStatus.PENDING, placedAt })
-        .where(and(eq(orders.id, orderId), eq(orders.userId, userId), eq(orders.status, expectedStatus)))
-        .returning({ id: orders.id });
-      // EXTENSION BF#1 (T4): reserve stock here, in this transaction, before returning.
-      // EXTENSION BF#4 (T8-9): append OrderPlaced to the outbox here, in this transaction.
-      return updated.length > 0;
-    });
   }
 }
 

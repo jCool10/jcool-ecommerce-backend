@@ -11,6 +11,15 @@ import { ACCOUNT_THROTTLER } from './throttler.constants';
  */
 @Injectable()
 export class AccountAwareThrottlerGuard extends ThrottlerGuard {
+  // Global kill-switch (load tests / e2e). Enforced here, not via the module's `skipIf`
+  // option, which this throttler version leaves unapplied so enforcement never turns off.
+  override canActivate(context: ExecutionContext): Promise<boolean> {
+    if (process.env.THROTTLE_ENABLED === 'false') {
+      return Promise.resolve(true);
+    }
+    return super.canActivate(context);
+  }
+
   protected generateKey(context: ExecutionContext, suffix: string, name: string): string {
     if (name === ACCOUNT_THROTTLER) {
       const request = context.switchToHttp().getRequest<Request>();

@@ -1,4 +1,4 @@
-import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
 // Order schema — the transactional source of truth. Infrastructure only, never
@@ -34,15 +34,26 @@ export const orders = pgTable(
     // aggregate can exceed int4 even when each line fits (Σ across lines / quantity).
     // `mode: 'number'` — order totals stay well inside JS safe-integer range.
     totalAmount: bigint('total_amount', { mode: 'number' }).notNull(),
-    // EXTENSION BF#1 (T4): optimistic-lock counter for inventory reservation. Reserved — unused in Week 3.
+    // Optimistic-lock counter for the order aggregate (guards concurrent transitions
+    // on the same order). Placement currently uses a status-based conditional UPDATE;
+    // this column is reserved for version-based aggregate concurrency, not yet read.
     version: integer('version').notNull().default(0),
-    // EXTENSION BF#2 (T5): idempotency key (nullable + unique). Reserved — unused in Week 3.
-    idempotencyKey: text('idempotency_key').unique(),
+    // The client Idempotency-Key that created this order (nullable). Stamped at checkout as the
+    // exit-defense backstop for retry-safety. Scoped per user (see the composite unique below), so
+    // two different users may reuse the same key value without colliding — mirrors the idempotency
+    // store's per-user (scope, key) model.
+    idempotencyKey: text('idempotency_key'),
     // Set when DRAFT → PENDING; null while still a draft.
     placedAt: timestamp('placed_at', { withTimezone: true }),
     ...stamps,
   },
-  (t) => [index('idx_orders_user').on(t.userId)],
+  (t) => [
+    index('idx_orders_user').on(t.userId),
+    // Per-user idempotency, matching the store's (scope, key) scope: at most one order per
+    // (user, key). NULL keys don't collide (Postgres treats them as distinct), so pre-idempotency
+    // orders are unaffected. The final backstop behind the per-key entry gate.
+    uniqueIndex('uq_orders_user_idempotency_key').on(t.userId, t.idempotencyKey),
+  ],
 );
 
 export const orderItems = pgTable(

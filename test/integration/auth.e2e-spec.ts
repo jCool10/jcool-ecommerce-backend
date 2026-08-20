@@ -17,13 +17,7 @@ import {
   REFRESH_TOKEN_COOKIE,
 } from '../../src/modules/user/interface/security/auth-cookie.constants';
 import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import {
-  authHeader,
-  cookieValueOf,
-  loginAs,
-  sessionHeaders,
-  setCookieEntry,
-} from '../setup/auth.helper';
+import { authHeader, cookieValueOf, loginAs, sessionHeaders, setCookieEntry } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -202,7 +196,10 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       const { user, password } = await createTestUser(app);
       const token = await issueResetToken(user.id);
 
-      await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: newPassword }).expect(204);
+      await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({ token, password: newPassword })
+        .expect(204);
 
       const withNew = await request(app.getHttpServer())
         .post('/auth/login')
@@ -220,7 +217,10 @@ describe('Auth (integration, real Postgres + Redis)', () => {
 
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(200);
 
-      await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: newPassword }).expect(204);
+      await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({ token, password: newPassword })
+        .expect(204);
 
       // The session predates the reset: its access token dies via the epoch bump and its refresh can't rotate.
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(401);
@@ -232,7 +232,10 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       const { user } = await createTestUser(app);
       const token = await issueResetToken(user.id);
 
-      await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: newPassword }).expect(204);
+      await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({ token, password: newPassword })
+        .expect(204);
       const replay = await request(app.getHttpServer())
         .post('/auth/reset-password')
         .send({ token, password: 'AnotherPass789!' });

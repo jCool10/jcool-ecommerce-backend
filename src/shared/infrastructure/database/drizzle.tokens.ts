@@ -13,3 +13,9 @@ export const PG_POOL = Symbol('PG_POOL');
 
 export type DrizzleDB = NodePgDatabase<typeof schema>;
 export type { Pool as PgPool };
+
+// The transaction handle Drizzle hands the `db.transaction(async (tx) => ...)`
+// callback. Type-only, so a port can require "run inside the caller's unit of
+// work" (e.g. reserve stock in the checkout transaction) without the callback
+// binding leaking Drizzle internals into every signature.
+export type DrizzleTx = Parameters<Parameters<DrizzleDB['transaction']>[0]>[0];
