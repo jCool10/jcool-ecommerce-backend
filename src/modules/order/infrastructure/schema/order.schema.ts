@@ -45,6 +45,11 @@ export const orders = pgTable(
     idempotencyKey: text('idempotency_key'),
     // Set when DRAFT → PENDING; null while still a draft.
     placedAt: timestamp('placed_at', { withTimezone: true }),
+    // Set once, when the order enters a terminal state (PAID/FAILED/EXPIRED); null while PENDING/DRAFT.
+    // Finalize idempotency reads status for the guard; these stamp the when/why for reconciliation.
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    finalizeReason: text('finalize_reason'), // e.g. 'webhook:failed' | 'reconcile:paid' | 'expired'
+    paymentRef: text('payment_ref'), // gateway transaction id, when a paid outcome carried one
     ...stamps,
   },
   (t) => [

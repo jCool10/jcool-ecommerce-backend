@@ -33,6 +33,27 @@ export interface OrderRepositoryPort {
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult>;
 
+  /**
+   * Run `fn` inside one DB transaction, returning its result. The application layer owns the
+   * finalize unit of work: it locks the order, applies the domain transition, and persists —
+   * plus (later phases) resolves stock and appends the outbox event — all inside this `tx`.
+   */
+  withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T>;
+
+  /**
+   * Load one order (with items) FOR UPDATE inside `tx`; null if absent. The row lock serializes
+   * concurrent finalizers (a duplicate webhook, or a webhook racing the reconcile cron) — the
+   * second waits, re-reads the now-terminal row, and no-ops. NOT user-scoped: the caller (Payment
+   * webhook / reconcile) authorizes against the aggregate itself.
+   */
+  findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null>;
+
+  /**
+   * Persist a finalized order's terminal state (status + finalizedAt/reason/paymentRef) inside `tx`.
+   * Called only after the domain transition on a row already locked by `findByIdForUpdate`.
+   */
+  persistFinalization(order: Order, tx: DrizzleTx): Promise<void>;
+
   /** One order (with items) owned by `userId`; null if absent or owned by someone else. */
   findForUser(orderId: string, userId: string): Promise<Order | null>;
 

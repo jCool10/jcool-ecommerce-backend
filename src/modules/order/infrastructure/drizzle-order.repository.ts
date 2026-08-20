@@ -74,6 +74,40 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     });
   }
 
+  async withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
+    return this.db.transaction(fn);
+  }
+
+  async findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null> {
+    // FOR UPDATE on the order row only — items are immutable snapshots, no lock needed. This
+    // is the serialization point that makes finalize exactly-once under concurrent webhooks.
+    const [row] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update').limit(1);
+    if (!row) {
+      return null;
+    }
+    const itemRows = await tx
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId))
+      .orderBy(orderItems.createdAt, orderItems.id);
+    return toDomainOrder(row, itemRows);
+  }
+
+  async persistFinalization(order: Order, tx: DrizzleTx): Promise<void> {
+    if (order.id === null) {
+      throw new Error('Cannot persist finalization for an unsaved order');
+    }
+    await tx
+      .update(orders)
+      .set({
+        status: order.status,
+        finalizedAt: order.finalizedAt,
+        finalizeReason: order.finalizeReason,
+        paymentRef: order.paymentRef,
+      })
+      .where(eq(orders.id, order.id));
+  }
+
   async findForUser(orderId: string, userId: string): Promise<Order | null> {
     // User-scoped by design: another user's order id simply returns null (→ 404).
     const [row] = await this.db
@@ -143,6 +177,9 @@ function toDomainOrder(row: OrderRow, itemRows: OrderItemRow[]): Order {
     currency: row.currency,
     totalAmountMinor: row.totalAmount,
     placedAt: row.placedAt,
+    finalizedAt: row.finalizedAt,
+    finalizeReason: row.finalizeReason,
+    paymentRef: row.paymentRef,
     items: itemRows.map((item) => OrderItem.of(item.skuId, item.productName, item.unitPrice, item.quantity)),
   });
 }

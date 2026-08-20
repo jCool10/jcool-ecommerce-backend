@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
-import { CheckoutOrderUseCase } from './application/use-cases';
+import { CheckoutOrderUseCase, FinalizeOrderUseCase } from './application/use-cases';
 import { OrderQueryService } from './application/order-query.service';
 import { ORDER_PAYMENT_VIEW } from './application/public/order-payment-view.port';
 import { OrderPaymentViewService } from './application/public/order-payment-view.service';
@@ -34,6 +34,7 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
   controllers: [OrderController],
   providers: [
     CheckoutOrderUseCase,
+    FinalizeOrderUseCase,
     OrderQueryService,
     { provide: ORDER_REPOSITORY, useClass: DrizzleOrderRepository },
     { provide: CART_SNAPSHOT_READER, useClass: CartSnapshotAdapter },
@@ -44,7 +45,8 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     RequireIdempotencyKeyGuard,
     IdempotencyInterceptor,
   ],
-  // Published read language for other contexts (Payment reads an order to start a session).
-  exports: [ORDER_PAYMENT_VIEW],
+  // Published read language for other contexts (Payment reads an order to start a session);
+  // FinalizeOrderUseCase is exported so the Payment webhook + reconcile cron can settle an order.
+  exports: [ORDER_PAYMENT_VIEW, FinalizeOrderUseCase],
 })
 export class OrderModule {}
