@@ -1,0 +1,38 @@
+import { Controller, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiConflictResponse,
+  ApiCreatedResponse,
+  ApiNotFoundResponse,
+  ApiParam,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from '@nestjs/swagger';
+import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
+import { CreatePaymentSessionUseCase } from '../application/create-payment-session.use-case';
+import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
+
+/**
+ * Payment endpoints (global JwtAuthGuard protects the whole controller — no `@Public()`). Owns
+ * `orders/:id/pay`: opening a payment is a Payment-context concern, so the route lives here rather
+ * than on OrderController. The amount is taken from the order server-side; the body carries nothing.
+ */
+@ApiTags('payments')
+@ApiBearerAuth()
+@ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
+@Controller('orders')
+export class PaymentController {
+  constructor(private readonly createSession: CreatePaymentSessionUseCase) {}
+
+  @Post(':id/pay')
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Order id to pay' })
+  @ApiCreatedResponse({ type: CreatePaymentSessionResponseDto })
+  @ApiNotFoundResponse({ description: 'Order not found (or not owned by the caller)' })
+  @ApiConflictResponse({ description: 'Order is not PENDING, or already has an active payment' })
+  async pay(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) orderId: string,
+  ): Promise<CreatePaymentSessionResponseDto> {
+    return CreatePaymentSessionResponseDto.from(await this.createSession.execute(orderId, user.userId));
+  }
+}

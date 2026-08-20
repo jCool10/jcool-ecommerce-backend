@@ -21,6 +21,9 @@ export async function createTestApp(envOverrides: Record<string, string> = {}): 
   process.env.DATABASE_URL = inject('DATABASE_URL');
   process.env.REDIS_URL = inject('REDIS_URL');
   process.env.JWT_ACCESS_SECRET ??= 'test-jwt-access-secret-not-a-real-secret-000'; // schema needs ≥32 chars
+  // Payment defaults to the Stripe adapter, which refuses to construct without a webhook secret;
+  // provide a dummy so AppModule boots. Signed-webhook e2e can override with its own known secret.
+  process.env.PAYMENT_WEBHOOK_SECRET ??= 'whsec_test_not_a_real_secret_0000'; // schema needs ≥16 chars
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
@@ -33,7 +36,8 @@ export async function createTestApp(envOverrides: Record<string, string> = {}): 
 
   try {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true });
+    // `rawBody: true` mirrors main.ts so the payment webhook's raw-body signature check works in e2e.
+    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, rawBody: true });
     app.useLogger(app.get(Logger)); // pino logger — mirrors main.ts so e2e logs match prod shape
 
     // Mirror main.ts edge config so the e2e app exercises the same middleware.

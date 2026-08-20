@@ -4,6 +4,8 @@ import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
 import { CheckoutOrderUseCase } from './application/use-cases';
 import { OrderQueryService } from './application/order-query.service';
+import { ORDER_PAYMENT_VIEW } from './application/public/order-payment-view.port';
+import { OrderPaymentViewService } from './application/public/order-payment-view.service';
 import { ORDER_REPOSITORY } from './application/ports/order-repository.port';
 import { CART_SNAPSHOT_READER } from './application/ports/cart-snapshot.port';
 import { CATALOG_QUERY } from './application/ports/catalog-query.port';
@@ -38,8 +40,11 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     { provide: CATALOG_QUERY, useClass: CatalogQueryAdapter },
     { provide: INVENTORY_RESERVATION, useClass: InventoryReservationAdapter },
     { provide: IDEMPOTENCY_STORE, useClass: DrizzleIdempotencyKeyRepository },
+    { provide: ORDER_PAYMENT_VIEW, useClass: OrderPaymentViewService },
     RequireIdempotencyKeyGuard,
     IdempotencyInterceptor,
   ],
+  // Published read language for other contexts (Payment reads an order to start a session).
+  exports: [ORDER_PAYMENT_VIEW],
 })
 export class OrderModule {}

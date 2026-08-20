@@ -12,7 +12,10 @@ import { CSRF_HEADER } from '@modules/user/interface/security';
 async function bootstrap(): Promise<void> {
   // Buffer bootstrap logs until the pino logger is installed, then replay them through it
   // (so early logs are JSON too, not NestJS's default console format).
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+  // `rawBody: true` captures the exact request bytes on `req.rawBody` (alongside the parsed body)
+  // so the payment webhook can verify its HMAC signature over what the gateway actually signed —
+  // the global JSON parser would re-serialize and break it.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true, rawBody: true });
   const logger = app.get(Logger);
   app.useLogger(logger);
   const configService = app.get(ConfigService);

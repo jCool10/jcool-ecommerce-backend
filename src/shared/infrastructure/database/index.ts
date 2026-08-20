@@ -2,3 +2,4 @@
 // entry scripts (run by node/drizzle-kit) and are intentionally NOT re-exported here.
 export * from './drizzle.module';
 export * from './drizzle.tokens';
+export * from './pg-errors';

@@ -18,6 +18,13 @@ function parseTracesSampleRate(raw: string | undefined): number | undefined {
   return Number.isFinite(rate) && rate > 0 ? rate : undefined;
 }
 
+// parseInt that falls back on absent/empty/non-numeric input. Guards the empty-string→NaN env
+// gotcha; critical for the webhook replay window, where a silent NaN would disable replay defense.
+function parseIntOr(raw: string | undefined, fallback: number): number {
+  const parsed = parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export default () => ({
   app: {
     env: process.env.NODE_ENV,
@@ -92,6 +99,23 @@ export default () => ({
   throttle: {
     // Rate-limiting kill-switch; on by default (THROTTLE_ENABLED=false disables — load tests, e2e).
     enabled: process.env.THROTTLE_ENABLED !== 'false',
+  },
+  payment: {
+    // Gateway adapter chosen by the DI factory in payment.module.ts. Default 'stripe' (coded path).
+    provider: process.env.PAYMENT_PROVIDER ?? 'stripe',
+    // Webhook HMAC secret; undefined → the Stripe adapter refuses to construct (fail-fast).
+    webhookSecret: process.env.PAYMENT_WEBHOOK_SECRET,
+    // Timestamp tolerance (s) for webhook replay defense; 300s matches Stripe's default. A blank
+    // env value would parseInt→NaN and silently disable the replay window, so fall back explicitly.
+    webhookToleranceSec: parseIntOr(process.env.PAYMENT_WEBHOOK_TOLERANCE_SEC, 300),
+    // Live Stripe API key. Unset → the adapter stays on its network-free coded path (fabricated
+    // cs_...). Set to sk_test_.../sk_live_... to create real Checkout Sessions a webhook can settle.
+    secretKey: process.env.STRIPE_SECRET_KEY,
+    // Where Stripe redirects after checkout. success_url is mandatory for a live session; the
+    // {CHECKOUT_SESSION_ID} template is Stripe's own placeholder, expanded on redirect.
+    successUrl:
+      process.env.STRIPE_SUCCESS_URL ?? 'http://localhost:3000/payments/success?session_id={CHECKOUT_SESSION_ID}',
+    cancelUrl: process.env.STRIPE_CANCEL_URL ?? 'http://localhost:3000/payments/cancel',
   },
   inventory: {
     // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or
