@@ -1,4 +1,5 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { v7 as uuidv7 } from 'uuid';
 import { Payment } from '../domain/payment.entity';
 import { PaymentStatus } from '../domain/payment-status';
 import { ORDER_READ_PORT, type OrderReadPort } from './ports/order-read.port';
@@ -7,7 +8,12 @@ import {
   PAYMENT_REPOSITORY,
   type PaymentRepositoryPort,
 } from './ports/payment-repository.port';
-import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './ports/payment-gateway.port';
+import {
+  PAYMENT_GATEWAY,
+  PaymentGatewayError,
+  type GatewaySession,
+  type PaymentGatewayPort,
+} from './ports/payment-gateway.port';
 
 // The order status that may start a payment. Compared as a string literal on purpose: Payment must
 // not import Order's domain enum (cross-context boundary), and only needs to know this one value.
@@ -32,6 +38,8 @@ export interface CreatePaymentSessionResult {
  */
 @Injectable()
 export class CreatePaymentSessionUseCase {
+  private readonly logger = new Logger(CreatePaymentSessionUseCase.name);
+
   constructor(
     @Inject(ORDER_READ_PORT) private readonly orders: OrderReadPort,
     @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
@@ -54,15 +62,32 @@ export class CreatePaymentSessionUseCase {
     }
 
     // Amount is the order's frozen total, never a client-supplied figure (anti price-tampering).
-    // idempotencyKey is a seam: the network-free adapter ignores it today. A live SDK must key per
-    // attempt (not per order) — else a retry after a FAILED payment replays the stale failed session
-    // instead of opening a fresh one.
-    const session = await this.gateway.createSession({
-      orderId,
-      amountMinor: order.amountMinor,
-      currency: order.currency,
-      idempotencyKey: orderId,
-    });
+    // idempotencyKey is minted per attempt (not per order): the live Stripe path keys its create
+    // call so its own network retries are safe, while a retry after a FAILED payment still opens a
+    // FRESH session instead of replaying the stale failed one. No-double-charge does not rest on this
+    // key — the DB active-payment guard + unique index do; a lost race just leaves a harmless unpaid
+    // session that Stripe expires. The offline adapter ignores the key.
+    let session: GatewaySession;
+    try {
+      session = await this.gateway.createSession({
+        orderId,
+        amountMinor: order.amountMinor,
+        currency: order.currency,
+        idempotencyKey: uuidv7(),
+      });
+    } catch (error) {
+      // Provider/network fault (live Stripe down) — a 502, not a 500. Nothing persisted yet. The
+      // client only ever sees a masked generic 502, so log the gateway detail + cause HERE or a
+      // checkout outage is undiagnosable; chain the cause so Sentry links the original Stripe error.
+      if (error instanceof PaymentGatewayError) {
+        this.logger.error(
+          `createSession failed for order ${orderId}: ${error.message}`,
+          error.cause instanceof Error ? error.cause.stack : undefined,
+        );
+        throw new BadGatewayException('Payment provider is temporarily unavailable', { cause: error });
+      }
+      throw error;
+    }
 
     const payment = Payment.create({
       orderId,

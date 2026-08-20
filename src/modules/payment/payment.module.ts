@@ -26,6 +26,9 @@ function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
   return new StripeGatewayAdapter({
     webhookSecret: config.get<string>('payment.webhookSecret'),
     toleranceSec: config.get<number>('payment.webhookToleranceSec') ?? 300,
+    secretKey: config.get<string>('payment.secretKey'),
+    successUrl: config.get<string>('payment.successUrl'),
+    cancelUrl: config.get<string>('payment.cancelUrl'),
   });
 }
 

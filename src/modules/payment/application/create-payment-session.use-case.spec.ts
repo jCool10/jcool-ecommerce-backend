@@ -1,10 +1,10 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, ConflictException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { Payment } from '../domain/payment.entity';
 import { PaymentStatus } from '../domain/payment-status';
 import type { OrderReadPort, OrderView } from './ports/order-read.port';
 import { DuplicateActivePaymentError, type PaymentRepositoryPort } from './ports/payment-repository.port';
-import type { GatewaySession, PaymentGatewayPort } from './ports/payment-gateway.port';
+import { PaymentGatewayError, type GatewaySession, type PaymentGatewayPort } from './ports/payment-gateway.port';
 import { CreatePaymentSessionUseCase } from './create-payment-session.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -29,7 +29,13 @@ function persistedPayment(status: PaymentStatus): Payment {
 }
 
 function build(
-  opts: { order?: OrderView | null; existing?: Payment | null; session?: GatewaySession; createError?: Error } = {},
+  opts: {
+    order?: OrderView | null;
+    existing?: Payment | null;
+    session?: GatewaySession;
+    createError?: Error;
+    sessionError?: Error;
+  } = {},
 ) {
   const findForPayment = vi.fn().mockResolvedValue(opts.order === undefined ? orderView() : opts.order);
   const findByOrderId = vi.fn().mockResolvedValue(opts.existing ?? null);
@@ -49,11 +55,16 @@ function build(
           }),
         ),
       );
-  const createSession = vi
-    .fn()
-    .mockResolvedValue(
-      opts.session ?? { providerSessionId: 'cs_test_new', redirectUrl: 'https://checkout.stripe.test/pay/cs_test_new' },
-    );
+  const createSession = opts.sessionError
+    ? vi.fn().mockRejectedValue(opts.sessionError)
+    : vi
+        .fn()
+        .mockResolvedValue(
+          opts.session ?? {
+            providerSessionId: 'cs_test_new',
+            redirectUrl: 'https://checkout.stripe.test/pay/cs_test_new',
+          },
+        );
 
   const orders = { findForPayment } as OrderReadPort;
   const payments = { findByOrderId, create, updateStatus: vi.fn() } as unknown as PaymentRepositoryPort;
@@ -128,5 +139,11 @@ describe('CreatePaymentSessionUseCase', () => {
     const { useCase, createSession } = build({ createError: new DuplicateActivePaymentError(ORDER_ID) });
     await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(ConflictException);
     expect(createSession).toHaveBeenCalledTimes(1); // pre-check passed; the DB backstop caught the race
+  });
+
+  it('maps a gateway/provider failure to 502 (BadGateway) and persists nothing', async () => {
+    const { useCase, create } = build({ sessionError: new PaymentGatewayError('stripe down') });
+    await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(BadGatewayException);
+    expect(create).not.toHaveBeenCalled();
   });
 });

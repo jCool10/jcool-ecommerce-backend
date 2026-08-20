@@ -194,6 +194,23 @@ export class EnvironmentVariables {
   @Min(0)
   PAYMENT_WEBHOOK_TOLERANCE_SEC?: number;
 
+  // Live Stripe secret key (sk_test_.../sk_live_...). Optional: absent → the adapter uses its
+  // network-free coded path; present → createSession calls the real Stripe API.
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  STRIPE_SECRET_KEY?: string;
+
+  // Post-checkout redirect targets. String (not @IsUrl): the success default carries Stripe's
+  // {CHECKOUT_SESSION_ID} brace template, which strict URL validation would reject.
+  @IsOptional()
+  @IsString()
+  STRIPE_SUCCESS_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  STRIPE_CANCEL_URL?: string;
+
   // HMAC secret for access tokens; MinLength(32) enforces a ~256-bit floor for HS256 (no default → missing fails boot).
   @IsString()
   @MinLength(32)

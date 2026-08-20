@@ -1,6 +1,6 @@
-// Payment gateway port — the single seam Phase 3 (session creation) and Phase 4 (webhook
-// verify) depend on. Swapping the provider is a DI + env change, never a caller change.
-// The Stripe-style HMAC adapter is the coded path; SePay/VietQR stays interface-only.
+// Payment gateway port — the single seam session creation and webhook verification depend on.
+// Swapping the provider is a DI + env change, never a caller change. The Stripe-style HMAC adapter
+// is the coded path; SePay/VietQR stays interface-only.
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 
 export interface CreateSessionInput {
@@ -33,4 +33,17 @@ export interface PaymentGatewayPort {
   createSession(input: CreateSessionInput): Promise<GatewaySession>;
   // `rawBody` is the exact bytes the gateway signed — verifying a re-serialized body would fail.
   verifyAndParseEvent(rawBody: Buffer, headers: Record<string, string>): VerifiedEvent;
+}
+
+// The gateway's own API (e.g. a live Stripe session-create) failed — an upstream/provider fault the
+// caller maps to 502, kept distinct from the domain 4xx a bad request raises. Carries the original
+// error as `cause` for the log, never surfaced to the client.
+export class PaymentGatewayError extends Error {
+  constructor(
+    message: string,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'PaymentGatewayError';
+  }
 }
