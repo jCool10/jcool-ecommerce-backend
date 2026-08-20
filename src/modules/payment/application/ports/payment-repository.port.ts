@@ -31,6 +31,13 @@ export interface PaymentRepositoryPort {
   findByOrderId(orderId: string): Promise<Payment | null>;
 
   /**
+   * The payment for a gateway session handle (the webhook's `data.object.id`); null if unknown.
+   * The webhook resolves its target payment this way. Optional `tx` reads inside the caller's
+   * unit of work so the lookup shares the apply transaction's snapshot.
+   */
+  findByProviderSessionId(providerSessionId: string, tx?: DrizzleTx): Promise<Payment | null>;
+
+  /**
    * Persist a status change (and optionally the provider intent id); returns the updated
    * payment, or null if the id is unknown. The state-machine guard lives in the domain
    * entity — the adapter only writes.

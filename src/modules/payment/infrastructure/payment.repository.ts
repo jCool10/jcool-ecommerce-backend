@@ -59,6 +59,24 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     return row ? toDomain(row) : null;
   }
 
+  async findByProviderSessionId(providerSessionId: string, tx?: DrizzleTx): Promise<Payment | null> {
+    const executor = tx ?? this.db;
+    // Session handles are generated unique per creation; order by newest as a deterministic
+    // tiebreak rather than relying on a DB uniqueness that the schema doesn't declare.
+    const query = executor
+      .select()
+      .from(payments)
+      .where(eq(payments.providerSessionId, providerSessionId))
+      .orderBy(desc(payments.createdAt), desc(payments.id))
+      .limit(1);
+    // Inside the webhook's apply transaction, lock the row (FOR UPDATE): two concurrent *distinct*
+    // events for the same payment (e.g. a success and a failure) then serialize — the second reads
+    // the already-settled status and the domain's canTransition guard rejects it, instead of both
+    // reading PENDING and the loser clobbering the winner.
+    const [row] = await (tx ? query.for('update') : query);
+    return row ? toDomain(row) : null;
+  }
+
   async updateStatus(
     id: string,
     status: PaymentStatus,

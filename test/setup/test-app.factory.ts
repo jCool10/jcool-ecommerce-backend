@@ -36,7 +36,8 @@ export async function createTestApp(envOverrides: Record<string, string> = {}): 
 
   try {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true });
+    // `rawBody: true` mirrors main.ts so the payment webhook's raw-body signature check works in e2e.
+    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, rawBody: true });
     app.useLogger(app.get(Logger)); // pino logger — mirrors main.ts so e2e logs match prod shape
 
     // Mirror main.ts edge config so the e2e app exercises the same middleware.

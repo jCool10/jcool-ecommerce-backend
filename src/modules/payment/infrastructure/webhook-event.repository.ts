@@ -56,6 +56,19 @@ export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort
     }
     return { inserted: false, event: toDomain(existing) };
   }
+
+  async markProcessed(id: string, tx?: DrizzleTx): Promise<void> {
+    const executor = tx ?? this.db;
+    await executor
+      .update(webhookEvents)
+      .set({ status: WebhookEventStatus.PROCESSED, processedAt: new Date() })
+      .where(eq(webhookEvents.id, id));
+  }
+
+  async markSkipped(id: string, tx?: DrizzleTx): Promise<void> {
+    const executor = tx ?? this.db;
+    await executor.update(webhookEvents).set({ status: WebhookEventStatus.SKIPPED }).where(eq(webhookEvents.id, id));
+  }
 }
 
 function toDomain(row: WebhookEventRow): WebhookEvent {
