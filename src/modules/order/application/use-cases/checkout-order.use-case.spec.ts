@@ -39,6 +39,8 @@ function build(
   const getLines = vi.fn().mockResolvedValue(opts.lines ?? [{ skuId: SKU, quantity: 2 }]);
   const getSkuView = vi.fn().mockResolvedValue(opts.view === undefined ? skuView() : opts.view);
   const reserve = vi.fn().mockResolvedValue(undefined);
+  const commit = vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 });
+  const release = vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 });
   const markCompleted = vi.fn().mockResolvedValue(undefined);
   const recordOrderCreated = vi.fn();
   const observeOrderValue = vi.fn();
@@ -46,7 +48,7 @@ function build(
   const repo = { createCheckout, findForUser, findAllForUser: vi.fn() } as unknown as OrderRepositoryPort;
   const cart: CartSnapshotReaderPort = { getLines };
   const catalog: CatalogQueryPort = { getSkuView };
-  const reservation: InventoryReservationPort = { reserve };
+  const reservation: InventoryReservationPort = { reserve, commit, release };
   const store = { markCompleted } as unknown as IdempotencyStorePort;
   const metrics = { recordOrderCreated, observeOrderValue } as unknown as MetricsPort;
   // noContext models CLS inactive at the use-case boundary (the wired route always has it active).
@@ -119,7 +121,7 @@ describe('CheckoutOrderUseCase', () => {
     // reserve throws the published inventory error inside the tx → the whole tx (order, hold, key)
     // rolls back, so createCheckout rejects.
     const { useCase, spies } = build({
-      checkout: () => Promise.reject(new StockReservationError('Insufficient stock')),
+      checkout: () => Promise.reject(new StockReservationError('Insufficient stock', 'OUT_OF_STOCK')),
     });
 
     await expect(useCase.execute('u1')).rejects.toBeInstanceOf(ConflictException);

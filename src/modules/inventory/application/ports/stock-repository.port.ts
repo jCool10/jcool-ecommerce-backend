@@ -1,6 +1,9 @@
 // Type-only import (tokens file, not the barrel) so the port names Drizzle's tx
 // handle without pulling the runtime drizzle module into the application layer.
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
+import type { StockResolveResult } from '../public/stock-reservation.port';
+
+export type { StockResolveResult };
 
 // Stock persistence + reservation port, implemented by the Drizzle adapter in
 // infrastructure/. Kept free of drizzle-orm/schema; accepts a `tx` so a reserve
@@ -43,6 +46,21 @@ export interface StockRepositoryPort {
    * per order, or an idempotency key upstream).
    */
   reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void>;
+
+  /**
+   * Commit an order's HELD reservations inside `tx` (payment succeeded): HELD → COMMITTED, and for each
+   * held line drop BOTH `onHand` and `reserved` by its quantity (goods ship for real; `available` is
+   * unchanged). Guarded on `status='HELD'` so a re-run moves no stock. Locks stock rows in `variantId`
+   * order to match `reserve` and rule out a cross-order deadlock.
+   */
+  commitReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
+
+  /**
+   * Release an order's HELD reservations inside `tx` (payment failed / expired): HELD → RELEASED, drop
+   * `reserved` by each held quantity (`onHand` untouched — stock returns to available). Guarded on
+   * `status='HELD'`; same deterministic lock order as `commitReservations`.
+   */
+  releaseReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
 
   /** Current on-hand / reserved / available for a SKU; null if the SKU has no stock row. */
   getStockView(variantId: string): Promise<StockView | null>;

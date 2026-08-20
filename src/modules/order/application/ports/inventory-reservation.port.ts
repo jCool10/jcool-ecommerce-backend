@@ -16,6 +16,17 @@ export interface ReservationLine {
   quantity: number;
 }
 
+/**
+ * What resolving an order's hold did. `applied` — stock moved; `alreadyResolved` — a prior
+ * commit/release already ran (no-op); both false — the order had no hold at all (an anomaly for a
+ * PAID order, logged for reconciliation). Finalization proceeds regardless — resolution never throws.
+ */
+export interface StockResolution {
+  applied: boolean;
+  alreadyResolved: boolean;
+  count: number;
+}
+
 export interface InventoryReservationPort {
   /**
    * Reserve stock for the given lines inside the caller's `tx`. A shortfall (or an
@@ -24,4 +35,16 @@ export interface InventoryReservationPort {
    * DRAFT and stock is untouched.
    */
   reserve(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void>;
+
+  /**
+   * Commit the order's hold inside the finalize `tx` (PAID): HELD → COMMITTED, on-hand drops for real.
+   * Idempotent and non-throwing so the finalize transaction settles order + stock atomically.
+   */
+  commit(tx: DrizzleTx, orderId: string): Promise<StockResolution>;
+
+  /**
+   * Release the order's hold inside the finalize `tx` (FAILED/EXPIRED): HELD → RELEASED, stock returns
+   * to available. Idempotent and non-throwing — same contract as `commit`.
+   */
+  release(tx: DrizzleTx, orderId: string): Promise<StockResolution>;
 }

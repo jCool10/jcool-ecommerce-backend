@@ -4,7 +4,7 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
 import { STOCK_REPOSITORY, type ReserveLine, type StockRepositoryPort } from './ports/stock-repository.port';
-import { StockReservationError, type StockReservation } from './public/stock-reservation.port';
+import { StockReservationError, type StockReservation, type StockResolveResult } from './public/stock-reservation.port';
 
 /** The two concurrency-control strategies, selected by config. */
 export type LockStrategy = 'pessimistic' | 'optimistic';
@@ -42,5 +42,15 @@ export class ReserveStockUseCase implements StockReservation {
       }
       throw error;
     }
+  }
+
+  // commit/release only move stock down a resolved reservation; no shortfall path, so no error
+  // translation — a DB CHECK violation here would signal a logic bug and must surface, not be masked.
+  commit(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
+    return this.stock.commitReservations(tx, orderId);
+  }
+
+  release(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
+    return this.stock.releaseReservations(tx, orderId);
   }
 }

@@ -6,7 +6,12 @@ import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
 import { ReservationStatus } from '../domain/reservation-status';
-import type { ReserveLine, StockRepositoryPort, StockView } from '../application/ports/stock-repository.port';
+import type {
+  ReserveLine,
+  StockRepositoryPort,
+  StockResolveResult,
+  StockView,
+} from '../application/ports/stock-repository.port';
 import { reservations, stockLevels } from './schema/inventory.schema';
 
 /**
@@ -148,6 +153,82 @@ export class StockRepository implements StockRepositoryPort {
       }
       await this.sleep(this.backoffMs * 2 ** attempt + this.jitter());
     }
+  }
+
+  async commitReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
+    return this.resolveReservations(tx, orderId, ReservationStatus.COMMITTED);
+  }
+
+  async releaseReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
+    return this.resolveReservations(tx, orderId, ReservationStatus.RELEASED);
+  }
+
+  // Transition an order's HELD reservations to COMMITTED (goods ship: onHand & reserved both drop) or
+  // RELEASED (hold freed: only reserved drops). The caller holds the order row lock (finalize), so this
+  // order's reservation rows are exclusive here; the shared stock rows are locked (by the per-line UPDATE)
+  // in the SAME order the reserve path uses — `variantId` ascending via `localeCompare` — so a concurrent
+  // reserve/resolve of another order on overlapping SKUs acquires locks in one global order and can't
+  // deadlock. The per-line flip is a CAS on status='HELD', so the stock delta is applied exactly once even
+  // on a duplicate resolve.
+  private async resolveReservations(
+    tx: DrizzleTx,
+    orderId: string,
+    target: typeof ReservationStatus.COMMITTED | typeof ReservationStatus.RELEASED,
+  ): Promise<StockResolveResult> {
+    const rows = await tx
+      .select({ variantId: reservations.variantId, quantity: reservations.quantity, status: reservations.status })
+      .from(reservations)
+      .where(eq(reservations.orderId, orderId));
+
+    if (rows.length === 0) {
+      return { applied: false, alreadyResolved: false, count: 0 };
+    }
+    // Sort in JS with the exact comparator reservePessimistic/reserveOptimistic use, so the lock order is
+    // identical to reserve regardless of DB collation (not the SQL sort, which may order UUIDs differently).
+    const held = rows
+      .filter((r) => r.status === ReservationStatus.HELD)
+      .sort((a, b) => a.variantId.localeCompare(b.variantId));
+    if (held.length === 0) {
+      return { applied: false, alreadyResolved: true, count: 0 };
+    }
+
+    let count = 0;
+    for (const { variantId, quantity } of held) {
+      const flipped = await tx
+        .update(reservations)
+        .set({ status: target })
+        .where(
+          and(
+            eq(reservations.orderId, orderId),
+            eq(reservations.variantId, variantId),
+            eq(reservations.status, ReservationStatus.HELD),
+          ),
+        )
+        .returning({ id: reservations.id });
+      if (flipped.length === 0) {
+        continue;
+      }
+
+      const setStock =
+        target === ReservationStatus.COMMITTED
+          ? {
+              quantityOnHand: sql`${stockLevels.quantityOnHand} - ${quantity}`,
+              quantityReserved: sql`${stockLevels.quantityReserved} - ${quantity}`,
+              version: sql`${stockLevels.version} + 1`,
+            }
+          : {
+              quantityReserved: sql`${stockLevels.quantityReserved} - ${quantity}`,
+              version: sql`${stockLevels.version} + 1`,
+            };
+      await tx.update(stockLevels).set(setStock).where(eq(stockLevels.variantId, variantId));
+      count += 1;
+    }
+
+    // Every held row lost the CAS to a concurrent resolver → nothing for us to apply.
+    if (count === 0) {
+      return { applied: false, alreadyResolved: true, count: 0 };
+    }
+    return { applied: true, alreadyResolved: false, count };
   }
 
   async getStockView(variantId: string): Promise<StockView | null> {

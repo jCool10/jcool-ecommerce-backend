@@ -11,6 +11,8 @@ function setup(strategy: string | undefined) {
   const stock = {
     reservePessimistic: vi.fn().mockResolvedValue(undefined),
     reserveOptimistic: vi.fn().mockResolvedValue(undefined),
+    commitReservations: vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 }),
+    releaseReservations: vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 }),
     getStockView: vi.fn().mockResolvedValue(null),
   };
   const config = { get: vi.fn().mockReturnValue(strategy) };

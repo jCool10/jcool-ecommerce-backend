@@ -32,6 +32,21 @@ export class StockReservationError extends DomainError {
   }
 }
 
+/**
+ * Outcome of committing or releasing an order's reservations.
+ * - `applied`         — at least one HELD reservation was transitioned (stock moved).
+ * - `alreadyResolved` — reservations existed but none were HELD (a prior commit/release already ran).
+ * - `count`           — how many reservations this call transitioned (0 unless `applied`).
+ *
+ * `applied:false, alreadyResolved:false` means the order had no reservations at all — a data anomaly
+ * for a PAID order (it predates holds, or the hold was lost), surfaced by the caller for reconciliation.
+ */
+export interface StockResolveResult {
+  applied: boolean;
+  alreadyResolved: boolean;
+  count: number;
+}
+
 export interface StockReservation {
   /**
    * Hold stock for an order's lines inside the caller's `tx`, so the hold commits or
@@ -39,4 +54,18 @@ export interface StockReservation {
    * line can't be held.
    */
   reserve(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void>;
+
+  /**
+   * Commit an order's holds inside the caller's `tx` (payment succeeded): HELD → COMMITTED, dropping
+   * both on-hand and reserved for each held line (goods ship for real). Idempotent — a re-run moves no
+   * stock. Never throws for a missing/already-resolved reservation; the result says what happened.
+   */
+  commit(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
+
+  /**
+   * Release an order's holds inside the caller's `tx` (payment failed / expired): HELD → RELEASED,
+   * returning each held quantity to available (on-hand untouched). Idempotent, non-throwing — same
+   * contract as `commit`.
+   */
+  release(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
 }

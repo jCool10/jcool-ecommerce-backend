@@ -1,7 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
+import { OrderStatus } from '../../domain/order-status';
 import { canTransition } from '../../domain/order-state-machine';
 import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
+import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/inventory-reservation.port';
 import type { FinalizeInput, FinalizeResult } from './finalize-order.types';
 
 const LOG_CONTEXT = 'FinalizeOrder';
@@ -22,6 +24,7 @@ const LOG_CONTEXT = 'FinalizeOrder';
 export class FinalizeOrderUseCase {
   constructor(
     @Inject(ORDER_REPOSITORY) private readonly repo: OrderRepositoryPort,
+    @Inject(INVENTORY_RESERVATION) private readonly inventory: InventoryReservationPort,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -50,9 +53,20 @@ export class FinalizeOrderUseCase {
       }
 
       const finalized = order.finalize(outcome, { now: new Date(), reason, paymentRef });
-      // SEAM (stock resolution): resolve the reservation here — commit on PAID, release on FAILED/EXPIRED —
-      // inside this same tx, so order state and stock commit or roll back together (no PAID-but-unpinned window).
       await this.repo.persistFinalization(finalized, tx);
+
+      // Resolve stock in this same tx so order state and stock commit or roll back together (no
+      // PAID-but-unpinned window): PAID commits the hold (on-hand drops), FAILED/EXPIRED releases it.
+      const resolution =
+        outcome === OrderStatus.PAID
+          ? await this.inventory.commit(tx, orderId)
+          : await this.inventory.release(tx, orderId);
+      if (!resolution.applied && !resolution.alreadyResolved) {
+        // Settled an order with no stock hold (predates reservations, or the hold was lost). Not fatal —
+        // the order still finalizes — but it breaks the money=stock=status invariant, so flag for reconcile.
+        this.logger.warn({ context: LOG_CONTEXT, orderId, outcome }, 'finalized order had no reservation to resolve');
+      }
+
       // SEAM (outbox): append `finalized.toFinalizedEvent()` to an outbox table in this same tx; a relay publishes it.
       return { status: 'finalized', order: finalized, event: finalized.toFinalizedEvent() };
     });
