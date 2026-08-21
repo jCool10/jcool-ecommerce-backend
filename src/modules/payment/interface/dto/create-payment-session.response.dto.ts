@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import type { CreatePaymentSessionResult } from '../../application/create-payment-session.use-case';
+import type { CreatePaymentSessionResult } from '../../application/use-cases';
 
 /** The opened payment session: the persisted Payment id plus the gateway handles the client needs. */
 export class CreatePaymentSessionResponseDto {

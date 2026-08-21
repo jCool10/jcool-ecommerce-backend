@@ -6,8 +6,11 @@ import { WEBHOOK_EVENT_REPOSITORY } from './application/ports/webhook-event-repo
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './application/ports/payment-gateway.port';
 import { ORDER_READ_PORT } from './application/ports/order-read.port';
 import { TRANSACTION_RUNNER } from './application/ports/transaction-runner.port';
-import { CreatePaymentSessionUseCase } from './application/create-payment-session.use-case';
-import { ProcessWebhookEventUseCase } from './application/process-webhook-event.use-case';
+import {
+  CreatePaymentSessionUseCase,
+  HandlePaymentWebhookUseCase,
+  ProcessWebhookEventUseCase,
+} from './application/use-cases';
 import { DrizzlePaymentRepository } from './infrastructure/payment.repository';
 import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.repository';
 import { DrizzleTransactionRunner } from './infrastructure/drizzle-transaction-runner';
@@ -37,8 +40,8 @@ function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
  * webhook_events behind their repository ports, and the gateway port that session creation and
  * webhook verify depend on. Reads an order only through Order's published ORDER_PAYMENT_VIEW
  * (via OrderModule), behind Payment's own ORDER_READ_PORT anti-corruption adapter — never Order's
- * table. `POST /orders/:id/pay` opens a session and persists a PENDING Payment; it does not
- * finalize the order.
+ * table. `POST /orders/:id/pay` opens a session and persists a PENDING Payment; a settled webhook
+ * then finalizes the order through Order's exported FinalizeOrderUseCase (never Order's repository).
  */
 @Module({
   imports: [OrderModule],
@@ -51,6 +54,9 @@ function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
     { provide: TRANSACTION_RUNNER, useClass: DrizzleTransactionRunner },
     CreatePaymentSessionUseCase,
     ProcessWebhookEventUseCase,
+    // Wires ProcessWebhookEventUseCase → Order's FinalizeOrderUseCase (via OrderModule) so a settled
+    // webhook finalizes the order; the controller depends on this orchestrator, not the raw processor.
+    HandlePaymentWebhookUseCase,
   ],
   exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY],
 })

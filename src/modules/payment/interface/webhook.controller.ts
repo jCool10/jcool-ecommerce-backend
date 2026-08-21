@@ -11,7 +11,7 @@ import { ApiOkResponse, ApiTags, ApiUnauthorizedResponse } from '@nestjs/swagger
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { Public } from '@shared/rbac';
-import { ProcessWebhookEventUseCase } from '../application/process-webhook-event.use-case';
+import { HandlePaymentWebhookUseCase } from '../application/use-cases';
 
 /**
  * Gateway webhook sink. `@Public()` — the caller is the payment gateway, authenticated by the HMAC
@@ -26,7 +26,7 @@ import { ProcessWebhookEventUseCase } from '../application/process-webhook-event
 @ApiTags('payments')
 @Controller('webhooks')
 export class WebhookController {
-  constructor(private readonly processEvent: ProcessWebhookEventUseCase) {}
+  constructor(private readonly handleWebhook: HandlePaymentWebhookUseCase) {}
 
   @Public()
   @SkipThrottle()
@@ -42,7 +42,7 @@ export class WebhookController {
       throw new UnauthorizedException('Missing webhook body');
     }
 
-    const result = await this.processEvent.execute(rawBody, req.headers as Record<string, string>);
+    const result = await this.handleWebhook.execute(rawBody, req.headers as Record<string, string>);
     if (result.outcome === 'rejected') {
       throw new UnauthorizedException('Invalid webhook signature');
     }

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Payment } from '../domain/payment.entity';
-import { PaymentStatus } from '../domain/payment-status';
-import { WebhookEvent } from '../domain/webhook-event.entity';
-import type { PaymentGatewayPort, VerifiedEvent } from './ports/payment-gateway.port';
-import type { PaymentRepositoryPort } from './ports/payment-repository.port';
-import type { WebhookEventRepositoryPort } from './ports/webhook-event-repository.port';
-import type { TransactionRunnerPort } from './ports/transaction-runner.port';
+import { Payment } from '../../domain/payment.entity';
+import { PaymentStatus } from '../../domain/payment-status';
+import { WebhookEvent } from '../../domain/webhook-event.entity';
+import type { PaymentGatewayPort, VerifiedEvent } from '../ports/payment-gateway.port';
+import type { PaymentRepositoryPort } from '../ports/payment-repository.port';
+import type { WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
+import type { TransactionRunnerPort } from '../ports/transaction-runner.port';
 import { ProcessWebhookEventUseCase } from './process-webhook-event.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -116,7 +116,13 @@ describe('ProcessWebhookEventUseCase', () => {
 
     const result = await useCase.execute(RAW, HEADERS);
 
-    expect(result).toEqual({ outcome: 'processed', status: PaymentStatus.SUCCEEDED });
+    expect(result).toEqual({
+      outcome: 'processed',
+      status: PaymentStatus.SUCCEEDED,
+      orderId: ORDER_ID,
+      paymentRef: 'pi_123',
+      eventType: 'checkout.session.completed',
+    });
     expect(updateStatus).toHaveBeenCalledWith(
       PAYMENT_ID,
       PaymentStatus.SUCCEEDED,
@@ -146,7 +152,13 @@ describe('ProcessWebhookEventUseCase', () => {
       existing: payment(PaymentStatus.PENDING),
     });
     const result = await useCase.execute(RAW, HEADERS);
-    expect(result).toEqual({ outcome: 'processed', status: PaymentStatus.FAILED });
+    expect(result).toEqual({
+      outcome: 'processed',
+      status: PaymentStatus.FAILED,
+      orderId: ORDER_ID,
+      paymentRef: null,
+      eventType: 'checkout.session.expired',
+    });
     expect(updateStatus).toHaveBeenCalledWith(PAYMENT_ID, PaymentStatus.FAILED, expect.anything());
   });
 

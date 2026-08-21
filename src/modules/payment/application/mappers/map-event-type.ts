@@ -1,4 +1,4 @@
-import { PaymentStatus } from '../domain/payment-status';
+import { PaymentStatus } from '../../domain/payment-status';
 
 /**
  * Map a gateway event type to the payment outcome it drives, for the coded Checkout Session flow.

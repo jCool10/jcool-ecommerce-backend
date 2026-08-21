@@ -1,19 +1,19 @@
 import { BadGatewayException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
-import { Payment } from '../domain/payment.entity';
-import { PaymentStatus } from '../domain/payment-status';
-import { ORDER_READ_PORT, type OrderReadPort } from './ports/order-read.port';
+import { Payment } from '../../domain/payment.entity';
+import { PaymentStatus } from '../../domain/payment-status';
+import { ORDER_READ_PORT, type OrderReadPort } from '../ports/order-read.port';
 import {
   DuplicateActivePaymentError,
   PAYMENT_REPOSITORY,
   type PaymentRepositoryPort,
-} from './ports/payment-repository.port';
+} from '../ports/payment-repository.port';
 import {
   PAYMENT_GATEWAY,
   PaymentGatewayError,
   type GatewaySession,
   type PaymentGatewayPort,
-} from './ports/payment-gateway.port';
+} from '../ports/payment-gateway.port';
 
 // The order status that may start a payment. Compared as a string literal on purpose: Payment must
 // not import Order's domain enum (cross-context boundary), and only needs to know this one value.

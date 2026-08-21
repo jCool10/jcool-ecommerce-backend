@@ -1,11 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PaymentStatus } from '../domain/payment-status';
-import { canTransition } from '../domain/payment-state-machine';
-import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './ports/payment-gateway.port';
-import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from './ports/payment-repository.port';
-import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from './ports/webhook-event-repository.port';
-import { TRANSACTION_RUNNER, type TransactionRunnerPort } from './ports/transaction-runner.port';
-import { mapEventType } from './map-event-type';
+import { PaymentStatus } from '../../domain/payment-status';
+import { canTransition } from '../../domain/payment-state-machine';
+import { PAYMENT_GATEWAY, type PaymentGatewayPort } from '../ports/payment-gateway.port';
+import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';
+import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
+import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
+import { mapEventType } from '../mappers/map-event-type';
 
 /**
  * Outcome of one webhook delivery. `rejected` is the only non-2xx result (verify failed, nothing
@@ -17,7 +17,9 @@ export type WebhookProcessResult =
   | { outcome: 'duplicate' }
   | { outcome: 'ignored' }
   | { outcome: 'skipped'; reason: 'payment_not_found' | 'conflict' }
-  | { outcome: 'processed'; status: PaymentStatus };
+  // `orderId`/`paymentRef`/`eventType` let the caller finalize the order without re-reading the
+  // payment: only `processed` settled it, so only `processed` carries what finalize needs.
+  | { outcome: 'processed'; status: PaymentStatus; orderId: string; paymentRef: string | null; eventType: string };
 
 /**
  * Verify a gateway webhook, then apply it exactly once.
@@ -28,8 +30,10 @@ export type WebhookProcessResult =
  * rolls back the log too, so the retry re-does the whole unit. The DB unique(provider, eventId) is
  * the backstop that turns concurrent redeliveries into one winner + one no-op.
  *
- * This week touches only Payment.status. Finalizing the Order (PENDING→PAID/FAILED), releasing
- * held stock, and reconciling stuck sessions are the next week's work — see the seam comment below.
+ * This use case settles only the payment side (event log + Payment.status) inside that transaction.
+ * Finalizing the Order (PENDING→PAID/FAILED) and resolving its held stock run after this commits, in
+ * HandlePaymentWebhookUseCase via FinalizeOrderUseCase's own transaction — Payment and Order are
+ * independent state machines.
  */
 @Injectable()
 export class ProcessWebhookEventUseCase {
@@ -96,12 +100,17 @@ export class ProcessWebhookEventUseCase {
       if (!updated) throw new Error(`payment vanished mid-transaction: ${payment.id}`);
       await this.webhookEvents.markProcessed(eventId, tx);
 
-      // SEAM (next week): with the payment settled, finalize the Order (PENDING→PAID on success /
-      // FAILED on failure), release or settle the held stock on failure, and let a reconciliation
-      // job resolve sessions no webhook ever settled. Deliberately not wired here — Payment and
-      // Order are separate state machines, and this week owns only the payment side.
-
-      return { outcome: 'processed', status: applied.status };
+      // The payment is settled in this tx; finalizing the Order (PENDING→PAID/FAILED) + resolving
+      // held stock runs AFTER this tx commits, in FinalizeOrderUseCase's own tx (see
+      // HandlePaymentWebhookUseCase). Kept separate so Payment and Order stay independent state
+      // machines; a finalize that fails post-commit is closed by the reconciliation cron.
+      return {
+        outcome: 'processed',
+        status: applied.status,
+        orderId: payment.orderId,
+        paymentRef: applied.providerIntentId,
+        eventType: verified.type,
+      };
     });
   }
 }

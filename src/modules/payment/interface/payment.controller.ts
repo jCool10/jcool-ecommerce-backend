@@ -9,7 +9,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
-import { CreatePaymentSessionUseCase } from '../application/create-payment-session.use-case';
+import { CreatePaymentSessionUseCase } from '../application/use-cases';
 import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
 
 /**
