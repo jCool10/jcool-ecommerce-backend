@@ -10,6 +10,7 @@ import {
   CreatePaymentSessionUseCase,
   HandlePaymentWebhookUseCase,
   ProcessWebhookEventUseCase,
+  ReconcileStaleOrdersUseCase,
 } from './application/use-cases';
 import { DrizzlePaymentRepository } from './infrastructure/payment.repository';
 import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.repository';
@@ -19,6 +20,7 @@ import { StripeGatewayAdapter } from './infrastructure/gateway/stripe-gateway.ad
 import { SepayGatewayAdapter } from './infrastructure/gateway/sepay-gateway.adapter';
 import { PaymentController } from './interface/payment.controller';
 import { WebhookController } from './interface/webhook.controller';
+import { ReconciliationScheduler } from './interface/reconciliation.scheduler';
 
 // Provider selected by env; changing gateways is an env + inject change, never a caller change.
 // Stripe is the coded path (see StripeGatewayAdapter); SePay is an interface-only seam.
@@ -36,12 +38,9 @@ function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
 }
 
 /**
- * Payment bounded context: the "never double-charge" invariant. Owns payments +
- * webhook_events behind their repository ports, and the gateway port that session creation and
- * webhook verify depend on. Reads an order only through Order's published ORDER_PAYMENT_VIEW
- * (via OrderModule), behind Payment's own ORDER_READ_PORT anti-corruption adapter — never Order's
- * table. `POST /orders/:id/pay` opens a session and persists a PENDING Payment; a settled webhook
- * then finalizes the order through Order's exported FinalizeOrderUseCase (never Order's repository).
+ * Payment bounded context: the "never double-charge" invariant. Reads an order only through Order's
+ * published ORDER_PAYMENT_VIEW, behind Payment's own ORDER_READ_PORT anti-corruption adapter, and
+ * settles one only through Order's exported FinalizeOrderUseCase — never Order's tables.
  */
 @Module({
   imports: [OrderModule],
@@ -54,9 +53,11 @@ function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
     { provide: TRANSACTION_RUNNER, useClass: DrizzleTransactionRunner },
     CreatePaymentSessionUseCase,
     ProcessWebhookEventUseCase,
-    // Wires ProcessWebhookEventUseCase → Order's FinalizeOrderUseCase (via OrderModule) so a settled
-    // webhook finalizes the order; the controller depends on this orchestrator, not the raw processor.
+    // The controller depends on this orchestrator, not the raw processor.
     HandlePaymentWebhookUseCase,
+    // The webhook's polling counterpart, driving the same FinalizeOrderUseCase.
+    ReconcileStaleOrdersUseCase,
+    ReconciliationScheduler,
   ],
   exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY],
 })

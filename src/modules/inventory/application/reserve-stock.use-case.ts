@@ -44,8 +44,8 @@ export class ReserveStockUseCase implements StockReservation {
     }
   }
 
-  // commit/release only move stock down a resolved reservation; no shortfall path, so no error
-  // translation — a DB CHECK violation here would signal a logic bug and must surface, not be masked.
+  // No shortfall path here, so no error translation: a DB CHECK violation would be a logic bug
+  // and must surface rather than be masked.
   commit(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
     return this.stock.commitReservations(tx, orderId);
   }

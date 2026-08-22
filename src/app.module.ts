@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { SentryModule } from '@sentry/nestjs/setup';
 import { ClsModule } from 'nestjs-cls';
 import { ConfigModule } from '@shared/config';
@@ -34,6 +35,8 @@ import { AuthModule } from '@modules/user/auth.module';
     DrizzleModule,
     RedisModule,
     ThrottlerSecurityModule,
+    // Timer registry for the payment reconciliation sweep; the sweep itself is gated by RECONCILE_ENABLED.
+    ScheduleModule.forRoot(),
     HealthModule,
     CatalogModule,
     CartModule,

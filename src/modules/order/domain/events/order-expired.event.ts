@@ -1,12 +1,8 @@
 import type { DomainEvent } from '@shared/kernel';
 
 /**
- * Raised when an unpaid order is finalized PENDING → EXPIRED (expiry sweep).
- *
- * Declared seam, NOT published yet: a later outbox relay appends it inside the finalize
- * transaction, and an Inventory subscriber releases the held reservation off it. Same
- * release effect as FAILED, kept a distinct event so consumers can tell a timeout from a
- * gateway rejection. `aggregateId` is the order id.
+ * Produced by finalize on the expiry sweep, but nothing publishes it yet. Same stock effect as
+ * FAILED, kept distinct so a consumer can tell a timeout from a gateway rejection.
  */
 export class OrderExpiredEvent implements DomainEvent {
   readonly eventName = 'order.expired';

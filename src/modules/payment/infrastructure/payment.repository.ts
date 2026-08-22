@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx, isUniqueViolation } from '@shared/infrastructure/database';
 import { Payment } from '../domain/payment.entity';
 import { PaymentStatus } from '../domain/payment-status';
@@ -87,7 +87,13 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     if (options.providerIntentId !== undefined) {
       patch.providerIntentId = options.providerIntentId;
     }
-    const [row] = await executor.update(payments).set(patch).where(eq(payments.id, id)).returning();
+    // Postgres evaluates the status predicate under the row's own lock, so a caller that read the
+    // row outside a transaction gets zero rows back instead of clobbering a committed change.
+    const where =
+      options.expectedStatus === undefined
+        ? eq(payments.id, id)
+        : and(eq(payments.id, id), eq(payments.status, options.expectedStatus));
+    const [row] = await executor.update(payments).set(patch).where(where).returning();
     return row ? toDomain(row) : null;
   }
 }

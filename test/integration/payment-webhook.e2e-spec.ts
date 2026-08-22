@@ -23,10 +23,9 @@ import {
 // offline against this, so the signatures are real HMACs over the real bodies (no network, no mock).
 const WEBHOOK_SECRET = 'whsec_e2e_test_secret_0123456789';
 
-// End-to-end proof of the payment webhook over real Postgres: a valid signature settles the payment exactly
-// once, a forged/expired one is rejected with nothing written, a duplicate event id is a no-op, an
-// out-of-order event can't clobber a settled payment, and a settled success finalizes the Order
-// (finalize behaviour is exercised in depth in payment-webhook-finalize.e2e-spec).
+// The payment webhook over real Postgres: a valid signature settles exactly once, a forged or expired
+// one writes nothing, a duplicate event id no-ops, and an out-of-order event cannot clobber a settled
+// payment. Finalize behaviour itself is covered in payment-webhook-finalize.e2e-spec.
 describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   let app: INestApplication;
   let pool: Pool;

@@ -18,10 +18,9 @@ const USER_ID = '00000000-0000-4000-8000-0000000000aa';
 const SKU = '11111111-1111-4111-8111-111111111111';
 const SKU_B = '22222222-2222-4222-8222-222222222222';
 
-// Stock resolution on finalization over real Postgres: PAID commits the hold (HELD→COMMITTED, on-hand
-// drops for real), FAILED/EXPIRED releases it (HELD→RELEASED, stock back to available) — all in the SAME
-// transaction as the order status flip. Proves the money=stock=status invariant: no PAID order leaves stock
-// held, no FAILED order leaves it committed, and a failure anywhere rolls back both order and stock together.
+// Stock resolution over real Postgres, in the SAME transaction as the order status flip. Proves the
+// money = stock = status invariant: no PAID order leaves stock held, no FAILED order leaves it
+// committed, and a failure anywhere rolls back both together.
 describe('Order finalization stock resolution (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -196,9 +195,7 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     // reserved below zero → ck_stock_reserved_nonneg fires, aborting the transaction. The order status
     // flip shares that tx, so it must revert with the stock — proving the two are one unit of work.
     await seedStock(app, SKU, 10, 2);
-    await db
-      .insert(schema.reservations)
-      .values({ orderId, variantId: SKU, quantity: 5, status: 'HELD' });
+    await db.insert(schema.reservations).values({ orderId, variantId: SKU, quantity: 5, status: 'HELD' });
 
     await expect(finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' })).rejects.toThrow();
 

@@ -45,8 +45,7 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     RequireIdempotencyKeyGuard,
     IdempotencyInterceptor,
   ],
-  // Published read language for other contexts (Payment reads an order to start a session);
-  // FinalizeOrderUseCase is exported so the Payment webhook + reconcile cron can settle an order.
+  // FinalizeOrderUseCase is exported so Payment's webhook and sweep can settle an order.
   exports: [ORDER_PAYMENT_VIEW, FinalizeOrderUseCase],
 })
 export class OrderModule {}

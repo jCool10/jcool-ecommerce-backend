@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ORDER_PAYMENT_VIEW, type OrderPaymentView } from '@modules/order/application/public/order-payment-view.port';
-import type { OrderReadPort, OrderView } from '../application/ports/order-read.port';
+import type { OrderReadPort, OrderView, StalePendingOrderView } from '../application/ports/order-read.port';
 
 /**
  * Anti-corruption adapter: implements Payment's `OrderReadPort` by delegating to Order's published
@@ -26,5 +26,9 @@ export class OrderReadAdapter implements OrderReadPort {
       amountMinor: order.totalAmountMinor,
       currency: order.currency,
     };
+  }
+
+  async findStalePending(input: { placedBefore: Date; limit: number }): Promise<StalePendingOrderView[]> {
+    return this.orders.findStalePending(input);
   }
 }

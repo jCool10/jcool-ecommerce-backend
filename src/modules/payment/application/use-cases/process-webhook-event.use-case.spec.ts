@@ -207,7 +207,11 @@ describe('ProcessWebhookEventUseCase', () => {
       existing: payment(PaymentStatus.SUCCEEDED),
     });
     const result = await useCase.execute(RAW, HEADERS);
-    expect(result).toEqual({ outcome: 'skipped', reason: 'conflict' });
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'conflict',
+      conflict: { orderId: ORDER_ID, from: PaymentStatus.SUCCEEDED, to: PaymentStatus.FAILED },
+    });
     expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());
     expect(updateStatus).not.toHaveBeenCalled();
   });

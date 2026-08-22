@@ -29,8 +29,7 @@ export class InventoryReservationAdapter implements InventoryReservationPort {
     );
   }
 
-  // Inventory keys reservations by orderId, so resolution needs no skuId→variantId mapping; the
-  // published result shape matches Order's StockResolution one-to-one.
+  // Reservations are keyed by orderId, so resolution needs no skuId → variantId mapping.
   commit(tx: DrizzleTx, orderId: string): Promise<StockResolution> {
     return this.stock.commit(tx, orderId);
   }

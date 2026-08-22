@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ORDER_STATUSES, OrderStatus } from './order-status';
 import { assertTransition, canTransition, isTerminal, OrderTransitionError } from './order-state-machine';
 
-// Every wired edge — the single expectation the exhaustive test checks each (from, to)
-// pair against. Declared-but-unwired transitions must read as NOT allowed here.
+// The single expectation the exhaustive test checks every (from, to) pair against.
 const WIRED_TRANSITIONS: ReadonlyArray<[OrderStatus, OrderStatus]> = [
   [OrderStatus.DRAFT, OrderStatus.PENDING],
   [OrderStatus.DRAFT, OrderStatus.CANCELLED],

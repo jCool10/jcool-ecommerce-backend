@@ -1,9 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Order } from '../domain/order.entity';
+import { OrderStatus } from '../domain/order-status';
 import { OrderItem } from '../domain/order-item.entity';
-import type { CheckoutPersistResult, OrderRepositoryPort } from '../application/ports/order-repository.port';
+import type {
+  CheckoutPersistResult,
+  OrderRepositoryPort,
+  StalePendingOrder,
+} from '../application/ports/order-repository.port';
 import { orderItems, orders } from './schema/order.schema';
 
 type OrderRow = typeof orders.$inferSelect;
@@ -79,8 +84,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
   }
 
   async findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null> {
-    // FOR UPDATE on the order row only — items are immutable snapshots, no lock needed. This
-    // is the serialization point that makes finalize exactly-once under concurrent webhooks.
+    // The order row only: items are immutable snapshots, so they need no lock.
     const [row] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update').limit(1);
     if (!row) {
       return null;
@@ -164,6 +168,18 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     }
 
     return orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? []));
+  }
+
+  async findStalePending({ placedBefore, limit }: { placedBefore: Date; limit: number }): Promise<StalePendingOrder[]> {
+    // A projection, not the aggregate. `placed_at < :t` also drops NULLs, so the cast below is safe.
+    const rows = await this.db
+      .select({ id: orders.id, placedAt: orders.placedAt })
+      .from(orders)
+      .where(and(eq(orders.status, OrderStatus.PENDING), lt(orders.placedAt, placedBefore)))
+      .orderBy(asc(orders.placedAt))
+      .limit(limit)
+      .for('update', { skipLocked: true });
+    return rows.map((row) => ({ id: row.id, placedAt: row.placedAt as Date }));
   }
 }
 

@@ -22,10 +22,9 @@ import {
 const WEBHOOK_SECRET = 'whsec_e2e_test_secret_0123456789';
 const STOCK = 5;
 
-// The full webhook → order-finalize path over real Postgres: a settled payment drives the Order
-// through the state machine and resolves its held stock in one move, and a duplicate/out-of-order/
-// orphan delivery neither double-applies nor regresses. Proves the payment dedup guard and the order
-// finalize guards compose into one exactly-once effect end to end.
+// The full webhook → order-finalize path over real Postgres: proves the payment dedup guard and the
+// order finalize guards compose into one exactly-once effect, and that a duplicate, out-of-order, or
+// orphan delivery neither double-applies nor regresses.
 describe('Payment webhook → order finalization (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;

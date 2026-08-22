@@ -2,38 +2,29 @@ import { DomainError } from '@shared/kernel';
 import { OrderStatus } from './order-status';
 
 /**
- * Order state machine — a pure function over (from, to). It is the single source
- * of truth for which status changes are legal; every transition in the app goes
- * through `assertTransition`, so the rule lives in exactly one place (no if/else
- * scattered across use-cases).
- *
- * Only wired transitions are legal. The rest are declared (documented) but NOT
- * wired — attempting one is rejected at runtime — so a new capability is enabled
- * by flipping a flag here, never by restructuring. See docs/engineering-notes.md (Order).
+ * The single source of truth for which status changes are legal — every transition goes through
+ * `assertTransition`, so no use case carries its own if/else. Unwired edges are declared for
+ * documentation and rejected at runtime, so enabling one is a flag flip, never a restructure.
+ * See docs/engineering-notes.md (Order).
  */
 
-/** A single edge in the machine. */
 interface Transition {
   from: OrderStatus;
   to: OrderStatus;
-  /** false = declared but not yet enabled; rejected at runtime until wired. */
+  /** false = declared but rejected at runtime. */
   wired: boolean;
 }
 
-// The complete transition table. Only wired edges are legal; unwired ones are
-// declared for a later week and rejected at runtime until flipped.
 const TRANSITIONS: readonly Transition[] = [
-  { from: OrderStatus.DRAFT, to: OrderStatus.PENDING, wired: true }, // place order (seam: reserve/idempotency/outbox)
+  { from: OrderStatus.DRAFT, to: OrderStatus.PENDING, wired: true }, // place order
   { from: OrderStatus.DRAFT, to: OrderStatus.CANCELLED, wired: true }, // discard a draft
   { from: OrderStatus.PENDING, to: OrderStatus.PAID, wired: true }, // finalize: payment webhook success / reconcile paid
   { from: OrderStatus.PENDING, to: OrderStatus.FAILED, wired: true }, // finalize: payment webhook failure / reconcile failed
   { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // finalize: expiry sweep on an unpaid hold
-  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: false }, // later (user/admin cancel)
+  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: false }, // user/admin cancel
 ];
 
-// Statuses a finalized/discarded order can never leave — the guard that turns an
-// at-least-once webhook into an exactly-once effect: re-applying the same outcome
-// is a no-op, and a conflicting one is ignored (never a regress), never applied.
+// The guard that turns an at-least-once webhook into an exactly-once effect: nothing leaves these.
 const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
   OrderStatus.PAID,
   OrderStatus.FAILED,
@@ -41,7 +32,7 @@ const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
   OrderStatus.CANCELLED,
 ]);
 
-/** True only for a transition that is both declared AND wired for the current week. */
+/** True only for an edge that is both declared AND wired. */
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return TRANSITIONS.some((t) => t.from === from && t.to === to && t.wired);
 }

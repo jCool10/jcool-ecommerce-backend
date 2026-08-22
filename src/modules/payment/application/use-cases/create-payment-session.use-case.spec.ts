@@ -64,7 +64,7 @@ function build(
         },
       );
 
-  const orders = { findForPayment } as OrderReadPort;
+  const orders = { findForPayment } as unknown as OrderReadPort;
   const payments = { findByOrderId, create, updateStatus: vi.fn() } as unknown as PaymentRepositoryPort;
   const gateway = { provider: 'stripe', createSession, verifyAndParseEvent: vi.fn() } as unknown as PaymentGatewayPort;
 

@@ -90,6 +90,12 @@ export class Payment {
     return this.withStatus(PaymentStatus.FAILED, providerIntentId);
   }
 
+  /** Only the sweep drives this — a webhook always carries a real outcome. */
+  markExpired(): Payment {
+    assertTransition(this.status, PaymentStatus.EXPIRED);
+    return this.withStatus(PaymentStatus.EXPIRED);
+  }
+
   private withStatus(status: PaymentStatus, providerIntentId?: string | null): Payment {
     return new Payment(
       this.id,

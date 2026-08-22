@@ -2,12 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { PAYMENT_STATUSES, PaymentStatus } from './payment-status';
 import { assertTransition, canTransition, PaymentTransitionError } from './payment-state-machine';
 
-// The wired transitions — the single expectation the exhaustive test checks every
-// (from, to) pair against. Declared-but-unwired edges (PENDING → EXPIRED) and every
-// transition out of a terminal state must read as NOT allowed.
+// The single expectation the exhaustive test checks every (from, to) pair against.
 const WIRED_TRANSITIONS: ReadonlyArray<[PaymentStatus, PaymentStatus]> = [
   [PaymentStatus.PENDING, PaymentStatus.SUCCEEDED],
   [PaymentStatus.PENDING, PaymentStatus.FAILED],
+  [PaymentStatus.PENDING, PaymentStatus.EXPIRED],
 ];
 
 function isWired(from: PaymentStatus, to: PaymentStatus): boolean {
@@ -18,10 +17,7 @@ describe('payment state machine', () => {
   it('allows the wired transitions', () => {
     expect(canTransition(PaymentStatus.PENDING, PaymentStatus.SUCCEEDED)).toBe(true);
     expect(canTransition(PaymentStatus.PENDING, PaymentStatus.FAILED)).toBe(true);
-  });
-
-  it('blocks the declared-but-unwired transition', () => {
-    expect(canTransition(PaymentStatus.PENDING, PaymentStatus.EXPIRED)).toBe(false);
+    expect(canTransition(PaymentStatus.PENDING, PaymentStatus.EXPIRED)).toBe(true);
   });
 
   it('rejects every transition out of a terminal state', () => {
@@ -49,8 +45,8 @@ describe('payment state machine', () => {
       expect(() => assertTransition(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED)).toThrow(PaymentTransitionError);
     });
 
-    it('throws for a declared-but-unwired transition', () => {
-      expect(() => assertTransition(PaymentStatus.PENDING, PaymentStatus.EXPIRED)).toThrow(PaymentTransitionError);
+    it('throws when re-expiring an already-expired payment', () => {
+      expect(() => assertTransition(PaymentStatus.EXPIRED, PaymentStatus.EXPIRED)).toThrow(PaymentTransitionError);
     });
 
     it('carries the from/to on the error', () => {

@@ -9,12 +9,21 @@ import { inject } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { CSRF_HEADER } from '../../src/modules/user/interface/security/auth-cookie.constants';
 
+/** Swap one DI token for this app only — e.g. a scriptable gateway at the external-system boundary. */
+export interface ProviderOverride {
+  provide: unknown;
+  useValue: unknown;
+}
+
 // Real INestApplication on the container URLs, mirroring main.ts edge config.
 // `envOverrides` set config-backing env vars (e.g. INVENTORY_LOCK_STRATEGY) for
 // this app only: config reads process.env when the module compiles, so they are
 // applied before compile and restored after — one app's strategy never leaks into
 // the next (e2e files share this process and run sequentially).
-export async function createTestApp(envOverrides: Record<string, string> = {}): Promise<INestApplication> {
+export async function createTestApp(
+  envOverrides: Record<string, string> = {},
+  providerOverrides: ProviderOverride[] = [],
+): Promise<INestApplication> {
   // Set before AppModule loads: @nestjs/config's dotenv won't override these, so
   // the container URLs win over any local .env.
   process.env.NODE_ENV = 'test';
@@ -27,6 +36,14 @@ export async function createTestApp(envOverrides: Record<string, string> = {}): 
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
+  // Suites drive ReconcileStaleOrdersUseCase directly, so a tick can never fire mid-assertion and
+  // settle an order the test is still setting up.
+  process.env.RECONCILE_ENABLED ??= 'false';
+  // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
+  // live path — billable and non-deterministic. Dropped unless a suite asks for it.
+  if (!('STRIPE_SECRET_KEY' in envOverrides)) {
+    delete process.env.STRIPE_SECRET_KEY;
+  }
 
   const savedEnv: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(envOverrides)) {
@@ -35,7 +52,11 @@ export async function createTestApp(envOverrides: Record<string, string> = {}): 
   }
 
   try {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    let builder = Test.createTestingModule({ imports: [AppModule] });
+    for (const override of providerOverrides) {
+      builder = builder.overrideProvider(override.provide).useValue(override.useValue);
+    }
+    const moduleRef = await builder.compile();
     // `rawBody: true` mirrors main.ts so the payment webhook's raw-body signature check works in e2e.
     const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, rawBody: true });
     app.useLogger(app.get(Logger)); // pino logger — mirrors main.ts so e2e logs match prod shape

@@ -163,13 +163,9 @@ export class StockRepository implements StockRepositoryPort {
     return this.resolveReservations(tx, orderId, ReservationStatus.RELEASED);
   }
 
-  // Transition an order's HELD reservations to COMMITTED (goods ship: onHand & reserved both drop) or
-  // RELEASED (hold freed: only reserved drops). The caller holds the order row lock (finalize), so this
-  // order's reservation rows are exclusive here; the shared stock rows are locked (by the per-line UPDATE)
-  // in the SAME order the reserve path uses — `variantId` ascending via `localeCompare` — so a concurrent
-  // reserve/resolve of another order on overlapping SKUs acquires locks in one global order and can't
-  // deadlock. The per-line flip is a CAS on status='HELD', so the stock delta is applied exactly once even
-  // on a duplicate resolve.
+  // The per-line UPDATE locks the shared stock rows in the SAME order the reserve path uses —
+  // `variantId` ascending — so two orders touching overlapping SKUs cannot deadlock. Each flip is a
+  // CAS on status='HELD', so a duplicate resolve moves the stock delta exactly once.
   private async resolveReservations(
     tx: DrizzleTx,
     orderId: string,

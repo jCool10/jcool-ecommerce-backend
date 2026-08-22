@@ -32,9 +32,8 @@ export interface CreatePaymentSessionResult {
 }
 
 /**
- * Start a payment for a PENDING order: authorize the caller owns it, snapshot the order total,
- * ask the gateway for a session, and persist a PENDING Payment. The order is NOT finalized here
- * (that is a later week's webhook/reconcile work) — this only opens the payment.
+ * Opens a payment for a PENDING order and nothing more: the order is settled elsewhere, by the
+ * webhook or the reconciliation sweep.
  */
 @Injectable()
 export class CreatePaymentSessionUseCase {

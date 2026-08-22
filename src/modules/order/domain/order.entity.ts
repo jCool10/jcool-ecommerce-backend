@@ -7,10 +7,8 @@ import { OrderPaidEvent } from './events/order-paid.event';
 import { OrderFailedEvent } from './events/order-failed.event';
 import { OrderExpiredEvent } from './events/order-expired.event';
 
-/** The terminal outcomes finalization can drive a PENDING order to. */
 export type FinalizeOutcome = typeof OrderStatus.PAID | typeof OrderStatus.FAILED | typeof OrderStatus.EXPIRED;
 
-/** The domain event a finalized order represents (declared seam; nothing publishes it yet). */
 export type OrderFinalizedEvent = OrderPaidEvent | OrderFailedEvent | OrderExpiredEvent;
 
 /**
@@ -32,10 +30,9 @@ export class Order {
     public readonly items: readonly OrderItem[],
     public readonly totalAmountMinor: number,
     public readonly placedAt: Date | null,
-    // Set once, when the order enters a terminal state (PAID/FAILED/EXPIRED); null while PENDING/DRAFT.
+    // Stamped once, when the order settles; null while DRAFT/PENDING.
     public readonly finalizedAt: Date | null,
     public readonly finalizeReason: string | null,
-    // Gateway transaction id captured at finalize, for reconciliation; null unless a paid webhook carried one.
     public readonly paymentRef: string | null,
   ) {}
 
@@ -118,15 +115,14 @@ export class Order {
     );
   }
 
-  /** True once the order is settled (PAID/FAILED/EXPIRED/CANCELLED) and must never regress. */
+  /** Settled, and must never regress. */
   isTerminal(): boolean {
     return isTerminal(this.status);
   }
 
   /**
-   * Finalize the order to a terminal outcome (PENDING → PAID/FAILED/EXPIRED), stamping when and why.
-   * Asserts the transition (throws `OrderTransitionError` from any non-PENDING state) and returns a
-   * new immutable copy — the use-case guards idempotency (terminal check + row lock) before calling.
+   * Throws `OrderTransitionError` from any non-PENDING state and returns a new copy. Idempotency is
+   * the use case's job (terminal check + row lock) before it ever gets here.
    */
   finalize(outcome: FinalizeOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
     assertTransition(this.status, outcome);
@@ -156,11 +152,7 @@ export class Order {
     return new OrderPlacedEvent(this.id, this.userId, this.totalAmountMinor, this.currency, this.placedAt);
   }
 
-  /**
-   * The domain event a just-finalized order represents. Declared seam: a later outbox relay appends
-   * it inside the finalize transaction, a subscriber commits/releases stock off it. Only a persisted,
-   * finalized order can produce one.
-   */
+  /** Only a persisted, finalized order can produce one. */
   toFinalizedEvent(): OrderFinalizedEvent {
     if (this.id === null || this.finalizedAt === null) {
       throw new DomainError('Only a finalized order can produce a finalization event');

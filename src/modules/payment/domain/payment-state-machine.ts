@@ -7,22 +7,21 @@ import { PaymentStatus } from './payment-status';
  * `assertTransition`, so the rule lives in one place (no scattered if/else).
  *
  * Terminal states (SUCCEEDED / FAILED / EXPIRED) have no outgoing edge: a late or
- * conflicting webhook onto an already-terminal payment is rejected here, leaving deeper
- * conflict handling (and the PENDING → EXPIRED reconcile edge) to be enabled later by
- * flipping a flag, never by restructuring.
+ * conflicting webhook onto an already-terminal payment is rejected here; deeper conflict handling
+ * (refund, chargeback) is a flag flip away, not a restructure.
  */
 
 interface Transition {
   from: PaymentStatus;
   to: PaymentStatus;
-  /** false = declared but not yet reachable; rejected at runtime until enabled. */
+  /** false = declared but rejected at runtime. */
   wired: boolean;
 }
 
 const TRANSITIONS: readonly Transition[] = [
   { from: PaymentStatus.PENDING, to: PaymentStatus.SUCCEEDED, wired: true }, // webhook success
   { from: PaymentStatus.PENDING, to: PaymentStatus.FAILED, wired: true }, // webhook failure
-  { from: PaymentStatus.PENDING, to: PaymentStatus.EXPIRED, wired: false }, // session expiry / reconciliation
+  { from: PaymentStatus.PENDING, to: PaymentStatus.EXPIRED, wired: true }, // reconciliation: session lapsed unpaid
 ];
 
 /** True only for a transition that is both declared AND wired. Pure — no I/O. */

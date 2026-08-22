@@ -13,10 +13,9 @@ import { createTestApp } from '../setup/test-app.factory';
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 const USER_ID = '00000000-0000-4000-8000-0000000000aa';
 
-// Order finalization core over real Postgres: the state machine + idempotency guard that turns an
-// at-least-once webhook into an exactly-once effect. Drives FinalizeOrderUseCase directly (the webhook
-// HTTP path is wired later); orders are seeded straight into the table since this proves finalize, not
-// checkout. NO stock assertions here — resolving the reservation is a later phase (a seam in the use-case).
+// The state machine + idempotency guard that turn an at-least-once webhook into an exactly-once
+// effect. Drives FinalizeOrderUseCase directly against seeded orders; stock resolution is covered in
+// order-finalize-stock.e2e-spec.
 describe('Order finalization (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;

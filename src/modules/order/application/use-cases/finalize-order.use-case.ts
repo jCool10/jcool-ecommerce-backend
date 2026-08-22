@@ -9,16 +9,10 @@ import type { FinalizeInput, FinalizeResult } from './finalize-order.types';
 const LOG_CONTEXT = 'FinalizeOrder';
 
 /**
- * Finalize an order to a terminal outcome (PENDING → PAID/FAILED/EXPIRED) with an exactly-once
- * effect, so a duplicated or out-of-order webhook — or a webhook racing the reconcile cron — settles
- * the order at most once and never regresses it.
- *
- * Idempotency = row lock + terminal guard, no distributed lock: one transaction locks the order
- * (`findByIdForUpdate` → SELECT … FOR UPDATE) to serialize concurrent finalizers, then a terminal
- * check decides the branch — re-applying the same outcome is a benign no-op, a conflicting one is
- * ignored (logged for reconciliation), and only a genuine PENDING → outcome transition mutates state
- * and produces the domain event. No network I/O runs inside the transaction (that would hold the lock);
- * a gateway is queried only outside it, then the confirmed outcome is passed here.
+ * The one path that settles an order, shared by the webhook and the reconciliation sweep. Its
+ * exactly-once effect is a row lock plus a terminal guard, no distributed lock — see
+ * docs/engineering-notes.md (Order). Callers must resolve the gateway BEFORE calling: no network I/O
+ * may run inside this transaction, which holds the order's row lock.
  */
 @Injectable()
 export class FinalizeOrderUseCase {
@@ -47,7 +41,7 @@ export class FinalizeOrderUseCase {
         return { status: 'ignored', order };
       }
 
-      // Not PENDING (still DRAFT, or any non-wired source): finalizing an unplaced order is illegal — skip safely.
+      // Still DRAFT, or any unwired source state: finalizing an unplaced order is illegal.
       if (!canTransition(order.status, outcome)) {
         return { status: 'ignored', order };
       }
@@ -55,19 +49,17 @@ export class FinalizeOrderUseCase {
       const finalized = order.finalize(outcome, { now: new Date(), reason, paymentRef });
       await this.repo.persistFinalization(finalized, tx);
 
-      // Resolve stock in this same tx so order state and stock commit or roll back together (no
-      // PAID-but-unpinned window): PAID commits the hold (on-hand drops), FAILED/EXPIRED releases it.
+      // Same tx as the status flip, so there is no window where an order is PAID but its stock is not.
       const resolution =
         outcome === OrderStatus.PAID
           ? await this.inventory.commit(tx, orderId)
           : await this.inventory.release(tx, orderId);
       if (!resolution.applied && !resolution.alreadyResolved) {
-        // Settled an order with no stock hold (predates reservations, or the hold was lost). Not fatal —
-        // the order still finalizes — but it breaks the money=stock=status invariant, so flag for reconcile.
+        // Not fatal, but it breaks the money = stock = status invariant, so a human has to look.
         this.logger.warn({ context: LOG_CONTEXT, orderId, outcome }, 'finalized order had no reservation to resolve');
       }
 
-      // SEAM (outbox): append `finalized.toFinalizedEvent()` to an outbox table in this same tx; a relay publishes it.
+      // The event is returned, not published: an outbox insert belongs in this same tx.
       return { status: 'finalized', order: finalized, event: finalized.toFinalizedEvent() };
     });
   }
