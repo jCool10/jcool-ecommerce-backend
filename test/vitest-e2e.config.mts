@@ -3,8 +3,7 @@ import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
 // e2e config (HTTP via supertest + Testcontainers). Kept separate from the unit
-// config so `test` stays fast and hermetic. No `*.e2e-spec.ts` exist yet, so
-// `passWithNoTests` keeps `npm run test:e2e` green until the first e2e lands.
+// config so `test` stays fast and hermetic.
 export default defineConfig({
   test: {
     globals: true,

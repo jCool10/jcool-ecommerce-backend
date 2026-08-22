@@ -148,6 +148,43 @@ export class EnvironmentVariables {
   @IsBooleanString()
   THROTTLE_ENABLED?: string;
 
+  @IsOptional()
+  @IsBooleanString()
+  RECONCILE_ENABLED?: string;
+
+  // Sweep period (ms); default 60000 (configuration.ts). Min 1000 so a typo can't turn the sweep
+  // into a busy loop hammering the payment gateway.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  RECONCILE_INTERVAL_MS?: number;
+
+  // Orders per sweep tick; default 50 (configuration.ts). Capped so one tick can't fan out an
+  // unbounded number of gateway round-trips.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  RECONCILE_BATCH_SIZE?: number;
+
+  // Minimum age (s) before a PENDING order is swept; default 120 (configuration.ts). 0 is legal —
+  // e2e drives the sweep deterministically.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  ORDER_STALE_THRESHOLD_SEC?: number;
+
+  // Age (s) after which an unsettled PENDING order is expired and its stock released; default 900
+  // (configuration.ts), matching the reservation TTL.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  ORDER_TTL_SEC?: number;
+
   // Stock-reservation locking strategy; defaults to pessimistic (configuration.ts).
   @IsOptional()
   @IsEnum(InventoryLockStrategy)

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_orders_pending_placed_at" ON "orders" USING btree ("placed_at") WHERE "orders"."status" = 'PENDING';

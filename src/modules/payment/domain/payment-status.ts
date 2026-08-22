@@ -9,7 +9,7 @@ export const PaymentStatus = {
   PENDING: 'PENDING',
   SUCCEEDED: 'SUCCEEDED',
   FAILED: 'FAILED',
-  /** Session lapsed without an outcome (set by reconciliation, not yet wired). */
+  /** Session lapsed without an outcome; set by the reconciliation sweep, never by a webhook. */
   EXPIRED: 'EXPIRED',
 } as const;
 

@@ -1,5 +1,10 @@
 import { Injectable, NotImplementedException } from '@nestjs/common';
-import type { GatewaySession, PaymentGatewayPort, VerifiedEvent } from '../../application/ports/payment-gateway.port';
+import type {
+  GatewaySession,
+  GatewayPaymentStatus,
+  PaymentGatewayPort,
+  VerifiedEvent,
+} from '../../application/ports/payment-gateway.port';
 
 /**
  * Interface-only seam for the Vietnam-domestic gateway. Kept unimplemented so the port stays
@@ -16,6 +21,14 @@ export class SepayGatewayAdapter implements PaymentGatewayPort {
   }
 
   verifyAndParseEvent(): VerifiedEvent {
+    throw new NotImplementedException('SePay/VietQR gateway not yet implemented');
+  }
+
+  getPaymentStatus(): Promise<GatewayPaymentStatus> {
+    throw new NotImplementedException('SePay/VietQR gateway not yet implemented');
+  }
+
+  expireSession(): Promise<void> {
     throw new NotImplementedException('SePay/VietQR gateway not yet implemented');
   }
 }

@@ -5,6 +5,8 @@ import {
   PaymentGatewayError,
   type CreateSessionInput,
   type GatewaySession,
+  type GatewayPaymentStatus,
+  type GatewayStatus,
   type PaymentGatewayPort,
   type VerifiedEvent,
 } from '../../application/ports/payment-gateway.port';
@@ -108,8 +110,7 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
       );
       return { providerSessionId: session.id, redirectUrl: session.url ?? undefined };
     } catch (error) {
-      const detail = error instanceof Stripe.errors.StripeError ? `${error.type}: ${error.message}` : String(error);
-      throw new PaymentGatewayError(`Stripe checkout session create failed (${detail})`, error);
+      throw new PaymentGatewayError(`Stripe checkout session create failed (${describe(error)})`, error);
     }
   }
 
@@ -121,4 +122,73 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
       headers,
     });
   }
+
+  async getPaymentStatus(ref: string): Promise<GatewayPaymentStatus> {
+    // Offline: the fabricated handle exists nowhere at Stripe. UNKNOWN, not PENDING, so the TTL
+    // sweep can still settle the order.
+    if (!this.stripe) {
+      return { status: 'UNKNOWN' };
+    }
+
+    try {
+      const session = await this.stripe.checkout.sessions.retrieve(ref);
+      return { status: mapSessionStatus(session), intentId: extractIntentId(session) };
+    } catch (error) {
+      // An unrecognised handle is an answer, not an outage. Every other fault throws, so an outage
+      // is never read as "not paid" and used to expire a settled order.
+      if (isUnknownHandle(error)) {
+        return { status: 'UNKNOWN' };
+      }
+      throw new PaymentGatewayError(`Stripe checkout session retrieve failed (${describe(error)})`, error);
+    }
+  }
+
+  async expireSession(ref: string): Promise<void> {
+    // Offline coded path: the fabricated handle was never payable in the first place.
+    if (!this.stripe) {
+      return;
+    }
+
+    try {
+      await this.stripe.checkout.sessions.expire(ref);
+    } catch (error) {
+      // A handle Stripe never issued cannot be paid — the guarantee the caller needs. Anything else,
+      // including a refusal because the session just completed, means the page may still take money.
+      if (isUnknownHandle(error)) {
+        return;
+      }
+      throw new PaymentGatewayError(`Stripe checkout session expire failed (${describe(error)})`, error);
+    }
+  }
+}
+
+// An `expired` session maps to FAILED so it reconciles to the same order state its
+// `checkout.session.expired` webhook would have produced.
+function mapSessionStatus(session: Pick<Stripe.Checkout.Session, 'status' | 'payment_status'>): GatewayStatus {
+  if (session.payment_status === 'paid' || session.payment_status === 'no_payment_required') {
+    return 'PAID';
+  }
+  if (session.status === 'expired') {
+    return 'FAILED';
+  }
+  // `open`, or `complete` while an async payment method is still clearing.
+  if (session.status === 'open' || session.status === 'complete') {
+    return 'PENDING';
+  }
+  return 'UNKNOWN';
+}
+
+// `payment_intent` is a bare id unless the caller expanded it; both shapes yield the same handle.
+function extractIntentId(session: Pick<Stripe.Checkout.Session, 'payment_intent'>): string | null {
+  const intent = session.payment_intent;
+  if (typeof intent === 'string') return intent;
+  return intent?.id ?? null;
+}
+
+function isUnknownHandle(error: unknown): boolean {
+  return error instanceof Stripe.errors.StripeInvalidRequestError && error.statusCode === 404;
+}
+
+function describe(error: unknown): string {
+  return error instanceof Stripe.errors.StripeError ? `${error.type}: ${error.message}` : String(error);
 }

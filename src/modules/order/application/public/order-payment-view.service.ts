@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
-import type { OrderPaymentSnapshot, OrderPaymentView } from './order-payment-view.port';
+import type { OrderPaymentSnapshot, OrderPaymentView, StalePendingOrderSnapshot } from './order-payment-view.port';
 
 /**
  * Implements Order's published payment-view port over the order repository. Thin: the port is the
@@ -26,5 +26,9 @@ export class OrderPaymentViewService implements OrderPaymentView {
       totalAmountMinor: order.totalAmountMinor,
       currency: order.currency,
     };
+  }
+
+  async findStalePending(input: { placedBefore: Date; limit: number }): Promise<StalePendingOrderSnapshot[]> {
+    return this.repo.findStalePending(input);
   }
 }

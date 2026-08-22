@@ -1,11 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PaymentStatus } from '../domain/payment-status';
-import { canTransition } from '../domain/payment-state-machine';
-import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './ports/payment-gateway.port';
-import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from './ports/payment-repository.port';
-import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from './ports/webhook-event-repository.port';
-import { TRANSACTION_RUNNER, type TransactionRunnerPort } from './ports/transaction-runner.port';
-import { mapEventType } from './map-event-type';
+import { PaymentStatus } from '../../domain/payment-status';
+import { canTransition } from '../../domain/payment-state-machine';
+import { PAYMENT_GATEWAY, type PaymentGatewayPort } from '../ports/payment-gateway.port';
+import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';
+import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
+import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
+import { mapEventType } from '../mappers/map-event-type';
 
 /**
  * Outcome of one webhook delivery. `rejected` is the only non-2xx result (verify failed, nothing
@@ -16,20 +16,21 @@ export type WebhookProcessResult =
   | { outcome: 'rejected'; reason: 'invalid_signature' | 'expired_timestamp' }
   | { outcome: 'duplicate' }
   | { outcome: 'ignored' }
-  | { outcome: 'skipped'; reason: 'payment_not_found' | 'conflict' }
-  | { outcome: 'processed'; status: PaymentStatus };
+  // `conflict` separates a harmless late notice from a success landing on a payment we already closed.
+  | {
+      outcome: 'skipped';
+      reason: 'payment_not_found' | 'conflict';
+      conflict?: { orderId: string; from: PaymentStatus; to: PaymentStatus };
+    }
+  // Only `processed` settled the payment, so only it carries what the caller needs to finalize.
+  | { outcome: 'processed'; status: PaymentStatus; orderId: string; paymentRef: string | null; eventType: string };
 
 /**
- * Verify a gateway webhook, then apply it exactly once.
+ * Verify a gateway webhook, then apply it exactly once to the payment side only.
  *
- * The idempotency insert and the payment change run in ONE transaction on purpose: if they were
- * separate, a crash after logging the event (RECEIVED) but before applying it would make the
- * gateway's redelivery see `inserted: false` and no-op forever — the effect lost. Atomic, a crash
- * rolls back the log too, so the retry re-does the whole unit. The DB unique(provider, eventId) is
- * the backstop that turns concurrent redeliveries into one winner + one no-op.
- *
- * This week touches only Payment.status. Finalizing the Order (PENDING→PAID/FAILED), releasing
- * held stock, and reconciling stuck sessions are the next week's work — see the seam comment below.
+ * The idempotency insert and the payment change share ONE transaction: split them, and a crash after
+ * logging the event but before applying it leaves the redelivery seeing `inserted: false` and
+ * no-oping forever. The DB unique(provider, eventId) turns concurrent redeliveries into one winner.
  */
 @Injectable()
 export class ProcessWebhookEventUseCase {
@@ -64,25 +65,27 @@ export class ProcessWebhookEventUseCase {
       if (eventId === null) throw new Error('inserted webhook_events row has no id');
 
       const target = mapEventType(verified.type);
-      // Logged for audit, but not an outcome we act on this week — left RECEIVED.
+      // An event type we log for audit but do not act on — left RECEIVED.
       if (target === null) return { outcome: 'ignored' };
 
       const ref = extractPaymentRef(verified.payload);
       const payment = ref.sessionId ? await this.payments.findByProviderSessionId(ref.sessionId, tx) : null;
-      // No matching payment yet (webhook raced ahead of the local commit, or an event shape we
-      // don't link this week). Keep the audit row, skip applying — reconciliation is next week.
+      // The webhook raced ahead of our own commit, or carries a shape we don't link to a payment.
+      // Keep the audit row and skip applying; the sweep settles the order either way.
       if (!payment || payment.id === null) {
         await this.webhookEvents.markSkipped(eventId, tx);
         return { outcome: 'skipped', reason: 'payment_not_found' };
       }
 
-      // Out-of-order or terminal-state event (e.g. a failure after success): reject the change in
-      // the domain rather than clobbering a settled payment. The FOR UPDATE lock the read took
-      // makes this guard hold under concurrent distinct events too; resolving what to DO about a
-      // genuinely conflicting authentic event (refund/reconcile) is next week.
+      // Out-of-order or terminal-state event: refuse it in the domain rather than clobber a settled
+      // payment. The read's FOR UPDATE lock makes the guard hold under concurrent distinct events.
       if (!canTransition(payment.status, target)) {
         await this.webhookEvents.markSkipped(eventId, tx);
-        return { outcome: 'skipped', reason: 'conflict' };
+        return {
+          outcome: 'skipped',
+          reason: 'conflict',
+          conflict: { orderId: payment.orderId, from: payment.status, to: target },
+        };
       }
 
       const applied =
@@ -96,12 +99,17 @@ export class ProcessWebhookEventUseCase {
       if (!updated) throw new Error(`payment vanished mid-transaction: ${payment.id}`);
       await this.webhookEvents.markProcessed(eventId, tx);
 
-      // SEAM (next week): with the payment settled, finalize the Order (PENDING→PAID on success /
-      // FAILED on failure), release or settle the held stock on failure, and let a reconciliation
-      // job resolve sessions no webhook ever settled. Deliberately not wired here — Payment and
-      // Order are separate state machines, and this week owns only the payment side.
-
-      return { outcome: 'processed', status: applied.status };
+      // The payment is settled in this tx; finalizing the Order (PENDING→PAID/FAILED) + resolving
+      // held stock runs AFTER this tx commits, in FinalizeOrderUseCase's own tx (see
+      // HandlePaymentWebhookUseCase). Kept separate so Payment and Order stay independent state
+      // machines; a finalize that fails post-commit is closed by the reconciliation cron.
+      return {
+        outcome: 'processed',
+        status: applied.status,
+        orderId: payment.orderId,
+        paymentRef: applied.providerIntentId,
+        eventType: verified.type,
+      };
     });
   }
 }

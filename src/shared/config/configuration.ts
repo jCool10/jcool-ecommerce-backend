@@ -117,6 +117,17 @@ export default () => ({
       process.env.STRIPE_SUCCESS_URL ?? 'http://localhost:3000/payments/success?session_id={CHECKOUT_SESSION_ID}',
     cancelUrl: process.env.STRIPE_CANCEL_URL ?? 'http://localhost:3000/payments/cancel',
   },
+  reconcile: {
+    // Off for e2e suites, which drive the use case directly, and for one-off job containers.
+    enabled: process.env.RECONCILE_ENABLED !== 'false',
+    // A blank env value would parseInt→NaN and register a 0ms interval, so fall back explicitly.
+    intervalMs: parseIntOr(process.env.RECONCILE_INTERVAL_MS, 60_000),
+    batchSize: parseIntOr(process.env.RECONCILE_BATCH_SIZE, 50),
+    // Below this age an order is still waiting on a webhook probably in flight; polling burns a call.
+    staleAfterSec: parseIntOr(process.env.ORDER_STALE_THRESHOLD_SEC, 120),
+    // Matches INVENTORY_RESERVATION_TTL, so an order never outlives the stock hold it depends on.
+    orderTtlSec: parseIntOr(process.env.ORDER_TTL_SEC, 900),
+  },
   inventory: {
     // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or
     // 'optimistic' (version CAS + retry). Default pessimistic.

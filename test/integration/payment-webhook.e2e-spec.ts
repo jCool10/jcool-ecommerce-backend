@@ -23,9 +23,9 @@ import {
 // offline against this, so the signatures are real HMACs over the real bodies (no network, no mock).
 const WEBHOOK_SECRET = 'whsec_e2e_test_secret_0123456789';
 
-// End-to-end proof of BF#3 Part 1 over real Postgres: a valid signature settles the payment exactly
-// once, a forged/expired one is rejected with nothing written, a duplicate event id is a no-op, an
-// out-of-order event can't clobber a settled payment, and the Order is never finalized here.
+// The payment webhook over real Postgres: a valid signature settles exactly once, a forged or expired
+// one writes nothing, a duplicate event id no-ops, and an out-of-order event cannot clobber a settled
+// payment. Finalize behaviour itself is covered in payment-webhook-finalize.e2e-spec.
 describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -207,13 +207,13 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     expect(row).toMatchObject({ providerEventId: 'evt_orphan', status: 'SKIPPED' });
   });
 
-  it('does not finalize the Order: after a success webhook the order stays PENDING (Order seam untouched)', async () => {
+  it('finalizes the Order to PAID after a success webhook (payment settle drives order finalize)', async () => {
     const { token, orderId, sessionId } = await openPayment();
     await postWebhook(
       signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionCompleted(sessionId, { eventId: 'evt_final' }) }),
     ).then((r) => expect(r.status).toBe(200));
 
     const order = await request(server()).get(`/orders/${orderId}`).set(authHeader(token)).expect(200);
-    expect(order.body.status).toBe('PENDING');
+    expect(order.body.status).toBe('PAID');
   });
 });

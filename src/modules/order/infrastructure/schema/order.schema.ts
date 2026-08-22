@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -45,6 +46,11 @@ export const orders = pgTable(
     idempotencyKey: text('idempotency_key'),
     // Set when DRAFT → PENDING; null while still a draft.
     placedAt: timestamp('placed_at', { withTimezone: true }),
+    // Stamped once, when the order settles; null while DRAFT/PENDING. Idempotency reads `status`,
+    // not these — they carry the when/why for reconciliation.
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    finalizeReason: text('finalize_reason'), // e.g. 'webhook:failed' | 'reconcile:paid' | 'expired'
+    paymentRef: text('payment_ref'), // gateway transaction id, when a paid outcome carried one
     ...stamps,
   },
   (t) => [
@@ -53,6 +59,11 @@ export const orders = pgTable(
     // (user, key). NULL keys don't collide (Postgres treats them as distinct), so pre-idempotency
     // orders are unaffected. The final backstop behind the per-key entry gate.
     uniqueIndex('uq_orders_user_idempotency_key').on(t.userId, t.idempotencyKey),
+    // Partial: the sweep's queue is only ever PENDING rows, so the index stays proportional to
+    // orders in flight rather than to every order ever placed.
+    index('idx_orders_pending_placed_at')
+      .on(t.placedAt)
+      .where(sql`${t.status} = 'PENDING'`),
   ],
 );
 

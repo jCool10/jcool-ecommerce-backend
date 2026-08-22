@@ -1,10 +1,10 @@
 import { BadGatewayException, ConflictException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
-import { Payment } from '../domain/payment.entity';
-import { PaymentStatus } from '../domain/payment-status';
-import type { OrderReadPort, OrderView } from './ports/order-read.port';
-import { DuplicateActivePaymentError, type PaymentRepositoryPort } from './ports/payment-repository.port';
-import { PaymentGatewayError, type GatewaySession, type PaymentGatewayPort } from './ports/payment-gateway.port';
+import { Payment } from '../../domain/payment.entity';
+import { PaymentStatus } from '../../domain/payment-status';
+import type { OrderReadPort, OrderView } from '../ports/order-read.port';
+import { DuplicateActivePaymentError, type PaymentRepositoryPort } from '../ports/payment-repository.port';
+import { PaymentGatewayError, type GatewaySession, type PaymentGatewayPort } from '../ports/payment-gateway.port';
 import { CreatePaymentSessionUseCase } from './create-payment-session.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -64,7 +64,7 @@ function build(
         },
       );
 
-  const orders = { findForPayment } as OrderReadPort;
+  const orders = { findForPayment } as unknown as OrderReadPort;
   const payments = { findByOrderId, create, updateStatus: vi.fn() } as unknown as PaymentRepositoryPort;
   const gateway = { provider: 'stripe', createSession, verifyAndParseEvent: vi.fn() } as unknown as PaymentGatewayPort;
 

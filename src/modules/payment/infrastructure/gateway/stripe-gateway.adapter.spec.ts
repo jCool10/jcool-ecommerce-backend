@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type Stripe from 'stripe';
+import Stripe from 'stripe';
 import { StripeGatewayAdapter, type StripeGatewayOptions } from './stripe-gateway.adapter';
 import { signStripeStyle } from './hmac-signature';
 import { PaymentGatewayError } from '../../application/ports/payment-gateway.port';
@@ -24,6 +24,20 @@ function liveAdapter(
     stripeClient,
     ...overrides,
   });
+}
+
+// Live mode for the reconciliation calls, which read/close a session instead of creating one.
+function statusAdapter(sessions: Record<string, unknown>): StripeGatewayAdapter {
+  return new StripeGatewayAdapter({
+    webhookSecret: SECRET,
+    toleranceSec: 300,
+    successUrl: 'https://app.test/ok',
+    stripeClient: { checkout: { sessions } } as unknown as Pick<Stripe, 'checkout'>,
+  });
+}
+
+function stripeError(statusCode: number, type: Stripe.StripeRawError['type'] = 'invalid_request_error'): unknown {
+  return Stripe.errors.StripeError.generate({ statusCode, type, message: 'stripe says no' });
 }
 
 describe('StripeGatewayAdapter', () => {
@@ -142,6 +156,89 @@ describe('StripeGatewayAdapter', () => {
       const { raw, header } = signedBody(nowSec - 301);
       const result = adapter().verifyAndParseEvent(raw, { 'stripe-signature': header });
       expect(result).toEqual({ kind: 'expired_timestamp' });
+    });
+  });
+});
+
+describe('StripeGatewayAdapter reconciliation calls', () => {
+  describe('getPaymentStatus', () => {
+    it('reports UNKNOWN offline, because the fabricated handle exists nowhere at Stripe', async () => {
+      await expect(adapter().getPaymentStatus('cs_test_anything')).resolves.toEqual({ status: 'UNKNOWN' });
+    });
+
+    it.each([
+      ['paid', 'complete', 'PAID'],
+      ['no_payment_required', 'complete', 'PAID'],
+      ['unpaid', 'expired', 'FAILED'],
+      ['unpaid', 'open', 'PENDING'],
+      ['unpaid', 'complete', 'PENDING'],
+    ])('maps payment_status=%s status=%s to %s', async (payment_status, status, expected) => {
+      const retrieve = vi.fn().mockResolvedValue({ payment_status, status, payment_intent: null });
+
+      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toMatchObject({
+        status: expected,
+      });
+      expect(retrieve).toHaveBeenCalledWith('cs_live_1');
+    });
+
+    it('carries the PaymentIntent handle so a sweep-settled payment stays refundable', async () => {
+      const retrieve = vi
+        .fn()
+        .mockResolvedValue({ payment_status: 'paid', status: 'complete', payment_intent: 'pi_1' });
+
+      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toEqual({
+        status: 'PAID',
+        intentId: 'pi_1',
+      });
+    });
+
+    it('reads an expanded PaymentIntent object as the same handle', async () => {
+      const retrieve = vi
+        .fn()
+        .mockResolvedValue({ payment_status: 'paid', status: 'complete', payment_intent: { id: 'pi_2' } });
+
+      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toMatchObject({
+        intentId: 'pi_2',
+      });
+    });
+
+    it('treats a handle Stripe does not recognise as UNKNOWN, so one bad row cannot stall the sweep', async () => {
+      const retrieve = vi.fn().mockRejectedValue(stripeError(404));
+
+      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_gone')).resolves.toEqual({ status: 'UNKNOWN' });
+    });
+
+    it('throws on any other provider fault, so an outage is never read as "not paid"', async () => {
+      const retrieve = vi.fn().mockRejectedValue(stripeError(503, 'api_error'));
+
+      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).rejects.toBeInstanceOf(
+        PaymentGatewayError,
+      );
+    });
+  });
+
+  describe('expireSession', () => {
+    it('is a no-op offline, where no session was ever payable', async () => {
+      await expect(adapter().expireSession('cs_test_anything')).resolves.toBeUndefined();
+    });
+
+    it('closes the session at Stripe', async () => {
+      const expire = vi.fn().mockResolvedValue({ id: 'cs_live_1', status: 'expired' });
+
+      await expect(statusAdapter({ expire }).expireSession('cs_live_1')).resolves.toBeUndefined();
+      expect(expire).toHaveBeenCalledWith('cs_live_1');
+    });
+
+    it('accepts an unrecognised handle as already unpayable', async () => {
+      const expire = vi.fn().mockRejectedValue(stripeError(404));
+
+      await expect(statusAdapter({ expire }).expireSession('cs_gone')).resolves.toBeUndefined();
+    });
+
+    it('throws when Stripe refuses, because the page may still take money', async () => {
+      const expire = vi.fn().mockRejectedValue(stripeError(400));
+
+      await expect(statusAdapter({ expire }).expireSession('cs_live_1')).rejects.toBeInstanceOf(PaymentGatewayError);
     });
   });
 });

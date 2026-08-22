@@ -1,0 +1,73 @@
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
+import { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
+import { PaymentStatus } from '../../domain/payment-status';
+import { mapPaymentToOrderOutcome } from '../mappers/map-payment-to-order-outcome';
+import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';
+
+const LOG_CONTEXT = 'HandlePaymentWebhook';
+
+/**
+ * Settles the payment, then the order, in two SEPARATE transactions — Payment and Order are
+ * independent state machines. The cost is a window where the payment is settled and the order is not;
+ * the reconciliation sweep closes it, and the gateway only ever sees a 2xx.
+ */
+@Injectable()
+export class HandlePaymentWebhookUseCase {
+  constructor(
+    private readonly processEvent: ProcessWebhookEventUseCase,
+    private readonly finalizeOrder: FinalizeOrderUseCase,
+    private readonly logger: PinoLogger,
+  ) {}
+
+  async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
+    const result = await this.processEvent.execute(rawBody, headers);
+    // Only a first-delivery settle finalizes: on any other outcome the payment side already decided.
+    if (result.outcome !== 'processed') {
+      if (result.outcome === 'skipped' && result.conflict?.to === PaymentStatus.SUCCEEDED) {
+        // Money moved on a payment we had already closed. A refund decision, not a retry.
+        this.logger.error(
+          { context: LOG_CONTEXT, ...result.conflict },
+          'gateway reported a success on an already-settled payment — funds may be captured with no matching order',
+        );
+      }
+      return result;
+    }
+
+    const outcome = mapPaymentToOrderOutcome(result.status);
+    if (outcome === null) {
+      // Unreachable today, but a future settled status must never strand a paid order silently.
+      this.logger.warn(
+        { context: LOG_CONTEXT, orderId: result.orderId, status: result.status },
+        'settled payment status maps to no order outcome — order not finalized',
+      );
+      return result;
+    }
+
+    // The payment tx has already committed, so a gateway retry would dedup and never re-drive this.
+    // Ack 2xx even on failure and leave the order to the sweep; a 5xx buys only a retry storm.
+    try {
+      const finalize = await this.finalizeOrder.execute({
+        orderId: result.orderId,
+        outcome,
+        paymentRef: result.paymentRef,
+        reason: `webhook:${result.eventType}`,
+      });
+      if (finalize.status === 'not_found' || finalize.status === 'ignored') {
+        // Payment settled but the order did not move — a money/status mismatch for the sweep.
+        this.logger.warn(
+          { context: LOG_CONTEXT, orderId: result.orderId, outcome, finalize: finalize.status },
+          'payment settled but order finalize was a no-op — reconciliation will confirm',
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        { context: LOG_CONTEXT, orderId: result.orderId, outcome },
+        `order finalize failed after payment settled — order left for reconciliation cron: ${message}`,
+      );
+    }
+
+    return result;
+  }
+}

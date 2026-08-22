@@ -1,9 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Order } from '../domain/order.entity';
+import { OrderStatus } from '../domain/order-status';
 import { OrderItem } from '../domain/order-item.entity';
-import type { CheckoutPersistResult, OrderRepositoryPort } from '../application/ports/order-repository.port';
+import type {
+  CheckoutPersistResult,
+  OrderRepositoryPort,
+  StalePendingOrder,
+} from '../application/ports/order-repository.port';
 import { orderItems, orders } from './schema/order.schema';
 
 type OrderRow = typeof orders.$inferSelect;
@@ -74,6 +79,39 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     });
   }
 
+  async withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
+    return this.db.transaction(fn);
+  }
+
+  async findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null> {
+    // The order row only: items are immutable snapshots, so they need no lock.
+    const [row] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update').limit(1);
+    if (!row) {
+      return null;
+    }
+    const itemRows = await tx
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId))
+      .orderBy(orderItems.createdAt, orderItems.id);
+    return toDomainOrder(row, itemRows);
+  }
+
+  async persistFinalization(order: Order, tx: DrizzleTx): Promise<void> {
+    if (order.id === null) {
+      throw new Error('Cannot persist finalization for an unsaved order');
+    }
+    await tx
+      .update(orders)
+      .set({
+        status: order.status,
+        finalizedAt: order.finalizedAt,
+        finalizeReason: order.finalizeReason,
+        paymentRef: order.paymentRef,
+      })
+      .where(eq(orders.id, order.id));
+  }
+
   async findForUser(orderId: string, userId: string): Promise<Order | null> {
     // User-scoped by design: another user's order id simply returns null (→ 404).
     const [row] = await this.db
@@ -131,6 +169,18 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
 
     return orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? []));
   }
+
+  async findStalePending({ placedBefore, limit }: { placedBefore: Date; limit: number }): Promise<StalePendingOrder[]> {
+    // A projection, not the aggregate. `placed_at < :t` also drops NULLs, so the cast below is safe.
+    const rows = await this.db
+      .select({ id: orders.id, placedAt: orders.placedAt })
+      .from(orders)
+      .where(and(eq(orders.status, OrderStatus.PENDING), lt(orders.placedAt, placedBefore)))
+      .orderBy(asc(orders.placedAt))
+      .limit(limit)
+      .for('update', { skipLocked: true });
+    return rows.map((row) => ({ id: row.id, placedAt: row.placedAt as Date }));
+  }
 }
 
 // Row → domain aggregate. Items are already the frozen snapshot, so rehydration
@@ -143,6 +193,9 @@ function toDomainOrder(row: OrderRow, itemRows: OrderItemRow[]): Order {
     currency: row.currency,
     totalAmountMinor: row.totalAmount,
     placedAt: row.placedAt,
+    finalizedAt: row.finalizedAt,
+    finalizeReason: row.finalizeReason,
+    paymentRef: row.paymentRef,
     items: itemRows.map((item) => OrderItem.of(item.skuId, item.productName, item.unitPrice, item.quantity)),
   });
 }

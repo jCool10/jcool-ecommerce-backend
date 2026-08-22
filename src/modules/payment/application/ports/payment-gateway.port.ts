@@ -1,6 +1,5 @@
-// Payment gateway port — the single seam session creation and webhook verification depend on.
-// Swapping the provider is a DI + env change, never a caller change. The Stripe-style HMAC adapter
-// is the coded path; SePay/VietQR stays interface-only.
+// Swapping the provider is a DI + env change, never a caller change. Stripe is the coded adapter;
+// SePay/VietQR stays interface-only.
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 
 export interface CreateSessionInput {
@@ -18,26 +17,45 @@ export interface GatewaySession {
   clientSecret?: string; // PaymentIntent client_secret, when the flow uses one
 }
 
-// Discriminated result so the webhook handler branches on outcome instead of catching an opaque
-// throw: a forged/tampered body is `invalid_signature`, a replayed/clock-skewed one is
-// `expired_timestamp`, and only `valid` carries the parsed event.
+// Discriminated so the webhook handler branches on outcome instead of catching an opaque throw.
 export type VerifiedEvent =
   | { kind: 'valid'; providerEventId: string; type: string; payload: unknown }
   | { kind: 'invalid_signature' }
   | { kind: 'expired_timestamp' };
 
+/**
+ * `UNKNOWN` is distinct from `PENDING` on purpose: the gateway could not answer, which the sweep
+ * must not read as "still in progress" once the order is past its TTL.
+ */
+export type GatewayStatus = 'PAID' | 'FAILED' | 'PENDING' | 'UNKNOWN';
+
+export interface GatewayPaymentStatus {
+  status: GatewayStatus;
+  /** Carried with the status because a sweep-settled payment has no webhook to record it, and a
+   * later refund or dispute needs the handle. */
+  intentId?: string | null;
+}
+
 export interface PaymentGatewayPort {
-  // Provider key recorded on Payment.provider — the adapter is authoritative, so the persisted
-  // value can't drift from the gateway the DI factory actually built (config could).
+  // Recorded on Payment.provider from the adapter, not config, so the two can never drift.
   readonly provider: string;
   createSession(input: CreateSessionInput): Promise<GatewaySession>;
   // `rawBody` is the exact bytes the gateway signed — verifying a re-serialized body would fail.
   verifyAndParseEvent(rawBody: Buffer, headers: Record<string, string>): VerifiedEvent;
+  /**
+   * Network I/O — callers must invoke it OUTSIDE a transaction. An unreachable provider throws
+   * rather than answering `UNKNOWN`, which would let a TTL sweep expire an order that was paid.
+   */
+  getPaymentStatus(ref: string): Promise<GatewayPaymentStatus>;
+  /**
+   * Resolves only once the session is guaranteed unpayable; anything else throws — including the
+   * gateway refusing because the session has just been paid. The hosted page outlives our TTL, so
+   * expiring an order before this resolves would charge a buyer for an order that no longer exists.
+   */
+  expireSession(ref: string): Promise<void>;
 }
 
-// The gateway's own API (e.g. a live Stripe session-create) failed — an upstream/provider fault the
-// caller maps to 502, kept distinct from the domain 4xx a bad request raises. Carries the original
-// error as `cause` for the log, never surfaced to the client.
+// An upstream provider fault (→ 502), kept distinct from the domain 4xx a bad request raises.
 export class PaymentGatewayError extends Error {
   constructor(
     message: string,

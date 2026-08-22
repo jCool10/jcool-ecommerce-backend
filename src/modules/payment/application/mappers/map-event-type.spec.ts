@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PaymentStatus } from '../domain/payment-status';
+import { PaymentStatus } from '../../domain/payment-status';
 import { mapEventType } from './map-event-type';
 
 describe('mapEventType', () => {
