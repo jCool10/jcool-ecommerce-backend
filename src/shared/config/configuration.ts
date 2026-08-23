@@ -128,6 +128,11 @@ export default () => ({
     // Matches INVENTORY_RESERVATION_TTL, so an order never outlives the stock hold it depends on.
     orderTtlSec: parseIntOr(process.env.ORDER_TTL_SEC, 900),
   },
+  catalog: {
+    // Cache-aside TTL (s) for the public product read paths — also the upper bound on staleness
+    // if an invalidation is ever missed. A blank env value would parseInt→NaN and cache forever.
+    cacheTtlSec: parseIntOr(process.env.CATALOG_CACHE_TTL_SEC, 60),
+  },
   inventory: {
     // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or
     // 'optimistic' (version CAS + retry). Default pessimistic.

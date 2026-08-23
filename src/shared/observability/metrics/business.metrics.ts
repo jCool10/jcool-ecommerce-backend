@@ -2,10 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { PinoLogger } from 'nestjs-pino';
 import type { Counter, Histogram } from 'prom-client';
-import type { CartOperation, MetricsPort } from './metrics.port';
+import type { CacheResult, CartOperation, MetricsPort } from './metrics.port';
 import {
   AUTH_EVENTS_TOTAL,
   CART_OPERATIONS_TOTAL,
+  CATALOG_CACHE_OPERATIONS_TOTAL,
   ORDERS_CREATED_TOTAL,
   ORDER_VALUE_MINOR,
 } from './metric-definitions';
@@ -23,6 +24,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(ORDER_VALUE_MINOR) private readonly orderValue: Histogram<string>,
     @InjectMetric(CART_OPERATIONS_TOTAL) private readonly cartOps: Counter<string>,
     @InjectMetric(AUTH_EVENTS_TOTAL) private readonly authEvents: Counter<string>,
+    @InjectMetric(CATALOG_CACHE_OPERATIONS_TOTAL) private readonly catalogCacheOps: Counter<string>,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -40,6 +42,10 @@ export class BusinessMetrics implements MetricsPort {
 
   recordAuthEvent(event: string, outcome: 'success' | 'failure'): void {
     this.safely('auth_event', () => this.authEvents.inc({ event, outcome }));
+  }
+
+  recordCatalogCacheOperation(result: CacheResult): void {
+    this.safely('catalog_cache_operation', () => this.catalogCacheOps.inc({ result }));
   }
 
   // Swallow-and-log: a telemetry error is logged (so it's not invisible) but never rethrown.

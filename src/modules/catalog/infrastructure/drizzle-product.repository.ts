@@ -39,7 +39,8 @@ function escapeLike(input: string): string {
 
 // A product id is a UUID; a slug never is. Probe the uuid `id` column only for
 // UUID-shaped input — comparing it against a slug throws on Postgres' text→uuid cast.
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Exported because the cache keys must normalise exactly the tokens this treats as ids.
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Drizzle adapter for ProductRepositoryPort — explicit SQL-first joins (readable `EXPLAIN ANALYZE`) with integer money passthrough, and the seam for a future cache-aside layer. */
 @Injectable()

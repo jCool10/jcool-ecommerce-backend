@@ -1,12 +1,20 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckResult, HealthCheckService } from '@nestjs/terminus';
+import { SkipThrottle } from '@nestjs/throttler';
+import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@shared/infrastructure/throttler';
 import { Public } from '@shared/rbac';
 import { DrizzleHealthIndicator, RedisHealthIndicator, ShutdownHealthIndicator } from './indicators';
 
 // Liveness/readiness must answer without a token — orchestrators probe these
 // unauthenticated. `@Public()` opts the whole controller out of the global guard.
+// Probes arrive on a schedule and must never be rate limited: a 429 would pull a healthy
+// instance from service, and every tier that stays active costs a Redis round-trip on a
+// route whose entire job is to answer when Redis is the thing that's broken.
+// Both tiers must be named — bare `@SkipThrottle()` skips only `default`, leaving `account`
+// to call Redis on every probe.
 @Public()
+@SkipThrottle({ [DEFAULT_THROTTLER]: true, [ACCOUNT_THROTTLER]: true })
 @ApiTags('health')
 @Controller('health')
 export class HealthController {

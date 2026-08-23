@@ -6,6 +6,7 @@ import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens
 import { authHeader } from '../setup/auth.helper';
 import { createTestProduct, seedProducts } from '../setup/fixtures/catalog.fixture';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
@@ -26,6 +27,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
 
   beforeEach(async () => {
     await resetDatabase(pool);
+    await resetCatalogCache(app);
   });
 
   describe('GET /products (list, paginated)', () => {
@@ -40,6 +42,35 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(res.body.pageSize).toBe(20); // schema default
       expect(res.body.totalPages).toBe(1);
       expect(res.body.items).toHaveLength(15);
+    });
+
+    // Both bounds are query-shape gates rather than data answers: an out-of-range page is a deep
+    // OFFSET scan and a non-slug filter can never match a row, and each distinct value would mint
+    // its own cache key on the way to saying nothing.
+    it('rejects a page past the ceiling with 400 rather than scanning to an empty page', async () => {
+      const res = await request(app.getHttpServer()).get('/products').query({ page: 10_001 });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('accepts the last page inside the ceiling', async () => {
+      const res = await request(app.getHttpServer()).get('/products').query({ page: 10_000 });
+
+      expect(res.status).toBe(200);
+      expect(res.body.items).toEqual([]);
+    });
+
+    it('rejects a categorySlug that is not slug-shaped with 400', async () => {
+      const res = await request(app.getHttpServer()).get('/products').query({ categorySlug: 'Not A Slug!' });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('still serves a well-formed categorySlug that matches nothing', async () => {
+      const res = await request(app.getHttpServer()).get('/products').query({ categorySlug: 'no-such-category' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.items).toEqual([]);
     });
 
     it('slices by page/pageSize without overlap across pages', async () => {

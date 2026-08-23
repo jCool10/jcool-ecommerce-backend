@@ -9,6 +9,7 @@ function build() {
   const valueObserve = vi.fn();
   const cartInc = vi.fn();
   const authInc = vi.fn();
+  const cacheInc = vi.fn();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
   const logger = { warn } as unknown as PinoLogger;
   const metrics = new BusinessMetrics(
@@ -16,9 +17,10 @@ function build() {
     { observe: valueObserve } as unknown as Histogram<string>,
     { inc: cartInc } as unknown as Counter<string>,
     { inc: authInc } as unknown as Counter<string>,
+    { inc: cacheInc } as unknown as Counter<string>,
     logger,
   );
-  return { metrics, ordersInc, valueObserve, cartInc, authInc, warn };
+  return { metrics, ordersInc, valueObserve, cartInc, authInc, cacheInc, warn };
 }
 
 describe('BusinessMetrics', () => {
@@ -44,6 +46,12 @@ describe('BusinessMetrics', () => {
     const { metrics, authInc } = build();
     metrics.recordAuthEvent('login.failed', 'failure');
     expect(authInc).toHaveBeenCalledWith({ event: 'login.failed', outcome: 'failure' });
+  });
+
+  it('counts a catalog cache lookup by result', () => {
+    const { metrics, cacheInc } = build();
+    metrics.recordCatalogCacheOperation('hit');
+    expect(cacheInc).toHaveBeenCalledWith({ result: 'hit' });
   });
 
   it('swallows a metric error and logs it — telemetry never breaks the business flow', () => {
