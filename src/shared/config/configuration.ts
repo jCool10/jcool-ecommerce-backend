@@ -10,6 +10,16 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string {
   return Number.isInteger(hops) && hops >= 0 ? hops : raw;
 }
 
+// parseInt that treats an unset OR blank/whitespace var as absent (→ fallback) and
+// never returns NaN. A NaN pool timeout is falsy to pg, which silently reverts to
+// wait-forever/never-reap — defeating the bound. class-validator coerces "" to 0 and
+// passes @Min(0), so the guard must live here where the raw string is read.
+function intEnv(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 // Sentry performance sampling: a positive fraction enables tracing; 0/absent → errors only. Returns
 // undefined (never literal 0) so callers can omit the key — an explicit 0 turns Sentry's own http
 // spans on and duplicates our OTel spans (see instrumentation.ts).
@@ -74,6 +84,13 @@ export default () => ({
   },
   database: {
     url: process.env.DATABASE_URL,
+    // App-side pg pool bounds — the stack has no external pooler (a PgBouncer drop-in
+    // is owned by deploy), so these cap the backend connections Postgres faces.
+    poolMax: intEnv(process.env.DB_POOL_MAX, 10),
+    // Fail an acquire after this long instead of pg's default of waiting forever, so a
+    // saturated pool surfaces as a fast failure rather than an unbounded request backlog.
+    connectionTimeoutMs: intEnv(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 5000),
+    idleTimeoutMs: intEnv(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10000),
   },
   redis: {
     url: process.env.REDIS_URL,

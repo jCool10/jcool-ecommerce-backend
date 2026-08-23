@@ -266,6 +266,9 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `SENTRY_DSN`         |    No    | — (off)          | Sentry project DSN; unset → SDK never initializes ([`adr/0016`](./docs/adr/0016-error-tracking-sentry.md)) |
 | `SENTRY_TRACES_SAMPLE_RATE` | No | `0` (errors only) | Fraction (0–1) of transactions sampled for Sentry performance tracing |
 | `DATABASE_URL`       |   Yes    | —                | PostgreSQL connection string                |
+| `DB_POOL_MAX`        |    No    | `10`             | Max app-side pg pool connections (caps Postgres backends under a spike) |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | No | `5000`     | Fail a pool acquire after this long (pg default `0` = wait forever)      |
+| `DB_POOL_IDLE_TIMEOUT_MS` | No  | `10000`          | Reap an idle pooled connection after this long |
 | `REDIS_URL`          |   Yes    | —                | Redis connection string                     |
 | `JWT_ACCESS_SECRET`  |   Yes    | —                | HS256 secret, **min 32 chars** (no default) |
 | `JWT_ACCESS_TTL`     |    No    | `5m`             | Access-token lifetime                       |

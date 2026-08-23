@@ -28,7 +28,11 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/shared/infrastructure/database/seed.ts",
-    "load:baseline": "k6 run k6/baseline.js"
+    "seed:users:bulk": "tsx scripts/seed-users-bulk.ts",
+    "db:metrics:users": "tsx scripts/capture-db-metrics.ts",
+    "load:baseline": "k6 run k6/baseline.js",
+    "load:register:write": "k6 run test/load/register-uniqueness/write-mix.js",
+    "load:register:dup": "k6 run test/load/register-uniqueness/duplicate-mix.js"
   },
   "dependencies": {
     "@nest-lab/throttler-storage-redis": "^1.2.0",

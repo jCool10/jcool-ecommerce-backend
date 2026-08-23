@@ -67,6 +67,27 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   DATABASE_URL!: string;
 
+  // App-side pg pool bounds; validated so an out-of-range value fails at boot.
+  // Defaults (10 / 5000ms / 10000ms) applied in configuration.ts. Timeouts allow 0
+  // to opt back into pg's native behavior (0 = wait forever / never reap idle).
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  DB_POOL_MAX?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  DB_POOL_CONNECTION_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  DB_POOL_IDLE_TIMEOUT_MS?: number;
+
   @IsString()
   @IsNotEmpty()
   REDIS_URL!: string;

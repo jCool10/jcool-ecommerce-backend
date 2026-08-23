@@ -5,18 +5,20 @@ import type { EmailVerificationService, VerificationRecipient } from '../service
 import { RegisterUserUseCase } from './register-user.use-case';
 
 class MockUserRepository implements UserRepositoryPort {
-  existing: User | null = null;
-  lastFindEmail?: string;
+  // When set, create() returns null — the DB unique-index conflict (email taken).
+  emailTaken = false;
   created?: CreateUserInput;
 
-  findByEmail(email: string): Promise<User | null> {
-    this.lastFindEmail = email;
-    return Promise.resolve(this.existing);
+  findByEmail(): Promise<User | null> {
+    return Promise.resolve(null);
   }
   findById(): Promise<User | null> {
     return Promise.resolve(null);
   }
-  create(input: CreateUserInput): Promise<User> {
+  create(input: CreateUserInput): Promise<User | null> {
+    if (this.emailTaken) {
+      return Promise.resolve(null);
+    }
     this.created = input;
     return Promise.resolve(
       new User('new-id', input.email, input.passwordHash, input.role ?? 'CUSTOMER', new Date(), new Date()),
@@ -71,20 +73,28 @@ describe('RegisterUserUseCase', () => {
     expect(emailVerification.sentTo).toEqual([user]);
   });
 
-  it('normalizes the email (trim + lowercase) before lookup and create', async () => {
+  it('normalizes the email (trim + lowercase) before create', async () => {
     await useCase.execute({ email: '  User@Example.COM  ', password: 'supersecret' });
 
-    expect(repo.lastFindEmail).toBe('user@example.com');
     expect(repo.created?.email).toBe('user@example.com');
   });
 
-  it('throws ConflictException, does not create, and sends no email when the email is taken', async () => {
-    repo.existing = new User('u1', 'user@example.com', 'hashed:x', 'CUSTOMER', new Date(), new Date());
+  it('throws ConflictException and sends no email when the insert loses the race (create → null)', async () => {
+    repo.emailTaken = true;
 
     await expect(useCase.execute({ email: 'user@example.com', password: 'supersecret' })).rejects.toBeInstanceOf(
       ConflictException,
     );
     expect(repo.created).toBeUndefined();
     expect(emailVerification.sentTo).toHaveLength(0);
+  });
+
+  it('still returns the created user when the verification mailer throws (after-commit, non-fatal)', async () => {
+    emailVerification.issueAndSend = () => Promise.reject(new Error('smtp down'));
+
+    const user = await useCase.execute({ email: 'user@example.com', password: 'supersecret' });
+
+    expect(user.email).toBe('user@example.com');
+    expect(repo.created?.email).toBe('user@example.com');
   });
 });
