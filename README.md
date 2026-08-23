@@ -96,6 +96,7 @@ Currently implemented:
 - **Catalog**
   - Public read paths: list products (paginated) and product detail by id or slug.
   - Admin write paths (RBAC `ADMIN`): full CRUD for categories, products, and SKUs, plus price management, with soft-delete support.
+  - **Redis cache-aside** on both read paths, wired as a decorator behind the repository port — controllers, use cases and domain are unaware. Every admin write bumps a generation counter embedded in the cache keys, so the whole cached generation is invalidated in `O(1)` and the next read refills; `CATALOG_CACHE_TTL_SEC` bounds staleness if an invalidation is ever missed. Postgres stays the source of truth: a Redis outage degrades a cached read to a fall-through rather than an error, and shows up as `catalog_cache_operations_total{result="error"}`. Note the request as a whole is not Redis-free — the global rate-limit guard runs first and is Redis-backed with no fall-through of its own.
 - **Cart**
   - Per-user shopping cart (one active cart per user): add (upsert-accumulate on a repeat SKU), update quantity, remove a line, view, and clear — every mutation returns the full cart.
   - Prices and names are read **live** from Catalog through a published cross-context port (anti-corruption boundary) — the cart never snapshots a price, so the subtotal always reflects the current price; freezing happens only at Order.
@@ -281,6 +282,7 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `EMAIL_VERIFICATION_TTL` | No   | `24h`            | Email-verification token lifetime           |
 | `AUTH_REQUIRE_VERIFIED_EMAIL` | No | `false`        | Refuse login until the email is verified (403) |
 | `PASSWORD_RESET_TTL` | No       | `1h`             | Password-reset token lifetime               |
+| `CATALOG_CACHE_TTL_SEC` | No    | `60`             | TTL (s) on cached product reads; also the upper bound on staleness from a missed invalidation |
 
 Docker Compose additionally reads `POSTGRES_USER`, `POSTGRES_PASSWORD`,
 `POSTGRES_DB`, `POSTGRES_HOST_PORT`, and `REDIS_HOST_PORT` from `.env`; the
@@ -384,7 +386,7 @@ none of which is implemented yet.
 | Method | Path            | Description                                         |
 | ------ | --------------- | --------------------------------------------------- |
 | `GET`  | `/health/live`  | Liveness (no dependencies checked)                  |
-| `GET`  | `/health/ready` | Readiness (503 if Postgres or Redis is unreachable) |
+| `GET`  | `/health/ready` | Readiness (503 if Postgres or Redis is unreachable; never rate limited, so a Redis outage is reported rather than masked by the guard) |
 
 ## Database & Migrations
 

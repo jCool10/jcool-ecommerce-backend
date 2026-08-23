@@ -185,6 +185,14 @@ export class EnvironmentVariables {
   @Min(0)
   ORDER_TTL_SEC?: number;
 
+  // Catalog cache-aside TTL (s); default 60 (configuration.ts). Min 1 — a 0 would make every
+  // SET expire instantly and turn the cache into pure overhead.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  CATALOG_CACHE_TTL_SEC?: number;
+
   // Stock-reservation locking strategy; defaults to pessimistic (configuration.ts).
   @IsOptional()
   @IsEnum(InventoryLockStrategy)

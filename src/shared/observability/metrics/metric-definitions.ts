@@ -34,8 +34,7 @@ export const ORDER_VALUE_BUCKETS = [
 
 /**
  * Every metric registered as an eager DI provider, so all appear in `/metrics` (HELP/TYPE)
- * before the first observation. `catalog_cache_operations_total` is a seam — registered now,
- * incremented once a cache layer lands. Outbox gauges live in outbox-backlog.collector.ts.
+ * before the first observation. Outbox gauges live in outbox-backlog.collector.ts.
  */
 export const METRIC_PROVIDERS: Provider[] = [
   makeHistogramProvider({
@@ -66,7 +65,7 @@ export const METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: CATALOG_CACHE_OPERATIONS_TOTAL,
-    help: 'Catalog cache hits/misses. Seam: incremented when a cache layer lands.',
+    help: 'Catalog cache-aside lookups, by result (hit/miss/error — error = Redis unreachable, served from Postgres).',
     labelNames: ['result'],
   }),
   makeCounterProvider({
