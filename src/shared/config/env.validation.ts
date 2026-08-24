@@ -99,6 +99,28 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   QUEUE_PREFIX?: string;
 
+  // Outbox relay kill-switch; on by default (configuration.ts).
+  @IsOptional()
+  @IsBooleanString()
+  OUTBOX_RELAY_ENABLED?: string;
+
+  // Relay period (ms); default 1000 (configuration.ts). Min 100 so a typo cannot turn the relay into
+  // a busy loop opening transactions against the outbox table.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  OUTBOX_POLL_MS?: number;
+
+  // Rows per relay tick; default 100 (configuration.ts). Capped because the publish happens inside
+  // the polling transaction, so the batch size is also how long row locks are held.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  OUTBOX_BATCH_SIZE?: number;
+
   @IsOptional()
   @IsBooleanString()
   SWAGGER_ENABLED?: string;

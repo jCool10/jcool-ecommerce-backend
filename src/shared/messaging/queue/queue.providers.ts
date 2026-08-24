@@ -19,6 +19,11 @@ export const QUEUE_PROVIDERS: Provider[] = [
         // the durable buffer: a rejected publish leaves `published_at` NULL for the next relay tick,
         // whereas an offline queue would accept a publish that dies with the process.
         enableOfflineQueue: false,
+        // That only covers commands not yet sent. `maxRetriesPerRequest: null` makes one already on
+        // the wire wait for the connection to come back — unbounded — and the relay publishes inside
+        // a transaction, so an outage would pin row locks and a pool client for its whole duration.
+        // Set here rather than in the factory: a consumer's blocking read is supposed to wait.
+        commandTimeout: 5_000,
       }),
   },
   {

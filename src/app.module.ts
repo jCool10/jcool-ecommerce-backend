@@ -37,7 +37,8 @@ import { AuthModule } from '@modules/user/auth.module';
     RedisModule,
     MessagingModule,
     ThrottlerSecurityModule,
-    // Timer registry for the payment reconciliation sweep; the sweep itself is gated by RECONCILE_ENABLED.
+    // Timer registry for the outbox relay and the payment reconciliation sweep; each is gated by its
+    // own kill-switch. Global, so position here does not affect resolution.
     ScheduleModule.forRoot(),
     HealthModule,
     CatalogModule,

@@ -2,11 +2,10 @@ import type { Provider } from '@nestjs/common';
 import { makeGaugeProvider } from '@willsoto/nestjs-prometheus';
 import type { Gauge } from 'prom-client';
 
-// UNWIRED SEAM — these report a hardcoded 0, not a measurement. The outbox table exists and is
-// written on every checkout and every finalize, so the real backlog (`WHERE published_at IS NULL`)
-// is now the whole table and grows without bound: there is no relay to drain it yet. Do not read a
-// 0 here as "nothing pending". Wiring `collect()` to the real count + oldest-row age lands with the
-// relay, which is also when a backlog first means something is wrong rather than merely unbuilt.
+// UNWIRED SEAM — these report a hardcoded 0, not a measurement, so do not read a 0 here as
+// "nothing pending". The relay now drains the table, which means a real backlog finally signals
+// something is wrong — and that is exactly what these gauges still cannot show. Until `collect()`
+// reads `WHERE published_at IS NULL` and the oldest row's age, a stalled relay is invisible here.
 export const OUTBOX_BACKLOG_PENDING = 'outbox_backlog_pending';
 export const OUTBOX_OLDEST_AGE_SECONDS = 'outbox_oldest_age_seconds';
 

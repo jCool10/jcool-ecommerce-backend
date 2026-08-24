@@ -100,6 +100,16 @@ export default () => ({
     // without a job written by one being consumed by another.
     prefix: process.env.QUEUE_PREFIX ?? 'bull',
   },
+  outbox: {
+    // Relay kill-switch; on by default. Off leaves rows unpublished rather than losing them, which
+    // is what e2e suites want while they assert on them.
+    relayEnabled: process.env.OUTBOX_RELAY_ENABLED !== 'false',
+    // A blank env value would parseInt->NaN and register a 0ms interval, so fall back explicitly.
+    pollMs: parseIntOr(process.env.OUTBOX_POLL_MS, 1000),
+    // Rows per tick. Also caps how long one transaction holds its row locks, since the publish runs
+    // inside it.
+    batchSize: parseIntOr(process.env.OUTBOX_BATCH_SIZE, 100),
+  },
   auth: {
     jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
     // Short access-token life (defense-in-depth): caps exposure if the jti denylist is ever bypassed.

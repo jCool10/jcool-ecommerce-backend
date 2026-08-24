@@ -39,6 +39,9 @@ export async function createTestApp(
   // Suites drive ReconcileStaleOrdersUseCase directly, so a tick can never fire mid-assertion and
   // settle an order the test is still setting up.
   process.env.RECONCILE_ENABLED ??= 'false';
+  // Same reason: suites call OutboxRelay.runOnce themselves, so a background tick can never publish
+  // a row a test is still asserting is unpublished.
+  process.env.OUTBOX_RELAY_ENABLED ??= 'false';
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
   // live path — billable and non-deterministic. Dropped unless a suite asks for it.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {

@@ -21,7 +21,7 @@ export const outbox = pgTable(
     aggregateId: uuid('aggregate_id').notNull(),
     // The event's own name ('order.placed', 'order.paid', ...); the consumer dispatches on it.
     eventType: text('event_type').notNull(),
-    payload: jsonb('payload').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     // W3C traceparent captured at insert, so a consumer can continue the producer's trace across
     // the queue boundary (auto-instrumentation cannot follow an async hop).
     traceparent: text('traceparent'),
