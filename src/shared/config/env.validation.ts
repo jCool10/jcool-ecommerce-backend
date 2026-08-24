@@ -92,6 +92,13 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   REDIS_URL!: string;
 
+  // BullMQ key prefix; default 'bull' (configuration.ts). @IsNotEmpty because a blank prefix would
+  // silently produce a different, colliding key layout rather than falling back to the default.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  QUEUE_PREFIX?: string;
+
   @IsOptional()
   @IsBooleanString()
   SWAGGER_ENABLED?: string;

@@ -95,6 +95,11 @@ export default () => ({
   redis: {
     url: process.env.REDIS_URL,
   },
+  queue: {
+    // BullMQ key prefix. Namespaces every queue key so one Redis can serve several environments
+    // without a job written by one being consumed by another.
+    prefix: process.env.QUEUE_PREFIX ?? 'bull',
+  },
   auth: {
     jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
     // Short access-token life (defense-in-depth): caps exposure if the jti denylist is ever bypassed.

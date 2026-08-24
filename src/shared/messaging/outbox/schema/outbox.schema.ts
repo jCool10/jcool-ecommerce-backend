@@ -21,8 +21,6 @@ export const outbox = pgTable(
     aggregateId: uuid('aggregate_id').notNull(),
     // The event's own name ('order.placed', 'order.paid', ...); the consumer dispatches on it.
     eventType: text('event_type').notNull(),
-    // A stable snapshot of the event: ids, minor-unit money, ISO timestamps. Never a live entity,
-    // so a replay a week later still means what it meant at write time.
     payload: jsonb('payload').notNull(),
     // W3C traceparent captured at insert, so a consumer can continue the producer's trace across
     // the queue boundary (auto-instrumentation cannot follow an async hop).
@@ -39,8 +37,6 @@ export const outbox = pgTable(
   },
   (t) => [
     // Partial so the index tracks the unpublished backlog rather than every event ever emitted.
-    // Until a relay exists nothing is ever marked published, so today those are the same set and the
-    // table is append-only on the hottest write path — retention arrives with the relay.
     index('idx_outbox_unpublished')
       .on(t.createdAt)
       .where(sql`${t.publishedAt} is null`),
