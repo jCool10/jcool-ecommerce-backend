@@ -8,3 +8,5 @@ export * from '../../../../modules/order/infrastructure/schema/order.schema';
 export * from '../../../../modules/order/infrastructure/schema/idempotency-key.schema';
 export * from '../../../../modules/inventory/infrastructure/schema/inventory.schema';
 export * from '../../../../modules/payment/infrastructure/schema/payment.schema';
+// Not a module table: the outbox carries events from every context (ADR 0019).
+export * from '../../../messaging/outbox/schema/outbox.schema';

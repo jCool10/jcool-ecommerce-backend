@@ -1,6 +1,6 @@
 import type { DomainEvent } from '@shared/kernel';
 
-/** Produced by finalize on a failed payment, but nothing publishes it yet. */
+/** Appended to the outbox by finalize on a failed payment; nothing publishes it from there yet. */
 export class OrderFailedEvent implements DomainEvent {
   readonly eventName = 'order.failed';
 

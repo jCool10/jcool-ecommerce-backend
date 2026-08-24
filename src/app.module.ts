@@ -6,6 +6,7 @@ import { ClsModule } from 'nestjs-cls';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import { RedisModule } from '@shared/infrastructure/redis';
+import { MessagingModule } from '@shared/messaging';
 import { ThrottlerSecurityModule } from '@shared/infrastructure/throttler';
 import { HealthModule } from '@shared/health';
 import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } from '@shared/observability';
@@ -34,6 +35,7 @@ import { AuthModule } from '@modules/user/auth.module';
     SentryModule.forRoot(),
     DrizzleModule,
     RedisModule,
+    MessagingModule,
     ThrottlerSecurityModule,
     // Timer registry for the payment reconciliation sweep; the sweep itself is gated by RECONCILE_ENABLED.
     ScheduleModule.forRoot(),

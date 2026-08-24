@@ -16,10 +16,10 @@ type OrderItemRow = typeof orderItems.$inferSelect;
 
 /**
  * Drizzle adapter for OrderRepositoryPort. `createCheckout` runs the whole checkout in ONE
- * transaction — insert the placed order + items, then the caller's `reserve` (stock hold) and
- * `complete` (idempotency COMPLETED) — so order, reservation, and key commit or roll back as a
- * unit. A pre-check on the unique `orders.idempotency_key` returns an already-placed order
- * instead of inserting a duplicate (crash-reclaim exit-defense).
+ * transaction — insert the placed order + items, then the caller's `reserve` (stock hold),
+ * `appendEvent` (outbox), and `complete` (idempotency COMPLETED) — so order, reservation, event,
+ * and key commit or roll back as a unit. A pre-check on the unique `orders.idempotency_key`
+ * returns an already-placed order instead of inserting a duplicate (crash-reclaim exit-defense).
  */
 @Injectable()
 export class DrizzleOrderRepository implements OrderRepositoryPort {
@@ -29,6 +29,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     order: Order,
     idempotencyKey: string | null,
     reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
+    appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult> {
     return this.db.transaction(async (tx) => {
@@ -70,10 +71,13 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
         })),
       );
 
-      // Hold stock, then freeze the idempotency result — same tx. Reserve throws on a shortfall,
-      // rolling back the order + key too; complete is the last write so any earlier failure aborts
-      // before the key is marked COMPLETED.
+      // Hold stock, emit the event, then freeze the idempotency result — same tx. Reserve throws on
+      // a shortfall, rolling back the order, event, and key too; complete is the last write so any
+      // earlier failure aborts before the key is marked COMPLETED. The event insert sharing this
+      // transaction is what makes it impossible to have a placed order without its event, or an
+      // event for an order that never committed.
       await reserve(tx, orderId);
+      await appendEvent(tx, orderId);
       await complete(tx, orderId);
       return { orderId, created: true };
     });

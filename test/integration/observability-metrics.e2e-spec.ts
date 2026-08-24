@@ -47,7 +47,9 @@ describe('Metrics endpoint (integration)', () => {
     expect(body).toContain('cart_operations_total');
     expect(body).toContain('catalog_cache_operations_total');
     expect(body).toContain('auth_events_total');
-    // Outbox seam reports a truthful 0 (no phantom table read).
+    // Outbox gauge is registered but UNWIRED — a hardcoded 0, not a measurement. Rows accumulate in
+    // the table with no relay to drain them, so this asserts the seam is exposed, not that the
+    // backlog is empty. It must be re-pointed at the real count when the relay lands.
     expect(body).toContain('outbox_backlog_pending 0');
   });
 

@@ -104,7 +104,8 @@ Currently implemented:
 - **Order**
   - Create an order from the current cart: each line's name and price are **snapshotted** into the order — a later Catalog price change never alters a placed order's total (the order is the transaction source of truth).
   - A pure, table-driven **state machine** (`DRAFT → PENDING`, `DRAFT → CANCELLED` wired; later states declared but not yet enabled) — an illegal transition is rejected with `409`.
-  - `place` runs the status change in a DB transaction with reserved seams (a no-op inventory reservation, a declared `OrderPlaced` event, reserved `version` / `idempotency_key` columns) so overselling (BF#1), idempotency (BF#2), and outbox/saga (BF#4) attach in later weeks without a rewrite.
+  - Checkout runs in **one transaction**: the order is persisted at `PENDING`, stock is held, the `order.placed` event is appended to the **transactional outbox**, and the idempotency result is frozen — all four commit or roll back together, so a stock shortfall leaves no order, no event, and no key to block a retry.
+  - **Transactional outbox** (`src/shared/messaging/`, [`adr/0019`](./docs/adr/0019-messaging-outbox-shared-infrastructure.md)): every order event (`order.placed` from checkout, `order.paid` / `order.failed` / `order.expired` from finalization) is written by the same transaction as the change it describes — never a second write that could be lost after a commit or orphaned by a rollback. The W3C `traceparent` is captured on each row so a consumer can continue the producer's trace across the queue boundary. Nothing publishes them yet: `published_at` stays `NULL`, which is the future relay's work queue.
 - **Platform**
   - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
@@ -189,6 +190,7 @@ src/
     ├── rbac/                    # Roles decorator + guard
     ├── config/                  # Env schema validation + typed config
     ├── health/                  # Liveness/readiness indicators
+    ├── messaging/               # Transactional outbox (write side) — ADR 0019
     ├── infrastructure/
     │   ├── database/            # Drizzle module, schema barrel, migrations, seed
     │   └── redis/               # Redis module + service
@@ -377,12 +379,14 @@ access token, and orders are **per-user** (another user's order reads as `404`).
 | `GET`  | `/orders`           | List the current user's orders                                                                       |
 | `GET`  | `/orders/:id`       | View one order (`404` if unknown or owned by another user)                                           |
 
-The state machine is a pure, table-driven function — Week 3 wires only
-`DRAFT → PENDING` (and `DRAFT → CANCELLED`); all later states (`PAID`, `FAILED`,
-`EXPIRED`) are declared but not yet reachable. Placement runs in a **DB
-transaction** and the order carries reserved seams (`version`, `idempotencyKey`,
-an inventory-reservation port, an `OrderPlaced` event) for later boss-fight work,
-none of which is implemented yet.
+The state machine is a pure, table-driven function: `DRAFT → PENDING`,
+`DRAFT → CANCELLED`, and `PENDING → PAID | FAILED | EXPIRED` are wired;
+`PENDING → CANCELLED` is declared but rejected at runtime. Checkout persists the
+order, its stock hold, its `order.placed` outbox event, and its idempotency
+result in **one transaction**; settlement does the same for the status flip, the
+stock resolution, and the matching `order.paid` / `order.failed` /
+`order.expired` event. `version` is still a reserved column — the aggregate uses
+a row lock, not the optimistic counter.
 
 ### Health — `/health`
 
