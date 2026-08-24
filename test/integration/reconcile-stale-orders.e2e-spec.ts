@@ -248,9 +248,14 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
 
   it('is a no-op against an order the webhook already settled — stock committed exactly once', async () => {
     const { orderId, sessionId, variantId } = await openPayment();
+    const recorded = await readPayment(orderId);
     const signed = signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, { eventId: 'evt_reconcile_race', paymentIntent: 'pi_e2e' }),
+      event: checkoutSessionCompleted(
+        sessionId,
+        { amountMinor: recorded.amountMinor, currency: recorded.currency },
+        { eventId: 'evt_reconcile_race', paymentIntent: 'pi_e2e' },
+      ),
     });
     await request(server()).post('/webhooks/payment').set(signed.headers).send(signed.rawBody).expect(200);
     gateway.setPaymentStatus(sessionId, 'PAID');

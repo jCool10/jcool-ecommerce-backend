@@ -12,16 +12,30 @@ const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PAYMENT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const EVENT_ROW_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 const SESSION_ID = 'cs_fake_session';
+const AMOUNT_MINOR = 150_000;
+const CURRENCY = 'VND';
 
+/**
+ * Defaults describe a cleared charge that matches the payment, so each test overrides only the one
+ * field it is about. `null` means the gateway omitted the field entirely, which is distinct from
+ * sending a wrong value.
+ */
 function stripeEvent(
   type: string,
-  opts: { id?: string; sessionId?: string; intentId?: string } = {},
+  opts: {
+    id?: string;
+    sessionId?: string;
+    intentId?: string;
+    paymentStatus?: string | null;
+    amountMinor?: number | null;
+    currency?: string | null;
+  } = {},
 ): Record<string, unknown> {
-  return {
-    id: opts.id ?? 'evt_1',
-    type,
-    data: { object: { id: opts.sessionId ?? SESSION_ID, payment_intent: opts.intentId } },
-  };
+  const object: Record<string, unknown> = { id: opts.sessionId ?? SESSION_ID, payment_intent: opts.intentId };
+  if (opts.paymentStatus !== null) object.payment_status = opts.paymentStatus ?? 'paid';
+  if (opts.amountMinor !== null) object.amount_total = opts.amountMinor ?? AMOUNT_MINOR;
+  if (opts.currency !== null) object.currency = opts.currency ?? CURRENCY.toLowerCase();
+  return { id: opts.id ?? 'evt_1', type, data: { object } };
 }
 
 function verified(payload: Record<string, unknown>): VerifiedEvent {
@@ -35,8 +49,8 @@ function payment(status: PaymentStatus): Payment {
     provider: 'stripe',
     providerSessionId: SESSION_ID,
     providerIntentId: null,
-    amountMinor: 150_000,
-    currency: 'VND',
+    amountMinor: AMOUNT_MINOR,
+    currency: CURRENCY,
     status,
   });
 }
@@ -199,6 +213,88 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(result).toEqual({ outcome: 'skipped', reason: 'payment_not_found' });
     expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());
     expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('refuses to settle a completed session whose payment has not cleared (async payment method)', async () => {
+    const { useCase, updateStatus, markSkipped, markProcessed, findByProviderSessionId } = build({
+      verify: verified(stripeEvent('checkout.session.completed', { paymentStatus: 'unpaid' })),
+      existing: payment(PaymentStatus.PENDING),
+    });
+
+    const result = await useCase.execute(RAW, HEADERS);
+
+    expect(result).toEqual({ outcome: 'skipped', reason: 'awaiting_payment' });
+    // Decided from the event alone, so the payment is never even read, let alone moved.
+    expect(findByProviderSessionId).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(markProcessed).not.toHaveBeenCalled();
+    expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());
+  });
+
+  it('refuses to settle a completed session that reports no payment_status at all', async () => {
+    const { useCase, updateStatus } = build({
+      verify: verified(stripeEvent('checkout.session.completed', { paymentStatus: null })),
+      existing: payment(PaymentStatus.PENDING),
+    });
+    const result = await useCase.execute(RAW, HEADERS);
+    expect(result).toEqual({ outcome: 'skipped', reason: 'awaiting_payment' });
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('refuses a success whose amount does not match the recorded payment', async () => {
+    const { useCase, updateStatus, markProcessed, markSkipped } = build({
+      verify: verified(stripeEvent('checkout.session.completed', { amountMinor: 1 })),
+      existing: payment(PaymentStatus.PENDING),
+    });
+
+    const result = await useCase.execute(RAW, HEADERS);
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'amount_mismatch',
+      charge: {
+        orderId: ORDER_ID,
+        expectedMinor: AMOUNT_MINOR,
+        expectedCurrency: CURRENCY,
+        actualMinor: 1,
+        actualCurrency: CURRENCY.toLowerCase(),
+      },
+    });
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(markProcessed).not.toHaveBeenCalled();
+    expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());
+  });
+
+  it('refuses a success whose currency does not match the recorded payment', async () => {
+    const { useCase, updateStatus } = build({
+      verify: verified(stripeEvent('checkout.session.completed', { currency: 'usd' })),
+      existing: payment(PaymentStatus.PENDING),
+    });
+    const result = await useCase.execute(RAW, HEADERS);
+    expect(result).toMatchObject({ outcome: 'skipped', reason: 'amount_mismatch' });
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('refuses a success that omits the charged amount — absence is not proof', async () => {
+    const { useCase, updateStatus } = build({
+      verify: verified(stripeEvent('checkout.session.completed', { amountMinor: null })),
+      existing: payment(PaymentStatus.PENDING),
+    });
+    const result = await useCase.execute(RAW, HEADERS);
+    expect(result).toMatchObject({ outcome: 'skipped', reason: 'amount_mismatch' });
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('settles an expiry without an amount check — releasing stock must not depend on a charge', async () => {
+    const { useCase, updateStatus } = build({
+      verify: verified(
+        stripeEvent('checkout.session.expired', { paymentStatus: null, amountMinor: null, currency: null }),
+      ),
+      existing: payment(PaymentStatus.PENDING),
+    });
+    const result = await useCase.execute(RAW, HEADERS);
+    expect(result).toMatchObject({ outcome: 'processed', status: PaymentStatus.FAILED });
+    expect(updateStatus).toHaveBeenCalledWith(PAYMENT_ID, PaymentStatus.FAILED, expect.anything());
   });
 
   it('skips a conflicting transition (failure after success) without clobbering the payment', async () => {

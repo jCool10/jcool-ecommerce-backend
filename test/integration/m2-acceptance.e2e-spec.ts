@@ -19,6 +19,7 @@ import {
   signOutcome,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
+import type { SessionCharge } from '../setup/sign-webhook.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
@@ -70,8 +71,10 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
     await resetDatabase(pool);
   });
 
-  const paid = (sessionId: string, eventId: string) => signOutcome(WEBHOOK_SECRET, sessionId, 'PAID', eventId);
-  const failed = (sessionId: string, eventId: string) => signOutcome(WEBHOOK_SECRET, sessionId, 'FAILED', eventId);
+  const paid = (sessionId: string, charge: SessionCharge, eventId: string) =>
+    signOutcome(WEBHOOK_SECRET, sessionId, charge, 'PAID', eventId);
+  const failed = (sessionId: string, eventId: string) =>
+    signOutcome(WEBHOOK_SECRET, sessionId, { amountMinor: null, currency: null }, 'FAILED', eventId);
 
   // `expectedOrders` is not decoration: without it an audit that found nothing to check reads exactly
   // like an audit that found everything in order.
@@ -87,7 +90,7 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
     // Three units on one line: quantity, not row count, is what the ledger has to reconcile.
     const order = await placeAndOpenSession(app, sku, 3);
 
-    const res = await postWebhook(app, paid(order.sessionId, 'evt_m2_happy'));
+    const res = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_m2_happy'));
 
     expect(res.status).toBe(200);
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
@@ -115,7 +118,9 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
     // Every winner walks the rest of the pipeline — the losers never got an order to pay for.
     for (const [i, winner] of won.entries()) {
       const pay = await openSession(app, winner.token, winner.orderId).expect(201);
-      await postWebhook(app, paid(pay.body.providerSessionId as string, `evt_m2_race_${i}`)).expect(200);
+      const recorded = await readPayment(app, winner.orderId);
+      const charge: SessionCharge = { amountMinor: recorded.amountMinor, currency: recorded.currency };
+      await postWebhook(app, paid(pay.body.providerSessionId as string, charge, `evt_m2_race_${i}`)).expect(200);
       expect((await readOrder(app, winner.orderId)).status).toBe('PAID');
     }
 
@@ -127,7 +132,7 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
   it('charges once when a delivery repeats and a sweep passes over the same order', async () => {
     const sku = await seedSellableSku(app, { onHand: 5, priceMinor: PRICE_MINOR });
     const order = await placeAndOpenSession(app, sku);
-    const delivery = paid(order.sessionId, 'evt_m2_dup');
+    const delivery = paid(order.sessionId, order.charge, 'evt_m2_dup');
     gateway.setPaymentStatus(order.sessionId, 'PAID');
 
     const first = await postWebhook(app, delivery);
@@ -160,7 +165,7 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
   it('holds the line when a failure arrives after the money did', async () => {
     const sku = await seedSellableSku(app, { onHand: 5, priceMinor: PRICE_MINOR });
     const order = await placeAndOpenSession(app, sku);
-    await postWebhook(app, paid(order.sessionId, 'evt_m2_first')).expect(200);
+    await postWebhook(app, paid(order.sessionId, order.charge, 'evt_m2_first')).expect(200);
 
     const late = await postWebhook(app, failed(order.sessionId, 'evt_m2_late'));
 
@@ -179,7 +184,7 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
 
     // Whichever wins the row lock, the other must find the order already terminal and stand down.
     const [webhook] = await Promise.all([
-      postWebhook(app, paid(order.sessionId, 'evt_m2_sweep_race')),
+      postWebhook(app, paid(order.sessionId, order.charge, 'evt_m2_sweep_race')),
       reconcile.execute(SWEEP_ALL),
     ]);
 
@@ -201,7 +206,7 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
     const abandonedToken = await buyerWithCart(app, sku.variantId);
     const abandoned = ((await checkout(app, abandonedToken).expect(201)).body as { id: string }).id;
 
-    await postWebhook(app, paid(byWebhookPaid.sessionId, 'evt_m2_mix_paid')).expect(200);
+    await postWebhook(app, paid(byWebhookPaid.sessionId, byWebhookPaid.charge, 'evt_m2_mix_paid')).expect(200);
     await postWebhook(app, failed(byWebhookFailed.sessionId, 'evt_m2_mix_failed')).expect(200);
     gateway.setPaymentStatus(undecided.sessionId, 'PENDING');
     gateway.setPaymentStatus(bySweepPaid.sessionId, 'PAID', 'pi_m2_mix');

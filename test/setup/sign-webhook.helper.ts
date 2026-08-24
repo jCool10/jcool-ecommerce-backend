@@ -31,15 +31,33 @@ export function signWebhook({ secret, event, timestampSec }: SignWebhookOptions)
   };
 }
 
+/**
+ * The charge a Checkout Session reports. `checkout.session.completed` only settles when the money
+ * has cleared AND the amount matches the recorded payment, so fixtures state the charge explicitly:
+ * pass the real payment's amount to settle, or a divergent one to exercise the refusal paths. A
+ * `null` field means the gateway omitted it entirely, which is distinct from sending a wrong value.
+ */
+export interface SessionCharge {
+  amountMinor: number | null;
+  currency: string | null;
+  /** `paid` | `no_payment_required` settle; `unpaid` (Stripe's async methods) must not. */
+  paymentStatus?: string | null;
+}
+
 /** Checkout Session success event → drives Payment PENDING→SUCCEEDED. `paymentIntent` links session→intent. */
 export function checkoutSessionCompleted(
   sessionId: string,
+  charge: SessionCharge,
   opts: { eventId?: string; paymentIntent?: string } = {},
 ): Record<string, unknown> {
+  const object: Record<string, unknown> = { id: sessionId, payment_intent: opts.paymentIntent };
+  if (charge.paymentStatus !== null) object.payment_status = charge.paymentStatus ?? 'paid';
+  if (charge.amountMinor !== null) object.amount_total = charge.amountMinor;
+  if (charge.currency !== null) object.currency = charge.currency.toLowerCase();
   return {
     id: opts.eventId ?? 'evt_test_completed',
     type: 'checkout.session.completed',
-    data: { object: { id: sessionId, payment_intent: opts.paymentIntent } },
+    data: { object },
   };
 }
 

@@ -9,6 +9,7 @@ import {
   checkoutSessionCompleted,
   checkoutSessionExpired,
   signWebhook,
+  type SessionCharge,
   type SignedWebhook,
 } from '../sign-webhook.helper';
 import { createTestProduct } from './catalog.fixture';
@@ -30,6 +31,8 @@ export interface OpenOrder {
   sessionId: string;
   variantId: string;
   quantity: number;
+  /** The charge recorded on the payment — a settling webhook must report exactly this. */
+  charge: SessionCharge;
 }
 
 export async function seedSellableSku(
@@ -67,7 +70,15 @@ export async function placeAndOpenSession(app: INestApplication, sku: SellableSk
   const order = await checkout(app, token).expect(201);
   const orderId = order.body.id as string;
   const pay = await openSession(app, token, orderId).expect(201);
-  return { token, orderId, sessionId: pay.body.providerSessionId as string, variantId: sku.variantId, quantity };
+  const recorded = await readPayment(app, orderId);
+  return {
+    token,
+    orderId,
+    sessionId: pay.body.providerSessionId as string,
+    variantId: sku.variantId,
+    quantity,
+    charge: { amountMinor: recorded.amountMinor, currency: recorded.currency },
+  };
 }
 
 export type WebhookOutcome = 'PAID' | 'FAILED';
@@ -75,13 +86,14 @@ export type WebhookOutcome = 'PAID' | 'FAILED';
 export function signOutcome(
   secret: string,
   sessionId: string,
+  charge: SessionCharge,
   outcome: WebhookOutcome,
   eventId: string,
   paymentIntent = 'pi_m2',
 ): SignedWebhook {
   const event =
     outcome === 'PAID'
-      ? checkoutSessionCompleted(sessionId, { eventId, paymentIntent })
+      ? checkoutSessionCompleted(sessionId, charge, { eventId, paymentIntent })
       : checkoutSessionExpired(sessionId, { eventId });
   return signWebhook({ secret, event });
 }

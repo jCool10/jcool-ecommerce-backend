@@ -31,6 +31,13 @@ export class HandlePaymentWebhookUseCase {
           'gateway reported a success on an already-settled payment — funds may be captured with no matching order',
         );
       }
+      if (result.outcome === 'skipped' && result.charge) {
+        // The signature was ours, the charge was not. Deliberately left unsettled for a human.
+        this.logger.error(
+          { context: LOG_CONTEXT, ...result.charge },
+          'gateway reported a charge that does not match the recorded payment — payment left unsettled for manual review',
+        );
+      }
       return result;
     }
 
