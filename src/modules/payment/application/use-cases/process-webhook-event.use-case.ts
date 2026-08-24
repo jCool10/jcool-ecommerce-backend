@@ -1,11 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PaymentStatus } from '../../domain/payment-status';
 import { canTransition } from '../../domain/payment-state-machine';
+import type { Payment } from '../../domain/payment.entity';
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from '../ports/payment-gateway.port';
 import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';
 import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
-import { mapEventType } from '../mappers/map-event-type';
+import { mapEventToOutcome } from '../mappers/map-event-to-outcome';
+import { readCheckoutSession, type CheckoutSessionFacts } from '../mappers/read-checkout-session';
 
 /**
  * Outcome of one webhook delivery. `rejected` is the only non-2xx result (verify failed, nothing
@@ -16,11 +18,19 @@ export type WebhookProcessResult =
   | { outcome: 'rejected'; reason: 'invalid_signature' | 'expired_timestamp' }
   | { outcome: 'duplicate' }
   | { outcome: 'ignored' }
-  // `conflict` separates a harmless late notice from a success landing on a payment we already closed.
+  // The reason separates the harmless (a late notice, a session still clearing) from the two that
+  // need a human: a success landing on a payment we already closed, and a charge that isn't ours.
   | {
       outcome: 'skipped';
-      reason: 'payment_not_found' | 'conflict';
+      reason: 'payment_not_found' | 'conflict' | 'awaiting_payment' | 'amount_mismatch';
       conflict?: { orderId: string; from: PaymentStatus; to: PaymentStatus };
+      charge?: {
+        orderId: string;
+        expectedMinor: number;
+        expectedCurrency: string;
+        actualMinor?: number;
+        actualCurrency?: string;
+      };
     }
   // Only `processed` settled the payment, so only it carries what the caller needs to finalize.
   | { outcome: 'processed'; status: PaymentStatus; orderId: string; paymentRef: string | null; eventType: string };
@@ -64,17 +74,41 @@ export class ProcessWebhookEventUseCase {
       const eventId = event.id;
       if (eventId === null) throw new Error('inserted webhook_events row has no id');
 
-      const target = mapEventType(verified.type);
+      const facts = readCheckoutSession(verified.payload);
+      const settlement = mapEventToOutcome(verified.type, facts.paymentStatus);
       // An event type we log for audit but do not act on — left RECEIVED.
-      if (target === null) return { outcome: 'ignored' };
+      if (settlement.kind === 'ignore') return { outcome: 'ignored' };
 
-      const ref = extractPaymentRef(verified.payload);
-      const payment = ref.sessionId ? await this.payments.findByProviderSessionId(ref.sessionId, tx) : null;
+      // The session finished but the money has not cleared. Leaving the payment PENDING is the whole
+      // point: the sweep settles it once the gateway reports it paid, and never before.
+      if (settlement.kind === 'awaiting_payment') {
+        await this.webhookEvents.markSkipped(eventId, tx);
+        return { outcome: 'skipped', reason: 'awaiting_payment' };
+      }
+
+      const target = settlement.status;
+      const payment = facts.sessionId ? await this.payments.findByProviderSessionId(facts.sessionId, tx) : null;
       // The webhook raced ahead of our own commit, or carries a shape we don't link to a payment.
       // Keep the audit row and skip applying; the sweep settles the order either way.
       if (!payment || payment.id === null) {
         await this.webhookEvents.markSkipped(eventId, tx);
         return { outcome: 'skipped', reason: 'payment_not_found' };
+      }
+
+      // Only a success moves money, so only a success has to prove it moved OUR money.
+      if (target === PaymentStatus.SUCCEEDED && !chargeMatchesPayment(payment, facts)) {
+        await this.webhookEvents.markSkipped(eventId, tx);
+        return {
+          outcome: 'skipped',
+          reason: 'amount_mismatch',
+          charge: {
+            orderId: payment.orderId,
+            expectedMinor: payment.amountMinor,
+            expectedCurrency: payment.currency,
+            actualMinor: facts.amountMinor,
+            actualCurrency: facts.currency,
+          },
+        };
       }
 
       // Out-of-order or terminal-state event: refuse it in the domain rather than clobber a settled
@@ -89,7 +123,7 @@ export class ProcessWebhookEventUseCase {
       }
 
       const applied =
-        target === PaymentStatus.SUCCEEDED ? payment.markSucceeded(ref.intentId) : payment.markFailed(ref.intentId);
+        target === PaymentStatus.SUCCEEDED ? payment.markSucceeded(facts.intentId) : payment.markFailed(facts.intentId);
       const updated = await this.payments.updateStatus(payment.id, applied.status, {
         providerIntentId: applied.providerIntentId,
         tx,
@@ -115,20 +149,16 @@ export class ProcessWebhookEventUseCase {
 }
 
 /**
- * Pull the payment handles out of a verified Stripe-style event body. Reads `data.object.id`
- * (the session handle persisted on Payment.providerSessionId) and, when present,
- * `data.object.payment_intent` (recorded on success to link session → intent). Fully defensive:
- * the body is authenticated but its inner shape is the sender's, so a missing field just yields
- * undefined and the caller skips rather than throwing.
+ * The event must describe the exact charge recorded when the session was created. A divergence is
+ * never retryable: it means this session is not the one this payment was for — a mislinked or reused
+ * handle, or a snapshot bug — so applying it would settle an order against the wrong money. Absent
+ * fields count as a divergence; on the money path, no proof is not proof.
  */
-function extractPaymentRef(payload: unknown): { sessionId?: string; intentId?: string } {
-  const object = asRecord(asRecord(payload)?.data)?.object;
-  const record = asRecord(object);
-  const sessionId = typeof record?.id === 'string' ? record.id : undefined;
-  const intentId = typeof record?.payment_intent === 'string' ? record.payment_intent : undefined;
-  return { sessionId, intentId };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
+function chargeMatchesPayment(payment: Payment, facts: CheckoutSessionFacts): boolean {
+  return (
+    facts.amountMinor === payment.amountMinor &&
+    facts.currency !== undefined &&
+    // Stripe sends ISO-4217 lowercase; `Payment.currency` is normalized upper at construction.
+    facts.currency.toUpperCase() === payment.currency
+  );
 }

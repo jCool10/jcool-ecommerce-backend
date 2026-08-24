@@ -16,6 +16,7 @@ import {
   checkoutSessionCompleted,
   checkoutSessionExpired,
   signWebhook,
+  type SessionCharge,
   type SignedWebhook,
 } from '../setup/sign-webhook.helper';
 
@@ -48,7 +49,13 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   const server = () => app.getHttpServer();
 
   // Open a real PENDING order + payment; returns the session handle the webhook must reference.
-  async function openPayment(): Promise<{ token: string; orderId: string; paymentId: string; sessionId: string }> {
+  async function openPayment(): Promise<{
+    token: string;
+    orderId: string;
+    paymentId: string;
+    sessionId: string;
+    charge: SessionCharge;
+  }> {
     const { accessToken: token } = await createTestUser(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 150_000 });
     await seedStock(app, variantId, 5);
@@ -64,7 +71,16 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
       .expect(201);
     const orderId = order.body.id as string;
     const pay = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token)).expect(201);
-    return { token, orderId, paymentId: pay.body.paymentId as string, sessionId: pay.body.providerSessionId as string };
+    const paymentId = pay.body.paymentId as string;
+    const recorded = await paymentRow(paymentId);
+    return {
+      token,
+      orderId,
+      paymentId,
+      sessionId: pay.body.providerSessionId as string,
+      // A settling event has to report the charge we actually recorded, exactly as the gateway would.
+      charge: { amountMinor: recorded.amountMinor, currency: recorded.currency },
+    };
   }
 
   function postWebhook(signed: SignedWebhook) {
@@ -81,10 +97,10 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   }
 
   it('accepts a valid first-delivery success: 200, one PROCESSED event, payment SUCCEEDED, intent captured', async () => {
-    const { paymentId, sessionId } = await openPayment();
+    const { paymentId, sessionId, charge } = await openPayment();
     const signed = signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, { eventId: 'evt_ok_1', paymentIntent: 'pi_e2e_123' }),
+      event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_ok_1', paymentIntent: 'pi_e2e_123' }),
     });
 
     const res = await postWebhook(signed);
@@ -101,8 +117,8 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   });
 
   it('rejects an invalid signature with 401, writes no event, leaves the payment PENDING', async () => {
-    const { paymentId, sessionId } = await openPayment();
-    const signed = signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionCompleted(sessionId) });
+    const { paymentId, sessionId, charge } = await openPayment();
+    const signed = signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionCompleted(sessionId, charge) });
     // Mutate one byte AFTER signing — the HMAC no longer covers the bytes we send (raw-body sensitivity).
     const tampered: SignedWebhook = { ...signed, rawBody: `${signed.rawBody} ` };
 
@@ -114,11 +130,11 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   });
 
   it('rejects a signature outside the tolerance window with 401 (replay defense), writes nothing', async () => {
-    const { paymentId, sessionId } = await openPayment();
+    const { paymentId, sessionId, charge } = await openPayment();
     const oneHourAgo = Math.floor(Date.now() / 1000) - 3600;
     const signed = signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId),
+      event: checkoutSessionCompleted(sessionId, charge),
       timestampSec: oneHourAgo,
     });
 
@@ -130,10 +146,10 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   });
 
   it('is exactly-once for a duplicate event id: both 2xx, one event row, payment SUCCEEDED once', async () => {
-    const { paymentId, sessionId } = await openPayment();
+    const { paymentId, sessionId, charge } = await openPayment();
     const signed = signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, { eventId: 'evt_dup_1', paymentIntent: 'pi_dup' }),
+      event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_dup_1', paymentIntent: 'pi_dup' }),
     });
 
     const first = await postWebhook(signed);
@@ -149,10 +165,10 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   });
 
   it('is exactly-once under CONCURRENT redelivery: one winner + one no-op, one row, applied once', async () => {
-    const { paymentId, sessionId } = await openPayment();
+    const { paymentId, sessionId, charge } = await openPayment();
     const signed = signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, { eventId: 'evt_race_1', paymentIntent: 'pi_race' }),
+      event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_race_1', paymentIntent: 'pi_race' }),
     });
 
     // Fire both byte-identical deliveries at once: the reason insert+apply live in ONE tx behind the
@@ -167,11 +183,11 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   });
 
   it('skips an out-of-order failure after success without downgrading the payment (200 skipped, event SKIPPED)', async () => {
-    const { paymentId, sessionId } = await openPayment();
+    const { paymentId, sessionId, charge } = await openPayment();
     await postWebhook(
       signWebhook({
         secret: WEBHOOK_SECRET,
-        event: checkoutSessionCompleted(sessionId, { eventId: 'evt_win', paymentIntent: 'pi_win' }),
+        event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_win', paymentIntent: 'pi_win' }),
       }),
     ).then((r) => expect(r.status).toBe(200));
 
@@ -196,7 +212,12 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   it('logs but skips a success for a session with no local payment (reconciliation seam)', async () => {
     const signed = signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted('cs_test_orphan_session', { eventId: 'evt_orphan' }),
+      // No local payment for this handle, so the charge is never compared — the lookup misses first.
+      event: checkoutSessionCompleted(
+        'cs_test_orphan_session',
+        { amountMinor: 150_000, currency: 'VND' },
+        { eventId: 'evt_orphan' },
+      ),
     });
 
     const res = await postWebhook(signed);
@@ -208,9 +229,9 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   });
 
   it('finalizes the Order to PAID after a success webhook (payment settle drives order finalize)', async () => {
-    const { token, orderId, sessionId } = await openPayment();
+    const { token, orderId, sessionId, charge } = await openPayment();
     await postWebhook(
-      signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionCompleted(sessionId, { eventId: 'evt_final' }) }),
+      signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_final' }) }),
     ).then((r) => expect(r.status).toBe(200));
 
     const order = await request(server()).get(`/orders/${orderId}`).set(authHeader(token)).expect(200);
