@@ -7,6 +7,7 @@ import { PinoLogger } from 'nestjs-pino';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import { extractTraceContext, injectTraceContext } from '@shared/observability/tracing/propagation';
 import { withSpan } from '@shared/observability/tracing/tracer';
+import type { DomainEventJob } from '../queue/domain-event.job';
 import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../queue/queue.constants';
 import { outbox } from './schema/outbox.schema';
 
@@ -14,18 +15,6 @@ const LOG_CONTEXT = 'OutboxRelay';
 const MAX_REFUSALS_PER_TICK = 3;
 
 type OutboxRow = typeof outbox.$inferSelect;
-
-export interface DomainEventJob {
-  /** Stable across redeliveries of the same event — the key a consumer dedups on. */
-  outboxId: string;
-
-  aggregateType: string;
-  aggregateId: string;
-  eventType: string;
-  payload: Record<string, unknown>;
-  occurredAt: string;
-  traceparent: string | null;
-}
 
 export interface RelayTickSummary {
   published: number;

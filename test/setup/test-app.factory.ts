@@ -42,6 +42,9 @@ export async function createTestApp(
   // Same reason: suites call OutboxRelay.runOnce themselves, so a background tick can never publish
   // a row a test is still asserting is unpublished.
   process.env.OUTBOX_RELAY_ENABLED ??= 'false';
+  // And the consumer: suites call DomainEventProcessor.process themselves, so a worker can never
+  // drain a job mid-assertion. A suite that needs the real worker sets QUEUE_WORKER_ENABLED='true'.
+  process.env.QUEUE_WORKER_ENABLED ??= 'false';
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
   // live path — billable and non-deterministic. Dropped unless a suite asks for it.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {

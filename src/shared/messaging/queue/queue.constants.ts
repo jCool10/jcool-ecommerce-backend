@@ -8,6 +8,13 @@ export const QUEUE_DOMAIN_EVENTS = 'domain-events';
 
 export const DOMAIN_EVENTS_QUEUE = Symbol('DOMAIN_EVENTS_QUEUE');
 
+/**
+ * Who the inbox dedups on behalf of. A consumer GROUP, not a process: every instance of this worker
+ * shares the value so they collapse each other's duplicates, while a second consumer that needs the
+ * same events for its own purpose gets its own identity and its own rows.
+ */
+export const DOMAIN_EVENTS_CONSUMER = 'domain-events';
+
 /** Held separately because BullMQ never closes a client it was handed. */
 export const QUEUE_CONNECTION = Symbol('QUEUE_CONNECTION');
 

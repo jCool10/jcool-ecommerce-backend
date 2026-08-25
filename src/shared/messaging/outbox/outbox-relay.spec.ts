@@ -7,7 +7,8 @@ import type { Redis } from 'ioredis';
 import type { PinoLogger } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
-import { OutboxRelay, type DomainEventJob } from './outbox-relay';
+import type { DomainEventJob } from '../queue/domain-event.job';
+import { OutboxRelay } from './outbox-relay';
 import type { outbox } from './schema/outbox.schema';
 
 type OutboxRow = typeof outbox.$inferSelect;

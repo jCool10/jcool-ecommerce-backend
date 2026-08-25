@@ -1,8 +1,13 @@
 import { Global, Module } from '@nestjs/common';
+import { DomainEventDispatcher } from './handlers/domain-event.dispatcher';
+import { OrderEventsHandler } from './handlers/order-events.handler';
+import { InboxStore } from './inbox/inbox.store';
 import { DrizzleOutboxWriter } from './outbox/drizzle-outbox.writer';
 import { OutboxRelay } from './outbox/outbox-relay';
 import { OutboxRelayScheduler } from './outbox/outbox-relay.scheduler';
 import { OUTBOX_WRITER } from './outbox/outbox-writer.port';
+import { DomainEventProcessor } from './queue/domain-event.processor';
+import { DomainEventsWorker } from './queue/domain-events.worker';
 import { QueueLifecycle } from './queue/queue.lifecycle';
 import { QUEUE_PROVIDERS } from './queue/queue.providers';
 
@@ -21,6 +26,11 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
     QueueLifecycle,
     OutboxRelay,
     OutboxRelayScheduler,
+    InboxStore,
+    OrderEventsHandler,
+    DomainEventDispatcher,
+    DomainEventProcessor,
+    DomainEventsWorker,
   ],
   exports: [OUTBOX_WRITER],
 })

@@ -99,6 +99,21 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   QUEUE_PREFIX?: string;
 
+  // Consumer kill-switch; OFF unless "true" (configuration.ts) — the consume path has no retry yet.
+  @IsOptional()
+  @IsBooleanString()
+  QUEUE_WORKER_ENABLED?: string;
+
+  // Jobs consumed in parallel; default 5 (configuration.ts). The cap is a sanity bound, NOT a
+  // guarantee against the pool: each in-flight job holds a connection for its transaction, so this
+  // and DB_POOL_MAX have to be sized against each other.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  QUEUE_WORKER_CONCURRENCY?: number;
+
   // Outbox relay kill-switch; on by default (configuration.ts).
   @IsOptional()
   @IsBooleanString()

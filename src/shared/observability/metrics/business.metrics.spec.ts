@@ -10,6 +10,7 @@ function build() {
   const cartInc = vi.fn();
   const authInc = vi.fn();
   const cacheInc = vi.fn();
+  const consumeInc = vi.fn();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
   const logger = { warn } as unknown as PinoLogger;
   const metrics = new BusinessMetrics(
@@ -18,9 +19,10 @@ function build() {
     { inc: cartInc } as unknown as Counter<string>,
     { inc: authInc } as unknown as Counter<string>,
     { inc: cacheInc } as unknown as Counter<string>,
+    { inc: consumeInc } as unknown as Counter<string>,
     logger,
   );
-  return { metrics, ordersInc, valueObserve, cartInc, authInc, cacheInc, warn };
+  return { metrics, ordersInc, valueObserve, cartInc, authInc, cacheInc, consumeInc, warn };
 }
 
 describe('BusinessMetrics', () => {
@@ -52,6 +54,12 @@ describe('BusinessMetrics', () => {
     const { metrics, cacheInc } = build();
     metrics.recordCatalogCacheOperation('hit');
     expect(cacheInc).toHaveBeenCalledWith({ result: 'hit' });
+  });
+
+  it('counts a consumed event by type and result', () => {
+    const { metrics, consumeInc } = build();
+    metrics.recordEventConsumed('order.placed', 'duplicate');
+    expect(consumeInc).toHaveBeenCalledWith({ event_type: 'order.placed', result: 'duplicate' });
   });
 
   it('swallows a metric error and logs it — telemetry never breaks the business flow', () => {

@@ -99,6 +99,15 @@ export default () => ({
     // BullMQ key prefix. Namespaces every queue key so one Redis can serve several environments
     // without a job written by one being consumed by another.
     prefix: process.env.QUEUE_PREFIX ?? 'bull',
+    // OPT-IN, deliberately. A consume that fails gets no retry yet, and by then the outbox row is
+    // already marked published — so a transient database error would leave the event unapplied with
+    // nothing to replay it. Off, the jobs simply wait in Redis (no TTL) until a process with a retry
+    // and dead-letter path turns this on.
+    workerEnabled: process.env.QUEUE_WORKER_ENABLED === 'true',
+    // Jobs one worker applies at a time. Each holds a pg connection for the length of its
+    // transaction, so this competes DIRECTLY with the HTTP path for DB_POOL_MAX (default 10) —
+    // size the two together rather than raising this alone.
+    workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, 5),
   },
   outbox: {
     // Relay kill-switch; on by default. Off leaves rows unpublished rather than losing them, which

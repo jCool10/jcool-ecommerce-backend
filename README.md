@@ -105,7 +105,8 @@ Currently implemented:
   - Create an order from the current cart: each line's name and price are **snapshotted** into the order — a later Catalog price change never alters a placed order's total (the order is the transaction source of truth).
   - A pure, table-driven **state machine** (`DRAFT → PENDING`, `DRAFT → CANCELLED` wired; later states declared but not yet enabled) — an illegal transition is rejected with `409`.
   - Checkout runs in **one transaction**: the order is persisted at `PENDING`, stock is held, the `order.placed` event is appended to the **transactional outbox**, and the idempotency result is frozen — all four commit or roll back together, so a stock shortfall leaves no order, no event, and no key to block a retry.
-  - **Transactional outbox** (`src/shared/messaging/`, [`adr/0019`](./docs/adr/0019-messaging-outbox-shared-infrastructure.md)): every order event (`order.placed` from checkout, `order.paid` / `order.failed` / `order.expired` from finalization) is written by the same transaction as the change it describes — never a second write that could be lost after a commit or orphaned by a rollback. The W3C `traceparent` is captured on each row so a consumer can continue the producer's trace across the queue boundary. Nothing publishes them yet: `published_at` stays `NULL`, which is the future relay's work queue.
+  - **Transactional outbox** (`src/shared/messaging/`, [`adr/0019`](./docs/adr/0019-messaging-outbox-shared-infrastructure.md)): every order event (`order.placed` from checkout, `order.paid` / `order.failed` / `order.expired` from finalization) is written by the same transaction as the change it describes — never a second write that could be lost after a commit or orphaned by a rollback. The W3C `traceparent` is captured on each row so a consumer can continue the producer's trace across the queue boundary.
+  - **Relay → queue → idempotent consumer**: a scheduler polls `published_at IS NULL` with `FOR UPDATE SKIP LOCKED`, publishes to BullMQ and marks the row published **in one transaction** — at-least-once, safe on every replica without leader election. The worker then claims `message_id = outbox.id` in an `inbox` table (unique on `(consumer, message_id)`) and runs the handler **in that same transaction**, which turns at-least-once delivery into an **exactly-once effect**: a redelivery loses the claim and does nothing, and a handler that fails takes its claim with it so the redelivery does the work. Handlers are audit-only by design — the emitting transaction already applied the effect, so reacting again would apply it twice.
 - **Platform**
   - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
@@ -190,7 +191,7 @@ src/
     ├── rbac/                    # Roles decorator + guard
     ├── config/                  # Env schema validation + typed config
     ├── health/                  # Liveness/readiness indicators
-    ├── messaging/               # Transactional outbox (write side) — ADR 0019
+    ├── messaging/               # Transactional outbox + relay + idempotent consumer — ADR 0019
     ├── infrastructure/
     │   ├── database/            # Drizzle module, schema barrel, migrations, seed
     │   └── redis/               # Redis module + service

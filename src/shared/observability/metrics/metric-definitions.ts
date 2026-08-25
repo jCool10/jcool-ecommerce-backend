@@ -17,6 +17,14 @@ export const CART_OPERATIONS_TOTAL = 'cart_operations_total';
 export const CATALOG_CACHE_OPERATIONS_TOTAL = 'catalog_cache_operations_total';
 export const AUTH_EVENTS_TOTAL = 'auth_events_total';
 
+// --- Messaging ---
+// The ratio between the results is the operational read on the pipeline: a steady trickle of
+// duplicates is at-least-once working as designed, a spike means the relay or the queue is
+// redelivering far more than it should, and any sustained `failed` rate means events are being
+// published and never applied. Counting failures matters as much as successes — without them a
+// pipeline where every consume throws is indistinguishable from an idle one.
+export const MESSAGING_CONSUME_TOTAL = 'messaging_consume_total';
+
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
 // across 1–150ms, where every route's p95/p99 sits; the 0.25s boundary is the latency-SLO
@@ -72,6 +80,11 @@ export const METRIC_PROVIDERS: Provider[] = [
     name: AUTH_EVENTS_TOTAL,
     help: 'Auth audit events, by event and outcome.',
     labelNames: ['event', 'outcome'],
+  }),
+  makeCounterProvider({
+    name: MESSAGING_CONSUME_TOTAL,
+    help: 'Domain events consumed, by event_type and result (processed = effect applied, duplicate = collapsed by the inbox, failed = effect rolled back).',
+    labelNames: ['event_type', 'result'],
   }),
   ...OUTBOX_SEAM_PROVIDERS,
 ];
