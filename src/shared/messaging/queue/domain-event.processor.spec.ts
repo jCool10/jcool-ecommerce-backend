@@ -30,7 +30,7 @@ function build({ claimed = true, known = true }: { claimed?: boolean; known?: bo
   const transaction = vi.fn((run: (t: unknown) => unknown) => Promise.resolve(run(tx)));
   const claim = vi.fn().mockResolvedValue(claimed);
   const dispatch = vi.fn().mockResolvedValue(undefined);
-  const knows = vi.fn().mockReturnValue(known);
+  const label = vi.fn((eventType: string) => (known ? eventType : 'unregistered'));
   const recordEventConsumed = vi.fn();
   const logger = { debug: vi.fn() } as unknown as PinoLogger;
 
@@ -38,7 +38,7 @@ function build({ claimed = true, known = true }: { claimed?: boolean; known?: bo
     { transaction } as unknown as DrizzleDB,
     { recordEventConsumed } as unknown as MetricsPort,
     { claim },
-    { dispatch, knows } as unknown as DomainEventDispatcher,
+    { dispatch, label } as unknown as DomainEventDispatcher,
     logger,
   );
 

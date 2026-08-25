@@ -3,7 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { createQueueConnection } from './queue-connection';
-import { DEFAULT_JOB_OPTIONS, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION, QUEUE_DOMAIN_EVENTS } from './queue.constants';
+import {
+  buildJobOptions,
+  DOMAIN_EVENTS_DLQ_QUEUE,
+  DOMAIN_EVENTS_QUEUE,
+  QUEUE_CONNECTION,
+  QUEUE_DOMAIN_EVENTS,
+  QUEUE_DOMAIN_EVENTS_DLQ,
+} from './queue.constants';
 
 /**
  * Producer side of the queue. A consumer gets its own connection: a worker's blocking read holds
@@ -35,7 +42,21 @@ export const QUEUE_PROVIDERS: Provider[] = [
         // Namespaces every key, so one Redis can host several environments without their queues
         // reading each other's jobs.
         prefix: config.getOrThrow<string>('queue.prefix'),
-        defaultJobOptions: DEFAULT_JOB_OPTIONS,
+        // Read here rather than baked in, so a suite can collapse the backoff to milliseconds and
+        // still exercise the real retry path.
+        defaultJobOptions: buildJobOptions(
+          config.getOrThrow<number>('queue.consumerAttempts'),
+          config.getOrThrow<number>('queue.consumerBackoffMs'),
+        ),
       }),
+  },
+  {
+    provide: DOMAIN_EVENTS_DLQ_QUEUE,
+    inject: [QUEUE_CONNECTION, ConfigService],
+    useFactory: (connection: Redis, config: ConfigService): Queue =>
+      // No default job options on purpose: nothing consumes this queue, so retention rules would
+      // quietly delete the very record it exists to keep. A dead-letter job leaves only by being
+      // replayed or dropped by hand.
+      new Queue(QUEUE_DOMAIN_EVENTS_DLQ, { connection, prefix: config.getOrThrow<string>('queue.prefix') }),
   },
 ];

@@ -3,9 +3,10 @@ import { PinoLogger } from 'nestjs-pino';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import { METRICS, type ConsumeResult, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { InboxStore } from '../inbox/inbox.store';
+import { PermanentError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import { withConsumeSpan } from './consume-span';
-import type { DomainEventJob } from './domain-event.job';
+import { envelopeFields, isWellFormedEnvelope, type DomainEventJob } from './domain-event.job';
 import { DOMAIN_EVENTS_CONSUMER } from './queue.constants';
 
 const LOG_CONTEXT = 'DomainEventProcessor';
@@ -33,10 +34,13 @@ export class DomainEventProcessor {
   ) {}
 
   async process(job: DomainEventJob): Promise<ConsumeResult> {
-    assertEnvelope(job);
-
     let result: ConsumeResult;
     try {
+      // Inside the try so a rejected envelope is counted as a failed consume like any other. Left
+      // outside, the one failure that never even reaches a handler would be the one absent from the
+      // counter that exists to make failures visible.
+      assertEnvelope(job);
+
       result = await withConsumeSpan(job.eventType, job.traceparent, () =>
         this.db.transaction(async (tx): Promise<ConsumeResult> => {
           const claimed = await this.inbox.claim(tx, {
@@ -54,13 +58,14 @@ export class DomainEventProcessor {
       // Counted before rethrowing: a pipeline where every consume throws would otherwise look
       // exactly like an idle one — the counter simply stops moving. The label falls back to a
       // constant for an unrecognised name, which is the only value here that is not bounded.
-      this.metrics.recordEventConsumed(this.labelFor(job.eventType), 'failed');
+      this.metrics.recordEventConsumed(this.dispatcher.label(job.eventType), 'failed');
       throw error;
     }
 
     // Counted after the commit: an effect that rolled back has not been applied, and a metric saying
-    // otherwise would hide exactly the failures this is here to surface.
-    this.metrics.recordEventConsumed(job.eventType, result);
+    // otherwise would hide exactly the failures this is here to surface. Through `label()` like
+    // every other event_type label — a name off the wire is bounded only by the dispatch table.
+    this.metrics.recordEventConsumed(this.dispatcher.label(job.eventType), result);
     if (result === 'duplicate') {
       this.logger.debug(
         { context: LOG_CONTEXT, eventType: job.eventType, messageId: job.outboxId },
@@ -70,20 +75,12 @@ export class DomainEventProcessor {
 
     return result;
   }
-
-  private labelFor(eventType: string): string {
-    return this.dispatcher.knows(eventType) ? eventType : 'unregistered';
-  }
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// The envelope arrives as JSON from Redis, so its type is a claim rather than a guarantee. Fail
-// early with something readable instead of letting a bad id surface as a Postgres cast error deep
-// inside the claim — a failure no redelivery can ever fix. Field names only: the payload can carry
-// customer data, and this message ends up in logs.
+// Permanent by definition — the bytes will be identical on every redelivery — so a rejected envelope
+// goes straight to the dead-letter queue rather than through the whole retry budget.
 function assertEnvelope(job: DomainEventJob): void {
-  if (!UUID.test(job?.outboxId ?? '') || !job?.eventType) {
-    throw new Error(`Malformed domain event envelope (fields: ${Object.keys(job ?? {}).join(',') || 'none'})`);
+  if (!isWellFormedEnvelope(job)) {
+    throw new PermanentError(`Malformed domain event envelope (fields: ${envelopeFields(job)})`);
   }
 }

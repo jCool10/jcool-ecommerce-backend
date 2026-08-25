@@ -11,6 +11,8 @@ function build() {
   const authInc = vi.fn();
   const cacheInc = vi.fn();
   const consumeInc = vi.fn();
+  const retryInc = vi.fn();
+  const dlqInc = vi.fn();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
   const logger = { warn } as unknown as PinoLogger;
   const metrics = new BusinessMetrics(
@@ -20,9 +22,11 @@ function build() {
     { inc: authInc } as unknown as Counter<string>,
     { inc: cacheInc } as unknown as Counter<string>,
     { inc: consumeInc } as unknown as Counter<string>,
+    { inc: retryInc } as unknown as Counter<string>,
+    { inc: dlqInc } as unknown as Counter<string>,
     logger,
   );
-  return { metrics, ordersInc, valueObserve, cartInc, authInc, cacheInc, consumeInc, warn };
+  return { metrics, ordersInc, valueObserve, cartInc, authInc, cacheInc, consumeInc, retryInc, dlqInc, warn };
 }
 
 describe('BusinessMetrics', () => {
@@ -60,6 +64,18 @@ describe('BusinessMetrics', () => {
     const { metrics, consumeInc } = build();
     metrics.recordEventConsumed('order.placed', 'duplicate');
     expect(consumeInc).toHaveBeenCalledWith({ event_type: 'order.placed', result: 'duplicate' });
+  });
+
+  it('counts a retry by type only — the reason belongs to the dead letter, not to every attempt', () => {
+    const { metrics, retryInc } = build();
+    metrics.recordConsumeRetry('order.paid');
+    expect(retryInc).toHaveBeenCalledWith({ event_type: 'order.paid' });
+  });
+
+  it('counts a dead letter by type and reason', () => {
+    const { metrics, dlqInc } = build();
+    metrics.recordDeadLetter('order.paid', 'permanent');
+    expect(dlqInc).toHaveBeenCalledWith({ event_type: 'order.paid', reason: 'permanent' });
   });
 
   it('swallows a metric error and logs it — telemetry never breaks the business flow', () => {

@@ -4,6 +4,7 @@ import { Worker } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import type { ConsumeResult } from '@shared/observability/metrics/metrics.port';
+import { DeadLetterRouter } from './dead-letter';
 import type { DomainEventJob } from './domain-event.job';
 import { DomainEventProcessor } from './domain-event.processor';
 import { createQueueConnection } from './queue-connection';
@@ -24,6 +25,10 @@ const CLOSE_TIMEOUT_MS = 10_000;
 export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdown {
   private worker: Worker<DomainEventJob, ConsumeResult> | null = null;
   private connection: Redis | null = null;
+  // BullMQ's 'failed' listener is synchronous, so routing to the dead-letter queue outlives the
+  // event that triggered it. Tracked because shutdown has to wait for it: worker.close() knows
+  // nothing about these, and the queue underneath them is closed moments later.
+  private readonly pendingRoutes = new Set<Promise<void>>();
 
   private readonly enabled: boolean;
   private readonly concurrency: number;
@@ -32,6 +37,7 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
 
   constructor(
     private readonly processor: DomainEventProcessor,
+    private readonly deadLetter: DeadLetterRouter,
     config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
@@ -62,20 +68,22 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
       this.logger.error({ context: LOG_CONTEXT, err: error }, `domain events worker error: ${error.message}`);
     });
 
-    // A failed job is kept by the queue rather than lost, but nothing routes it anywhere yet and it
-    // will not be retried — so until a dead-letter path exists, this line is the only signal that an
-    // event went unapplied.
+    // Retry-or-dead-letter, decided by the router. The listener signature is synchronous, so the
+    // route is started rather than awaited; the .catch() is there so a bug inside it can never
+    // surface as an unhandled rejection that kills the process.
     this.worker.on('failed', (job, error: Error) => {
-      this.logger.error(
-        {
-          context: LOG_CONTEXT,
-          err: error,
-          eventType: job?.name,
-          messageId: job?.data?.outboxId,
-          attemptsMade: job?.attemptsMade,
-        },
-        `domain event consume failed: ${error.message}`,
-      );
+      if (!job) {
+        // No job means BullMQ could not load it — nothing to route, and nothing to identify it by.
+        this.logger.error({ context: LOG_CONTEXT, err: error }, `domain event consume failed: ${error.message}`);
+        return;
+      }
+      const route = this.deadLetter
+        .route(job, error)
+        .catch((caught: unknown) => {
+          this.logger.error({ context: LOG_CONTEXT, err: caught }, 'dead-letter routing threw');
+        })
+        .finally(() => this.pendingRoutes.delete(route));
+      this.pendingRoutes.add(route);
     });
 
     this.logger.info({ context: LOG_CONTEXT, concurrency: this.concurrency }, 'domain events worker started');
@@ -98,6 +106,11 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
         `failed to close domain events worker: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+
+    // After the close, because the last job to fail raises 'failed' during it. Inside the same
+    // bound: a clean SIGTERM that returned here early would close the dead-letter queue out from
+    // under a move still in flight, losing it exactly as a crash would.
+    await Promise.race([Promise.allSettled(this.pendingRoutes), timeout(CLOSE_TIMEOUT_MS)]);
 
     if (!this.connection) return;
     // quit() drains then closes, but rejects outright when Redis is already gone — fall back to an

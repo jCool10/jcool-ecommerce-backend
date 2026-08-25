@@ -10,6 +10,8 @@ import { OrderEventsHandler } from './order-events.handler';
  */
 export type DomainEventHandler = (job: DomainEventJob, tx: DrizzleTx) => Promise<void>;
 
+const UNREGISTERED_EVENT_LABEL = 'unregistered';
+
 /** Routes a consumed event to its effect. The one place that decides what this service reacts to. */
 @Injectable()
 export class DomainEventDispatcher {
@@ -29,12 +31,12 @@ export class DomainEventDispatcher {
   }
 
   /**
-   * Whether an event name is one this service registered. Callers use it to keep an unrecognised
-   * name off a metric label — the dispatch table is the only bounded set of event names there is,
-   * and anything arriving on the queue is not.
+   * The event name as a metric label, folding anything unrecognised into one constant. The dispatch
+   * table is the only bounded set of event names there is — a name off the wire is not — so a
+   * producer emitting garbage would otherwise mint a time series per value.
    */
-  knows(eventType: string): boolean {
-    return this.handlers.has(eventType);
+  label(eventType: string): string {
+    return this.handlers.has(eventType) ? eventType : UNREGISTERED_EVENT_LABEL;
   }
 
   async dispatch(job: DomainEventJob, tx: DrizzleTx): Promise<void> {

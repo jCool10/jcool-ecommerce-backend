@@ -1,6 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
+import type { DeadLetterRouter } from './dead-letter';
 import type { DomainEventProcessor } from './domain-event.processor';
 import { DomainEventsWorker } from './domain-events.worker';
 
@@ -24,6 +25,7 @@ function build(overrides: Record<string, unknown> = {}) {
 
   const worker = new DomainEventsWorker(
     { process: vi.fn() } as unknown as DomainEventProcessor,
+    { route: vi.fn() } as unknown as DeadLetterRouter,
     config,
     logger as unknown as PinoLogger,
   );

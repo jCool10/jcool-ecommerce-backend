@@ -42,4 +42,11 @@ describe('DomainEventDispatcher', () => {
 
     await expect(dispatcher.dispatch(job('payment.succeeded'), tx)).rejects.toBeInstanceOf(UnhandledEventError);
   });
+
+  it('folds an unregistered name into one label, so a bad producer cannot mint time series', () => {
+    const { dispatcher } = build();
+
+    expect(dispatcher.label('order.paid')).toBe('order.paid');
+    expect(dispatcher.label('order.paid; DROP TABLE')).toBe('unregistered');
+  });
 });

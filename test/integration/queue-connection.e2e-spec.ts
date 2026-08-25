@@ -5,7 +5,7 @@ import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RedisService } from '../../src/shared/infrastructure/redis';
 import {
-  DEFAULT_JOB_OPTIONS,
+  buildJobOptions,
   DOMAIN_EVENTS_QUEUE,
   QUEUE_CONNECTION,
   QUEUE_DOMAIN_EVENTS,
@@ -48,8 +48,18 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
     expect(waiting[0].name).toBe('order.placed');
     expect(waiting[0].data).toEqual(job);
     // Proves defaultJobOptions reached the queue rather than sitting unread in the constants file.
-    expect(waiting[0].opts.removeOnComplete).toEqual(DEFAULT_JOB_OPTIONS.removeOnComplete);
-    expect(waiting[0].opts.removeOnFail).toEqual(DEFAULT_JOB_OPTIONS.removeOnFail);
+    // The retry policy above all: it is stamped onto the job at publish time, so a queue built
+    // without it would hand the worker jobs that fail on their first try and never come back.
+    const expected = buildJobOptions(
+      app.get(ConfigService).getOrThrow<number>('queue.consumerAttempts'),
+      app.get(ConfigService).getOrThrow<number>('queue.consumerBackoffMs'),
+    );
+    expect(waiting[0].opts).toMatchObject({
+      attempts: expected.attempts,
+      backoff: expected.backoff,
+      removeOnComplete: expected.removeOnComplete,
+      removeOnFail: expected.removeOnFail,
+    });
   });
 
   it('namespaces its keys under the configured prefix', async () => {

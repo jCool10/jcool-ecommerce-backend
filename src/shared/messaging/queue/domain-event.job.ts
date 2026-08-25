@@ -13,3 +13,20 @@ export interface DomainEventJob {
   occurredAt: string;
   traceparent: string | null;
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The envelope arrives as JSON from Redis, so its declared type is a claim rather than a guarantee.
+ * Checked wherever `outboxId` is about to be used as a key — the consumer before it claims the
+ * message, the replay tool before it re-publishes under that id — so a bad value surfaces here
+ * rather than as a Postgres cast error deep inside a transaction.
+ */
+export function isWellFormedEnvelope(job: DomainEventJob | undefined): boolean {
+  return UUID.test(job?.outboxId ?? '') && Boolean(job?.eventType);
+}
+
+/** Field names only: the payload can carry customer data, and this string ends up in logs. */
+export function envelopeFields(job: unknown): string {
+  return Object.keys((job as Record<string, unknown> | null) ?? {}).join(',') || 'none';
+}

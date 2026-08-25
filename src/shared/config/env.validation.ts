@@ -99,7 +99,7 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   QUEUE_PREFIX?: string;
 
-  // Consumer kill-switch; OFF unless "true" (configuration.ts) — the consume path has no retry yet.
+  // Consumer kill-switch; on by default (configuration.ts). Off leaves jobs queued, never lost.
   @IsOptional()
   @IsBooleanString()
   QUEUE_WORKER_ENABLED?: string;
@@ -113,6 +113,25 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(50)
   QUEUE_WORKER_CONCURRENCY?: number;
+
+  // Deliveries before a message is dead-lettered; default 5 (configuration.ts). Capped at 10 rather
+  // than left open because the backoff doubles: ten tries already stretch the last wait past eight
+  // minutes, and a message nobody can apply belongs in the DLQ long before that.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  QUEUE_CONSUMER_ATTEMPTS?: number;
+
+  // First retry delay in ms; default 1000 (configuration.ts). Min 100 so a typo cannot turn the
+  // retry budget into a tight loop against whatever dependency is already failing.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(60_000)
+  QUEUE_CONSUMER_BACKOFF_MS?: number;
 
   // Outbox relay kill-switch; on by default (configuration.ts).
   @IsOptional()

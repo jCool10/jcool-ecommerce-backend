@@ -24,6 +24,11 @@ export const AUTH_EVENTS_TOTAL = 'auth_events_total';
 // published and never applied. Counting failures matters as much as successes — without them a
 // pipeline where every consume throws is indistinguishable from an idle one.
 export const MESSAGING_CONSUME_TOTAL = 'messaging_consume_total';
+// Retries and dead letters are the same failure seen at two horizons. A rising retry rate with a
+// flat DLQ is a dependency wobbling and the backoff absorbing it; a rising DLQ means messages are
+// now being parked for a human, and is the one of the two worth waking someone for.
+export const MESSAGING_CONSUME_RETRIES_TOTAL = 'messaging_consume_retries_total';
+export const MESSAGING_DLQ_TOTAL = 'messaging_dlq_total';
 
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
@@ -85,6 +90,16 @@ export const METRIC_PROVIDERS: Provider[] = [
     name: MESSAGING_CONSUME_TOTAL,
     help: 'Domain events consumed, by event_type and result (processed = effect applied, duplicate = collapsed by the inbox, failed = effect rolled back).',
     labelNames: ['event_type', 'result'],
+  }),
+  makeCounterProvider({
+    name: MESSAGING_CONSUME_RETRIES_TOTAL,
+    help: 'Failed deliveries the queue will retry after a backoff, by event_type.',
+    labelNames: ['event_type'],
+  }),
+  makeCounterProvider({
+    name: MESSAGING_DLQ_TOTAL,
+    help: 'Messages moved to the dead-letter queue, by event_type and reason (permanent = retrying could never fix it, attempts_exhausted = it stayed broken for the whole budget).',
+    labelNames: ['event_type', 'reason'],
   }),
   ...OUTBOX_SEAM_PROVIDERS,
 ];

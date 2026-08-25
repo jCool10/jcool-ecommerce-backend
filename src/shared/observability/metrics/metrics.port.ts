@@ -12,6 +12,9 @@ export type CacheResult = 'hit' | 'miss' | 'error';
 /** Result of applying one delivered domain event. `duplicate` is a redelivery the inbox collapsed — routine under at-least-once delivery, not a failure. `failed` means the effect rolled back. */
 export type ConsumeResult = 'processed' | 'duplicate' | 'failed';
 
+/** Why a message stopped being retried. `permanent` is a failure retrying could never fix (bad envelope, no handler); `attempts_exhausted` is one that stayed broken for the whole retry budget. */
+export type DeadLetterReason = 'permanent' | 'attempts_exhausted';
+
 /**
  * Business events worth counting. Callers pass only bounded, low-cardinality values —
  * never an id/email/sku (those belong on logs/spans, not Prometheus labels).
@@ -29,4 +32,8 @@ export interface MetricsPort {
   recordCatalogCacheOperation(result: CacheResult): void;
   /** One domain event finished consuming. `eventType` must be a registered event name — never a value straight off the wire, which would be unbounded label cardinality. */
   recordEventConsumed(eventType: string, result: ConsumeResult): void;
+  /** A failed delivery the transport will try again. Same cardinality rule as above. */
+  recordConsumeRetry(eventType: string): void;
+  /** A message moved to the dead-letter queue — it will not be tried again without a human. Same cardinality rule as above. */
+  recordDeadLetter(eventType: string, reason: DeadLetterReason): void;
 }

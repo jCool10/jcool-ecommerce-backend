@@ -17,7 +17,7 @@
     "start:prod": "node --import ./dist/instrumentation.js dist/main",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "lint:check": "eslint \"src/**/*.ts\"",
-    "typecheck": "tsc --noEmit -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json && tsc -p tsconfig.scripts.json",
     "arch:check": "depcruise --config .dependency-cruiser.cjs src",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -30,6 +30,7 @@
     "db:seed": "tsx src/shared/infrastructure/database/seed.ts",
     "seed:users:bulk": "tsx scripts/seed-users-bulk.ts",
     "db:metrics:users": "tsx scripts/capture-db-metrics.ts",
+    "queue:replay-dlq": "tsx scripts/replay-dlq.ts",
     "load:baseline": "k6 run k6/baseline.js",
     "load:register:write": "k6 run test/load/register-uniqueness/write-mix.js",
     "load:register:dup": "k6 run test/load/register-uniqueness/duplicate-mix.js"
