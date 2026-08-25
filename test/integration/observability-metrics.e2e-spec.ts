@@ -47,10 +47,14 @@ describe('Metrics endpoint (integration)', () => {
     expect(body).toContain('cart_operations_total');
     expect(body).toContain('catalog_cache_operations_total');
     expect(body).toContain('auth_events_total');
-    // Outbox gauge is registered but UNWIRED — a hardcoded 0, not a measurement. Rows accumulate in
-    // the table with no relay to drain them, so this asserts the seam is exposed, not that the
-    // backlog is empty. It must be re-pointed at the real count when the relay lands.
-    expect(body).toContain('outbox_backlog_pending 0');
+    // Messaging + the outbox gauges. Presence only: the gauges now read the table on every scrape,
+    // and this app shares its database with whatever suite ran before it — asserting a value here
+    // would make this file fail for another file's leftovers. What the numbers mean is
+    // outbox-queue-e2e's subject, on a database it resets itself.
+    expect(body).toContain('messaging_publish_total');
+    expect(body).toContain('messaging_consume_total');
+    expect(body).toContain('outbox_backlog_pending');
+    expect(body).toContain('outbox_oldest_age_seconds');
   });
 
   it('labels the RED metric with the route TEMPLATE, never the concrete id (cardinality)', async () => {

@@ -159,7 +159,9 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
       .set('Authorization', `Bearer ${METRICS_TOKEN}`)
       .expect(200);
 
-    // Presence, not value: the registry is process-wide and shared with every other e2e file.
+    // Presence, not value: counters accumulate across the tests in this file, so only a delta would
+    // be meaningful (the registry itself is per-file — vitest isolates each e2e file in its own
+    // process).
     expect(text).toContain('messaging_consume_total{event_type="order.placed",result="processed"}');
     expect(text).toContain('messaging_consume_total{event_type="order.placed",result="duplicate"}');
   });

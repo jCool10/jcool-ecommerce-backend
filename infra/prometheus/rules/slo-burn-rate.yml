@@ -131,15 +131,38 @@ groups:
           summary: 'Slow latency-budget burn (latency SLO 99% < 250ms)'
           description: '>6% of requests slower than 250ms over 6h and 30m — ~10 days to exhaust the 30-day budget.'
 
-  # SEAM (BF#4 outbox) — disabled until the outbox table + poller exist. Uncomment when
-  # outbox_backlog_pending / outbox_oldest_age_seconds report real values (they are 0 now).
-  # - name: outbox-alerts
-  #   rules:
-  #     - alert: OutboxBacklogGrowing
-  #       expr: outbox_backlog_pending > 100
-  #       for: 10m
-  #       labels: { severity: ticket }
-  #     - alert: OutboxMessageStale
-  #       expr: outbox_oldest_age_seconds > 300
-  #       for: 5m
-  #       labels: { severity: page }
+  # The event pipeline fails silently against every rule above it: a dead relay serves 200s all day,
+  # so none of these failures move the RED numerator. Triage steps in docs/observability-runbook.md §9.
+  - name: messaging-alerts
+    rules:
+      # Age, not count, is the page — on a quiet shop a dead relay barely moves the count. The relay
+      # polls every second, so a healthy oldest row is seconds old. Blind spot: a single permanently
+      # refused row pins this gauge, and it keeps firing even though that row blocks nobody else, so
+      # check `attempts` (runbook §9) before treating it as a stalled relay.
+      - alert: OutboxMessageStale
+        expr: outbox_oldest_age_seconds > 60
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Outbox relay is not draining'
+          description: 'Oldest unpublished outbox row older than 60s for 2m — events are committed but never delivered.'
+      # Sizes the incident above, and a ticket on its own: a backlog this deep with a healthy age is
+      # a traffic burst the relay is still working through, not an outage.
+      - alert: OutboxBacklogGrowing
+        expr: outbox_backlog_pending > 100
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Outbox backlog above 100 rows'
+          description: 'Sustained backlog — read against outbox_oldest_age_seconds to tell a burst from a stall.'
+      # A dead-lettered message has already spent its whole retry budget; nothing will pick it up
+      # again without a human. No `for`: one message is the incident.
+      - alert: DeadLetterQueued
+        expr: increase(messaging_dlq_total[5m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: 'Message moved to the dead-letter queue'
+          description: 'Parked after exhausting retries or a permanent failure. Inspect with `npm run queue:replay-dlq`, deploy the fix, then replay.'

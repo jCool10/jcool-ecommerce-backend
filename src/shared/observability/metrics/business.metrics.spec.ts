@@ -10,6 +10,7 @@ function build() {
   const cartInc = vi.fn();
   const authInc = vi.fn();
   const cacheInc = vi.fn();
+  const publishInc = vi.fn();
   const consumeInc = vi.fn();
   const retryInc = vi.fn();
   const dlqInc = vi.fn();
@@ -21,12 +22,25 @@ function build() {
     { inc: cartInc } as unknown as Counter<string>,
     { inc: authInc } as unknown as Counter<string>,
     { inc: cacheInc } as unknown as Counter<string>,
+    { inc: publishInc } as unknown as Counter<string>,
     { inc: consumeInc } as unknown as Counter<string>,
     { inc: retryInc } as unknown as Counter<string>,
     { inc: dlqInc } as unknown as Counter<string>,
     logger,
   );
-  return { metrics, ordersInc, valueObserve, cartInc, authInc, cacheInc, consumeInc, retryInc, dlqInc, warn };
+  return {
+    metrics,
+    ordersInc,
+    valueObserve,
+    cartInc,
+    authInc,
+    cacheInc,
+    publishInc,
+    consumeInc,
+    retryInc,
+    dlqInc,
+    warn,
+  };
 }
 
 describe('BusinessMetrics', () => {
@@ -58,6 +72,12 @@ describe('BusinessMetrics', () => {
     const { metrics, cacheInc } = build();
     metrics.recordCatalogCacheOperation('hit');
     expect(cacheInc).toHaveBeenCalledWith({ result: 'hit' });
+  });
+
+  it('counts a published event by type and result', () => {
+    const { metrics, publishInc } = build();
+    metrics.recordEventPublished('order.placed', 'refused');
+    expect(publishInc).toHaveBeenCalledWith({ event_type: 'order.placed', result: 'refused' });
   });
 
   it('counts a consumed event by type and result', () => {

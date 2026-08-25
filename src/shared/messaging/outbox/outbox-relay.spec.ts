@@ -7,6 +7,9 @@ import type { Redis } from 'ioredis';
 import type { PinoLogger } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
+import type { OrderEventsHandler } from '../handlers/order-events.handler';
 import type { DomainEventJob } from '../queue/domain-event.job';
 import { OutboxRelay } from './outbox-relay';
 import type { outbox } from './schema/outbox.schema';
@@ -70,16 +73,33 @@ function build(rows: OutboxRow[]) {
   const add = vi.fn().mockResolvedValue(undefined);
   const connection = { status: 'ready' };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const recordEventPublished = vi.fn();
+  // The real table, not a stub that echoes back whatever it is given: what the label folds is the
+  // thing under test, and a stub would agree with any answer.
+  const dispatcher = new DomainEventDispatcher({ record: vi.fn() } as unknown as OrderEventsHandler);
 
   const relay = new OutboxRelay(
     { transaction } as unknown as DrizzleDB,
     { add } as unknown as Queue,
     connection as unknown as Redis,
+    { recordEventPublished } as unknown as MetricsPort,
+    dispatcher,
     logger as unknown as PinoLogger,
   );
 
   const jobs = () => add.mock.calls.map(([, job]) => job as DomainEventJob);
-  return { relay, transaction, add, connection, logger, writes, limits, jobs, lock: () => lockClause };
+  return {
+    relay,
+    transaction,
+    add,
+    connection,
+    logger,
+    writes,
+    limits,
+    jobs,
+    recordEventPublished,
+    lock: () => lockClause,
+  };
 }
 
 describe('OutboxRelay', () => {
@@ -190,6 +210,39 @@ describe('OutboxRelay', () => {
       expect(t.transaction).not.toHaveBeenCalled();
       expect(t.add).not.toHaveBeenCalled();
       expect(t.logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('publish metrics', () => {
+    it('counts a delivered row as published', async () => {
+      const t = build([row(), row()]);
+
+      await t.relay.runOnce(10);
+
+      expect(t.recordEventPublished).toHaveBeenCalledTimes(2);
+      expect(t.recordEventPublished).toHaveBeenCalledWith('order.placed', 'published');
+    });
+
+    it('counts the row the queue rejected, so a stalled pipeline is visible before the backlog is', async () => {
+      const t = build([row(), row()]);
+      t.add.mockRejectedValueOnce(new Error('queue rejected the payload')).mockResolvedValue(undefined);
+
+      await t.relay.runOnce(10);
+
+      expect(t.recordEventPublished).toHaveBeenNthCalledWith(1, 'order.placed', 'refused');
+      expect(t.recordEventPublished).toHaveBeenNthCalledWith(2, 'order.placed', 'published');
+    });
+
+    it('folds an event type no consumer knows into one series instead of minting one per name', async () => {
+      const t = build([row({ eventType: 'payment.succeeded' }), row({ eventType: 'shipment.created' })]);
+
+      await t.relay.runOnce(10);
+
+      // `outbox.event_type` is free text a producer wrote; only the dispatch table bounds it. The
+      // fold doubles as a warning — these two are heading straight for the dead-letter queue.
+      expect(t.recordEventPublished).toHaveBeenCalledTimes(2);
+      expect(t.recordEventPublished).toHaveBeenNthCalledWith(1, 'unregistered', 'published');
+      expect(t.recordEventPublished).toHaveBeenNthCalledWith(2, 'unregistered', 'published');
     });
   });
 

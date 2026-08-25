@@ -1,6 +1,6 @@
 import type { Provider } from '@nestjs/common';
 import { makeCounterProvider, makeHistogramProvider } from '@willsoto/nestjs-prometheus';
-import { OUTBOX_SEAM_PROVIDERS } from './outbox-backlog.collector';
+import { OUTBOX_BACKLOG_PROVIDERS } from './outbox-backlog.collector';
 
 // Metric names in one place so the providers, the @InjectMetric() consumers, and the tests
 // never drift. Prometheus conventions: `_total` suffix for counters, base-unit suffix
@@ -18,6 +18,11 @@ export const CATALOG_CACHE_OPERATIONS_TOTAL = 'catalog_cache_operations_total';
 export const AUTH_EVENTS_TOTAL = 'auth_events_total';
 
 // --- Messaging ---
+// Publishes are the producer half of the pipeline, and the only place a queue outage is visible as
+// a number: the relay keeps refused rows for the next tick, so nothing is lost, but a sustained
+// `refused` rate means events are piling up in Postgres. Read it against the backlog gauges — this
+// counter says the relay is trying, they say how far behind it has fallen.
+export const MESSAGING_PUBLISH_TOTAL = 'messaging_publish_total';
 // The ratio between the results is the operational read on the pipeline: a steady trickle of
 // duplicates is at-least-once working as designed, a spike means the relay or the queue is
 // redelivering far more than it should, and any sustained `failed` rate means events are being
@@ -87,6 +92,11 @@ export const METRIC_PROVIDERS: Provider[] = [
     labelNames: ['event', 'outcome'],
   }),
   makeCounterProvider({
+    name: MESSAGING_PUBLISH_TOTAL,
+    help: 'Publish attempts by the relay, by event_type and result (published = accepted by the queue, refused = kept for a later tick). Attempts, not rows: a tick that rolls back after publishing has already counted, and the row is counted again when the next tick resends it.',
+    labelNames: ['event_type', 'result'],
+  }),
+  makeCounterProvider({
     name: MESSAGING_CONSUME_TOTAL,
     help: 'Domain events consumed, by event_type and result (processed = effect applied, duplicate = collapsed by the inbox, failed = effect rolled back).',
     labelNames: ['event_type', 'result'],
@@ -101,5 +111,5 @@ export const METRIC_PROVIDERS: Provider[] = [
     help: 'Messages moved to the dead-letter queue, by event_type and reason (permanent = retrying could never fix it, attempts_exhausted = it stayed broken for the whole budget).',
     labelNames: ['event_type', 'reason'],
   }),
-  ...OUTBOX_SEAM_PROVIDERS,
+  ...OUTBOX_BACKLOG_PROVIDERS,
 ];

@@ -5,8 +5,10 @@ import { asc, eq, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { extractTraceContext, injectTraceContext } from '@shared/observability/tracing/propagation';
 import { withSpan } from '@shared/observability/tracing/tracer';
+import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { DomainEventJob } from '../queue/domain-event.job';
 import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../queue/queue.constants';
 import { outbox } from './schema/outbox.schema';
@@ -33,6 +35,13 @@ export class OutboxRelay {
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     @Inject(DOMAIN_EVENTS_QUEUE) private readonly queue: Queue,
     @Inject(QUEUE_CONNECTION) private readonly connection: Redis,
+    @Inject(METRICS) private readonly metrics: MetricsPort,
+    // Not to dispatch anything — for `label()`. The dispatch table is the only bounded set of event
+    // names in the system, and `outbox.event_type` is free text a producer wrote, so publishing a
+    // name nobody consumes has to fold into one series rather than mint its own. That fold is also
+    // the signal: `event_type="unregistered"` climbing here means we are shipping events straight at
+    // the dead-letter queue, visible a full retry budget before the DLQ counter says so.
+    private readonly dispatcher: DomainEventDispatcher,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -60,9 +69,11 @@ export class OutboxRelay {
       let published = 0;
 
       for (const row of rows) {
+        const eventType = this.dispatcher.label(row.eventType);
         try {
           await this.publish(row);
         } catch (error) {
+          this.metrics.recordEventPublished(eventType, 'refused');
           refused.push(row);
           lastError = error instanceof Error ? error.message : String(error);
           // Several refusals in one tick is the queue failing, not that many bad rows. Stop rather
@@ -70,6 +81,11 @@ export class OutboxRelay {
           if (refused.length >= MAX_REFUSALS_PER_TICK) break;
           continue;
         }
+        // Counted at the publish, not after the commit: the job is on the queue from here on, and a
+        // crash before the mark commits does not take it back — it only means the row is sent again
+        // next tick. Counting after the commit would under-report exactly the window the outbox
+        // exists to survive.
+        this.metrics.recordEventPublished(eventType, 'published');
         await tx.update(outbox).set({ publishedAt: new Date() }).where(eq(outbox.id, row.id));
         published += 1;
       }
