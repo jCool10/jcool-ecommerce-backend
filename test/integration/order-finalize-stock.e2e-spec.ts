@@ -117,6 +117,18 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     expect((await readStock(SKU)).quantityReserved).toBe(0);
   });
 
+  it('CANCELLED releases the hold, same as FAILED', async () => {
+    const orderId = await seedPendingOrder();
+    await seedStock(app, SKU, 10);
+    await hold(orderId, SKU, 3);
+
+    await finalize.execute({ orderId, outcome: 'CANCELLED', reason: 'user:cancelled' });
+
+    expect((await readOrder(orderId)).status).toBe('CANCELLED');
+    expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
+    expect((await readStock(SKU)).quantityReserved).toBe(0);
+  });
+
   it('is idempotent: finalizing PAID twice commits the hold once — on-hand not dropped again', async () => {
     const orderId = await seedPendingOrder();
     await seedStock(app, SKU, 10);

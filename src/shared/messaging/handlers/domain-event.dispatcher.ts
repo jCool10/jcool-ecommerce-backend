@@ -20,11 +20,12 @@ export class DomainEventDispatcher {
   constructor(orderEvents: OrderEventsHandler) {
     this.handlers = new Map<string, DomainEventHandler>([
       ['order.placed', (job) => orderEvents.record(job)],
-      // The three finalize outcomes. Audit-only for the same reason as order.placed: the finalizing
+      // The finalize outcomes. Audit-only for the same reason as order.placed: the finalizing
       // transaction already settled the stock, so re-applying anything here would double it.
       ['order.paid', (job) => orderEvents.record(job)],
       ['order.failed', (job) => orderEvents.record(job)],
       ['order.expired', (job) => orderEvents.record(job)],
+      ['order.cancelled', (job) => orderEvents.record(job)],
       // A context that starts emitting its own events (Payment, say) registers here — and only once
       // it has an effect that is genuinely its consumer's to run, not a repeat of the producer's.
     ]);

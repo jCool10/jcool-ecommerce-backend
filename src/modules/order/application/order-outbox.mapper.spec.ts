@@ -3,6 +3,7 @@ import { OrderPlacedEvent } from '../domain/events/order-placed.event';
 import { OrderPaidEvent } from '../domain/events/order-paid.event';
 import { OrderFailedEvent } from '../domain/events/order-failed.event';
 import { OrderExpiredEvent } from '../domain/events/order-expired.event';
+import { OrderCancelledEvent } from '../domain/events/order-cancelled.event';
 import { toFinalizedOutboxRecord, toPlacedOutboxRecord } from './order-outbox.mapper';
 
 const ORDER_ID = '01a03000-0000-7000-8000-000000000001';
@@ -69,6 +70,17 @@ describe('order outbox mapper', () => {
       aggregateId: ORDER_ID,
       eventType: 'order.expired',
       payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: null },
+    });
+  });
+
+  it('maps a cancelled outcome to an order.cancelled record, distinct from failed', () => {
+    const record = toFinalizedOutboxRecord(new OrderCancelledEvent(ORDER_ID, USER_ID, 'user:cancelled', AT));
+
+    expect(record).toEqual({
+      aggregateType: 'Order',
+      aggregateId: ORDER_ID,
+      eventType: 'order.cancelled',
+      payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: 'user:cancelled' },
     });
   });
 });

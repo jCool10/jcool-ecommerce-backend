@@ -6,6 +6,8 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructur
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { FinalizeOrderUseCase } from '../../src/modules/order/application/use-cases';
 import { OrderPaidEvent } from '../../src/modules/order/domain/events/order-paid.event';
+import { OrderExpiredEvent } from '../../src/modules/order/domain/events/order-expired.event';
+import { OrderCancelledEvent } from '../../src/modules/order/domain/events/order-cancelled.event';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
@@ -69,6 +71,25 @@ describe('Order finalization (integration, real Postgres)', () => {
     expect(row.finalizedAt).not.toBeNull();
     expect(row.finalizeReason).toBe('webhook:paid');
     expect(row.paymentRef).toBe('pay_1');
+  });
+
+  it('finalizes a PENDING order to EXPIRED or CANCELLED, each producing its own event', async () => {
+    const expiredId = await seedOrder('PENDING');
+    const cancelledId = await seedOrder('PENDING');
+
+    const expired = await finalize.execute({ orderId: expiredId, outcome: 'EXPIRED', reason: 'reconcile:expired' });
+    const cancelled = await finalize.execute({ orderId: cancelledId, outcome: 'CANCELLED', reason: 'user:cancelled' });
+
+    expect(expired.status).toBe('finalized');
+    expect(expired.event).toBeInstanceOf(OrderExpiredEvent);
+    expect((await readOrder(expiredId)).status).toBe('EXPIRED');
+
+    expect(cancelled.status).toBe('finalized');
+    expect(cancelled.event).toBeInstanceOf(OrderCancelledEvent);
+    const row = await readOrder(cancelledId);
+    expect(row.status).toBe('CANCELLED');
+    expect(row.finalizedAt).not.toBeNull();
+    expect(row.finalizeReason).toBe('user:cancelled');
   });
 
   it('is idempotent: re-applying the same outcome is a no-op — no state change, no second event', async () => {

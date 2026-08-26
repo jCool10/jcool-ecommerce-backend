@@ -9,6 +9,7 @@ const WIRED_TRANSITIONS: ReadonlyArray<[OrderStatus, OrderStatus]> = [
   [OrderStatus.PENDING, OrderStatus.PAID],
   [OrderStatus.PENDING, OrderStatus.FAILED],
   [OrderStatus.PENDING, OrderStatus.EXPIRED],
+  [OrderStatus.PENDING, OrderStatus.CANCELLED],
 ];
 
 function isWired(from: OrderStatus, to: OrderStatus): boolean {
@@ -25,10 +26,7 @@ describe('order state machine', () => {
     expect(canTransition(OrderStatus.PENDING, OrderStatus.PAID)).toBe(true);
     expect(canTransition(OrderStatus.PENDING, OrderStatus.FAILED)).toBe(true);
     expect(canTransition(OrderStatus.PENDING, OrderStatus.EXPIRED)).toBe(true);
-  });
-
-  it('blocks declared-but-unwired transitions', () => {
-    expect(canTransition(OrderStatus.PENDING, OrderStatus.CANCELLED)).toBe(false);
+    expect(canTransition(OrderStatus.PENDING, OrderStatus.CANCELLED)).toBe(true);
   });
 
   it('never lets a terminal order transition (no regress off a finalized outcome)', () => {
@@ -81,17 +79,13 @@ describe('order state machine', () => {
       expect(() => assertTransition(OrderStatus.PENDING, OrderStatus.DRAFT)).toThrow(OrderTransitionError);
     });
 
-    it('throws for a declared-but-unwired transition', () => {
-      expect(() => assertTransition(OrderStatus.PENDING, OrderStatus.CANCELLED)).toThrow(OrderTransitionError);
-    });
-
     it('carries the from/to on the error', () => {
       try {
-        assertTransition(OrderStatus.PENDING, OrderStatus.CANCELLED);
+        assertTransition(OrderStatus.PAID, OrderStatus.CANCELLED);
         expect.unreachable('assertTransition should have thrown');
       } catch (error) {
         expect(error).toBeInstanceOf(OrderTransitionError);
-        expect((error as OrderTransitionError).from).toBe(OrderStatus.PENDING);
+        expect((error as OrderTransitionError).from).toBe(OrderStatus.PAID);
         expect((error as OrderTransitionError).to).toBe(OrderStatus.CANCELLED);
       }
     });

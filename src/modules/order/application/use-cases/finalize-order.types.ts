@@ -8,6 +8,7 @@ export const FINALIZE_OUTCOMES: readonly FinalizeOutcome[] = [
   OrderStatus.PAID,
   OrderStatus.FAILED,
   OrderStatus.EXPIRED,
+  OrderStatus.CANCELLED,
 ];
 
 export interface FinalizeInput {

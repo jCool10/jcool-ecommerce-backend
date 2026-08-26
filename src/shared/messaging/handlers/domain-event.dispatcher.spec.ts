@@ -27,15 +27,18 @@ function build() {
 }
 
 describe('DomainEventDispatcher', () => {
-  // Every event the order context emits today. A producer that starts emitting a fifth without
+  // Every event the order context emits today. A producer that starts emitting one more without
   // registering it here should fail this test, not discover it in the dead-letter queue.
-  it.each(['order.placed', 'order.paid', 'order.failed', 'order.expired'])('audits %s', async (eventType) => {
-    const { dispatcher, info } = build();
+  it.each(['order.placed', 'order.paid', 'order.failed', 'order.expired', 'order.cancelled'])(
+    'audits %s',
+    async (eventType) => {
+      const { dispatcher, info } = build();
 
-    await dispatcher.dispatch(job(eventType), tx);
+      await dispatcher.dispatch(job(eventType), tx);
 
-    expect(info).toHaveBeenCalledWith(expect.objectContaining({ eventType }), 'order event consumed');
-  });
+      expect(info).toHaveBeenCalledWith(expect.objectContaining({ eventType }), 'order event consumed');
+    },
+  );
 
   it('refuses an event it has no handler for rather than acknowledging it', async () => {
     const { dispatcher } = build();

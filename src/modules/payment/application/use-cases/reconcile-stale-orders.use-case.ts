@@ -1,17 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { FinalizeOrderUseCase, type FinalizeOutcome } from '@modules/order/application/use-cases';
+import { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
 import { PaymentStatus } from '../../domain/payment-status';
 import type { Payment } from '../../domain/payment.entity';
 import { ORDER_READ_PORT, type OrderReadPort, type StalePendingOrderView } from '../ports/order-read.port';
 import { PAYMENT_GATEWAY, type GatewayPaymentStatus, type PaymentGatewayPort } from '../ports/payment-gateway.port';
 import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';
-import { mapGatewayStatusToOutcome } from '../mappers/map-gateway-status-to-outcome';
+import { mapGatewayStatusToOutcome, type GatewayOutcome } from '../mappers/map-gateway-status-to-outcome';
 
 const LOG_CONTEXT = 'ReconcileStaleOrders';
 
 /** The payment status that matches a reconciled order outcome. */
-const PAYMENT_STATUS_FOR: Record<FinalizeOutcome, PaymentStatus> = {
+const PAYMENT_STATUS_FOR: Record<GatewayOutcome, PaymentStatus> = {
   PAID: PaymentStatus.SUCCEEDED,
   FAILED: PaymentStatus.FAILED,
   EXPIRED: PaymentStatus.EXPIRED,
@@ -177,7 +177,7 @@ export class ReconcileStaleOrdersUseCase {
 }
 
 /** Apply the reconciled outcome to the payment aggregate; the state machine rejects an illegal move. */
-function settlePayment(payment: Payment, outcome: FinalizeOutcome): Payment {
+function settlePayment(payment: Payment, outcome: GatewayOutcome): Payment {
   switch (PAYMENT_STATUS_FOR[outcome]) {
     case PaymentStatus.SUCCEEDED:
       return payment.markSucceeded();

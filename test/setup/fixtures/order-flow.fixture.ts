@@ -187,7 +187,8 @@ export async function auditM2Invariants(
         break;
       }
       case 'FAILED':
-      case 'EXPIRED': {
+      case 'EXPIRED':
+      case 'CANCELLED': {
         if (holds.length === 0) violations.push(`${order.status} order ${order.id} settled without ever holding stock`);
         const wrong = holds.filter((r) => r.status !== 'RELEASED');
         if (wrong.length > 0)
@@ -198,7 +199,7 @@ export async function auditM2Invariants(
         break;
       }
       default:
-        // DRAFT, CANCELLED, or anything a later state machine adds: unclassified, so unaudited.
+        // DRAFT, or anything a later state machine adds: unclassified, so unaudited.
         violations.push(`order ${order.id} sits in ${order.status}, which this audit does not know how to check`);
     }
   }

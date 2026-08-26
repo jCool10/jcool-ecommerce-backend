@@ -21,7 +21,7 @@ const TRANSITIONS: readonly Transition[] = [
   { from: OrderStatus.PENDING, to: OrderStatus.PAID, wired: true }, // finalize: payment webhook success / reconcile paid
   { from: OrderStatus.PENDING, to: OrderStatus.FAILED, wired: true }, // finalize: payment webhook failure / reconcile failed
   { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // finalize: expiry sweep on an unpaid hold
-  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: false }, // user/admin cancel
+  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: true }, // finalize: user/admin cancel
 ];
 
 // The guard that turns an at-least-once webhook into an exactly-once effect: nothing leaves these.

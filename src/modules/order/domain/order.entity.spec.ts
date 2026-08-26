@@ -6,6 +6,7 @@ import { OrderTransitionError } from './order-state-machine';
 import { OrderPaidEvent } from './events/order-paid.event';
 import { OrderFailedEvent } from './events/order-failed.event';
 import { OrderExpiredEvent } from './events/order-expired.event';
+import { OrderCancelledEvent } from './events/order-cancelled.event';
 
 const line = (unitPriceMinor: number, quantity: number, skuId = 'sku-a', name = 'Widget'): OrderItem =>
   OrderItem.of(skuId, name, unitPriceMinor, quantity);
@@ -96,6 +97,7 @@ describe('Order entity', () => {
       expect(pendingOrder(OrderStatus.PAID).isTerminal()).toBe(true);
       expect(pendingOrder(OrderStatus.FAILED).isTerminal()).toBe(true);
       expect(pendingOrder(OrderStatus.EXPIRED).isTerminal()).toBe(true);
+      expect(pendingOrder(OrderStatus.CANCELLED).isTerminal()).toBe(true);
       expect(pendingOrder(OrderStatus.PENDING).isTerminal()).toBe(false);
       expect(pendingOrder(OrderStatus.DRAFT).isTerminal()).toBe(false);
     });
@@ -118,6 +120,15 @@ describe('Order entity', () => {
       expect(pendingOrder().finalize(OrderStatus.EXPIRED, { now }).toFinalizedEvent()).toBeInstanceOf(
         OrderExpiredEvent,
       );
+
+      const cancelled = pendingOrder().finalize(OrderStatus.CANCELLED, { now, reason: 'user:cancelled' });
+      expect(cancelled.toFinalizedEvent()).toBeInstanceOf(OrderCancelledEvent);
+      expect(cancelled.toFinalizedEvent()).toMatchObject({
+        eventName: 'order.cancelled',
+        aggregateId: 'order-1',
+        reason: 'user:cancelled',
+        occurredAt: now,
+      });
     });
 
     it('throws for an order that has not been finalized', () => {
