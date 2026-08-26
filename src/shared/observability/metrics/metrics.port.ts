@@ -9,6 +9,15 @@ export type CartOperation = 'add' | 'update' | 'remove' | 'clear';
 /** Outcome of one cache lookup. `error` is Redis being unreachable — a served-from-source read that is not a cold miss, and the signal that the cache is down. */
 export type CacheResult = 'hit' | 'miss' | 'error';
 
+/** Outcome of handing one outbox row to the queue. `refused` is the queue rejecting it — the row stays unpublished and a later tick tries again, so this counts a delay, not a loss. */
+export type PublishResult = 'published' | 'refused';
+
+/** Result of applying one delivered domain event. `duplicate` is a redelivery the inbox collapsed — routine under at-least-once delivery, not a failure. `failed` means the effect rolled back. */
+export type ConsumeResult = 'processed' | 'duplicate' | 'failed';
+
+/** Why a message stopped being retried. `permanent` is a failure retrying could never fix (bad envelope, no handler); `attempts_exhausted` is one that stayed broken for the whole retry budget. */
+export type DeadLetterReason = 'permanent' | 'attempts_exhausted';
+
 /**
  * Business events worth counting. Callers pass only bounded, low-cardinality values —
  * never an id/email/sku (those belong on logs/spans, not Prometheus labels).
@@ -24,4 +33,12 @@ export interface MetricsPort {
   recordAuthEvent(event: string, outcome: 'success' | 'failure'): void;
   /** One Catalog cache-aside lookup resolved. */
   recordCatalogCacheOperation(result: CacheResult): void;
+  /** The relay finished one publish attempt. Same cardinality rule as the consume side: a registered event name only. */
+  recordEventPublished(eventType: string, result: PublishResult): void;
+  /** One domain event finished consuming. `eventType` must be a registered event name — never a value straight off the wire, which would be unbounded label cardinality. */
+  recordEventConsumed(eventType: string, result: ConsumeResult): void;
+  /** A failed delivery the transport will try again. Same cardinality rule as above. */
+  recordConsumeRetry(eventType: string): void;
+  /** A message moved to the dead-letter queue — it will not be tried again without a human. Same cardinality rule as above. */
+  recordDeadLetter(eventType: string, reason: DeadLetterReason): void;
 }

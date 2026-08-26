@@ -18,14 +18,16 @@ export interface StalePendingOrder {
 
 export interface OrderRepositoryPort {
   /**
-   * Order + stock hold + idempotency flip commit or roll back together, in one transaction. An
-   * existing order under the same key returns `created: false` and runs neither callback; the
-   * unique `orders.idempotency_key` still backstops a race that slips past that check.
+   * Order + stock hold + outbox event + idempotency flip commit or roll back together, in one
+   * transaction. An existing order under the same key returns `created: false` and runs none of the
+   * callbacks; the unique `orders.idempotency_key` still backstops a race that slips past that
+   * check. `appendEvent` runs only for a genuinely new order — a reclaim heal re-emits nothing.
    */
   createCheckout(
     order: Order,
     idempotencyKey: string | null,
     reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
+    appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult>;
 

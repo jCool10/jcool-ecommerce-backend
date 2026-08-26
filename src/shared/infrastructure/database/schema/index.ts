@@ -8,3 +8,7 @@ export * from '../../../../modules/order/infrastructure/schema/order.schema';
 export * from '../../../../modules/order/infrastructure/schema/idempotency-key.schema';
 export * from '../../../../modules/inventory/infrastructure/schema/inventory.schema';
 export * from '../../../../modules/payment/infrastructure/schema/payment.schema';
+// Not module tables: the outbox carries events from every context, the inbox records what a
+// consumer has applied of them (ADR 0019).
+export * from '../../../messaging/outbox/schema/outbox.schema';
+export * from '../../../messaging/inbox/schema/inbox.schema';

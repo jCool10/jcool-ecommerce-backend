@@ -141,9 +141,8 @@ export class Order {
   }
 
   /**
-   * The domain event this (placed) order represents. Declared for a future outbox/publish path
-   * (checkout would append it in the placement transaction); nothing publishes it yet. Only a
-   * persisted, placed order can produce one.
+   * The domain event this (placed) order represents; checkout appends it to the outbox in the
+   * placement transaction. Only a persisted, placed order can produce one.
    */
   toPlacedEvent(): OrderPlacedEvent {
     if (this.id === null || this.placedAt === null) {

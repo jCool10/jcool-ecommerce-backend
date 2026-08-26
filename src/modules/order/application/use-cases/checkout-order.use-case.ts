@@ -9,6 +9,7 @@ import {
 import { ClsService } from 'nestjs-cls';
 import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { getIdempotencyContext } from '@shared/idempotency';
 import { Order } from '../../domain/order.entity';
 import { OrderItem } from '../../domain/order-item.entity';
@@ -18,13 +19,15 @@ import { CATALOG_QUERY, type CatalogQueryPort, type OrderSkuView } from '../port
 import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/inventory-reservation.port';
 import { IDEMPOTENCY_STORE, type IdempotencyStorePort } from '../ports/idempotency-store.port';
 import { loadOrderView, toView, type OrderView } from '../order-view.mapper';
+import { toPlacedOutboxRecord } from '../order-outbox.mapper';
 
 /**
  * Atomic checkout: snapshot the user's cart into an order and, in ONE transaction, persist it at
- * PENDING, hold stock, and freeze the idempotency result. The price/name of each line is resolved
- * live from Catalog once, then frozen — a later Catalog price change never moves a placed order's
- * total (transactional truth). Order + reservation + idempotency COMPLETED commit together: a stock
- * shortfall rolls the whole thing back (no order, no key), so the client can safely retry.
+ * PENDING, hold stock, append the OrderPlaced event to the outbox, and freeze the idempotency
+ * result. The price/name of each line is resolved live from Catalog once, then frozen — a later
+ * Catalog price change never moves a placed order's total (transactional truth). Order +
+ * reservation + event + idempotency COMPLETED commit together: a stock shortfall rolls the whole
+ * thing back (no order, no event, no key), so the client can safely retry.
  *
  * The `{scope, key}` for the idempotency flip rides down over CLS, set by the interceptor on the
  * wired route — no controller plumbing. Cross-context reads go only through the two ports.
@@ -37,6 +40,7 @@ export class CheckoutOrderUseCase {
     @Inject(CATALOG_QUERY) private readonly catalog: CatalogQueryPort,
     @Inject(INVENTORY_RESERVATION) private readonly reservation: InventoryReservationPort,
     @Inject(IDEMPOTENCY_STORE) private readonly idempotency: IdempotencyStorePort,
+    @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly cls: ClsService,
   ) {}
@@ -60,6 +64,7 @@ export class CheckoutOrderUseCase {
         placed,
         idem.key,
         (tx, orderId) => this.reservation.reserve(tx, orderId, lines),
+        (tx, orderId) => this.outbox.append(tx, toPlacedOutboxRecord(this.withId(placed, orderId).toPlacedEvent())),
         (tx, orderId) =>
           this.idempotency.markCompleted(
             {
@@ -134,19 +139,22 @@ export class CheckoutOrderUseCase {
     return { currency, items };
   }
 
-  // The response cached for replay: built from the in-memory placed order + its freshly-assigned id,
-  // so no DB re-read is needed and it is byte-identical to `OrderResponseDto.fromView` (a passthrough).
+  // The id only exists after the INSERT, so the cached response and the outbox event are both built
+  // from the in-memory order plus its freshly-assigned id — no DB re-read on the checkout path.
+  private withId(order: Order, id: string): Order {
+    return Order.rehydrate({
+      id,
+      userId: order.userId,
+      status: order.status,
+      currency: order.currency,
+      items: [...order.items],
+      totalAmountMinor: order.totalAmountMinor,
+      placedAt: order.placedAt,
+    });
+  }
+
+  // The response cached for replay; byte-identical to `OrderResponseDto.fromView` (a passthrough).
   private viewOf(order: Order, id: string): OrderView {
-    return toView(
-      Order.rehydrate({
-        id,
-        userId: order.userId,
-        status: order.status,
-        currency: order.currency,
-        items: [...order.items],
-        totalAmountMinor: order.totalAmountMinor,
-        placedAt: order.placedAt,
-      }),
-    );
+    return toView(this.withId(order, id));
   }
 }

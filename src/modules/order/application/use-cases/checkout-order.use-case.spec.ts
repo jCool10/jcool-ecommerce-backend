@@ -3,6 +3,7 @@ import type { ClsService } from 'nestjs-cls';
 import { describe, expect, it, vi } from 'vitest';
 import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import type { OutboxRecord, OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { Order } from '../../domain/order.entity';
 import { OrderItem } from '../../domain/order-item.entity';
@@ -23,6 +24,7 @@ type Checkout = (
   order: Order,
   key: string | null,
   reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
+  appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
   complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
 ) => Promise<CheckoutPersistResult>;
 
@@ -42,6 +44,7 @@ function build(
   const commit = vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 });
   const release = vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 });
   const markCompleted = vi.fn().mockResolvedValue(undefined);
+  const append = vi.fn().mockResolvedValue(undefined);
   const recordOrderCreated = vi.fn();
   const observeOrderValue = vi.fn();
 
@@ -50,6 +53,7 @@ function build(
   const catalog: CatalogQueryPort = { getSkuView };
   const reservation: InventoryReservationPort = { reserve, commit, release };
   const store = { markCompleted } as unknown as IdempotencyStorePort;
+  const outbox: OutboxWriterPort = { append };
   const metrics = { recordOrderCreated, observeOrderValue } as unknown as MetricsPort;
   // noContext models CLS inactive at the use-case boundary (the wired route always has it active).
   const cls = {
@@ -57,10 +61,10 @@ function build(
     get: () => ({ scope: SCOPE, key: KEY }),
   } as unknown as ClsService;
 
-  const useCase = new CheckoutOrderUseCase(repo, cart, catalog, reservation, store, metrics, cls);
+  const useCase = new CheckoutOrderUseCase(repo, cart, catalog, reservation, store, outbox, metrics, cls);
   return {
     useCase,
-    spies: { createCheckout, findForUser, reserve, markCompleted, recordOrderCreated, observeOrderValue },
+    spies: { createCheckout, findForUser, reserve, markCompleted, append, recordOrderCreated, observeOrderValue },
   };
 }
 
@@ -79,10 +83,11 @@ describe('CheckoutOrderUseCase', () => {
     expect(spies.createCheckout).not.toHaveBeenCalled();
   });
 
-  it('checks out: reserves stock and completes the key inside the tx, returns the PENDING view, records metrics', async () => {
+  it('checks out: reserves stock, appends the event and completes the key inside the tx, returns the PENDING view, records metrics', async () => {
     const { useCase, spies } = build({
-      checkout: async (_order, _key, reserve, complete) => {
+      checkout: async (_order, _key, reserve, appendEvent, complete) => {
         await reserve(TX, 'order-1');
+        await appendEvent(TX, 'order-1');
         await complete(TX, 'order-1');
         return { orderId: 'order-1', created: true };
       },
@@ -99,6 +104,17 @@ describe('CheckoutOrderUseCase', () => {
     expect(view.placedAt).toEqual(expect.any(String));
     // Reserve ran inside the tx with the freshly-assigned order id.
     expect(spies.reserve).toHaveBeenCalledWith(TX, 'order-1', [{ skuId: SKU, quantity: 2 }]);
+    // OrderPlaced appended in the SAME tx, carrying the id the INSERT just assigned.
+    const [tx, record] = spies.append.mock.calls[0] as [DrizzleTx, OutboxRecord];
+    expect(tx).toBe(TX);
+    expect(record).toMatchObject({ aggregateType: 'Order', aggregateId: 'order-1', eventType: 'order.placed' });
+    expect(record.payload).toMatchObject({
+      orderId: 'order-1',
+      userId: 'u1',
+      totalAmountMinor: 200_000,
+      currency: 'VND',
+    });
+    expect(typeof record.payload.placedAt).toBe('string');
     // COMPLETED written in the SAME tx (second arg) — the cached responseBody is the returned view.
     expect(spies.markCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ scope: SCOPE, key: KEY, responseStatus: 201, orderId: 'order-1', responseBody: view }),
@@ -146,8 +162,10 @@ describe('CheckoutOrderUseCase', () => {
     const view = await useCase.execute('u1');
 
     expect(view).toMatchObject({ id: 'order-existing', status: OrderStatus.PENDING });
-    // No fresh hold; the existing order already reserved when it was first placed.
+    // No fresh hold and no second event; the existing order already reserved and emitted when it
+    // was first placed.
     expect(spies.reserve).not.toHaveBeenCalled();
+    expect(spies.append).not.toHaveBeenCalled();
     // Key healed to the existing order — a standalone write (single arg, no tx) so replay points at it.
     expect(spies.markCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ scope: SCOPE, key: KEY, orderId: 'order-existing' }),

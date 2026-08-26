@@ -13,6 +13,7 @@ export default defineConfig({
     passWithNoTests: true,
     env: {
       NODE_ENV: 'test',
+      LOG_LEVEL: 'warn',
       DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
       REDIS_URL: 'redis://127.0.0.1:6379',
       JWT_ACCESS_SECRET: '2b557f0c-ac0e-469d-bd24-9a380d07e3bc', // ≥32 chars for the schema

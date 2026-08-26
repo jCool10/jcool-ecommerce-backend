@@ -51,6 +51,17 @@ module.exports = {
       },
     },
     {
+      name: 'messaging-port-only-from-core',
+      severity: 'error',
+      comment:
+        'domain/application may reach messaging only through its pure port. The package barrel pulls the Drizzle adapter and, transitively, @opentelemetry/api — which app-domain-telemetry-free cannot catch, because it matches direct edges only.',
+      from: { path: '^src/modules/[^/]+/(domain|application)/' },
+      to: {
+        path: '^src/shared/messaging/',
+        pathNot: '^src/shared/messaging/outbox/outbox-writer\\.port',
+      },
+    },
+    {
       name: 'kernel-pure',
       severity: 'error',
       comment: 'shared/kernel is the pure DDD building-block layer: it may import only itself.',

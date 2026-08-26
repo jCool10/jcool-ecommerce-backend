@@ -95,6 +95,37 @@ export default () => ({
   redis: {
     url: process.env.REDIS_URL,
   },
+  queue: {
+    // BullMQ key prefix. Namespaces every queue key so one Redis can serve several environments
+    // without a job written by one being consumed by another.
+    prefix: process.env.QUEUE_PREFIX ?? 'bull',
+    // On by default: a failed consume is now retried with backoff and dead-lettered if it stays
+    // broken, so an event can no longer go missing between the relay marking the row published and
+    // a handler throwing. Off leaves jobs waiting in Redis (no TTL) rather than losing them, which
+    // is what e2e suites want while they drive the processor by hand.
+    workerEnabled: process.env.QUEUE_WORKER_ENABLED !== 'false',
+    // Jobs one worker applies at a time. Each holds a pg connection for the length of its
+    // transaction, so this competes DIRECTLY with the HTTP path for DB_POOL_MAX (default 10) —
+    // size the two together rather than raising this alone.
+    workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, 5),
+    // Deliveries before a message is dead-lettered, the first one included. Capped at 10 in the env
+    // schema: the backoff below doubles, so the tail grows faster than the count suggests.
+    consumerAttempts: parseIntOr(process.env.QUEUE_CONSUMER_ATTEMPTS, 5),
+    // First retry delay; each further one doubles it. 1s/2s/4s/8s at the defaults — long enough to
+    // ride out a restart or a failover, short enough that a genuine poison message reaches the
+    // dead-letter queue while the deploy that caused it is still the obvious suspect.
+    consumerBackoffMs: parseIntOr(process.env.QUEUE_CONSUMER_BACKOFF_MS, 1000),
+  },
+  outbox: {
+    // Relay kill-switch; on by default. Off leaves rows unpublished rather than losing them, which
+    // is what e2e suites want while they assert on them.
+    relayEnabled: process.env.OUTBOX_RELAY_ENABLED !== 'false',
+    // A blank env value would parseInt->NaN and register a 0ms interval, so fall back explicitly.
+    pollMs: parseIntOr(process.env.OUTBOX_POLL_MS, 1000),
+    // Rows per tick. Also caps how long one transaction holds its row locks, since the publish runs
+    // inside it.
+    batchSize: parseIntOr(process.env.OUTBOX_BATCH_SIZE, 100),
+  },
   auth: {
     jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
     // Short access-token life (defense-in-depth): caps exposure if the jti denylist is ever bypassed.

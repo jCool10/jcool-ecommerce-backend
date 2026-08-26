@@ -2,11 +2,22 @@ import { Injectable } from '@nestjs/common';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { PinoLogger } from 'nestjs-pino';
 import type { Counter, Histogram } from 'prom-client';
-import type { CacheResult, CartOperation, MetricsPort } from './metrics.port';
+import type {
+  CacheResult,
+  CartOperation,
+  ConsumeResult,
+  DeadLetterReason,
+  MetricsPort,
+  PublishResult,
+} from './metrics.port';
 import {
   AUTH_EVENTS_TOTAL,
   CART_OPERATIONS_TOTAL,
   CATALOG_CACHE_OPERATIONS_TOTAL,
+  MESSAGING_CONSUME_RETRIES_TOTAL,
+  MESSAGING_CONSUME_TOTAL,
+  MESSAGING_DLQ_TOTAL,
+  MESSAGING_PUBLISH_TOTAL,
   ORDERS_CREATED_TOTAL,
   ORDER_VALUE_MINOR,
 } from './metric-definitions';
@@ -25,6 +36,10 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(CART_OPERATIONS_TOTAL) private readonly cartOps: Counter<string>,
     @InjectMetric(AUTH_EVENTS_TOTAL) private readonly authEvents: Counter<string>,
     @InjectMetric(CATALOG_CACHE_OPERATIONS_TOTAL) private readonly catalogCacheOps: Counter<string>,
+    @InjectMetric(MESSAGING_PUBLISH_TOTAL) private readonly eventsPublished: Counter<string>,
+    @InjectMetric(MESSAGING_CONSUME_TOTAL) private readonly eventsConsumed: Counter<string>,
+    @InjectMetric(MESSAGING_CONSUME_RETRIES_TOTAL) private readonly consumeRetries: Counter<string>,
+    @InjectMetric(MESSAGING_DLQ_TOTAL) private readonly deadLetters: Counter<string>,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -46,6 +61,22 @@ export class BusinessMetrics implements MetricsPort {
 
   recordCatalogCacheOperation(result: CacheResult): void {
     this.safely('catalog_cache_operation', () => this.catalogCacheOps.inc({ result }));
+  }
+
+  recordEventPublished(eventType: string, result: PublishResult): void {
+    this.safely('event_published', () => this.eventsPublished.inc({ event_type: eventType, result }));
+  }
+
+  recordEventConsumed(eventType: string, result: ConsumeResult): void {
+    this.safely('event_consumed', () => this.eventsConsumed.inc({ event_type: eventType, result }));
+  }
+
+  recordConsumeRetry(eventType: string): void {
+    this.safely('consume_retry', () => this.consumeRetries.inc({ event_type: eventType }));
+  }
+
+  recordDeadLetter(eventType: string, reason: DeadLetterReason): void {
+    this.safely('dead_letter', () => this.deadLetters.inc({ event_type: eventType, reason }));
   }
 
   // Swallow-and-log: a telemetry error is logged (so it's not invisible) but never rethrown.

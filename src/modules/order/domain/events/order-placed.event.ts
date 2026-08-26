@@ -1,11 +1,6 @@
 /**
- * Domain event emitted (conceptually) when an order moves DRAFT → PENDING.
- *
- * EXTENSION — BF#4 Outbox/Saga (Weeks 8-9): DECLARED, NOT PUBLISHED in Week 3.
- * Because place-order already runs in a transaction, wiring this later is
- * additive: append the event to an `outbox` table inside that same transaction
- * (one insert), and a separate relay/saga module publishes it. Nothing here
- * produces behavior yet — it only fixes the event's shape so the seam is real.
+ * Emitted when an order moves DRAFT → PENDING. Predates the `DomainEvent` interface, hence
+ * `orderId`/`placedAt` rather than `aggregateId`/`occurredAt`.
  */
 export class OrderPlacedEvent {
   constructor(

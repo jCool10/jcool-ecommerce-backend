@@ -92,6 +92,69 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   REDIS_URL!: string;
 
+  // BullMQ key prefix; default 'bull' (configuration.ts). @IsNotEmpty because a blank prefix would
+  // silently produce a different, colliding key layout rather than falling back to the default.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  QUEUE_PREFIX?: string;
+
+  // Consumer kill-switch; on by default (configuration.ts). Off leaves jobs queued, never lost.
+  @IsOptional()
+  @IsBooleanString()
+  QUEUE_WORKER_ENABLED?: string;
+
+  // Jobs consumed in parallel; default 5 (configuration.ts). The cap is a sanity bound, NOT a
+  // guarantee against the pool: each in-flight job holds a connection for its transaction, so this
+  // and DB_POOL_MAX have to be sized against each other.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  QUEUE_WORKER_CONCURRENCY?: number;
+
+  // Deliveries before a message is dead-lettered; default 5 (configuration.ts). Capped at 10 rather
+  // than left open because the backoff doubles: ten tries already stretch the last wait past eight
+  // minutes, and a message nobody can apply belongs in the DLQ long before that.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  QUEUE_CONSUMER_ATTEMPTS?: number;
+
+  // First retry delay in ms; default 1000 (configuration.ts). Min 100 so a typo cannot turn the
+  // retry budget into a tight loop against whatever dependency is already failing.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(60_000)
+  QUEUE_CONSUMER_BACKOFF_MS?: number;
+
+  // Outbox relay kill-switch; on by default (configuration.ts).
+  @IsOptional()
+  @IsBooleanString()
+  OUTBOX_RELAY_ENABLED?: string;
+
+  // Relay period (ms); default 1000 (configuration.ts). Min 100 so a typo cannot turn the relay into
+  // a busy loop opening transactions against the outbox table.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  OUTBOX_POLL_MS?: number;
+
+  // Rows per relay tick; default 100 (configuration.ts). Capped because the publish happens inside
+  // the polling transaction, so the batch size is also how long row locks are held.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  OUTBOX_BATCH_SIZE?: number;
+
   @IsOptional()
   @IsBooleanString()
   SWAGGER_ENABLED?: string;

@@ -1,9 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { OrderStatus } from '../../domain/order-status';
 import { canTransition } from '../../domain/order-state-machine';
 import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
 import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/inventory-reservation.port';
+import { toFinalizedOutboxRecord } from '../order-outbox.mapper';
 import type { FinalizeInput, FinalizeResult } from './finalize-order.types';
 
 const LOG_CONTEXT = 'FinalizeOrder';
@@ -19,6 +21,7 @@ export class FinalizeOrderUseCase {
   constructor(
     @Inject(ORDER_REPOSITORY) private readonly repo: OrderRepositoryPort,
     @Inject(INVENTORY_RESERVATION) private readonly inventory: InventoryReservationPort,
+    @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -59,8 +62,13 @@ export class FinalizeOrderUseCase {
         this.logger.warn({ context: LOG_CONTEXT, orderId, outcome }, 'finalized order had no reservation to resolve');
       }
 
-      // The event is returned, not published: an outbox insert belongs in this same tx.
-      return { status: 'finalized', order: finalized, event: finalized.toFinalizedEvent() };
+      // Same tx again: the settlement event cannot outlive a rolled-back finalize, and a committed
+      // finalize cannot lose its event. Only this branch emits — a duplicate or conflicting outcome
+      // already returned above, so the terminal guard doubles as the event's dedup.
+      const event = finalized.toFinalizedEvent();
+      await this.outbox.append(tx, toFinalizedOutboxRecord(event));
+
+      return { status: 'finalized', order: finalized, event };
     });
   }
 }

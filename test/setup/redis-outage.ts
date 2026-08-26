@@ -10,7 +10,11 @@ import { RedisService } from '../../src/shared/infrastructure/redis';
  * passing test.
  */
 export async function withRedisDown(app: INestApplication, run: () => Promise<void>): Promise<void> {
-  const client = app.get(RedisService).getClient();
+  return withClientDown(app.get(RedisService).getClient(), run);
+}
+
+/** Same, for a client the app holds under a different token — the queue keeps its own. */
+export async function withClientDown(client: Redis, run: () => Promise<void>): Promise<void> {
   client.disconnect();
   try {
     await run();
