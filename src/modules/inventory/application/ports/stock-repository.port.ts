@@ -1,9 +1,9 @@
 // Type-only, from the tokens file rather than the barrel: importing the barrel would pull the
 // runtime drizzle module into the application layer.
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import type { StockResolveResult } from '../public/stock-reservation.port';
+import type { ExpiredHold, ExpiredHoldQuery, StockResolveResult } from '../public/stock-reservation.port';
 
-export type { StockResolveResult };
+export type { ExpiredHold, ExpiredHoldQuery, StockResolveResult };
 
 // Stock persistence + reservation port; the Drizzle adapter implements it in infrastructure/.
 export const STOCK_REPOSITORY = Symbol('STOCK_REPOSITORY');
@@ -41,4 +41,7 @@ export interface StockRepositoryPort {
 
   /** Current on-hand / reserved / available for a SKU; null if the SKU has no stock row. */
   getStockView(variantId: string): Promise<StockView | null>;
+
+  /** Distinct orders holding HELD stock past `expiredBefore`, oldest expiry first. */
+  findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]>;
 }

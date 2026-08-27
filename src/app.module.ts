@@ -37,8 +37,9 @@ import { AuthModule } from '@modules/user/auth.module';
     RedisModule,
     MessagingModule,
     ThrottlerSecurityModule,
-    // Timer registry for the outbox relay and the payment reconciliation sweep; each is gated by its
-    // own kill-switch. Global, so position here does not affect resolution.
+    // Timer registry for the outbox relay, the payment reconciliation sweep and the reservation
+    // expiry sweep; each is gated by its own kill-switch. Global, so position here does not affect
+    // resolution.
     ScheduleModule.forRoot(),
     HealthModule,
     CatalogModule,

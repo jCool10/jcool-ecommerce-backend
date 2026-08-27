@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
-import { CheckoutOrderUseCase, FinalizeOrderUseCase } from './application/use-cases';
+import { CheckoutOrderUseCase, FinalizeOrderUseCase, SweepExpiredReservationsUseCase } from './application/use-cases';
 import { OrderQueryService } from './application/order-query.service';
 import { ORDER_PAYMENT_VIEW } from './application/public/order-payment-view.port';
 import { OrderPaymentViewService } from './application/public/order-payment-view.service';
@@ -20,6 +20,7 @@ import { OrderController } from './interface/order.controller';
 import { IdempotencyInterceptor } from './interface/idempotency.interceptor';
 import { PaymentEventsHandler } from './interface/queue/payment-events.handler';
 import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.guard';
+import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
 
 /**
  * Order bounded context: the transactional source of truth. Creating an order
@@ -36,6 +37,7 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
   providers: [
     CheckoutOrderUseCase,
     FinalizeOrderUseCase,
+    SweepExpiredReservationsUseCase,
     OrderQueryService,
     { provide: ORDER_REPOSITORY, useClass: DrizzleOrderRepository },
     { provide: CART_SNAPSHOT_READER, useClass: CartSnapshotAdapter },
@@ -46,6 +48,7 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     RequireIdempotencyKeyGuard,
     IdempotencyInterceptor,
     PaymentEventsHandler,
+    ReservationTtlScheduler,
   ],
   // FinalizeOrderUseCase is exported so Payment's webhook and sweep can settle an order, and
   // PaymentEventsHandler so the shared event consumer can route a settlement back here.

@@ -63,10 +63,13 @@ export class HandlePaymentWebhookUseCase {
         reason: `webhook:${result.eventType}`,
       });
       if (finalize.status === 'not_found' || finalize.status === 'ignored') {
-        // Payment settled but the order did not move — a money/status mismatch for the sweep.
-        this.logger.warn(
+        // Not something a sweep will pick up: reconcile's queue is orders still PENDING, and this
+        // order is either gone or already terminal. The durable settlement event re-runs the same
+        // finalize and lands here too, so a paid order that never moved is a refund decision.
+        const level = outcome === 'PAID' ? 'error' : 'warn';
+        this.logger[level](
           { context: LOG_CONTEXT, orderId: result.orderId, outcome, finalize: finalize.status },
-          'payment settled but order finalize was a no-op — reconciliation will confirm',
+          'payment settled but the order did not move',
         );
       }
     } catch (error) {

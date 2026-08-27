@@ -51,7 +51,7 @@ function build(
   const repo = { createCheckout, findForUser, findAllForUser: vi.fn() } as unknown as OrderRepositoryPort;
   const cart: CartSnapshotReaderPort = { getLines };
   const catalog: CatalogQueryPort = { getSkuView };
-  const reservation: InventoryReservationPort = { reserve, commit, release };
+  const reservation: InventoryReservationPort = { reserve, commit, release, findExpiredHolds: vi.fn() };
   const store = { markCompleted } as unknown as IdempotencyStorePort;
   const outbox: OutboxWriterPort = { append };
   const metrics = { recordOrderCreated, observeOrderValue } as unknown as MetricsPort;

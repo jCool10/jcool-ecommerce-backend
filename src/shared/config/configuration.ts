@@ -176,6 +176,17 @@ export default () => ({
     // Matches INVENTORY_RESERVATION_TTL, so an order never outlives the stock hold it depends on.
     orderTtlSec: parseIntOr(process.env.ORDER_TTL_SEC, 900),
   },
+  reservationSweep: {
+    // Off for e2e suites, which drive the use case directly, and for one-off job containers.
+    enabled: process.env.RESERVATION_SWEEP_ENABLED !== 'false',
+    // A blank env value would parseInt→NaN and register a 0ms interval, so fall back explicitly.
+    intervalMs: parseIntOr(process.env.RESERVATION_SWEEP_INTERVAL_MS, 60_000),
+    batchSize: parseIntOr(process.env.RESERVATION_SWEEP_BATCH_SIZE, 50),
+    // Extra age past a hold's `expires_at` before this sweep expires the order. A full ORDER_TTL_SEC
+    // by default, so the gateway-driven reconcile — the only sweep that can also close the checkout
+    // session — always gets there first, and this one only clears what that could not settle.
+    graceSec: parseIntOr(process.env.RESERVATION_SWEEP_GRACE_SEC, 900),
+  },
   catalog: {
     // Cache-aside TTL (s) for the public product read paths — also the upper bound on staleness
     // if an invalidation is ever missed. A blank env value would parseInt→NaN and cache forever.
@@ -185,8 +196,8 @@ export default () => ({
     // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or
     // 'optimistic' (version CAS + retry). Default pessimistic.
     lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',
-    // How long a HELD reservation stamps `expiresAt` ahead (duration form). Written now;
-    // the sweep that reclaims an expired unpaid hold is a later concern.
+    // How long a HELD reservation stamps `expiresAt` ahead (duration form) — the deadline the
+    // expiry sweep reclaims an unpaid hold from.
     reservationTtl: process.env.INVENTORY_RESERVATION_TTL ?? '15m',
     // Optimistic reserve: how many times to re-CAS after losing a version race before
     // giving up with a 409 (0 = never retry). Real shortfalls never consume a retry.

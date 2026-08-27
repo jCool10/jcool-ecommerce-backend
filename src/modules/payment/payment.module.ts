@@ -8,6 +8,7 @@ import { ORDER_READ_PORT } from './application/ports/order-read.port';
 import { TRANSACTION_RUNNER } from './application/ports/transaction-runner.port';
 import {
   CreatePaymentSessionUseCase,
+  ExpirePaymentSessionUseCase,
   HandlePaymentWebhookUseCase,
   ProcessWebhookEventUseCase,
   ReconcileStaleOrdersUseCase,
@@ -21,6 +22,7 @@ import { SepayGatewayAdapter } from './infrastructure/gateway/sepay-gateway.adap
 import { PaymentController } from './interface/payment.controller';
 import { WebhookController } from './interface/webhook.controller';
 import { ReconciliationScheduler } from './interface/reconciliation.scheduler';
+import { OrderExpiredHandler } from './interface/queue/order-expired.handler';
 
 // Provider selected by env; changing gateways is an env + inject change, never a caller change.
 // Stripe is the coded path (see StripeGatewayAdapter); SePay is an interface-only seam.
@@ -58,7 +60,11 @@ function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
     // The webhook's polling counterpart, driving the same FinalizeOrderUseCase.
     ReconcileStaleOrdersUseCase,
     ReconciliationScheduler,
+    ExpirePaymentSessionUseCase,
+    OrderExpiredHandler,
   ],
-  exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY],
+  // OrderExpiredHandler is exported so the shared event consumer can route Order's expiry back here;
+  // the gateway session it closes is Payment's to close, and only Payment can reach it.
+  exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY, OrderExpiredHandler],
 })
 export class PaymentModule {}

@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { PermanentError, UnhandledEventError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
+import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
+import type { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
 import type { OrderEventsHandler } from '../handlers/order-events.handler';
 import { DeadLetterRouter } from './dead-letter';
 import type { DomainEventJob } from './domain-event.job';
@@ -45,7 +47,11 @@ function build({
   const logError = vi.fn();
   // The real dispatcher, so the label assertions prove the router consults the actual dispatch table
   // rather than a stub that folds by the same rule the assertion expects.
-  const dispatcher = new DomainEventDispatcher({ record: vi.fn() } as unknown as OrderEventsHandler);
+  const dispatcher = new DomainEventDispatcher(
+    { record: vi.fn() } as unknown as OrderEventsHandler,
+    { settle: vi.fn() } as unknown as PaymentEventsHandler,
+    { close: vi.fn() } as unknown as OrderExpiredHandler,
+  );
 
   const router = new DeadLetterRouter(
     { add, remove } as unknown as Queue,

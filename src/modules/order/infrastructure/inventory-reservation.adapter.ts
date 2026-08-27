@@ -2,6 +2,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { STOCK_RESERVATION, type StockReservation } from '@modules/inventory/application/public/stock-reservation.port';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type {
+  ExpiredHold,
+  ExpiredHoldQuery,
   InventoryReservationPort,
   ReservationLine,
   StockResolution,
@@ -36,5 +38,9 @@ export class InventoryReservationAdapter implements InventoryReservationPort {
 
   release(tx: DrizzleTx, orderId: string): Promise<StockResolution> {
     return this.stock.release(tx, orderId);
+  }
+
+  findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]> {
+    return this.stock.findExpiredHolds(query);
   }
 }

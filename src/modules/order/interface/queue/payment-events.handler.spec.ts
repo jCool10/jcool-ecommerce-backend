@@ -21,16 +21,18 @@ function job(eventType: string, payload: Record<string, unknown> = { orderId: OR
   };
 }
 
-function build(status: 'finalized' | 'noop' | 'ignored' | 'not_found' = 'finalized') {
-  const execute = vi.fn().mockResolvedValue({ status });
+function build(status: 'finalized' | 'noop' | 'ignored' | 'not_found' = 'finalized', orderStatus?: string) {
+  const execute = vi.fn().mockResolvedValue({ status, order: orderStatus ? { status: orderStatus } : undefined });
   const error = vi.fn();
+  const info = vi.fn();
   const handler = new PaymentEventsHandler(
     { execute } as unknown as FinalizeOrderUseCase,
     {
       error,
+      info,
     } as unknown as PinoLogger,
   );
-  return { handler, execute, error };
+  return { handler, execute, error, info };
 }
 
 describe('PaymentEventsHandler', () => {
@@ -88,13 +90,36 @@ describe('PaymentEventsHandler', () => {
     );
   });
 
-  // A redelivery after the webhook already settled the order, and a late failure after a success:
-  // finalize decides both, and neither is the consumer's problem to retry.
-  it.each(['noop', 'ignored'] as const)('accepts a %s finalize quietly', async (status) => {
-    const { handler, error } = build(status);
+  // A redelivery after the webhook already settled the order the same way — the ordinary case for a
+  // path that exists to be at-least-once.
+  it('accepts a noop finalize quietly', async () => {
+    const { handler, error, info } = build('noop');
 
     await expect(handler.settle(job('payment.succeeded'), tx)).resolves.toBeUndefined();
 
     expect(error).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  // The TTL sweep expiring an order out from under a payment that then succeeds: no retry recovers
+  // stock already resold, so the only useful move is to put a refund decision in front of a human.
+  it('raises a successful payment onto an already-terminal order at error level', async () => {
+    const { handler, error } = build('ignored', 'EXPIRED');
+
+    await expect(handler.settle(job('payment.succeeded'), tx)).resolves.toBeUndefined();
+
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: ORDER_ID, status: 'EXPIRED' }),
+      'payment settled for an order that was already in a terminal state',
+    );
+  });
+
+  it('records a failed payment onto an already-terminal order without alarm', async () => {
+    const { handler, error, info } = build('ignored', 'EXPIRED');
+
+    await handler.settle(job('payment.failed'), tx);
+
+    expect(error).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(expect.objectContaining({ orderId: ORDER_ID }), expect.any(String));
   });
 });

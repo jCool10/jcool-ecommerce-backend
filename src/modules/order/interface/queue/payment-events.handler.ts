@@ -48,12 +48,22 @@ export class PaymentEventsHandler {
       tx,
     );
 
+    // Both are acknowledged rather than retried: no redelivery conjures an order or reopens a
+    // terminal one, and the money has already moved.
     if (result.status === 'not_found') {
-      // Acknowledged rather than retried: no redelivery conjures an order, and the money has already
-      // moved. Loud, because a settled payment with no order to settle is a refund decision.
+      // Loud, because a settled payment with no order to settle is a refund decision.
       this.logger.error(
         { context: LOG_CONTEXT, orderId, eventType: job.eventType, messageId: job.outboxId },
         'payment settled for an order that does not exist',
+      );
+    } else if (result.status === 'ignored') {
+      // The order settled some other way first — the TTL sweep expiring it is the realistic path.
+      // A successful payment onto that is the same refund decision as above; a failed one is the
+      // benign tail, where two paths agreed the order was not going to be paid.
+      const level = outcome === 'PAID' ? 'error' : 'info';
+      this.logger[level](
+        { context: LOG_CONTEXT, orderId, eventType: job.eventType, status: result.order?.status },
+        'payment settled for an order that was already in a terminal state',
       );
     }
   }
