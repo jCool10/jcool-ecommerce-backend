@@ -18,6 +18,7 @@ import { InventoryReservationAdapter } from './infrastructure/inventory-reservat
 import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempotency-key.repository';
 import { OrderController } from './interface/order.controller';
 import { IdempotencyInterceptor } from './interface/idempotency.interceptor';
+import { PaymentEventsHandler } from './interface/queue/payment-events.handler';
 import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.guard';
 
 /**
@@ -44,8 +45,10 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     { provide: ORDER_PAYMENT_VIEW, useClass: OrderPaymentViewService },
     RequireIdempotencyKeyGuard,
     IdempotencyInterceptor,
+    PaymentEventsHandler,
   ],
-  // FinalizeOrderUseCase is exported so Payment's webhook and sweep can settle an order.
-  exports: [ORDER_PAYMENT_VIEW, FinalizeOrderUseCase],
+  // FinalizeOrderUseCase is exported so Payment's webhook and sweep can settle an order, and
+  // PaymentEventsHandler so the shared event consumer can route a settlement back here.
+  exports: [ORDER_PAYMENT_VIEW, FinalizeOrderUseCase, PaymentEventsHandler],
 })
 export class OrderModule {}

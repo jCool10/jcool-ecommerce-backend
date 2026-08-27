@@ -41,6 +41,6 @@ export interface StockReservation {
   /** Payment succeeded: on-hand drops for real. Idempotent, and never throws — the result says what happened. */
   commit(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
 
-  /** Payment failed or expired: the held quantity returns to available. Same contract as `commit`. */
+  /** The hold is given up: the held quantity returns to available. Same contract as `commit`. */
   release(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
 }

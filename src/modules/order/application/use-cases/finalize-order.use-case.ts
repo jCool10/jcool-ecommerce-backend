@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
+import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { OrderStatus } from '../../domain/order-status';
 import { canTransition } from '../../domain/order-state-machine';
@@ -11,10 +12,10 @@ import type { FinalizeInput, FinalizeResult } from './finalize-order.types';
 const LOG_CONTEXT = 'FinalizeOrder';
 
 /**
- * The one path that settles an order, shared by the webhook and the reconciliation sweep. Its
- * exactly-once effect is a row lock plus a terminal guard, no distributed lock — see
- * docs/engineering-notes.md (Order). Callers must resolve the gateway BEFORE calling: no network I/O
- * may run inside this transaction, which holds the order's row lock.
+ * The one path that settles an order, shared by the webhook, the reconciliation sweep, and the
+ * payment-settled consumer. Its exactly-once effect is a row lock plus a terminal guard, no
+ * distributed lock — see docs/engineering-notes.md (Order). Callers must resolve the gateway BEFORE
+ * calling: no network I/O may run inside this transaction, which holds the order's row lock.
  */
 @Injectable()
 export class FinalizeOrderUseCase {
@@ -25,7 +26,11 @@ export class FinalizeOrderUseCase {
     private readonly logger: PinoLogger,
   ) {}
 
-  async execute({ orderId, outcome, reason, paymentRef }: FinalizeInput): Promise<FinalizeResult> {
+  /**
+   * `join` runs the whole unit in a transaction the caller already owns — how a consumer settles an
+   * order under the same transaction as its inbox claim, so neither can commit without the other.
+   */
+  async execute({ orderId, outcome, reason, paymentRef }: FinalizeInput, join?: DrizzleTx): Promise<FinalizeResult> {
     return this.repo.withTransaction(async (tx) => {
       const order = await this.repo.findByIdForUpdate(orderId, tx);
       if (!order) {
@@ -69,6 +74,6 @@ export class FinalizeOrderUseCase {
       await this.outbox.append(tx, toFinalizedOutboxRecord(event));
 
       return { status: 'finalized', order: finalized, event };
-    });
+    }, join);
   }
 }

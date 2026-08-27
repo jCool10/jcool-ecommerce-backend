@@ -183,7 +183,7 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
     });
 
     it('folds an event type no consumer is registered for into one series', async () => {
-      await seed(1, { eventType: 'payment.succeeded' });
+      await seed(1, { eventType: 'payment.refunded' });
       const before = counter(await scrape(), UNREGISTERED);
 
       await relay.runOnce(10);
@@ -192,7 +192,7 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
       // Cardinality iron rule: `outbox.event_type` is free text a producer wrote, so only the
       // dispatch table bounds it. The raw name must not appear as a label anywhere.
       expect(counter(text, UNREGISTERED)).toBe(before + 1);
-      expect(text).not.toContain('event_type="payment.succeeded"');
+      expect(text).not.toContain('event_type="payment.refunded"');
     });
   });
 

@@ -234,7 +234,7 @@ describe('OutboxRelay', () => {
     });
 
     it('folds an event type no consumer knows into one series instead of minting one per name', async () => {
-      const t = build([row({ eventType: 'payment.succeeded' }), row({ eventType: 'shipment.created' })]);
+      const t = build([row({ eventType: 'payment.refunded' }), row({ eventType: 'shipment.created' })]);
 
       await t.relay.runOnce(10);
 

@@ -1,4 +1,4 @@
-import { PaymentStatus } from '../../domain/payment-status';
+import { PaymentStatus, type SettledPaymentStatus } from '../../domain/payment-status';
 
 /**
  * Map a gateway event to the payment outcome it drives, for the coded Checkout Session flow.
@@ -19,7 +19,7 @@ import { PaymentStatus } from '../../domain/payment-status';
 const SETTLED_PAYMENT_STATUSES = new Set(['paid', 'no_payment_required']);
 
 export type EventOutcome =
-  | { kind: 'settle'; status: PaymentStatus }
+  | { kind: 'settle'; status: SettledPaymentStatus }
   // A session event we deliberately do not apply yet — the money has not cleared.
   | { kind: 'awaiting_payment' }
   // An event type we log for audit but never act on.

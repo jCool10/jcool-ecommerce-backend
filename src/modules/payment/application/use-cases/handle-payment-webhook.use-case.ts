@@ -9,8 +9,10 @@ const LOG_CONTEXT = 'HandlePaymentWebhook';
 
 /**
  * Settles the payment, then the order, in two SEPARATE transactions — Payment and Order are
- * independent state machines. The cost is a window where the payment is settled and the order is not;
- * the reconciliation sweep closes it, and the gateway only ever sees a 2xx.
+ * independent state machines. The finalize here is a latency optimization, not the guarantee: the
+ * payment transaction also emitted a settlement event, and the consumer behind it settles the same
+ * order idempotently. So the window this leaves open is closed by the queue within a relay tick,
+ * with the reconciliation sweep behind that, and the gateway only ever sees a 2xx.
  */
 @Injectable()
 export class HandlePaymentWebhookUseCase {
@@ -71,7 +73,7 @@ export class HandlePaymentWebhookUseCase {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
         { context: LOG_CONTEXT, orderId: result.orderId, outcome },
-        `order finalize failed after payment settled — order left for reconciliation cron: ${message}`,
+        `order finalize failed after payment settled — settlement event will settle it: ${message}`,
       );
     }
 

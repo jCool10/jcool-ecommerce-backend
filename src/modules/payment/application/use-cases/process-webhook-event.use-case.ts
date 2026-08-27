@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { canTransition } from '../../domain/payment-state-machine';
 import type { Payment } from '../../domain/payment.entity';
@@ -8,6 +9,7 @@ import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../po
 import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
 import { mapEventToOutcome } from '../mappers/map-event-to-outcome';
 import { readCheckoutSession, type CheckoutSessionFacts } from '../mappers/read-checkout-session';
+import { toSettledOutboxRecord } from '../payment-outbox.mapper';
 
 /**
  * Outcome of one webhook delivery. `rejected` is the only non-2xx result (verify failed, nothing
@@ -49,6 +51,7 @@ export class ProcessWebhookEventUseCase {
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
     @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEvents: WebhookEventRepositoryPort,
     @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
+    @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
   ) {}
 
   async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
@@ -133,10 +136,21 @@ export class ProcessWebhookEventUseCase {
       if (!updated) throw new Error(`payment vanished mid-transaction: ${payment.id}`);
       await this.webhookEvents.markProcessed(eventId, tx);
 
-      // The payment is settled in this tx; finalizing the Order (PENDING→PAID/FAILED) + resolving
-      // held stock runs AFTER this tx commits, in FinalizeOrderUseCase's own tx (see
-      // HandlePaymentWebhookUseCase). Kept separate so Payment and Order stay independent state
-      // machines; a finalize that fails post-commit is closed by the reconciliation cron.
+      // Same tx as the settlement, so a settled payment can never lose the event that drives its
+      // order — the crash window the direct call in HandlePaymentWebhookUseCase cannot close, since
+      // that one runs after this commit. Payment and Order stay independent state machines: this
+      // publishes what happened to the money and says nothing about what the order should become.
+      await this.outbox.append(
+        tx,
+        toSettledOutboxRecord({
+          paymentId: payment.id,
+          orderId: payment.orderId,
+          status: target,
+          paymentRef: applied.providerIntentId,
+          settledAt: new Date(),
+        }),
+      );
+
       return {
         outcome: 'processed',
         status: applied.status,

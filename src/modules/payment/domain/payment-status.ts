@@ -15,5 +15,8 @@ export const PaymentStatus = {
 
 export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 
+/** The outcomes a gateway event can settle a payment to — EXPIRED belongs to the sweep alone. */
+export type SettledPaymentStatus = typeof PaymentStatus.SUCCEEDED | typeof PaymentStatus.FAILED;
+
 /** All statuses, in declaration order — the pg enum + exhaustive test iteration use this. */
 export const PAYMENT_STATUSES: readonly PaymentStatus[] = Object.values(PaymentStatus);

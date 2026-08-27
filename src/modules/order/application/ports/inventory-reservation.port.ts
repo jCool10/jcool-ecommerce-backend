@@ -28,6 +28,6 @@ export interface InventoryReservationPort {
   /** PAID: on-hand drops for real. Idempotent and non-throwing, so finalize settles order + stock atomically. */
   commit(tx: DrizzleTx, orderId: string): Promise<StockResolution>;
 
-  /** FAILED/EXPIRED: stock returns to available. Same contract as `commit`. */
+  /** Any outcome other than PAID: stock returns to available. Same contract as `commit`. */
   release(tx: DrizzleTx, orderId: string): Promise<StockResolution>;
 }

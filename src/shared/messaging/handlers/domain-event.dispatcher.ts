@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { UnhandledEventError } from '../errors';
 import type { DomainEventJob } from '../queue/domain-event.job';
@@ -17,7 +18,7 @@ const UNREGISTERED_EVENT_LABEL = 'unregistered';
 export class DomainEventDispatcher {
   private readonly handlers: ReadonlyMap<string, DomainEventHandler>;
 
-  constructor(orderEvents: OrderEventsHandler) {
+  constructor(orderEvents: OrderEventsHandler, paymentEvents: PaymentEventsHandler) {
     this.handlers = new Map<string, DomainEventHandler>([
       ['order.placed', (job) => orderEvents.record(job)],
       // The finalize outcomes. Audit-only for the same reason as order.placed: the finalizing
@@ -26,8 +27,10 @@ export class DomainEventDispatcher {
       ['order.failed', (job) => orderEvents.record(job)],
       ['order.expired', (job) => orderEvents.record(job)],
       ['order.cancelled', (job) => orderEvents.record(job)],
-      // A context that starts emitting its own events (Payment, say) registers here — and only once
-      // it has an effect that is genuinely its consumer's to run, not a repeat of the producer's.
+      // Payment's settlements, unlike the above, carry an effect this consumer genuinely owns: the
+      // producing transaction moved money and nothing else, leaving the order still to settle.
+      ['payment.succeeded', (job, tx) => paymentEvents.settle(job, tx)],
+      ['payment.failed', (job, tx) => paymentEvents.settle(job, tx)],
     ]);
   }
 

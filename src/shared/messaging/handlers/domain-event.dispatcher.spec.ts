@@ -1,5 +1,6 @@
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
+import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { UnhandledEventError } from '../errors';
 import type { DomainEventJob } from '../queue/domain-event.job';
@@ -22,8 +23,13 @@ function job(eventType: string): DomainEventJob {
 
 function build() {
   const info = vi.fn();
+  const settle = vi.fn().mockResolvedValue(undefined);
   const handler = new OrderEventsHandler({ info } as unknown as PinoLogger);
-  return { dispatcher: new DomainEventDispatcher(handler), info };
+  return {
+    dispatcher: new DomainEventDispatcher(handler, { settle } as unknown as PaymentEventsHandler),
+    info,
+    settle,
+  };
 }
 
 describe('DomainEventDispatcher', () => {
@@ -40,10 +46,23 @@ describe('DomainEventDispatcher', () => {
     },
   );
 
+  // The one route with an effect of its own, so it gets the consumer's transaction — the handler
+  // settles the order under the same transaction that holds the inbox claim.
+  it.each(['payment.succeeded', 'payment.failed'])(
+    'routes %s to the order settlement, on the consumer tx',
+    async (eventType) => {
+      const { dispatcher, settle } = build();
+
+      await dispatcher.dispatch(job(eventType), tx);
+
+      expect(settle).toHaveBeenCalledWith(expect.objectContaining({ eventType }), tx);
+    },
+  );
+
   it('refuses an event it has no handler for rather than acknowledging it', async () => {
     const { dispatcher } = build();
 
-    await expect(dispatcher.dispatch(job('payment.succeeded'), tx)).rejects.toBeInstanceOf(UnhandledEventError);
+    await expect(dispatcher.dispatch(job('cart.abandoned'), tx)).rejects.toBeInstanceOf(UnhandledEventError);
   });
 
   it('folds an unregistered name into one label, so a bad producer cannot mint time series', () => {
