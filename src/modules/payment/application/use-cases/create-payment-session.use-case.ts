@@ -1,5 +1,6 @@
 import { BadGatewayException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import { ORDER_READ_PORT, type OrderReadPort } from '../ports/order-read.port';
@@ -43,6 +44,7 @@ export class CreatePaymentSessionUseCase {
     @Inject(ORDER_READ_PORT) private readonly orders: OrderReadPort,
     @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
+    @Inject(METRICS) private readonly metrics: MetricsPort,
   ) {}
 
   async execute(orderId: string, userId: string): Promise<CreatePaymentSessionResult> {
@@ -78,6 +80,9 @@ export class CreatePaymentSessionUseCase {
       // Provider/network fault (live Stripe down) — a 502, not a 500. Nothing persisted yet. The
       // client only ever sees a masked generic 502, so log the gateway detail + cause HERE or a
       // checkout outage is undiagnosable; chain the cause so Sentry links the original Stripe error.
+      // The saga stalls here with stock still held, so it is a failed step — unlike the guards
+      // above, which refuse a request without leaving the order any worse off.
+      this.metrics.recordSagaStep('payment_session', 'failed');
       if (error instanceof PaymentGatewayError) {
         this.logger.error(
           `createSession failed for order ${orderId}: ${error.message}`,
@@ -88,25 +93,33 @@ export class CreatePaymentSessionUseCase {
       throw error;
     }
 
-    const payment = Payment.create({
-      orderId,
-      provider: this.gateway.provider,
-      providerSessionId: session.providerSessionId,
-      amountMinor: order.amountMinor,
-      currency: order.currency,
-    });
-
     let saved: Payment;
     try {
-      saved = await this.payments.create(payment);
+      // Built inside the try because the entity's own invariants can reject a malformed session, and
+      // that strands one at the gateway exactly the way a failed insert does.
+      saved = await this.payments.create(
+        Payment.create({
+          orderId,
+          provider: this.gateway.provider,
+          providerSessionId: session.providerSessionId,
+          amountMinor: order.amountMinor,
+          currency: order.currency,
+        }),
+      );
     } catch (error) {
-      // A concurrent request beat us past the pre-check and won the DB unique index — same outcome.
+      // A concurrent request beat us past the pre-check and won the DB unique index. Not a failed
+      // step — the order has an active payment, just not this request's — though the session this
+      // attempt opened is orphaned at the gateway until it expires there.
       if (error instanceof DuplicateActivePaymentError) {
         throw new ConflictException(error.message);
       }
+      // A session now open at the gateway that no payment row points at: the order cannot be paid
+      // and nothing will clean the session up until the expiry sweep does.
+      this.metrics.recordSagaStep('payment_session', 'failed');
       throw error;
     }
 
+    this.metrics.recordSagaStep('payment_session', 'success');
     return {
       paymentId: saved.id as string,
       providerSessionId: saved.providerSessionId,

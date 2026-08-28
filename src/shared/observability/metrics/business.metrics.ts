@@ -5,10 +5,12 @@ import type { Counter, Histogram } from 'prom-client';
 import type {
   CacheResult,
   CartOperation,
+  CompensationTrigger,
   ConsumeResult,
   DeadLetterReason,
   MetricsPort,
   PublishResult,
+  SagaStep,
 } from './metrics.port';
 import {
   AUTH_EVENTS_TOTAL,
@@ -20,6 +22,9 @@ import {
   MESSAGING_PUBLISH_TOTAL,
   ORDERS_CREATED_TOTAL,
   ORDER_VALUE_MINOR,
+  RESERVATION_EXPIRY_TOTAL,
+  SAGA_COMPENSATION_TOTAL,
+  SAGA_STEP_TOTAL,
 } from './metric-definitions';
 
 const LOG_CONTEXT = 'BusinessMetrics';
@@ -40,6 +45,9 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(MESSAGING_CONSUME_TOTAL) private readonly eventsConsumed: Counter<string>,
     @InjectMetric(MESSAGING_CONSUME_RETRIES_TOTAL) private readonly consumeRetries: Counter<string>,
     @InjectMetric(MESSAGING_DLQ_TOTAL) private readonly deadLetters: Counter<string>,
+    @InjectMetric(SAGA_STEP_TOTAL) private readonly sagaSteps: Counter<string>,
+    @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
+    @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -77,6 +85,18 @@ export class BusinessMetrics implements MetricsPort {
 
   recordDeadLetter(eventType: string, reason: DeadLetterReason): void {
     this.safely('dead_letter', () => this.deadLetters.inc({ event_type: eventType, reason }));
+  }
+
+  recordSagaStep(step: SagaStep, outcome: 'success' | 'failed'): void {
+    this.safely('saga_step', () => this.sagaSteps.inc({ step, outcome }));
+  }
+
+  recordCompensation(trigger: CompensationTrigger): void {
+    this.safely('saga_compensation', () => this.compensations.inc({ trigger }));
+  }
+
+  recordReservationExpiry(): void {
+    this.safely('reservation_expiry', () => this.reservationExpiries.inc());
   }
 
   // Swallow-and-log: a telemetry error is logged (so it's not invisible) but never rethrown.

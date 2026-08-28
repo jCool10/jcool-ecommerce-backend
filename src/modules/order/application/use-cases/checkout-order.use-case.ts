@@ -78,8 +78,11 @@ export class CheckoutOrderUseCase {
           ),
       );
     } catch (error) {
-      // Out of stock, or the optimistic retry budget was exhausted under contention: the hold, the
-      // order, and the key COMPLETED all rolled back together, so nothing persisted. Surface as 409.
+      // The step is the whole unit, not just the stock call: the hold, the order, the event and the
+      // key COMPLETED commit together, so any fault in there ends with no hold taken.
+      this.metrics.recordSagaStep('reserve', 'failed');
+      // Out of stock, or the optimistic retry budget was exhausted under contention — the one fault
+      // here that is an answer to the caller rather than a fault of ours. Surface as 409.
       if (error instanceof StockReservationError) {
         throw new ConflictException(error.message);
       }
@@ -87,6 +90,8 @@ export class CheckoutOrderUseCase {
     }
 
     if (result.created) {
+      // Only a fresh hold is a step: the replay below reuses one an earlier attempt already took.
+      this.metrics.recordSagaStep('reserve', 'success');
       this.metrics.recordOrderCreated(placed.status);
       this.metrics.observeOrderValue(placed.totalAmountMinor);
       return this.viewOf(placed, result.orderId);

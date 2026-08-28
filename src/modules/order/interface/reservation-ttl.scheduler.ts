@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { PinoLogger } from 'nestjs-pino';
 import { durationToMs } from '@shared/kernel';
+import { withSpan } from '@shared/observability/tracing/tracer';
 import { SweepExpiredReservationsUseCase, type SweepInput } from '../application/use-cases';
 
 const LOG_CONTEXT = 'ReservationTtlScheduler';
@@ -67,19 +68,24 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
     }
     this.running = true;
     try {
-      const summary = await this.sweepExpired.execute(this.sweep);
-      // A full batch that expired nothing means the oldest holds cannot be cleared, and the read is
-      // ordered oldest-first — so they will fill every tick from here on and newer holds never get
-      // looked at. Distinct from the catch below: the sweep worked, its queue is jammed.
-      if (summary.scanned === this.sweep.batchSize && summary.expired === 0) {
-        this.logger.error(
-          { context: LOG_CONTEXT, ...summary, stuck: true },
-          'reservation expiry sweep filled a batch without expiring anything — stock stays held',
-        );
-      } else if (summary.scanned > 0) {
-        // Idle sweeps are the common case; logging them buries the ticks that did something.
-        this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reservation expiry sweep completed');
-      }
+      // A timer has no request and no inbound trace, so nothing would tie this tick's lines to the
+      // orders it settled — the span is what puts a trace id on both. One per tick, not per order:
+      // the whole batch is the unit of work, and each order is already identified by its own id.
+      await withSpan('reservation.sweep', async () => {
+        const summary = await this.sweepExpired.execute(this.sweep);
+        // A full batch that expired nothing means the oldest holds cannot be cleared, and the read is
+        // ordered oldest-first — so they will fill every tick from here on and newer holds never get
+        // looked at. Distinct from the catch below: the sweep worked, its queue is jammed.
+        if (summary.scanned === this.sweep.batchSize && summary.expired === 0) {
+          this.logger.error(
+            { context: LOG_CONTEXT, ...summary, stuck: true },
+            'reservation expiry sweep filled a batch without expiring anything — stock stays held',
+          );
+        } else if (summary.scanned > 0) {
+          // Idle sweeps are the common case; logging them buries the ticks that did something.
+          this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reservation expiry sweep completed');
+        }
+      });
     } catch (error) {
       // Per-order failures are already isolated, so this is the sweep itself breaking. Swallow it:
       // an unhandled rejection in a timer kills the process.

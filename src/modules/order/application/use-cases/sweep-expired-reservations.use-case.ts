@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { OrderStatus } from '../../domain/order-status';
 import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/inventory-reservation.port';
 import { FinalizeOrderUseCase } from './finalize-order.use-case';
@@ -34,6 +35,7 @@ export class SweepExpiredReservationsUseCase {
   constructor(
     @Inject(INVENTORY_RESERVATION) private readonly inventory: InventoryReservationPort,
     private readonly finalizeOrder: FinalizeOrderUseCase,
+    @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -54,6 +56,9 @@ export class SweepExpiredReservationsUseCase {
         });
         if (result.status === 'finalized') {
           summary.expired += 1;
+          // Only this branch: the races below were expired by someone else, and counting them here
+          // would erase the difference between this sweep and reconcile that the counter exists for.
+          this.metrics.recordReservationExpiry();
           continue;
         }
 

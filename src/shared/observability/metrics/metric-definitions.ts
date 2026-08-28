@@ -35,6 +35,24 @@ export const MESSAGING_CONSUME_TOTAL = 'messaging_consume_total';
 export const MESSAGING_CONSUME_RETRIES_TOTAL = 'messaging_consume_retries_total';
 export const MESSAGING_DLQ_TOTAL = 'messaging_dlq_total';
 
+// --- Saga ---
+// The checkout saga's funnel. Each step commits its own transaction, so an order can stop between
+// any two of them and sit there holding stock. Read the steps as rates side by side, not as a
+// subtraction: an order that reserves, never opens a session and is expired straight from the hold
+// reaches finalize without ever reaching payment_session, so the steps are not nested and a
+// difference between them can go negative. What leaves the funnel shows up in the counters below.
+export const SAGA_STEP_TOTAL = 'saga_step_total';
+// Compensation is the saga's only rollback, so this is the rate at which checkouts are being undone.
+// The trigger says whose fault it was — a payment_failed spike is the gateway, a ttl_expired spike is
+// buyers abandoning or webhooks not arriving, and telling those apart is the whole point of the label.
+export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
+// Deliberately narrower than saga_compensation_total{trigger=ttl_expired}: that one counts every
+// order that ended EXPIRED, this one only those the reservation sweep itself claimed. The difference
+// is what the gateway-driven reconcile expired first, which is the ordering the sweep's boot guard
+// exists to preserve — so once expiries are actually happening, the two rates converging means
+// reconcile has stopped. Both sit at 0 on a healthy quiet shop, where the comparison says nothing.
+export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
+
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
 // across 1–150ms, where every route's p95/p99 sits; the 0.25s boundary is the latency-SLO
@@ -110,6 +128,20 @@ export const METRIC_PROVIDERS: Provider[] = [
     name: MESSAGING_DLQ_TOTAL,
     help: 'Messages moved to the dead-letter queue, by event_type and reason (permanent = retrying could never fix it, attempts_exhausted = it stayed broken for the whole budget).',
     labelNames: ['event_type', 'reason'],
+  }),
+  makeCounterProvider({
+    name: SAGA_STEP_TOTAL,
+    help: 'Checkout saga steps, by step (reserve/payment_session/finalize) and outcome. A settlement that moved nothing — a duplicate, or one conflicting with an order already terminal — is not counted: it repeats a step rather than adding one. Only the repeats arriving over the queue also show up in messaging_consume_total; one from the payment webhook or the reconcile sweep is in neither, and the "conflicting finalize ignored" log is the only place it appears.',
+    labelNames: ['step', 'outcome'],
+  }),
+  makeCounterProvider({
+    name: SAGA_COMPENSATION_TOTAL,
+    help: 'Orders that released their stock hold instead of committing it, by trigger (payment_failed/ttl_expired/cancelled).',
+    labelNames: ['trigger'],
+  }),
+  makeCounterProvider({
+    name: RESERVATION_EXPIRY_TOTAL,
+    help: 'Orders the reservation sweep expired because their hold had lapsed. Orders, not reservation rows: a multi-line order is one hold to the sweep.',
   }),
   ...OUTBOX_BACKLOG_PROVIDERS,
 ];

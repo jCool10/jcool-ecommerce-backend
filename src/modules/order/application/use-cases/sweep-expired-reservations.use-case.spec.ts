@@ -2,6 +2,7 @@ import type { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OrderStatus } from '../../domain/order-status';
 import type { Order } from '../../domain/order.entity';
+import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { ExpiredHold, InventoryReservationPort } from '../ports/inventory-reservation.port';
 import type { FinalizeOrderUseCase } from './finalize-order.use-case';
 import type { FinalizeResult } from './finalize-order.types';
@@ -24,12 +25,14 @@ function finalized(): FinalizeResult {
 function build(holds: ExpiredHold[], execute = vi.fn().mockResolvedValue(finalized())) {
   const findExpiredHolds = vi.fn().mockResolvedValue(holds);
   const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+  const recordReservationExpiry = vi.fn();
   const useCase = new SweepExpiredReservationsUseCase(
     { findExpiredHolds } as unknown as InventoryReservationPort,
     { execute } as unknown as FinalizeOrderUseCase,
+    { recordReservationExpiry } as unknown as MetricsPort,
     logger as unknown as PinoLogger,
   );
-  return { useCase, findExpiredHolds, execute, logger };
+  return { useCase, findExpiredHolds, execute, logger, recordReservationExpiry };
 }
 
 describe('SweepExpiredReservationsUseCase', () => {
@@ -49,6 +52,18 @@ describe('SweepExpiredReservationsUseCase', () => {
       outcome: OrderStatus.EXPIRED,
       reason: 'ttl:expired',
     });
+  });
+
+  it('counts one expiry per order it actually expired, and none for the ones it lost', async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(finalized())
+      .mockResolvedValueOnce({ status: 'ignored', order: { status: OrderStatus.PAID } as Order });
+    const { useCase, recordReservationExpiry } = build([hold(1), hold(2)], execute);
+
+    await useCase.execute(INPUT);
+
+    expect(recordReservationExpiry).toHaveBeenCalledTimes(1);
   });
 
   it('subtracts the grace from now, so a hold is claimed only once it is that much overdue', async () => {
