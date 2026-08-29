@@ -1,0 +1,1 @@
+CREATE INDEX "idx_reservations_held_expires_at" ON "reservations" USING btree ("expires_at") WHERE "reservations"."status" = 'HELD';

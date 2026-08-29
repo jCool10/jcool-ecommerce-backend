@@ -2,6 +2,7 @@ import { BadGatewayException, ConflictException, NotFoundException } from '@nest
 import { describe, expect, it, vi } from 'vitest';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
+import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { OrderReadPort, OrderView } from '../ports/order-read.port';
 import { DuplicateActivePaymentError, type PaymentRepositoryPort } from '../ports/payment-repository.port';
 import { PaymentGatewayError, type GatewaySession, type PaymentGatewayPort } from '../ports/payment-gateway.port';
@@ -68,8 +69,12 @@ function build(
   const payments = { findByOrderId, create, updateStatus: vi.fn() } as unknown as PaymentRepositoryPort;
   const gateway = { provider: 'stripe', createSession, verifyAndParseEvent: vi.fn() } as unknown as PaymentGatewayPort;
 
-  const useCase = new CreatePaymentSessionUseCase(orders, payments, gateway);
-  return { useCase, findForPayment, findByOrderId, create, createSession };
+  const recordSagaStep = vi.fn();
+
+  const useCase = new CreatePaymentSessionUseCase(orders, payments, gateway, {
+    recordSagaStep,
+  } as unknown as MetricsPort);
+  return { useCase, findForPayment, findByOrderId, create, createSession, recordSagaStep };
 }
 
 describe('CreatePaymentSessionUseCase', () => {
@@ -143,5 +148,30 @@ describe('CreatePaymentSessionUseCase', () => {
     const { useCase, create } = build({ sessionError: new PaymentGatewayError('stripe down') });
     await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(BadGatewayException);
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('counts the saga step once the payment is persisted', async () => {
+    const { useCase, recordSagaStep } = build();
+    await useCase.execute(ORDER_ID, OWNER);
+    expect(recordSagaStep).toHaveBeenCalledExactlyOnceWith('payment_session', 'success');
+  });
+
+  it('counts a gateway failure as a failed step — the order is stuck holding stock it cannot pay for', async () => {
+    const { useCase, recordSagaStep } = build({ sessionError: new PaymentGatewayError('stripe down') });
+    await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(BadGatewayException);
+    expect(recordSagaStep).toHaveBeenCalledExactlyOnceWith('payment_session', 'failed');
+  });
+
+  // A refused request is not a broken saga: the order is exactly where it was, and counting these
+  // would turn every duplicate tab into a failure rate nobody can act on.
+  it.each([
+    ['unknown order', { order: null }],
+    ['order not payable', { order: orderView({ status: 'DRAFT' }) }],
+    ['active payment already open', { existing: persistedPayment(PaymentStatus.PENDING) }],
+    ['lost the unique-index race', { createError: new DuplicateActivePaymentError(ORDER_ID) }],
+  ])('does not count a step when the request is refused (%s)', async (_case, opts) => {
+    const { useCase, recordSagaStep } = build(opts);
+    await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(Error);
+    expect(recordSagaStep).not.toHaveBeenCalled();
   });
 });

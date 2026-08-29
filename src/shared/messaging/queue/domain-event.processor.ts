@@ -68,7 +68,16 @@ export class DomainEventProcessor {
     this.metrics.recordEventConsumed(this.dispatcher.label(job.eventType), result);
     if (result === 'duplicate') {
       this.logger.debug(
-        { context: LOG_CONTEXT, eventType: job.eventType, messageId: job.outboxId },
+        // Qualified by `aggregateType` because the id means a different thing per producer — an
+        // orderId for `order.*`, a paymentId for `payment.*` — and an unlabelled id sends whoever
+        // reads this line looking for it in the wrong table.
+        {
+          context: LOG_CONTEXT,
+          eventType: job.eventType,
+          messageId: job.outboxId,
+          aggregateType: job.aggregateType,
+          aggregateId: job.aggregateId,
+        },
         'duplicate delivery skipped',
       );
     }

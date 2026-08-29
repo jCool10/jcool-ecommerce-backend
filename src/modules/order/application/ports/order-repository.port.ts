@@ -31,8 +31,12 @@ export interface OrderRepositoryPort {
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult>;
 
-  /** Run `fn` in one transaction — the application layer owns the finalize unit of work. */
-  withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T>;
+  /**
+   * Run `fn` in one transaction — the application layer owns the finalize unit of work. A caller
+   * that already holds one passes it in and `fn` joins it instead, so a finalize driven from a
+   * message commits or rolls back with whatever else that transaction is protecting.
+   */
+  withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>, join?: DrizzleTx): Promise<T>;
 
   /**
    * The row lock that serializes concurrent finalizers: the second waits, re-reads the now-terminal

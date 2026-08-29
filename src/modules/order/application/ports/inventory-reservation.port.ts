@@ -21,6 +21,18 @@ export interface StockResolution {
   count: number;
 }
 
+/** One order still holding stock past the moment that hold was meant to lapse. */
+export interface ExpiredHold {
+  orderId: string;
+  expiresAt: Date;
+}
+
+export interface ExpiredHoldQuery {
+  expiredBefore: Date;
+  /** Caps reservation ROWS read, not orders — a multi-line order collapses to a single entry. */
+  limit: number;
+}
+
 export interface InventoryReservationPort {
   /** A shortfall throws `StockReservationError`, rolling back `tx`: the order stays DRAFT, stock untouched. */
   reserve(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void>;
@@ -28,6 +40,12 @@ export interface InventoryReservationPort {
   /** PAID: on-hand drops for real. Idempotent and non-throwing, so finalize settles order + stock atomically. */
   commit(tx: DrizzleTx, orderId: string): Promise<StockResolution>;
 
-  /** FAILED/EXPIRED: stock returns to available. Same contract as `commit`. */
+  /** Any outcome other than PAID: stock returns to available. Same contract as `commit`. */
   release(tx: DrizzleTx, orderId: string): Promise<StockResolution>;
+
+  /**
+   * Orders whose hold has lapsed, oldest first — the expiry sweep's work queue. Reads outside any
+   * transaction: the caller finalizes each order in its own, so one slow order blocks no other.
+   */
+  findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]>;
 }

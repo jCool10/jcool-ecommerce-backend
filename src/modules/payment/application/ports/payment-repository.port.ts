@@ -27,7 +27,7 @@ export interface PaymentRepositoryPort {
   create(payment: Payment, tx?: DrizzleTx): Promise<Payment>;
 
   /** The latest payment for an order (newest first); null if it has none. */
-  findByOrderId(orderId: string): Promise<Payment | null>;
+  findByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment | null>;
 
   /** How the webhook resolves its target payment, from `data.object.id`. */
   findByProviderSessionId(providerSessionId: string, tx?: DrizzleTx): Promise<Payment | null>;

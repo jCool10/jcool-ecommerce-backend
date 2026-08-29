@@ -73,9 +73,8 @@ async function bootstrap(): Promise<void> {
   logger.log(`Application running on http://localhost:${port}`, 'Bootstrap');
 }
 
-// Fail-fast: any bootstrap failure (e.g. env validation) exits non-zero. The pino logger
-// may not exist yet here, so fall back to NestJS's default logger for this last line.
 void bootstrap().catch((error: unknown) => {
-  NestLogger.error(error instanceof Error ? error.message : String(error), undefined, 'Bootstrap');
+  NestLogger.error(error instanceof Error ? (error.stack ?? error.message) : String(error), undefined, 'Bootstrap');
+  NestLogger.flush();
   process.exit(1);
 });

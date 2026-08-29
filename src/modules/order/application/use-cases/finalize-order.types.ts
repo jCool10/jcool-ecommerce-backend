@@ -8,6 +8,7 @@ export const FINALIZE_OUTCOMES: readonly FinalizeOutcome[] = [
   OrderStatus.PAID,
   OrderStatus.FAILED,
   OrderStatus.EXPIRED,
+  OrderStatus.CANCELLED,
 ];
 
 export interface FinalizeInput {
@@ -28,6 +29,6 @@ export interface FinalizeResult {
   status: FinalizeStatus;
   /** The order after the call; absent only for `not_found`. */
   order?: Order;
-  /** Present only on `finalized`, produced exactly once. Nothing publishes it yet. */
+  /** Present only on `finalized`, produced exactly once — the same event appended to the outbox. */
   event?: OrderFinalizedEvent;
 }

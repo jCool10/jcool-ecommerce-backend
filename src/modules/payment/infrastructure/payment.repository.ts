@@ -49,8 +49,11 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     }
   }
 
-  async findByOrderId(orderId: string): Promise<Payment | null> {
-    const [row] = await this.db
+  // Deliberately no `FOR UPDATE` even when given a tx: callers decide across a gateway round-trip,
+  // and their write is a compare-and-set, so locking here would only hold the row for the trip.
+  async findByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment | null> {
+    const executor = tx ?? this.db;
+    const [row] = await executor
       .select()
       .from(payments)
       .where(eq(payments.orderId, orderId))

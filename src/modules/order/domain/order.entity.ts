@@ -6,10 +6,12 @@ import { OrderPlacedEvent } from './events/order-placed.event';
 import { OrderPaidEvent } from './events/order-paid.event';
 import { OrderFailedEvent } from './events/order-failed.event';
 import { OrderExpiredEvent } from './events/order-expired.event';
+import { OrderCancelledEvent } from './events/order-cancelled.event';
 
-export type FinalizeOutcome = typeof OrderStatus.PAID | typeof OrderStatus.FAILED | typeof OrderStatus.EXPIRED;
+export type FinalizeOutcome =
+  typeof OrderStatus.PAID | typeof OrderStatus.FAILED | typeof OrderStatus.EXPIRED | typeof OrderStatus.CANCELLED;
 
-export type OrderFinalizedEvent = OrderPaidEvent | OrderFailedEvent | OrderExpiredEvent;
+export type OrderFinalizedEvent = OrderPaidEvent | OrderFailedEvent | OrderExpiredEvent | OrderCancelledEvent;
 
 /**
  * Order aggregate — the transactional source of truth. Pure: no framework/DB
@@ -121,8 +123,8 @@ export class Order {
   }
 
   /**
-   * Throws `OrderTransitionError` from any non-PENDING state and returns a new copy. Idempotency is
-   * the use case's job (terminal check + row lock) before it ever gets here.
+   * Asserts the transition and returns a new copy. Idempotency is the use case's job (terminal check
+   * + row lock) before it ever gets here.
    */
   finalize(outcome: FinalizeOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
     assertTransition(this.status, outcome);
@@ -170,6 +172,8 @@ export class Order {
         return new OrderFailedEvent(this.id, this.userId, this.finalizeReason, this.finalizedAt);
       case OrderStatus.EXPIRED:
         return new OrderExpiredEvent(this.id, this.userId, this.finalizeReason, this.finalizedAt);
+      case OrderStatus.CANCELLED:
+        return new OrderCancelledEvent(this.id, this.userId, this.finalizeReason, this.finalizedAt);
       default:
         throw new DomainError(`Order in status ${this.status} has no finalization event`);
     }

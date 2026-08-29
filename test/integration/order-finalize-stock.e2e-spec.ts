@@ -117,6 +117,18 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     expect((await readStock(SKU)).quantityReserved).toBe(0);
   });
 
+  it('CANCELLED releases the hold, same as FAILED', async () => {
+    const orderId = await seedPendingOrder();
+    await seedStock(app, SKU, 10);
+    await hold(orderId, SKU, 3);
+
+    await finalize.execute({ orderId, outcome: 'CANCELLED', reason: 'user:cancelled' });
+
+    expect((await readOrder(orderId)).status).toBe('CANCELLED');
+    expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
+    expect((await readStock(SKU)).quantityReserved).toBe(0);
+  });
+
   it('is idempotent: finalizing PAID twice commits the hold once — on-hand not dropped again', async () => {
     const orderId = await seedPendingOrder();
     await seedStock(app, SKU, 10);
@@ -128,6 +140,56 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     expect(again.status).toBe('noop');
     expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
     expect((await readStock(SKU)).quantityOnHand).toBe(7); // still 7, not 4
+  });
+
+  it('releases the hold once when FAILED is re-applied: stock given back once, not twice', async () => {
+    const orderId = await seedPendingOrder();
+    await seedStock(app, SKU, 10);
+    await hold(orderId, SKU, 3);
+
+    await finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' });
+    const again = await finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' });
+
+    expect(again.status).toBe('noop');
+    expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
+    const s = await readStock(SKU);
+    expect(s.quantityReserved).toBe(0); // not -3
+    expect(s.quantityOnHand).toBe(10);
+  });
+
+  it('does not un-commit a PAID order when a conflicting FAILED arrives late', async () => {
+    const orderId = await seedPendingOrder();
+    await seedStock(app, SKU, 10);
+    await hold(orderId, SKU, 3);
+
+    await finalize.execute({ orderId, outcome: 'PAID', paymentRef: 'pay_1' });
+    const late = await finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' });
+
+    // The terminal guard returns before the resolution branch, so compensation never runs on a
+    // settled order — goods already shipped must not be handed back to available.
+    expect(late.status).toBe('ignored');
+    expect((await readOrder(orderId)).status).toBe('PAID');
+    expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
+    const s = await readStock(SKU);
+    expect(s.quantityOnHand).toBe(7);
+    expect(s.quantityReserved).toBe(0);
+  });
+
+  it('reservation-status CAS makes releaseReservations idempotent on its own — no double give-back', async () => {
+    const orderId = await seedPendingOrder();
+    await seedStock(app, SKU, 10);
+    await hold(orderId, SKU, 3);
+
+    // Twice through the resolver directly, past the order-level terminal guard: without the per-line
+    // CAS the second call would give the 3 units back again and drive `reserved` negative.
+    const first = await db.transaction((tx) => stock.releaseReservations(tx, orderId));
+    const second = await db.transaction((tx) => stock.releaseReservations(tx, orderId));
+
+    expect(first).toMatchObject({ applied: true, alreadyResolved: false, count: 1 });
+    expect(second).toMatchObject({ applied: false, alreadyResolved: true, count: 0 });
+    const s = await readStock(SKU);
+    expect(s.quantityReserved).toBe(0);
+    expect(s.quantityOnHand).toBe(10);
   });
 
   it('finalizes an order that has no reservation: order PAID, stock untouched, no throw', async () => {

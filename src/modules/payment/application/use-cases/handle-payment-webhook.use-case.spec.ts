@@ -94,11 +94,17 @@ describe('HandlePaymentWebhookUseCase', () => {
     expect(spies.error).toHaveBeenCalledTimes(1);
   });
 
-  it('warns when the payment settled but finalize was a no-op (money=status mismatch)', async () => {
-    const { useCase, spies } = build({ process: processedSuccess, finalize: { status: 'not_found' } });
+  // No sweep picks this up — reconcile's queue is orders still PENDING — so a payment that moved
+  // money onto an order that did not move is a refund decision, not a wait-and-see.
+  it.each(['not_found', 'ignored'] as const)(
+    'raises a successful payment whose finalize was a %s at error level',
+    async (status) => {
+      const { useCase, spies } = build({ process: processedSuccess, finalize: { status } });
 
-    await useCase.execute(RAW, HEADERS);
+      await useCase.execute(RAW, HEADERS);
 
-    expect(spies.warn).toHaveBeenCalledTimes(1);
-  });
+      expect(spies.error).toHaveBeenCalledTimes(1);
+      expect(spies.warn).not.toHaveBeenCalled();
+    },
+  );
 });

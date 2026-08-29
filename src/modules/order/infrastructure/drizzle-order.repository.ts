@@ -83,8 +83,10 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     });
   }
 
-  async withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
-    return this.db.transaction(fn);
+  async withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>, join?: DrizzleTx): Promise<T> {
+    // Reused as-is rather than nested: a nested drizzle transaction is a SAVEPOINT, which would let
+    // this unit roll back on its own and leave the caller's — the inbox claim, say — committed.
+    return join ? fn(join) : this.db.transaction(fn);
   }
 
   async findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null> {

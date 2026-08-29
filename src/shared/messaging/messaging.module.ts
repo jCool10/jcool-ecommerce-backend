@@ -1,4 +1,6 @@
 import { Global, Module } from '@nestjs/common';
+import { OrderModule } from '@modules/order/order.module';
+import { PaymentModule } from '@modules/payment/payment.module';
 import { DomainEventDispatcher } from './handlers/domain-event.dispatcher';
 import { OrderEventsHandler } from './handlers/order-events.handler';
 import { InboxStore } from './inbox/inbox.store';
@@ -18,6 +20,10 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
  */
 @Global()
 @Module({
+  // The consumer's effects belong to the contexts that own them, so this reaches into Order and
+  // Payment for their handlers rather than reimplementing a settle here. One-way: neither imports
+  // this module — both read the outbox port off the global export — so the graph stays acyclic.
+  imports: [OrderModule, PaymentModule],
   // The queue token stays unexported on purpose: the relay lives in this package, and exporting the
   // raw Queue from a @Global module would let any context publish straight to it — the dual-write
   // the outbox exists to prevent, and one the architecture rules would not catch.

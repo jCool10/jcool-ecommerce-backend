@@ -4,7 +4,13 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
 import { STOCK_REPOSITORY, type ReserveLine, type StockRepositoryPort } from './ports/stock-repository.port';
-import { StockReservationError, type StockReservation, type StockResolveResult } from './public/stock-reservation.port';
+import {
+  StockReservationError,
+  type ExpiredHold,
+  type ExpiredHoldQuery,
+  type StockReservation,
+  type StockResolveResult,
+} from './public/stock-reservation.port';
 
 /** The two concurrency-control strategies, selected by config. */
 export type LockStrategy = 'pessimistic' | 'optimistic';
@@ -52,5 +58,9 @@ export class ReserveStockUseCase implements StockReservation {
 
   release(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
     return this.stock.releaseReservations(tx, orderId);
+  }
+
+  findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]> {
+    return this.stock.findExpiredHolds(query);
   }
 }

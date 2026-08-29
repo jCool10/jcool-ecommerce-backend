@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import { WebhookEvent } from '../../domain/webhook-event.entity';
@@ -91,7 +92,10 @@ function build(opts: { verify: VerifiedEvent; inserted?: boolean; existing?: Pay
     run: vi.fn().mockImplementation((work: (t: unknown) => unknown) => work(tx)),
   } as unknown as TransactionRunnerPort;
 
-  const useCase = new ProcessWebhookEventUseCase(txRunner, gateway, webhookEvents, payments);
+  const append = vi.fn<OutboxWriterPort['append']>().mockResolvedValue(undefined);
+  const outbox: OutboxWriterPort = { append };
+
+  const useCase = new ProcessWebhookEventUseCase(txRunner, gateway, webhookEvents, payments, outbox);
   return {
     useCase,
     tx,
@@ -101,6 +105,7 @@ function build(opts: { verify: VerifiedEvent; inserted?: boolean; existing?: Pay
     findByProviderSessionId,
     updateStatus,
     verifyAndParseEvent,
+    append,
   };
 }
 
@@ -146,8 +151,8 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(markSkipped).not.toHaveBeenCalled();
   });
 
-  it('threads the SAME transaction handle through insert, lookup, apply, and mark (single-tx effect)', async () => {
-    const { useCase, tx, insertIfNew, findByProviderSessionId, updateStatus, markProcessed } = build({
+  it('threads the SAME transaction handle through insert, lookup, apply, mark, and emit (single-tx effect)', async () => {
+    const { useCase, tx, insertIfNew, findByProviderSessionId, updateStatus, markProcessed, append } = build({
       verify: verified(stripeEvent('checkout.session.completed')),
       existing: payment(PaymentStatus.PENDING),
     });
@@ -158,6 +163,63 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(findByProviderSessionId).toHaveBeenCalledWith(SESSION_ID, tx);
     expect(updateStatus).toHaveBeenCalledWith(PAYMENT_ID, PaymentStatus.SUCCEEDED, expect.objectContaining({ tx }));
     expect(markProcessed).toHaveBeenCalledWith(EVENT_ROW_ID, tx);
+    // The emit belongs in the same unit as the settlement: a payment that commits without its event
+    // leaves the order to the sweep alone, which is the failure the outbox exists to remove.
+    expect(append).toHaveBeenCalledWith(tx, expect.objectContaining({ eventType: 'payment.succeeded' }));
+  });
+
+  it('emits a settlement event carrying the order the consumer has to settle', async () => {
+    const { useCase, append } = build({
+      verify: verified(stripeEvent('checkout.session.completed', { intentId: 'pi_live_1' })),
+      existing: payment(PaymentStatus.PENDING),
+    });
+
+    await useCase.execute(RAW, HEADERS);
+
+    const [, record] = append.mock.calls[0];
+    expect(record).toMatchObject({
+      aggregateType: 'Payment',
+      aggregateId: PAYMENT_ID,
+      eventType: 'payment.succeeded',
+    });
+    expect(record.payload).toMatchObject({ orderId: ORDER_ID, paymentRef: 'pi_live_1' });
+  });
+
+  it.each([
+    ['checkout.session.expired', 'payment.failed'],
+    ['checkout.session.completed', 'payment.succeeded'],
+  ])('emits %s as %s', async (eventType, expected) => {
+    const { useCase, append } = build({
+      verify: verified(stripeEvent(eventType)),
+      existing: payment(PaymentStatus.PENDING),
+    });
+
+    await useCase.execute(RAW, HEADERS);
+
+    expect(append).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: expected }));
+  });
+
+  // Every path that leaves the payment where it was: emitting there would drive an order off a
+  // settlement that never happened.
+  const nonSettling: [string, Partial<Parameters<typeof build>[0]>][] = [
+    ['a duplicate delivery', { inserted: false }],
+    ['a conflicting transition', { existing: payment(PaymentStatus.SUCCEEDED) }],
+    [
+      'an uncleared session',
+      { verify: verified(stripeEvent('checkout.session.completed', { paymentStatus: 'unpaid' })) },
+    ],
+  ];
+
+  it.each(nonSettling)('emits nothing for %s', async (_case, overrides) => {
+    const { useCase, append } = build({
+      verify: verified(stripeEvent('checkout.session.completed')),
+      existing: payment(PaymentStatus.PENDING),
+      ...overrides,
+    });
+
+    await useCase.execute(RAW, HEADERS);
+
+    expect(append).not.toHaveBeenCalled();
   });
 
   it('maps a failure event to FAILED', async () => {

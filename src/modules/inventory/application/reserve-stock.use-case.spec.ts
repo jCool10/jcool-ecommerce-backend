@@ -14,6 +14,7 @@ function setup(strategy: string | undefined) {
     commitReservations: vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 }),
     releaseReservations: vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 }),
     getStockView: vi.fn().mockResolvedValue(null),
+    findExpiredHolds: vi.fn().mockResolvedValue([]),
   };
   const config = { get: vi.fn().mockReturnValue(strategy) };
   const uc = new ReserveStockUseCase(stock, config as unknown as ConfigService);

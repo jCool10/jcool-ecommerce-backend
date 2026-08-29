@@ -145,7 +145,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
 
   it('treats an event nothing is registered for as permanent rather than burning the budget', async () => {
     // The real path, no spy: a producer shipping an event type ahead of its consumer.
-    await publish(job({ eventType: 'payment.succeeded' }));
+    await publish(job({ eventType: 'payment.refunded' }));
 
     const [dead] = await waitForDeadLetter();
     expect(dead.data.failedReason).toMatch(/No handler registered/);

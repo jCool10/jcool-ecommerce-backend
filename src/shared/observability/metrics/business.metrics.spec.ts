@@ -14,6 +14,9 @@ function build() {
   const consumeInc = vi.fn();
   const retryInc = vi.fn();
   const dlqInc = vi.fn();
+  const sagaStepInc = vi.fn();
+  const compensationInc = vi.fn();
+  const reservationExpiryInc = vi.fn();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
   const logger = { warn } as unknown as PinoLogger;
   const metrics = new BusinessMetrics(
@@ -26,6 +29,9 @@ function build() {
     { inc: consumeInc } as unknown as Counter<string>,
     { inc: retryInc } as unknown as Counter<string>,
     { inc: dlqInc } as unknown as Counter<string>,
+    { inc: sagaStepInc } as unknown as Counter<string>,
+    { inc: compensationInc } as unknown as Counter<string>,
+    { inc: reservationExpiryInc } as unknown as Counter<string>,
     logger,
   );
   return {
@@ -39,6 +45,9 @@ function build() {
     consumeInc,
     retryInc,
     dlqInc,
+    sagaStepInc,
+    compensationInc,
+    reservationExpiryInc,
     warn,
   };
 }
@@ -96,6 +105,24 @@ describe('BusinessMetrics', () => {
     const { metrics, dlqInc } = build();
     metrics.recordDeadLetter('order.paid', 'permanent');
     expect(dlqInc).toHaveBeenCalledWith({ event_type: 'order.paid', reason: 'permanent' });
+  });
+
+  it('counts a saga step by step and outcome', () => {
+    const { metrics, sagaStepInc } = build();
+    metrics.recordSagaStep('payment_session', 'failed');
+    expect(sagaStepInc).toHaveBeenCalledWith({ step: 'payment_session', outcome: 'failed' });
+  });
+
+  it('counts a compensation by trigger', () => {
+    const { metrics, compensationInc } = build();
+    metrics.recordCompensation('ttl_expired');
+    expect(compensationInc).toHaveBeenCalledWith({ trigger: 'ttl_expired' });
+  });
+
+  it('counts a reservation expiry with no labels at all', () => {
+    const { metrics, reservationExpiryInc } = build();
+    metrics.recordReservationExpiry();
+    expect(reservationExpiryInc).toHaveBeenCalledWith();
   });
 
   it('swallows a metric error and logs it — telemetry never breaks the business flow', () => {

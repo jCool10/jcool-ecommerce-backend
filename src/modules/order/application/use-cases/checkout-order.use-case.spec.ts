@@ -47,14 +47,15 @@ function build(
   const append = vi.fn().mockResolvedValue(undefined);
   const recordOrderCreated = vi.fn();
   const observeOrderValue = vi.fn();
+  const recordSagaStep = vi.fn();
 
   const repo = { createCheckout, findForUser, findAllForUser: vi.fn() } as unknown as OrderRepositoryPort;
   const cart: CartSnapshotReaderPort = { getLines };
   const catalog: CatalogQueryPort = { getSkuView };
-  const reservation: InventoryReservationPort = { reserve, commit, release };
+  const reservation: InventoryReservationPort = { reserve, commit, release, findExpiredHolds: vi.fn() };
   const store = { markCompleted } as unknown as IdempotencyStorePort;
   const outbox: OutboxWriterPort = { append };
-  const metrics = { recordOrderCreated, observeOrderValue } as unknown as MetricsPort;
+  const metrics = { recordOrderCreated, observeOrderValue, recordSagaStep } as unknown as MetricsPort;
   // noContext models CLS inactive at the use-case boundary (the wired route always has it active).
   const cls = {
     isActive: () => !opts.noContext,
@@ -64,7 +65,16 @@ function build(
   const useCase = new CheckoutOrderUseCase(repo, cart, catalog, reservation, store, outbox, metrics, cls);
   return {
     useCase,
-    spies: { createCheckout, findForUser, reserve, markCompleted, append, recordOrderCreated, observeOrderValue },
+    spies: {
+      createCheckout,
+      findForUser,
+      reserve,
+      markCompleted,
+      append,
+      recordOrderCreated,
+      observeOrderValue,
+      recordSagaStep,
+    },
   };
 }
 
@@ -122,6 +132,7 @@ describe('CheckoutOrderUseCase', () => {
     );
     expect(spies.recordOrderCreated).toHaveBeenCalledWith(OrderStatus.PENDING);
     expect(spies.observeOrderValue).toHaveBeenCalledWith(200_000);
+    expect(spies.recordSagaStep).toHaveBeenCalledExactlyOnceWith('reserve', 'success');
   });
 
   it('fails loud (500) when the idempotency context is missing, never opening the checkout', async () => {
@@ -142,6 +153,7 @@ describe('CheckoutOrderUseCase', () => {
 
     await expect(useCase.execute('u1')).rejects.toBeInstanceOf(ConflictException);
     expect(spies.recordOrderCreated).not.toHaveBeenCalled();
+    expect(spies.recordSagaStep).toHaveBeenCalledExactlyOnceWith('reserve', 'failed');
   });
 
   it('heals a crash-reclaim: returns the existing order and points the key at it, no second reserve', async () => {
@@ -171,5 +183,7 @@ describe('CheckoutOrderUseCase', () => {
       expect.objectContaining({ scope: SCOPE, key: KEY, orderId: 'order-existing' }),
     );
     expect(spies.recordOrderCreated).not.toHaveBeenCalled();
+    // No second hold was taken, so the funnel must not show a second one.
+    expect(spies.recordSagaStep).not.toHaveBeenCalled();
   });
 });

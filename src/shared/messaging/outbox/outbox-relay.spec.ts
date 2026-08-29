@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
+import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
+import type { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
 import type { OrderEventsHandler } from '../handlers/order-events.handler';
 import type { DomainEventJob } from '../queue/domain-event.job';
 import { OutboxRelay } from './outbox-relay';
@@ -76,7 +78,11 @@ function build(rows: OutboxRow[]) {
   const recordEventPublished = vi.fn();
   // The real table, not a stub that echoes back whatever it is given: what the label folds is the
   // thing under test, and a stub would agree with any answer.
-  const dispatcher = new DomainEventDispatcher({ record: vi.fn() } as unknown as OrderEventsHandler);
+  const dispatcher = new DomainEventDispatcher(
+    { record: vi.fn() } as unknown as OrderEventsHandler,
+    { settle: vi.fn() } as unknown as PaymentEventsHandler,
+    { close: vi.fn() } as unknown as OrderExpiredHandler,
+  );
 
   const relay = new OutboxRelay(
     { transaction } as unknown as DrizzleDB,
@@ -234,7 +240,7 @@ describe('OutboxRelay', () => {
     });
 
     it('folds an event type no consumer knows into one series instead of minting one per name', async () => {
-      const t = build([row({ eventType: 'payment.succeeded' }), row({ eventType: 'shipment.created' })]);
+      const t = build([row({ eventType: 'payment.refunded' }), row({ eventType: 'shipment.created' })]);
 
       await t.relay.runOnce(10);
 

@@ -1,12 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, lt, sql } from 'drizzle-orm';
 import { durationToMs } from '@shared/kernel';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
 import { ReservationStatus } from '../domain/reservation-status';
 import type {
+  ExpiredHold,
+  ExpiredHoldQuery,
   ReserveLine,
   StockRepositoryPort,
   StockResolveResult,
@@ -237,6 +239,31 @@ export class StockRepository implements StockRepositoryPort {
       return null;
     }
     return { onHand: row.onHand, reserved: row.reserved, available: row.onHand - row.reserved };
+  }
+
+  async findExpiredHolds({ expiredBefore, limit }: ExpiredHoldQuery): Promise<ExpiredHold[]> {
+    // `SKIP LOCKED` steps over holds a finalize is already resolving instead of queueing behind its
+    // row lock; the lock itself lasts only this statement, so it dedupes nothing beyond that — the
+    // caller's terminal guard is what makes two sweeps picking the same order harmless.
+    const rows = await this.db
+      .select({ orderId: reservations.orderId, expiresAt: reservations.expiresAt })
+      .from(reservations)
+      .where(and(eq(reservations.status, ReservationStatus.HELD), lt(reservations.expiresAt, expiredBefore)))
+      .orderBy(asc(reservations.expiresAt))
+      .limit(limit)
+      .for('update', { skipLocked: true });
+
+    // An order's lines each carry their own row, so collapse them: the caller acts per order, and a
+    // wide order must not spend the whole batch. `expires_at < :t` already dropped NULLs.
+    const earliest = new Map<string, Date>();
+    for (const row of rows) {
+      const expiresAt = row.expiresAt as Date;
+      const seen = earliest.get(row.orderId);
+      if (seen === undefined || expiresAt < seen) {
+        earliest.set(row.orderId, expiresAt);
+      }
+    }
+    return [...earliest].map(([orderId, expiresAt]) => ({ orderId, expiresAt }));
   }
 
   private computeExpiry(): Date {

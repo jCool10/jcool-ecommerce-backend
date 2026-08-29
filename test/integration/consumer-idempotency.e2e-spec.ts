@@ -144,7 +144,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('fails an event no handler is registered for instead of silently acknowledging it', async () => {
-    await expect(processor.process(job({ eventType: 'payment.succeeded' }))).rejects.toThrow(/No handler registered/);
+    await expect(processor.process(job({ eventType: 'payment.refunded' }))).rejects.toThrow(/No handler registered/);
 
     // Nothing claimed: once a handler exists, the redelivery still has an event to apply.
     expect(await inboxRows()).toHaveLength(0);

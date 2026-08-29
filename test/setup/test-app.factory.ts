@@ -36,11 +36,11 @@ export async function createTestApp(
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
-  // The three background drivers, forced off so nothing runs behind a test's back: suites call
-  // ReconcileStaleOrdersUseCase / OutboxRelay.runOnce / DomainEventProcessor.process themselves,
-  // and a tick firing mid-assertion would settle an order, publish a row, or drain a job the test
-  // is still setting up. A suite that wants one of them passes it in `envOverrides`, which is
-  // applied below and wins.
+  // The four background drivers, forced off so nothing runs behind a test's back: suites call
+  // ReconcileStaleOrdersUseCase / OutboxRelay.runOnce / DomainEventProcessor.process /
+  // SweepExpiredReservationsUseCase themselves, and a tick firing mid-assertion would settle an
+  // order, publish a row, or drain a job the test is still setting up. A suite that wants one of
+  // them passes it in `envOverrides`, which is applied below and wins.
   //
   // Assigned unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's
   // .env into process.env, so from the second app onwards `??=` would silently inherit whatever
@@ -48,6 +48,7 @@ export async function createTestApp(
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
+  process.env.RESERVATION_SWEEP_ENABLED = 'false';
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
   // live path — billable and non-deterministic. Dropped unless a suite asks for it.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {

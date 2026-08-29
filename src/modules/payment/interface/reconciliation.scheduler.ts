@@ -2,6 +2,7 @@ import { Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/com
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { PinoLogger } from 'nestjs-pino';
+import { withSpan } from '@shared/observability/tracing/tracer';
 import { ReconcileStaleOrdersUseCase, type ReconcileInput } from '../application/use-cases';
 
 const LOG_CONTEXT = 'ReconciliationScheduler';
@@ -63,11 +64,16 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
     }
     this.running = true;
     try {
-      const summary = await this.reconcile.execute(this.sweep);
-      // Idle sweeps are the common case; logging them buries the ticks that did something.
-      if (summary.scanned > 0) {
-        this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reconciliation sweep completed');
-      }
+      // A timer has no request and no inbound trace, so nothing would tie this tick's lines to the
+      // orders it settled — the span is what puts a trace id on both, including the gateway probe
+      // auto-instrumentation hangs underneath it.
+      await withSpan('payment.reconcile', async () => {
+        const summary = await this.reconcile.execute(this.sweep);
+        // Idle sweeps are the common case; logging them buries the ticks that did something.
+        if (summary.scanned > 0) {
+          this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reconciliation sweep completed');
+        }
+      });
     } catch (error) {
       // Per-order failures are already isolated, so this is the sweep itself breaking. Swallow it:
       // an unhandled rejection in a timer kills the process.

@@ -269,6 +269,35 @@ export class EnvironmentVariables {
   @Min(0)
   ORDER_TTL_SEC?: number;
 
+  @IsOptional()
+  @IsBooleanString()
+  RESERVATION_SWEEP_ENABLED?: string;
+
+  // Sweep period (ms); default 60000 (configuration.ts). Min 1000 so a typo can't turn the sweep
+  // into a busy loop opening transactions.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  RESERVATION_SWEEP_INTERVAL_MS?: number;
+
+  // Reservation rows per sweep tick; default 50 (configuration.ts). Capped because each distinct
+  // order in the batch costs a finalize transaction, so one tick can't run unbounded.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  RESERVATION_SWEEP_BATCH_SIZE?: number;
+
+  // Extra age (s) past a hold's expiry before the sweep claims it; default 900 (configuration.ts),
+  // keeping it behind the gateway-driven reconcile. 0 is legal — e2e drives the sweep deterministically.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  RESERVATION_SWEEP_GRACE_SEC?: number;
+
   // Catalog cache-aside TTL (s); default 60 (configuration.ts). Min 1 — a 0 would make every
   // SET expire instantly and turn the cache into pure overhead.
   @IsOptional()

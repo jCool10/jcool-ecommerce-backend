@@ -44,8 +44,8 @@ export const stockLevels = pgTable(
 );
 
 // One hold of stock for one SKU of one order. HELD at placement; COMMITTED on
-// payment or RELEASED on failure/expiry. `expiresAt` marks when a TTL sweep may
-// release an unpaid hold (written now, not yet swept).
+// payment or RELEASED on failure/expiry. `expiresAt` is when the hold lapses and
+// the expiry sweep may hand the stock back.
 export const reservations = pgTable(
   'reservations',
   {
@@ -61,5 +61,11 @@ export const reservations = pgTable(
     index('idx_reservations_variant_status').on(t.variantId, t.status),
     // One hold per (order, SKU); its left-most prefix also serves WHERE order_id = ?.
     uniqueIndex('uq_reservations_order_variant').on(t.orderId, t.variantId),
+    // Partial: the expiry sweep's queue is only ever HELD rows, so the index stays proportional to
+    // holds in flight rather than to every reservation ever written — and it also supplies the sort,
+    // since the sweep reads oldest-expiry-first.
+    index('idx_reservations_held_expires_at')
+      .on(t.expiresAt)
+      .where(sql`${t.status} = 'HELD'`),
   ],
 );
