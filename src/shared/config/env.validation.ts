@@ -298,8 +298,9 @@ export class EnvironmentVariables {
   @Min(0)
   RESERVATION_SWEEP_GRACE_SEC?: number;
 
-  // Catalog cache-aside TTL (s); default 60 (configuration.ts). Min 1 — a 0 would make every
-  // SET expire instantly and turn the cache into pure overhead.
+  // Catalog's fresh window (s); default 60 (configuration.ts). Total staleness is this plus
+  // CACHE_STALE_WINDOW_SEC plus CACHE_TTL_JITTER_SEC. Min 1 — a 0 would make every entry stale the
+  // instant it is written, turning every read into a stale serve plus a background rebuild.
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -6,7 +6,7 @@ import { SingleFlightLock } from './single-flight.lock';
 const DOWN = new Error("Stream isn't writeable and enableOfflineQueue options is false");
 
 function build() {
-  const client = { set: vi.fn(), eval: vi.fn() };
+  const client = { set: vi.fn(), eval: vi.fn(), exists: vi.fn() };
   const lock = new SingleFlightLock({ getClient: () => client as unknown as Redis } as unknown as RedisService);
   return { lock, client };
 }
@@ -49,6 +49,18 @@ describe('SingleFlightLock', () => {
       const first = await ctx.lock.acquire('k:lock', 5000);
       const second = await ctx.lock.acquire('k:lock', 5000);
       expect(first).not.toEqual(second);
+    });
+  });
+
+  describe('isHeld', () => {
+    it('reports a live lock, so a waiter knows a rebuild is still running', async () => {
+      ctx.client.exists.mockResolvedValue(1);
+      await expect(ctx.lock.isHeld('k:lock')).resolves.toBe(true);
+    });
+
+    it('answers false when Redis is unreachable — a waiter must not be pinned by a lock it cannot see', async () => {
+      ctx.client.exists.mockRejectedValue(DOWN);
+      await expect(ctx.lock.isHeld('k:lock')).resolves.toBe(false);
     });
   });
 

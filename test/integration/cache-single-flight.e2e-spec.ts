@@ -49,7 +49,7 @@ describe('Cache stampede protection (integration, real Redis)', () => {
     const source = countingSource({ id: 'p1' });
 
     const answers = await Promise.all(
-      Array.from({ length: 20 }, () => swr.readThroughSwr(key, source.rebuild, POLICY)),
+      Array.from({ length: 20 }, () => swr.readThroughSwr(key, source.rebuild, { policy: POLICY })),
     );
 
     expect(source.calls()).toBe(1);
@@ -61,21 +61,23 @@ describe('Cache stampede protection (integration, real Redis)', () => {
     let version = 1;
     const rebuild = () => Promise.resolve({ version: version++ });
 
-    expect(await swr.readThroughSwr(key, rebuild, POLICY)).toEqual({ version: 1 });
+    expect(await swr.readThroughSwr(key, rebuild, { policy: POLICY })).toEqual({ version: 1 });
     await sleep(POLICY.softTtlMs + 20);
 
     // Answered from the stale entry — the refresh it triggers has not landed yet.
-    expect(await swr.readThroughSwr(key, rebuild, POLICY)).toEqual({ version: 1 });
+    expect(await swr.readThroughSwr(key, rebuild, { policy: POLICY })).toEqual({ version: 1 });
 
     // Polled on the stored entry rather than through the service: another read would itself trigger
     // a refresh, so the assertion would be racing the rebuilds it causes.
     await expect.poll(() => client.get(key), { timeout: 2_000 }).toContain('"version":2');
-    expect(await swr.readThroughSwr(key, rebuild, POLICY)).toEqual({ version: 2 });
+    expect(await swr.readThroughSwr(key, rebuild, { policy: POLICY })).toEqual({ version: 2 });
   });
 
   it('spreads the expiry of keys written together, so one wave cannot expire in one instant', async () => {
     const keys = Array.from({ length: 10 }, () => `swr:test:${randomUUID()}`);
-    await Promise.all(keys.map((key) => swr.readThroughSwr(key, () => Promise.resolve({ id: key }), POLICY)));
+    await Promise.all(
+      keys.map((key) => swr.readThroughSwr(key, () => Promise.resolve({ id: key }), { policy: POLICY })),
+    );
 
     const ttls = await Promise.all(keys.map((key) => client.pttl(key)));
     for (const ttl of ttls) {
@@ -106,7 +108,9 @@ describe('Cache stampede protection (integration, real Redis)', () => {
     const source = countingSource({ id: 'from-postgres' }, 0);
 
     await withRedisDown(app, async () => {
-      await expect(swr.readThroughSwr(key, source.rebuild, POLICY)).resolves.toEqual({ id: 'from-postgres' });
+      await expect(swr.readThroughSwr(key, source.rebuild, { policy: POLICY })).resolves.toEqual({
+        id: 'from-postgres',
+      });
     });
 
     expect(source.calls()).toBe(1);

@@ -358,7 +358,7 @@
     },
     {
       "type": "stat",
-      "title": "Catalog cache hit ratio (5m) — seam until cache lands",
+      "title": "Catalog cache hit ratio (5m)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 30 },
       "id": 23,
@@ -381,7 +381,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(catalog_cache_operations_total{result=~\"hit|hit_fresh|hit_stale\"}[5m])) / clamp_min(sum(rate(catalog_cache_operations_total{result=~\"hit|hit_fresh|hit_stale|miss|error|error_fallthrough\"}[5m])), 1)",
+          "expr": "sum(rate(catalog_cache_operations_total{result=~\"hit_fresh|hit_stale\"}[5m])) / clamp_min(sum(rate(catalog_cache_operations_total{result=~\"hit_fresh|hit_stale|miss|error|error_fallthrough\"}[5m])), 1)",
           "legendFormat": "hit ratio",
           "refId": "A"
         }

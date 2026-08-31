@@ -46,6 +46,10 @@ export function toProductSnapshot(product: Product): ProductSnapshot {
   };
 }
 
+export function toProductListSnapshot(result: { items: Product[]; total: number }): ProductListSnapshot {
+  return { items: result.items.map(toProductSnapshot), total: result.total };
+}
+
 function asRecord(value: unknown, field: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError(`Cached product snapshot: ${field} is not an object`);
@@ -82,7 +86,7 @@ function asStatus(value: unknown): ProductStatus {
   return status as ProductStatus;
 }
 
-export function fromProductSnapshot(snapshot: ProductSnapshot): Product {
+export function fromProductSnapshot(snapshot: unknown): Product {
   const raw = asRecord(snapshot, 'snapshot');
   const category = asRecord(raw.category, 'category');
 
@@ -118,4 +122,13 @@ export function fromProductSnapshot(snapshot: ProductSnapshot): Product {
     variants,
     createdAt,
   );
+}
+
+export function fromProductListSnapshot(snapshot: unknown): { items: Product[]; total: number } {
+  const raw = asRecord(snapshot, 'list snapshot');
+  return {
+    // `total` drives the pagination the client sees, so it is checked as strictly as the items are.
+    items: asArray(raw.items, 'items').map(fromProductSnapshot),
+    total: asNumber(raw.total, 'total'),
+  };
 }

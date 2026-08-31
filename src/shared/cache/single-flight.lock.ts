@@ -42,6 +42,19 @@ export class SingleFlightLock {
     }
   }
 
+  /**
+   * Whether some holder is still rebuilding. A Redis failure answers `false`: a waiter must never be
+   * pinned to a lock it cannot see.
+   */
+  async isHeld(key: string): Promise<boolean> {
+    try {
+      return (await this.redis.getClient().exists(key)) === 1;
+    } catch (caught) {
+      this.warn('exists', key, caught);
+      return false;
+    }
+  }
+
   /** Best-effort: a release that never lands only delays the next rebuild until the lease expires. */
   async release(key: string, token: string): Promise<void> {
     try {

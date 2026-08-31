@@ -122,7 +122,7 @@ export const METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: CATALOG_CACHE_OPERATIONS_TOTAL,
-    help: 'Catalog cache lookups. Exactly one outcome per lookup: hit/miss/error on the fixed-TTL path, hit_fresh/hit_stale/miss/error_fallthrough on the stampede-protected one (error and error_fallthrough = Redis unreachable or refusing writes, served from Postgres). That path also counts the work a lookup did — lock_acquired, rebuild, lock_wait, lock_timeout — under the same metric, so a hit ratio must name the outcome values on both sides of the division instead of dividing by the total.',
+    help: 'Catalog cache lookups. Exactly one outcome per lookup: hit_fresh/hit_stale/miss when the cache answered or refilled, error/error_fallthrough when Redis was unreachable and Postgres answered instead. The same metric also counts the work a lookup did — lock_acquired, rebuild, lock_wait, lock_timeout (waited for another rebuilder and got nothing), store_rejected — so a hit ratio must name the outcome values on both sides of the division instead of dividing by the total.',
     labelNames: ['result'],
   }),
   makeCounterProvider({

@@ -17,7 +17,6 @@ export type CartOperation = 'add' | 'update' | 'remove' | 'clear';
  * holder never delivered), and the rebuild it ran.
  */
 export type CacheResult =
-  | 'hit'
   | 'miss'
   | 'error'
   | 'hit_fresh'
@@ -26,7 +25,8 @@ export type CacheResult =
   | 'lock_acquired'
   | 'lock_wait'
   | 'lock_timeout'
-  | 'error_fallthrough';
+  | 'error_fallthrough'
+  | 'store_rejected';
 
 /** Circuit-breaker positions. `half_open` is the single trial call that decides whether the downstream has recovered. */
 export type BreakerState = 'closed' | 'half_open' | 'open';

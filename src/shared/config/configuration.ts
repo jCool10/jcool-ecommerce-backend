@@ -188,8 +188,10 @@ export default () => ({
     graceSec: parseIntOr(process.env.RESERVATION_SWEEP_GRACE_SEC, 900),
   },
   catalog: {
-    // Cache-aside TTL (s) for the public product read paths — also the upper bound on staleness
-    // if an invalidation is ever missed. A blank env value would parseInt→NaN and cache forever.
+    // How long (s) a cached public product read is served without question. Catalog's own fresh
+    // window; the stale window, jitter and lock bounds below are shared. The upper bound on
+    // staleness after a missed invalidation is this plus those two, not this alone. A blank env
+    // value would parseInt→NaN and cache forever.
     cacheTtlSec: parseIntOr(process.env.CATALOG_CACHE_TTL_SEC, 60),
   },
   // Default windows for the stampede-protected read path. Held in milliseconds because the jittered
@@ -206,7 +208,10 @@ export default () => ({
     // expires mid-rebuild lets a second holder in and the herd back.
     leaseMs: parseIntOr(process.env.CACHE_LOCK_LEASE_MS, 5000),
     // How long a reader that lost the lock waits for the winner's value before reading through to
-    // Postgres itself. Short by design — waiting longer than a query costs more than it saves.
+    // Postgres itself. Short by design — waiting longer than a query costs more than it saves — but
+    // it also caps what single-flight can absorb: a rebuild slower than this times every waiter out
+    // and the herd arrives anyway, holding a request slot each on the way. Rising lock_timeout is
+    // that failure, and the fix is a faster rebuild or a longer wait, not a longer lease.
     waitMs: parseIntOr(process.env.CACHE_LOCK_WAIT_MS, 500),
   },
   inventory: {

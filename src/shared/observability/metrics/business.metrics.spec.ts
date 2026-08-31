@@ -94,8 +94,8 @@ describe('BusinessMetrics', () => {
 
   it('counts a catalog cache lookup by result', () => {
     const { metrics, cacheInc } = build();
-    metrics.recordCatalogCacheOperation('hit');
-    expect(cacheInc).toHaveBeenCalledWith({ result: 'hit' });
+    metrics.recordCatalogCacheOperation('hit_fresh');
+    expect(cacheInc).toHaveBeenCalledWith({ result: 'hit_fresh' });
   });
 
   it('counts a published event by type and result', () => {
