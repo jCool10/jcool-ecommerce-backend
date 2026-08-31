@@ -306,6 +306,44 @@ export class EnvironmentVariables {
   @Min(1)
   CATALOG_CACHE_TTL_SEC?: number;
 
+  // Stampede-protected cache windows; defaults 60s / 30s / 10s (configuration.ts). Min 1 on the
+  // fresh window because a 0 makes every entry stale the instant it is written, turning every read
+  // into a stale serve plus a background rebuild. The other two accept 0, which switches off
+  // stale-serving (resp. jitter) — switching off SWR takes both, since jitter also outlives freshness.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  CACHE_SOFT_TTL_SEC?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  CACHE_STALE_WINDOW_SEC?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  CACHE_TTL_JITTER_SEC?: number;
+
+  // Rebuild-lock lease (ms); default 5000 (configuration.ts). Min 100 because a lease shorter than a
+  // rebuild admits a second holder on every refill, which is the stampede this lock exists to stop.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  CACHE_LOCK_LEASE_MS?: number;
+
+  // How long a reader waits for the lock holder's value (ms); default 500 (configuration.ts).
+  // 0 is legal — it opts out of waiting and reads through to Postgres immediately.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  CACHE_LOCK_WAIT_MS?: number;
+
   // Stock-reservation locking strategy; defaults to pessimistic (configuration.ts).
   @IsOptional()
   @IsEnum(InventoryLockStrategy)

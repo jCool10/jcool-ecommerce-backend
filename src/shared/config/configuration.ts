@@ -192,6 +192,23 @@ export default () => ({
     // if an invalidation is ever missed. A blank env value would parseInt→NaN and cache forever.
     cacheTtlSec: parseIntOr(process.env.CATALOG_CACHE_TTL_SEC, 60),
   },
+  // Default windows for the stampede-protected read path. Held in milliseconds because the jittered
+  // expiry needs finer resolution than the seconds the env vars are written in.
+  cache: {
+    // How long a value is served without question.
+    softTtlMs: parseIntOr(process.env.CACHE_SOFT_TTL_SEC, 60) * 1000,
+    // How much longer it may be served while a rebuild runs behind it — the window that keeps a
+    // reader from ever waiting on Postgres. Past soft + stale the key is gone and the next read blocks.
+    staleWindowMs: parseIntOr(process.env.CACHE_STALE_WINDOW_SEC, 30) * 1000,
+    // Random spread on each key's expiry, so keys written in one wave do not expire in one wave.
+    jitterMs: parseIntOr(process.env.CACHE_TTL_JITTER_SEC, 10) * 1000,
+    // Rebuild-lock lease. Must stay above the p99 of cache_rebuild_duration_seconds: a lease that
+    // expires mid-rebuild lets a second holder in and the herd back.
+    leaseMs: parseIntOr(process.env.CACHE_LOCK_LEASE_MS, 5000),
+    // How long a reader that lost the lock waits for the winner's value before reading through to
+    // Postgres itself. Short by design — waiting longer than a query costs more than it saves.
+    waitMs: parseIntOr(process.env.CACHE_LOCK_WAIT_MS, 500),
+  },
   inventory: {
     // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or
     // 'optimistic' (version CAS + retry). Default pessimistic.

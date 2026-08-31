@@ -39,13 +39,12 @@ export class CacheService {
 
   /** `false` means Redis rejected the write — the read still succeeded from the source, but the cache is not absorbing load. */
   async write(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
-    try {
-      await this.redis.getClient().set(key, JSON.stringify(value), 'EX', ttlSeconds);
-      return true;
-    } catch (caught) {
-      this.warn('write', key, caught);
-      return false;
-    }
+    return this.set(key, value, 'EX', ttlSeconds);
+  }
+
+  /** Same, at millisecond resolution — a jittered expiry needs finer granularity than a second to spread keys apart. */
+  async writeMs(key: string, value: unknown, ttlMs: number): Promise<boolean> {
+    return this.set(key, value, 'PX', ttlMs);
   }
 
   /**
@@ -69,6 +68,21 @@ export class CacheService {
       await this.redis.getClient().incr(key);
     } catch (caught) {
       this.warn('bumpCounter', key, caught);
+    }
+  }
+
+  private async set(key: string, value: unknown, unit: 'EX' | 'PX', ttl: number): Promise<boolean> {
+    try {
+      // Serialization is inside the guard on purpose: an unserializable payload (a cycle, a bigint)
+      // must degrade to an uncached read like any other failure, not throw into the caller.
+      const client = this.redis.getClient();
+      const payload = JSON.stringify(value);
+      // Branched rather than passed through: ioredis types the expiry flag as a literal per overload.
+      await (unit === 'EX' ? client.set(key, payload, 'EX', ttl) : client.set(key, payload, 'PX', ttl));
+      return true;
+    } catch (caught) {
+      this.warn('write', key, caught);
+      return false;
     }
   }
 

@@ -6,8 +6,33 @@ export const METRICS = Symbol('METRICS');
 /** Cart write operations, mirroring CartService's methods (low-cardinality label). */
 export type CartOperation = 'add' | 'update' | 'remove' | 'clear';
 
-/** Outcome of one cache lookup. `error` is Redis being unreachable — a served-from-source read that is not a cold miss, and the signal that the cache is down. */
-export type CacheResult = 'hit' | 'miss' | 'error';
+/**
+ * What one cache lookup did. `hit`/`miss`/`error` are the fixed-TTL path's three outcomes, where
+ * `error` is Redis being unreachable — a served-from-source read that is not a cold miss, and the
+ * signal that the cache is down.
+ *
+ * The rest belong to the stampede-protected path. It reports exactly one outcome per lookup —
+ * hit_fresh, hit_stale, miss or error_fallthrough — and, alongside it, the work that lookup did:
+ * the lock it took (lock_acquired), the wait it served out (lock_wait, then lock_timeout if the
+ * holder never delivered), and the rebuild it ran.
+ */
+export type CacheResult =
+  | 'hit'
+  | 'miss'
+  | 'error'
+  | 'hit_fresh'
+  | 'hit_stale'
+  | 'rebuild'
+  | 'lock_acquired'
+  | 'lock_wait'
+  | 'lock_timeout'
+  | 'error_fallthrough';
+
+/** Circuit-breaker positions. `half_open` is the single trial call that decides whether the downstream has recovered. */
+export type BreakerState = 'closed' | 'half_open' | 'open';
+
+/** How one call through a breaker ended. `rejected` never reached the downstream (breaker open); `fallback` is the degraded answer served in its place. */
+export type BreakerCallResult = 'success' | 'failure' | 'timeout' | 'rejected' | 'fallback';
 
 /** Outcome of handing one outbox row to the queue. `refused` is the queue rejecting it — the row stays unpublished and a later tick tries again, so this counts a delay, not a loss. */
 export type PublishResult = 'published' | 'refused';
@@ -37,8 +62,18 @@ export interface MetricsPort {
   recordCartOperation(op: CartOperation): void;
   /** A security-relevant auth event fired (`event` is the bounded AuthAuditEvent union). */
   recordAuthEvent(event: string, outcome: 'success' | 'failure'): void;
-  /** One Catalog cache-aside lookup resolved. */
+  /** One Catalog cache lookup made progress — an outcome, or a step of the stampede-protected path. */
   recordCatalogCacheOperation(result: CacheResult): void;
+  /** One cache entry was rebuilt from its source, in seconds. Measured under the single-flight lock, so it is also the number the lock lease must stay ahead of. */
+  observeCacheRebuild(seconds: number): void;
+  /** A breaker settled into a state. `breaker` names the wrapped dependency and must be a fixed set of names, never a per-call value. */
+  setBreakerState(breaker: string, state: BreakerState): void;
+  /** A breaker changed state. Same cardinality rule on `breaker` as above. */
+  recordBreakerTransition(breaker: string, to: BreakerState): void;
+  /** One call through a breaker finished. Same cardinality rule on `breaker` as above. */
+  recordBreakerCall(breaker: string, result: BreakerCallResult): void;
+  /** A request was rejected by the rate limiter. `tier` is a configured throttler tier and `route` a route template — both bounded. */
+  recordRateLimitRejection(tier: string, route: string): void;
   /** The relay finished one publish attempt. Same cardinality rule as the consume side: a registered event name only. */
   recordEventPublished(eventType: string, result: PublishResult): void;
   /** One domain event finished consuming. `eventType` must be a registered event name — never a value straight off the wire, which would be unbounded label cardinality. */
