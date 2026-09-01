@@ -110,10 +110,16 @@ export default () => ({
     workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, 5),
     // Deliveries before a message is dead-lettered, the first one included. Capped at 10 in the env
     // schema: the backoff below doubles, so the tail grows faster than the count suggests.
-    consumerAttempts: parseIntOr(process.env.QUEUE_CONSUMER_ATTEMPTS, 5),
-    // First retry delay; each further one doubles it. 1s/2s/4s/8s at the defaults — long enough to
-    // ride out a restart or a failover, short enough that a genuine poison message reaches the
-    // dead-letter queue while the deploy that caused it is still the obvious suspect.
+    // Sized against an outage rather than a bad message. The handlers that call the payment gateway
+    // now fail fast — the circuit breaker abandons a call in seconds instead of waiting out the
+    // provider SDK — so a fixed ladder burns through far more quickly in wall-clock than it used to.
+    // Eight spans roughly two minutes, which an order expiry needs: past it the session that can
+    // still charge for a released order stays open until someone replays the dead letter.
+    consumerAttempts: parseIntOr(process.env.QUEUE_CONSUMER_ATTEMPTS, 8),
+    // First retry delay; each further one doubles it. 1s through 64s at the defaults — long enough
+    // to ride out a restart, a failover, or a provider outage, short enough that a genuine poison
+    // message reaches the dead-letter queue while the deploy that caused it is still the obvious
+    // suspect.
     consumerBackoffMs: parseIntOr(process.env.QUEUE_CONSUMER_BACKOFF_MS, 1000),
   },
   outbox: {
@@ -213,6 +219,32 @@ export default () => ({
     // and the herd arrives anyway, holding a request slot each on the way. Rising lock_timeout is
     // that failure, and the fix is a faster rebuild or a longer wait, not a longer lease.
     waitMs: parseIntOr(process.env.CACHE_LOCK_WAIT_MS, 500),
+  },
+  resilience: {
+    // Circuit breakers around calls that leave the process (currently the payment gateway).
+    breaker: {
+      // Kill-switch; on by default. Off makes every guarded call a direct pass-through — the escape
+      // hatch for a breaker tuned wrong in production, and for suites that want the raw downstream.
+      // It drops the timeout below with everything else, so calls go back to waiting out the
+      // provider SDK's own far longer one.
+      enabled: process.env.BREAKER_ENABLED !== 'false',
+      // How long one call may run before it is abandoned and counted as a failure. Without it a
+      // downstream that hangs rather than errors never trips anything: nothing ever fails, we just
+      // stop having request slots. Deliberately shorter than the provider SDK's own timeout — the
+      // point is to give up before the caller's request budget is gone.
+      timeoutMs: parseIntOr(process.env.BREAKER_TIMEOUT_MS, 3000),
+      // Failure share within the rolling window that opens the circuit.
+      errorThresholdPercentage: parseIntOr(process.env.BREAKER_ERROR_THRESHOLD_PCT, 50),
+      // How long calls fail fast before one trial call is allowed through. Long enough for a restart
+      // or failover on the other side, short enough that recovery is not noticed as a longer outage.
+      resetTimeoutMs: parseIntOr(process.env.BREAKER_RESET_TIMEOUT_MS, 10_000),
+      // The window the failure share is measured over — the breaker's memory. Past this, errors are
+      // forgotten, so a slow trickle of failures never accumulates into an open circuit.
+      rollingWindowMs: parseIntOr(process.env.BREAKER_ROLLING_WINDOW_MS, 10_000),
+      // Calls the window must hold before the share means anything, so one failure on a quiet route
+      // cannot read as 100% and open the circuit. The flip side: below this rate it never opens.
+      volumeThreshold: parseIntOr(process.env.BREAKER_VOLUME_THRESHOLD, 5),
+    },
   },
   inventory: {
     // Stock-reservation locking strategy: 'pessimistic' (SELECT ... FOR UPDATE) or

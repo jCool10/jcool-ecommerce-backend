@@ -114,7 +114,7 @@ export class EnvironmentVariables {
   @Max(50)
   QUEUE_WORKER_CONCURRENCY?: number;
 
-  // Deliveries before a message is dead-lettered; default 5 (configuration.ts). Capped at 10 rather
+  // Deliveries before a message is dead-lettered; default 8 (configuration.ts). Capped at 10 rather
   // than left open because the backoff doubles: ten tries already stretch the last wait past eight
   // minutes, and a message nobody can apply belongs in the DLQ long before that.
   @IsOptional()
@@ -344,6 +344,56 @@ export class EnvironmentVariables {
   @IsInt()
   @Min(0)
   CACHE_LOCK_WAIT_MS?: number;
+
+  // Circuit-breaker kill-switch; on by default (configuration.ts). Off passes every guarded call
+  // straight through to its downstream.
+  @IsOptional()
+  @IsBooleanString()
+  BREAKER_ENABLED?: string;
+
+  // How long one outbound call may run before it is abandoned (ms); default 3000 (configuration.ts).
+  // Min 100 so a typo cannot make every call time out before the downstream can possibly answer.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  BREAKER_TIMEOUT_MS?: number;
+
+  // Failure share that opens the circuit; default 50 (configuration.ts). The share is compared
+  // strictly, so 100 never opens however many calls fail — capped at 99 so a breaker that reads as
+  // configured cannot in fact be switched off. At the low end 1 opens on the first failure once the
+  // window holds enough calls to count.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  BREAKER_ERROR_THRESHOLD_PCT?: number;
+
+  // How long the circuit stays open before a trial call (ms); default 10000 (configuration.ts).
+  // Min 100 keeps the open state from being so brief it never sheds any load.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  BREAKER_RESET_TIMEOUT_MS?: number;
+
+  // Window the failure share is measured over (ms); default 10000 (configuration.ts). Min 1000 —
+  // a window shorter than the calls it counts would forget each failure before the next arrives.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  BREAKER_ROLLING_WINDOW_MS?: number;
+
+  // Calls the window needs before the share counts; default 5 (configuration.ts). 0 and 1 behave
+  // identically — one failure is then the whole window — so the floor only rules out the value that
+  // reads as "no gate at all".
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  BREAKER_VOLUME_THRESHOLD?: number;
 
   // Stock-reservation locking strategy; defaults to pessimistic (configuration.ts).
   @IsOptional()
