@@ -56,9 +56,6 @@ describe('M2 acceptance: order → pay → settle (integration, real Postgres)',
       },
       [{ provide: PAYMENT_GATEWAY, useValue: gateway }],
     );
-    // Bind a real port: supertest ephemeral-listens per request, and CONTENDERS concurrent binds race
-    // to ECONNRESET. With a listening server the contention lands in the DB, where it belongs.
-    await app.listen(0);
     pool = app.get<Pool>(PG_POOL);
     reconcile = app.get(ReconcileStaleOrdersUseCase);
   });

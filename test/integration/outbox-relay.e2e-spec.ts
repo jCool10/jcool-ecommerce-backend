@@ -223,9 +223,16 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     try {
       await db.insert(schema.outbox).values(seedRow(1));
 
-      await vi.waitFor(async () => expect(await queue.getWaitingCount()).toBe(1), { timeout: 10_000, interval: 50 });
-      // The publish alone proves a tick ran; the mark proves its transaction committed.
-      expect(await unpublished()).toHaveLength(0);
+      // The publish alone proves a tick ran; the mark proves its transaction committed. Both are
+      // polled: the job reaches the queue inside the transaction, so it is visible for as long as
+      // the commit that marks the row takes to land.
+      await vi.waitFor(
+        async () => {
+          expect(await queue.getWaitingCount()).toBe(1);
+          expect(await unpublished()).toHaveLength(0);
+        },
+        { timeout: 10_000, interval: 50 },
+      );
     } finally {
       await scheduled.close();
     }

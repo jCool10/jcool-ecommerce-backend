@@ -35,10 +35,6 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
 
   beforeAll(async () => {
     app = await createTestApp({ INVENTORY_LOCK_STRATEGY: strategy });
-    // Bind a real port once. supertest ephemeral-listens a non-listening server per request; firing
-    // CONTENDERS requests at it concurrently races those binds → ECONNRESET. A listening server is
-    // just connected to, so the concurrency happens where we want it — in the DB, not the socket.
-    await app.listen(0);
     pool = app.get<Pool>(PG_POOL);
     db = app.get<DrizzleDB>(DRIZZLE);
   });

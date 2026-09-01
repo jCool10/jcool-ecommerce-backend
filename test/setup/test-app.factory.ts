@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -5,9 +6,11 @@ import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { inject } from 'vitest';
+import { expect, inject } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { CSRF_HEADER } from '../../src/modules/user/interface/security/auth-cookie.constants';
+import { RedisService } from '../../src/shared/infrastructure/redis';
+import { waitForRedisReady } from './redis-ready';
 
 /** Swap one DI token for this app only — e.g. a scriptable gateway at the external-system boundary. */
 export interface ProviderOverride {
@@ -49,6 +52,11 @@ export async function createTestApp(
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
   process.env.RESERVATION_SWEEP_ENABLED = 'false';
+  // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
+  // a file that leaves jobs waiting hands them to the next file that boots a worker — which then
+  // applies events its own test never published. Same value for every app in a file, because a
+  // suite may drive one app's relay and read the queue through another's.
+  process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
   // live path — billable and non-deterministic. Dropped unless a suite asks for it.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {
@@ -90,6 +98,15 @@ export async function createTestApp(
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     // HttpExceptionFilter is wired via APP_FILTER in AppModule (needs CLS injection).
     await app.init();
+    // Bind a real port once, for every suite. supertest ephemeral-listens a non-listening server per
+    // request and tears that listener down again when the request ends; firing a herd of concurrent
+    // requests at it races those binds and surfaces as `read ECONNRESET`. A listening server is just
+    // connected to, so the concurrency under test stays where it belongs — the DB, the cache, the
+    // lock — instead of the socket.
+    await app.listen(0);
+    // The shared client connects lazily and rejects commands until its socket is writable, so an
+    // assertion made in the first instants of a suite would measure the Redis-down fall-through.
+    await waitForRedisReady(app.get(RedisService).getClient());
     return app;
   } finally {
     for (const [key, value] of Object.entries(savedEnv)) {
@@ -97,4 +114,11 @@ export async function createTestApp(
       else process.env[key] = value;
     }
   }
+}
+
+// Spec filenames are unique, so this is stable within a file and distinct across files — the two
+// properties the isolation depends on.
+function queuePrefixForCurrentSpec(): string {
+  const testPath = expect.getState().testPath;
+  return testPath ? `bull:${basename(testPath, '.e2e-spec.ts')}` : 'bull';
 }

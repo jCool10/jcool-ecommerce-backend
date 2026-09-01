@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import { RedisService } from '../../src/shared/infrastructure/redis';
+import { waitForRedisReady } from './redis-ready';
 
 /**
  * Take Redis away for the duration of `run`, then hand the suite back a usable client.
@@ -22,15 +23,6 @@ export async function withClientDown(client: Redis, run: () => Promise<void>): P
     if (client.status === 'end' || client.status === 'close') {
       await client.connect();
     }
-    await waitForReady(client);
-  }
-}
-
-async function waitForReady(client: Redis): Promise<void> {
-  for (let attempt = 0; attempt < 100 && client.status !== 'ready'; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  if (client.status !== 'ready') {
-    throw new Error(`Redis did not recover: status=${client.status}`);
+    await waitForRedisReady(client);
   }
 }

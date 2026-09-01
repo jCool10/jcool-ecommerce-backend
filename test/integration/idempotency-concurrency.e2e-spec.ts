@@ -37,10 +37,6 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
 
   beforeAll(async () => {
     app = await createTestApp();
-    // Bind a real port: supertest ephemeral-listens a non-listening server per request, and firing the
-    // same-key fan-out at it races those socket binds → ECONNRESET. A listening server moves the race
-    // to where it belongs — the DB's unique (scope, key) index.
-    await app.listen(0);
     pool = app.get<Pool>(PG_POOL);
     db = app.get<DrizzleDB>(DRIZZLE);
   });
