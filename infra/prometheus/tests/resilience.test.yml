@@ -1,0 +1,126 @@
+# Rule unit tests for resilience.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+#
+# These exist because the two failure modes they pin down are invisible to `promtool check rules`,
+# which only parses: an alert that never clears, and an alert that never fires. Both were shipped
+# once already.
+rule_files:
+  - ../rules/resilience.yml
+
+evaluation_interval: 15s
+
+tests:
+  # A downstream that is genuinely dead, with traffic: opossum re-opens after every trial call, so
+  # the gauge keeps returning to 2. The alert must latch and stay latched.
+  - interval: 15s
+    input_series:
+      - series: 'circuit_breaker_state{breaker="payment_gateway"}'
+        values: '2 2 2 1 2 2 2 1 2 2 2 1 2 2 2 1 2 2 2 1 2 2 2 1'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: CircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: CircuitBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              breaker: payment_gateway
+              severity: page
+            exp_annotations:
+              summary: 'Circuit breaker payment_gateway has been refusing calls for a minute'
+              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+      - eval_time: 5m
+        alertname: CircuitBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              breaker: payment_gateway
+              severity: page
+            exp_annotations:
+              summary: 'Circuit breaker payment_gateway has been refusing calls for a minute'
+              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+
+  # The overnight case: the breaker trips, the reset timer moves it to half-open, and then nothing
+  # calls it. opossum leaves it at 1 indefinitely. The alert must fire for the outage and then clear
+  # itself once nothing has been fully open for 5m — a `>= 1` rule alone would page until morning.
+  - interval: 15s
+    input_series:
+      - series: 'circuit_breaker_state{breaker="payment_gateway"}'
+        values: '2 2 2 2 1+0x60'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CircuitBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              breaker: payment_gateway
+              severity: page
+            exp_annotations:
+              summary: 'Circuit breaker payment_gateway has been refusing calls for a minute'
+              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+      - eval_time: 8m
+        alertname: CircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: CircuitBreakerOpen
+        exp_alerts: []
+
+  # A closed breaker is silent, and the series is published from boot so the absence is real rather
+  # than a gap nobody would notice.
+  - interval: 15s
+    input_series:
+      - series: 'circuit_breaker_state{breaker="payment_gateway"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CircuitBreakerOpen
+        exp_alerts: []
+
+  # The stampede itself: every waiter behind one hot key times out at once, then it is over. This is
+  # the shape a `rate[5m]` held `for: 5m` could not catch — the burst leaves the rate window at the
+  # same evaluation the `for` timer completes.
+  - interval: 15s
+    input_series:
+      - series: 'catalog_cache_operations_total{result="lock_timeout"}'
+        values: '0 0 500+0x60'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CacheStampedeLockTimeout
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Catalog cache rebuild lock is timing out'
+              description: 'Waiters are falling through to Postgres instead of being served by the single-flight winner. Compare rebuild duration p99 against CACHE_LOCK_WAIT_MS and CACHE_LOCK_LEASE_MS — note the histogram only covers rebuilds that held the lock, so a read-through is not in it.'
+
+  # A deploy or a cold start produces a handful of timeouts. That is not an incident, and the
+  # threshold is what keeps it from becoming a ticket.
+  - interval: 15s
+    input_series:
+      - series: 'catalog_cache_operations_total{result="lock_timeout"}'
+        values: '0 0 3+0x60'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CacheStampedeLockTimeout
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: CacheStampedeLockTimeout
+        exp_alerts: []
+
+  # Sustained 429s on one route and tier: 2/s, well over the one-per-second a well-behaved client
+  # would ever produce.
+  - interval: 15s
+    input_series:
+      - series: 'rate_limit_rejections_total{tier="default", route="POST /auth/login"}'
+        values: '0+30x60'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: RateLimitRejectionSpike
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RateLimitRejectionSpike
+        exp_alerts:
+          - exp_labels:
+              tier: default
+              route: 'POST /auth/login'
+              severity: ticket
+            exp_annotations:
+              summary: 'Rate limit rejecting POST /auth/login on the default tier'
+              description: 'Sustained 429s for 5m. Decide whether this is abuse to be shed or a limit set too tight for a legitimate client.'

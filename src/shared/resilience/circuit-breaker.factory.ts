@@ -1,8 +1,14 @@
-import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, type OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ROOT_CONTEXT, context as otelContext, trace } from '@opentelemetry/api';
+import { ClsService } from 'nestjs-cls';
+import { PinoLogger } from 'nestjs-pino';
 import CircuitBreaker from 'opossum';
 import { METRICS, type BreakerState, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { withSpan } from '@shared/observability/tracing/tracer';
 import { DownstreamUnavailableError, type OutboundCall } from './outbound-call.port';
+
+const LOG_CONTEXT = 'CircuitBreaker';
 
 // The breaker guards a thunk rather than one fixed function, so a single breaker can front every
 // method of a dependency. That is the right grain: what it tracks is the health of the downstream,
@@ -35,28 +41,52 @@ function codeOf(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null ? (error as { code?: string }).code : undefined;
 }
 
+// A breaker that has been shut down reports neither open nor closed. It refuses like an open one,
+// which is the only part a caller can act on.
+function stateOf(breaker: TaskBreaker): BreakerState {
+  if (breaker.halfOpen) {
+    return 'half_open';
+  }
+  return breaker.closed ? 'closed' : 'open';
+}
+
 class BreakerOutboundCall implements OutboundCall {
   constructor(
     private readonly name: string,
     private readonly breaker: TaskBreaker,
   ) {}
 
-  async run<T>(task: () => Promise<T>): Promise<T> {
-    try {
-      return (await this.breaker.fire(task)) as T;
-    } catch (error) {
-      switch (codeOf(error)) {
-        case BREAKER_OPEN:
-        case BREAKER_SHUT_DOWN:
-          throw new DownstreamUnavailableError(this.name, 'open', error);
-        case CALL_TIMED_OUT:
-          // The task keeps running in the background — the timeout abandons our wait, it cannot
-          // cancel a request already on the wire. What it buys is the request slot back.
-          throw new DownstreamUnavailableError(this.name, 'timeout', error);
-        default:
-          throw error;
+  run<T>(task: () => Promise<T>): Promise<T> {
+    // A refused call never reaches the network, so it leaves no auto-instrumented span behind:
+    // without this one, a trace of a checkout during an outage ends at a 502 with nothing in it
+    // that says why. The state is read before the call because the interesting one is `half_open`
+    // — the single trial that decides whether the downstream is back.
+    return withSpan(`breaker:${this.name}`, async (span) => {
+      span.setAttributes({ 'breaker.name': this.name, 'breaker.state': stateOf(this.breaker) });
+      try {
+        const value = (await this.breaker.fire(task)) as T;
+        span.setAttribute('breaker.result', 'success');
+        return value;
+      } catch (error) {
+        switch (codeOf(error)) {
+          case BREAKER_OPEN:
+          case BREAKER_SHUT_DOWN:
+            span.setAttribute('breaker.result', 'rejected');
+            throw new DownstreamUnavailableError(this.name, 'open', error);
+          case CALL_TIMED_OUT:
+            span.setAttribute('breaker.result', 'timeout');
+            // The task keeps running in the background — the timeout abandons our wait, it cannot
+            // cancel a request already on the wire. What it buys is the request slot back.
+            throw new DownstreamUnavailableError(this.name, 'timeout', error);
+          default:
+            // The downstream answered, badly. Whether that counts against its health is the
+            // caller's decision (`isDownstreamFault`), so this says only what happened to this
+            // call and leaves the verdict to the metric.
+            span.setAttribute('breaker.result', 'error');
+            throw error;
+        }
       }
-    }
+    });
   }
 }
 
@@ -75,13 +105,14 @@ class BreakerOutboundCall implements OutboundCall {
  */
 @Injectable()
 export class CircuitBreakerFactory implements OnApplicationShutdown {
-  private readonly logger = new Logger(CircuitBreakerFactory.name);
   private readonly breakers = new Map<string, TaskBreaker>();
   private readonly options: CircuitBreaker.Options;
 
   constructor(
     config: ConfigService,
     @Inject(METRICS) private readonly metrics: MetricsPort,
+    private readonly logger: PinoLogger,
+    private readonly cls: ClsService,
   ) {
     this.options = {
       // Off makes every guarded call a direct pass-through: no counting, no opening — and no
@@ -128,20 +159,44 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
     }
   }
 
+  /**
+   * Runs a timer-driven transition outside the request context it happened to inherit.
+   *
+   * The reset timer is scheduled from inside the call that tripped the breaker, so its callback
+   * still sees that call's CLS store and its (by now ended) span. Left attached, the log line would
+   * carry the requestId and traceId of a checkout that finished a reset window ago — correlation
+   * ids an on-call would follow to the wrong request — and the span event would be appended to an
+   * ended span, which OpenTelemetry drops with a warning.
+   */
+  private detached(run: () => void): void {
+    otelContext.with(ROOT_CONTEXT, () => {
+      this.cls.exit(run);
+    });
+  }
+
   private instrument(name: string, breaker: TaskBreaker): void {
     const entered = (state: BreakerState): void => {
       this.metrics.setBreakerState(name, state);
       this.metrics.recordBreakerTransition(name, state);
+      // Present only for a transition a call caused, which is the only case where hanging it off
+      // that call's span says anything.
+      trace.getActiveSpan()?.addEvent('breaker.state_changed', { 'breaker.name': name, 'breaker.state': state });
     };
+    const fields = (state: BreakerState): Record<string, string> => ({ context: LOG_CONTEXT, breaker: name, state });
 
     breaker.on('open', () => {
       entered('open');
-      this.logger.error(`circuit opened for ${name} — calls fail fast until the trial call after the reset window`);
+      this.logger.warn(fields('open'), 'circuit opened — calls fail fast until the trial call after the reset window');
     });
-    breaker.on('halfOpen', () => entered('half_open'));
+    breaker.on('halfOpen', () => {
+      this.detached(() => {
+        entered('half_open');
+        this.logger.warn(fields('half_open'), 'circuit half-open — one trial call decides whether it closes');
+      });
+    });
     breaker.on('close', () => {
       entered('closed');
-      this.logger.log(`circuit closed for ${name} — the downstream answered again`);
+      this.logger.info(fields('closed'), 'circuit closed — the downstream answered again');
     });
 
     // A rejection that `isDownstreamFault` disowns arrives here rather than as a failure, which is

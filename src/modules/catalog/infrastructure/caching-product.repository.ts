@@ -58,6 +58,7 @@ export class CachingProductRepository implements ProductRepositoryPort {
     return this.swr.readThroughSwr(productListKey(version, criteria), () => this.source.findManyActive(criteria), {
       policy: this.policy,
       codec: LIST_CODEC,
+      label: 'catalog.product_list',
     });
   }
 
@@ -71,7 +72,7 @@ export class CachingProductRepository implements ProductRepositoryPort {
     return this.swr.readThroughSwr(
       productDetailKey(version, idOrSlug),
       () => this.source.findActiveByIdOrSlug(idOrSlug),
-      { policy: this.policy, codec: DETAIL_CODEC },
+      { policy: this.policy, codec: DETAIL_CODEC, label: 'catalog.product_detail' },
     );
   }
 

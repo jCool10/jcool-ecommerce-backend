@@ -2,6 +2,8 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { describe, expect, it, vi } from 'vitest';
+import { ClsModule } from 'nestjs-cls';
+import { PinoLogger } from 'nestjs-pino';
 import configuration from '@shared/config/configuration';
 import { METRICS } from '@shared/observability/metrics/metrics.port';
 import { CircuitBreakerFactory } from './circuit-breaker.factory';
@@ -20,12 +22,25 @@ import { ResilienceModule } from './resilience.module';
 })
 class FakeMetricsModule {}
 
+// Mirrors nestjs-pino's LoggerModule, which is global too — the factory logs transitions without
+// importing a logging module.
+@Global()
+@Module({
+  providers: [{ provide: PinoLogger, useValue: { warn: vi.fn(), info: vi.fn() } }],
+  exports: [PinoLogger],
+})
+class FakeLoggerModule {}
+
 describe('ResilienceModule', () => {
   it('resolves the factory against the shipped configuration', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         ConfigModule.forRoot({ load: [configuration], ignoreEnvFile: true, isGlobal: true }),
+        // The real thing rather than a fake: the factory leans on it to keep a timer-driven
+        // transition from inheriting the request context that scheduled it.
+        ClsModule.forRoot({ global: true }),
         FakeMetricsModule,
+        FakeLoggerModule,
         ResilienceModule,
       ],
     }).compile();

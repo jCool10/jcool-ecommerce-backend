@@ -1,4 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
+import type { ClsService } from 'nestjs-cls';
+import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import { CircuitBreakerFactory, DownstreamUnavailableError, type OutboundCall } from '@shared/resilience';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
@@ -111,6 +113,8 @@ describe('BreakerPaymentGateway over a real breaker', () => {
     const factory = new CircuitBreakerFactory(
       { getOrThrow: (key: string) => values[key] } as unknown as ConfigService,
       metrics,
+      { warn: vi.fn(), info: vi.fn() } as unknown as PinoLogger,
+      { exit: <T>(run: () => T): T => run() } as unknown as ClsService,
     );
     return build(factory.create(PAYMENT_GATEWAY_BREAKER));
   }

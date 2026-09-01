@@ -8,9 +8,14 @@ import {
   type ThrottlerStorage,
 } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { PinoLogger } from 'nestjs-pino';
 import { resolveRouteTemplate } from '@shared/observability/http-route.util';
+import { createLogSampler } from '@shared/observability/logging/log-sampler';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { DEFAULT_THROTTLER } from './throttler.constants';
+
+const LOG_CONTEXT = 'RateLimit';
+const LOG_SAMPLE_WINDOW_MS = 10_000;
 
 /**
  * Base for this app's throttler guards: the enforcement kill-switch and the rejection counter,
@@ -18,11 +23,14 @@ import { DEFAULT_THROTTLER } from './throttler.constants';
  */
 @Injectable()
 export class MeteredThrottlerGuard extends ThrottlerGuard {
+  private readonly shouldLog = createLogSampler(LOG_SAMPLE_WINDOW_MS);
+
   constructor(
     options: ThrottlerModuleOptions,
     storageService: ThrottlerStorage,
     reflector: Reflector,
     @Inject(METRICS) protected readonly metrics: MetricsPort,
+    protected readonly logger: PinoLogger,
   ) {
     super(options, storageService, reflector);
   }
@@ -53,9 +61,14 @@ export class MeteredThrottlerGuard extends ThrottlerGuard {
   private recordRejection(request: ThrottlerRequest): void {
     const { context } = request;
     const path = context.switchToHttp().getRequest<Request>().path;
-    this.metrics.recordRateLimitRejection(
-      request.throttler.name ?? DEFAULT_THROTTLER,
-      resolveRouteTemplate(this.reflector, context, path),
-    );
+    const tier = request.throttler.name ?? DEFAULT_THROTTLER;
+    const route = resolveRouteTemplate(this.reflector, context, path);
+    this.metrics.recordRateLimitRejection(tier, route);
+    // The exception filter already logs every 429; what it cannot say is which tier ran out, the
+    // one field that separates a spray from one client retrying too fast. Sampled because a flood
+    // is the case this exists for, and every rejected request already costs one line there.
+    if (this.shouldLog(`${tier}|${route}`)) {
+      this.logger.warn({ context: LOG_CONTEXT, tier, route }, 'rate limit exceeded');
+    }
   }
 }

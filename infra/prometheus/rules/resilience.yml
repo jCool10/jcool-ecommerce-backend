@@ -1,0 +1,61 @@
+# Alerts for the three mechanisms that stop a dependency's bad day from becoming ours: the payment
+# circuit breaker, the rate limiter, and the catalog stampede lock. None of them are visible on the
+# RED dashboard while they work — a breaker that fails fast answers 502 in a millisecond and the
+# limiter answers 429, and neither is a slow request or a 5xx, so the burn-rate rules stay quiet
+# through an outage these are absorbing. Triage steps in docs/observability-runbook.md §11.
+groups:
+  - name: resilience
+    rules:
+      # Two clauses because neither state alone is a usable signal. `== 2` is not enough: an open
+      # breaker drops to half_open (1) every reset window to try one call, and each of those dips
+      # restarts a `for` timer, so a genuinely dead downstream could stay silent forever. `>= 1` is
+      # not enough either: half_open is entered by the reset timer, and nothing leaves it but a call,
+      # so a breaker that trips at 03:00 with no traffic behind it sits at 1 until someone checks out
+      # — a page that cannot clear itself. Requiring a fully-open sample in the recent past keeps a
+      # dead-with-traffic breaker latched (it re-reaches 2 every cycle) and lets a stranded half-open
+      # one age out. `max by (breaker)` because state is per-replica and in-memory: replicas learn
+      # the outage from their own traffic, so disagreement is normal and one replica refusing calls
+      # is already the incident.
+      - alert: CircuitBreakerOpen
+        expr: |
+          max by (breaker) (circuit_breaker_state) >= 1
+          and
+          max by (breaker) (max_over_time(circuit_breaker_state[5m])) >= 2
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Circuit breaker {{ $labels.breaker }} has been refusing calls for a minute'
+          description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+      # A bad API key never opens the breaker: the provider answers 4xx, which is deliberately not
+      # counted as its fault. A config fault therefore shows up as a checkout error rate with a
+      # closed breaker, so do not read a quiet CircuitBreakerOpen as "payments are fine".
+
+      # Threshold is a placeholder over the ~21 req/s baseline in runbook §3 — one rejection per
+      # second on a single route is far more than a well-behaved client produces. The tier is what
+      # makes it actionable: `default`/`account` is anonymous flooding or one NAT'd office, `user` is
+      # a single authenticated account misbehaving.
+      - alert: RateLimitRejectionSpike
+        expr: sum by (tier, route) (rate(rate_limit_rejections_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Rate limit rejecting {{ $labels.route }} on the {{ $labels.tier }} tier'
+          description: 'Sustained 429s for 5m. Decide whether this is abuse to be shed or a limit set too tight for a legitimate client.'
+
+      # The one path where stampede protection does not hold: the waiter gave up on the rebuild lock
+      # and read through, so a hot key under load costs one Postgres query per waiter after all.
+      # Counted over a window instead of rated-with-`for`, because a stampede is a spike and the two
+      # cancel out: a `rate[5m]` held `for: 5m` only fires at the evaluation where the burst has just
+      # left the window, so the acute incident this is named for would never alert while a slow
+      # trickle would. Threshold sits above the handful of timeouts a deploy or a cold start
+      # produces. Read cache_rebuild_duration_seconds against the wait and lease budgets before
+      # widening either.
+      - alert: CacheStampedeLockTimeout
+        expr: sum(increase(catalog_cache_operations_total{result="lock_timeout"}[10m])) > 5
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Catalog cache rebuild lock is timing out'
+          description: 'Waiters are falling through to Postgres instead of being served by the single-flight winner. Compare rebuild duration p99 against CACHE_LOCK_WAIT_MS and CACHE_LOCK_LEASE_MS — note the histogram only covers rebuilds that held the lock, so a read-through is not in it.'

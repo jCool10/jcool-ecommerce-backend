@@ -33,6 +33,13 @@ jobs:
       - run: npm run typecheck # tsc --noEmit (SWC build emits without checking types)
       - run: npm run arch:check # dependency-cruiser: layer/context boundaries
       - run: npm run build
+      # Pinned to the deployed Prometheus so a rule that parses here cannot fail to load there.
+      - name: Install promtool
+        run: |
+          curl -sSfL "https://github.com/prometheus/prometheus/releases/download/v2.55.1/prometheus-2.55.1.linux-amd64.tar.gz" \
+            | tar -xz --strip-components=1 -C /usr/local/bin prometheus-2.55.1.linux-amd64/promtool
+      - run: npm run alerts:check # alert rules parse
+      - run: npm run alerts:test # and fire (and clear) on the timelines they claim to
 
   test:
     name: Test (unit + integration · Testcontainers)

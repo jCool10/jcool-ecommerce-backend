@@ -1,6 +1,7 @@
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { ThrottlerException, type ThrottlerRequest, type ThrottlerStorage } from '@nestjs/throttler';
+import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { MeteredThrottlerGuard } from './metered-throttler.guard';
@@ -33,15 +34,24 @@ function incrementReturning(isBlocked: boolean) {
   });
 }
 
+function fakeLogger() {
+  return { warn: vi.fn() };
+}
+
 async function build(isBlocked: boolean) {
   const increment = incrementReturning(isBlocked);
   const recordRateLimitRejection = vi.fn();
-  const guard = new MeteredThrottlerGuard({ throttlers: [] }, { increment }, reflector, {
-    recordRateLimitRejection,
-  } as unknown as MetricsPort);
+  const logger = fakeLogger();
+  const guard = new MeteredThrottlerGuard(
+    { throttlers: [] },
+    { increment },
+    reflector,
+    { recordRateLimitRejection } as unknown as MetricsPort,
+    logger as unknown as PinoLogger,
+  );
   await guard.onModuleInit(); // resolves the options the base guard reads per request
   const shim = guard as unknown as { handleRequest(request: ThrottlerRequest): Promise<boolean> };
-  return { shim, increment, recordRateLimitRejection };
+  return { shim, increment, recordRateLimitRejection, logger };
 }
 
 const request: ThrottlerRequest = {
@@ -63,12 +73,26 @@ describe('MeteredThrottlerGuard', () => {
     expect(recordRateLimitRejection).toHaveBeenCalledWith(USER_THROTTLER, '/orders');
   });
 
+  // The tier is the field the exception filter's own 429 line cannot carry, and the only one that
+  // separates a spray from one client retrying too fast.
+  it('names the tier in the rejection log', async () => {
+    const { shim, logger } = await build(true);
+
+    await expect(shim.handleRequest(request)).rejects.toBeInstanceOf(ThrottlerException);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: USER_THROTTLER, route: '/orders' }),
+      expect.any(String),
+    );
+  });
+
   it('counts nothing while the caller is under the limit', async () => {
-    const { shim, recordRateLimitRejection } = await build(false);
+    const { shim, recordRateLimitRejection, logger } = await build(false);
 
     await expect(shim.handleRequest(request)).resolves.toBe(true);
 
     expect(recordRateLimitRejection).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('stops enforcing entirely while the kill-switch is off', async () => {
@@ -78,6 +102,7 @@ describe('MeteredThrottlerGuard', () => {
       { increment },
       reflector,
       { recordRateLimitRejection: vi.fn() } as unknown as MetricsPort,
+      fakeLogger() as unknown as PinoLogger,
     );
     await guard.onModuleInit();
     const previous = process.env.THROTTLE_ENABLED;

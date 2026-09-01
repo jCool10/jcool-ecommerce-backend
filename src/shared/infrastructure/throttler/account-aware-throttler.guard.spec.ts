@@ -6,7 +6,7 @@ import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER, USER_THROTTLER } from './throttle
 // generateKey is the overridden extension point and uses only the context/body,
 // so construct the guard with placeholder framework deps and exercise it directly.
 function makeGuard(storage: ThrottlerStorage = {} as never): AccountAwareThrottlerGuard {
-  return new AccountAwareThrottlerGuard({ throttlers: [] }, storage, {} as never, {} as never);
+  return new AccountAwareThrottlerGuard({ throttlers: [] }, storage, {} as never, {} as never, {} as never);
 }
 
 // Minimal ExecutionContext: generateKey reads class/handler names and, for the

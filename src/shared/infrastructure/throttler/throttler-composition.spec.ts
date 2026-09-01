@@ -10,6 +10,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { Throttle, ThrottlerModule, type ThrottlerStorage } from '@nestjs/throttler';
 import type { Server } from 'node:http';
+import { PinoLogger } from 'nestjs-pino';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
@@ -70,6 +71,7 @@ async function boot(overLimit = false) {
     controllers: [ProbeController],
     providers: [
       { provide: METRICS, useValue: { recordRateLimitRejection } },
+      { provide: PinoLogger, useValue: { warn: vi.fn() } },
       { provide: APP_GUARD, useClass: AccountAwareThrottlerGuard },
       { provide: APP_GUARD, useClass: FakeAuthGuard },
     ],

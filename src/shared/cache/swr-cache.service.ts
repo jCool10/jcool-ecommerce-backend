@@ -1,11 +1,18 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
+import { createLogSampler } from '@shared/observability/logging/log-sampler';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { withSpan } from '@shared/observability/tracing/tracer';
 import { CacheService } from './cache.service';
 import { SingleFlightLock } from './single-flight.lock';
 import { computeHardTtlMs, isEnvelope, isFresh, makeEnvelope, type CacheEnvelope, type TtlPolicy } from './ttl-policy';
 
 const POLL_INTERVAL_MS = 25;
+
+const LOG_CONTEXT = 'SwrCache';
+const LOG_SAMPLE_WINDOW_MS = 10_000;
+const UNLABELLED = '(unlabelled)';
 
 /**
  * Translates between the value a caller works with and the JSON that survives a Redis round-trip.
@@ -22,11 +29,18 @@ export interface CacheCodec<T> {
 export interface SwrReadOptions<T> {
   policy?: TtlPolicy;
   codec?: CacheCodec<T>;
+  /**
+   * Names the shape of the key on the rebuild span, so rebuilds can be grouped by what is being
+   * rebuilt. The key itself is on the span too, but it carries an id and a generation counter and
+   * so groups nothing.
+   */
+  label?: string;
 }
 
 interface ResolvedOptions<T> {
   policy: TtlPolicy;
   codec?: CacheCodec<T>;
+  label?: string;
 }
 
 /**
@@ -39,14 +53,15 @@ interface ResolvedOptions<T> {
  */
 @Injectable()
 export class SwrCacheService {
-  private readonly logger = new Logger(SwrCacheService.name);
   readonly defaultPolicy: TtlPolicy;
+  private readonly shouldLog = createLogSampler(LOG_SAMPLE_WINDOW_MS);
 
   constructor(
     private readonly cache: CacheService,
     private readonly lock: SingleFlightLock,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     config: ConfigService,
+    private readonly logger: PinoLogger,
   ) {
     this.defaultPolicy = {
       softTtlMs: config.getOrThrow<number>('cache.softTtlMs'),
@@ -57,8 +72,16 @@ export class SwrCacheService {
     };
   }
 
+  /**
+   * `key` reaches logs and span attributes verbatim, so it must hold nothing unsafe to hand an
+   * operator — a personal id, an email, a token. Callers keying per user hash that part first.
+   */
   async readThroughSwr<T>(key: string, rebuild: () => Promise<T>, options: SwrReadOptions<T> = {}): Promise<T> {
-    const resolved: ResolvedOptions<T> = { policy: options.policy ?? this.defaultPolicy, codec: options.codec };
+    const resolved: ResolvedOptions<T> = {
+      policy: options.policy ?? this.defaultPolicy,
+      codec: options.codec,
+      label: options.label,
+    };
 
     const read = await this.cache.read<unknown>(key);
     if (read.status === 'error') {
@@ -102,7 +125,7 @@ export class SwrCacheService {
         const filled = await this.readFreshEnvelope(key, options);
         // The previous holder finished between this caller's read and its acquire: the lock is free
         // because the value is already there. Rebuilding again is the herd this whole class prevents.
-        return filled ? filled.data : await this.rebuildAndStore(key, rebuild, options);
+        return filled ? filled.data : await this.rebuildAndStore(key, rebuild, options, 'miss');
       } finally {
         await this.lock.release(lockKeyFor(key), attempt.token);
       }
@@ -117,6 +140,20 @@ export class SwrCacheService {
     // without storing a value. Reading through is the one case where the herd is not fully
     // suppressed, which is why it is counted separately.
     this.metrics.recordCatalogCacheOperation('lock_timeout');
+    // Sampled per key shape: a stampede times out every waiter at once, and one line each would
+    // put its heaviest logging exactly where the cache is already failing to absorb load.
+    if (this.shouldLog(options.label ?? UNLABELLED)) {
+      this.logger.warn(
+        {
+          context: LOG_CONTEXT,
+          key,
+          label: options.label,
+          waitMs: options.policy.waitMs,
+          leaseMs: options.policy.leaseMs,
+        },
+        'cache rebuild lock timed out, reading through',
+      );
+    }
     return rebuild();
   }
 
@@ -127,8 +164,10 @@ export class SwrCacheService {
    */
   private refreshInBackground<T>(key: string, rebuild: () => Promise<T>, options: ResolvedOptions<T>): void {
     void this.refreshIfUncontended(key, rebuild, options).catch((caught: unknown) => {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      this.logger.warn(`background cache rebuild failed for "${key}", serving stale: ${message}`);
+      this.logger.warn(
+        { context: LOG_CONTEXT, key, reason: reasonOf(caught) },
+        'background cache rebuild failed, serving stale',
+      );
     });
   }
 
@@ -144,46 +183,66 @@ export class SwrCacheService {
     this.metrics.recordCatalogCacheOperation('lock_acquired');
     try {
       if (!(await this.readFreshEnvelope(key, options))) {
-        await this.rebuildAndStore(key, rebuild, options);
+        await this.rebuildAndStore(key, rebuild, options, 'hit_stale');
       }
     } finally {
       await this.lock.release(lockKeyFor(key), attempt.token);
     }
   }
 
-  private async rebuildAndStore<T>(key: string, rebuild: () => Promise<T>, options: ResolvedOptions<T>): Promise<T> {
-    const startedAt = Date.now();
-    const data = await rebuild();
-    this.metrics.observeCacheRebuild((Date.now() - startedAt) / 1000);
-    this.metrics.recordCatalogCacheOperation('rebuild');
+  /**
+   * `trigger` is the lookup outcome that caused this rebuild — a cold key, or one that went stale
+   * under a reader. It is the difference between "the cache is not absorbing load" and "the cache
+   * is refreshing itself while readers are served", which the rebuild count alone cannot tell.
+   */
+  private rebuildAndStore<T>(
+    key: string,
+    rebuild: () => Promise<T>,
+    options: ResolvedOptions<T>,
+    trigger: 'miss' | 'hit_stale',
+  ): Promise<T> {
+    // The source read is the expensive half of a cache lookup and the only half nothing else times:
+    // the auto-instrumented pg span sits under it with no idea it is serving a rebuild.
+    return withSpan('cache.rebuild', async (span) => {
+      span.setAttributes({ 'cache.key': key, 'cache.result': trigger });
+      if (options.label) {
+        span.setAttribute('cache.key_template', options.label);
+      }
 
-    // An absent value is never stored. Negative caching is a per-domain call — a flood of unknown
-    // ids would otherwise fill the keyspace with tombstones that evict live entries — so callers
-    // that want it cache their own sentinel instead.
-    if (data == null) {
-      return data;
-    }
+      const startedAt = Date.now();
+      const data = await rebuild();
+      const rebuildMs = Date.now() - startedAt;
+      span.setAttribute('cache.rebuild_ms', rebuildMs);
+      this.metrics.observeCacheRebuild(rebuildMs / 1000);
+      this.metrics.recordCatalogCacheOperation('rebuild');
 
-    try {
-      const payload = options.codec ? options.codec.encode(data) : data;
-      const stored = await this.cache.writeMs(
-        key,
-        makeEnvelope(payload, options.policy),
-        computeHardTtlMs(options.policy),
-      );
-      if (!stored) {
-        // A Redis that reads fine but refuses writes (out of memory, say) would otherwise look like
-        // a permanent miss rate with no errors at all.
+      // An absent value is never stored. Negative caching is a per-domain call — a flood of unknown
+      // ids would otherwise fill the keyspace with tombstones that evict live entries — so callers
+      // that want it cache their own sentinel instead.
+      if (data == null) {
+        return data;
+      }
+
+      try {
+        const payload = options.codec ? options.codec.encode(data) : data;
+        const stored = await this.cache.writeMs(
+          key,
+          makeEnvelope(payload, options.policy),
+          computeHardTtlMs(options.policy),
+        );
+        if (!stored) {
+          // A Redis that reads fine but refuses writes (out of memory, say) would otherwise look
+          // like a permanent miss rate with no errors at all.
+          this.metrics.recordCatalogCacheOperation('store_rejected');
+        }
+      } catch (caught) {
+        // `encode` is the caller's code and may throw. The value is already answered from the
+        // source, so failing to file it away must not turn a served read into a 500.
+        this.logger.warn({ context: LOG_CONTEXT, key, reason: reasonOf(caught) }, 'cache store failed');
         this.metrics.recordCatalogCacheOperation('store_rejected');
       }
-    } catch (caught) {
-      // `encode` is the caller's code and may throw. The value is already answered from the source,
-      // so failing to file it away must not turn a served read into a 500.
-      const message = caught instanceof Error ? caught.message : String(caught);
-      this.logger.warn(`cache store failed for "${key}": ${message}`);
-      this.metrics.recordCatalogCacheOperation('store_rejected');
-    }
-    return data;
+      return data;
+    });
   }
 
   /** A value that is present and still fresh, or null — used to skip a rebuild the winner already did. */
@@ -242,8 +301,7 @@ export class SwrCacheService {
       return { data: options.codec.decode(value.data), freshUntil: value.freshUntil };
     } catch (caught) {
       if (warnOnDrift) {
-        const message = caught instanceof Error ? caught.message : String(caught);
-        this.logger.warn(`discarding undecodable cache entry "${key}": ${message}`);
+        this.logger.warn({ context: LOG_CONTEXT, key, reason: reasonOf(caught) }, 'discarding undecodable cache entry');
       }
       return null;
     }
@@ -257,4 +315,8 @@ function lockKeyFor(key: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function reasonOf(caught: unknown): string {
+  return caught instanceof Error ? caught.message : String(caught);
 }

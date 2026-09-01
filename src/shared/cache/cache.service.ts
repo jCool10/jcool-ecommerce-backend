@@ -1,5 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { RedisService } from '@shared/infrastructure/redis';
+
+const LOG_CONTEXT = 'CacheService';
 
 /** Outcome of one cache read. `miss` and `error` are kept apart because a cold key and an unreachable Redis are different incidents — folding them together hides an outage behind a plausible-looking miss rate. */
 export type CacheRead<T> = { status: 'hit'; value: T } | { status: 'miss' } | { status: 'error' };
@@ -13,9 +16,10 @@ export type CacheRead<T> = { status: 'hit'; value: T } | { status: 'miss' } | { 
  */
 @Injectable()
 export class CacheService {
-  private readonly logger = new Logger(CacheService.name);
-
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    private readonly logger: PinoLogger,
+  ) {}
 
   async read<T>(key: string): Promise<CacheRead<T>> {
     let raw: string | null;
@@ -87,7 +91,7 @@ export class CacheService {
   }
 
   private warn(op: string, key: string, caught: unknown): void {
-    const message = caught instanceof Error ? caught.message : String(caught);
-    this.logger.warn(`cache ${op} failed for "${key}": ${message}`);
+    const reason = caught instanceof Error ? caught.message : String(caught);
+    this.logger.warn({ context: LOG_CONTEXT, op, key, reason }, 'cache operation failed');
   }
 }

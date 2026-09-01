@@ -3,6 +3,7 @@ import { Inject, Injectable, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { ThrottlerModuleOptions, ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { PinoLogger } from 'nestjs-pino';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { MeteredThrottlerGuard } from './metered-throttler.guard';
 import { ACCOUNT_THROTTLER, USER_THROTTLER } from './throttler.constants';
@@ -19,8 +20,9 @@ export class AccountAwareThrottlerGuard extends MeteredThrottlerGuard {
     storageService: ThrottlerStorage,
     reflector: Reflector,
     @Inject(METRICS) metrics: MetricsPort,
+    logger: PinoLogger,
   ) {
-    super(options, storageService, reflector, metrics);
+    super(options, storageService, reflector, metrics, logger);
   }
 
   // This guard is global, so it runs before authentication and has no user to key the `user` tier

@@ -1,5 +1,9 @@
 import type { ConfigService } from '@nestjs/config';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { PinoLogger } from 'nestjs-pino';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { CacheService } from './cache.service';
 import type { SingleFlightLock } from './single-flight.lock';
@@ -26,13 +30,15 @@ function build() {
   };
   const metrics = { recordCatalogCacheOperation: vi.fn(), observeCacheRebuild: vi.fn() };
   const config = { getOrThrow: (key: string) => CONFIG_VALUES[key] };
+  const logger = { warn: vi.fn() };
   const swr = new SwrCacheService(
     cache as unknown as CacheService,
     lock as unknown as SingleFlightLock,
     metrics as unknown as MetricsPort,
     config as unknown as ConfigService,
+    logger as unknown as PinoLogger,
   );
-  return { swr, cache, lock, metrics };
+  return { swr, cache, lock, metrics, logger };
 }
 
 /** Cache ops recorded so far, in order — the label sequence is the behaviour under test. */
@@ -302,5 +308,67 @@ describe('SwrCacheService', () => {
       expect(ctx.cache.writeMs).toHaveBeenCalledWith('k', expect.objectContaining({ data: { wire: 'p2' } }), 90_000);
       expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_acquired', 'rebuild']);
     });
+  });
+});
+
+// The source read is the only part of a lookup nothing else times: the pg span underneath has no
+// idea it is serving a rebuild, and a background refresh has no request to hang off at all.
+describe('SwrCacheService tracing', () => {
+  const exporter = new InMemorySpanExporter();
+  let provider: BasicTracerProvider;
+
+  beforeAll(() => {
+    context.disable();
+    trace.disable();
+    provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+    trace.setGlobalTracerProvider(provider);
+  });
+
+  afterAll(async () => {
+    await provider.shutdown();
+    context.disable();
+    trace.disable();
+  });
+
+  beforeEach(() => exporter.reset());
+
+  it('names what was rebuilt and why, so rebuilds group by key shape rather than by id', async () => {
+    const ctx = build();
+    ctx.cache.read.mockResolvedValue({ status: 'miss' });
+    ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
+
+    await ctx.swr.readThroughSwr('catalog:v3:product:p1', () => Promise.resolve({ id: 'p1' }), {
+      policy: POLICY,
+      label: 'catalog.product_detail',
+    });
+
+    const spans = exporter.getFinishedSpans().filter((span) => span.name === 'cache.rebuild');
+    expect(spans).toHaveLength(1);
+    expect(spans[0].attributes).toMatchObject({
+      'cache.key': 'catalog:v3:product:p1',
+      'cache.key_template': 'catalog.product_detail',
+      'cache.result': 'miss',
+    });
+    expect(spans[0].attributes['cache.rebuild_ms']).toEqual(expect.any(Number));
+  });
+
+  it('records a refresh behind a stale hit as stale, not as a miss', async () => {
+    const ctx = build();
+    ctx.cache.read.mockResolvedValue({
+      status: 'hit',
+      value: makeEnvelope({ id: 'p1' }, POLICY, Date.now() - POLICY.softTtlMs - 1),
+    });
+    ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
+
+    await ctx.swr.readThroughSwr('k', () => Promise.resolve({ id: 'p1-new' }), { policy: POLICY });
+    await flushBackgroundWork();
+
+    // Stale rebuilds cost nobody latency; a miss does. Folding them together hides the difference
+    // between a cache refreshing itself and a cache that is not absorbing load at all.
+    const spans = exporter.getFinishedSpans().filter((span) => span.name === 'cache.rebuild');
+    expect(spans).toHaveLength(1);
+    expect(spans[0].attributes).toMatchObject({ 'cache.result': 'hit_stale' });
+    expect(spans[0].attributes['cache.key_template']).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import { SwrCacheService, type CacheService, type SingleFlightLock } from '@shared/cache';
 import { Money } from '@shared/kernel';
 import type { CacheResult, MetricsPort } from '@shared/observability/metrics/metrics.port';
+import type { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Product } from '../domain/entities';
 import { CATALOG_CACHE_VERSION_KEY } from './catalog-cache.keys';
@@ -72,6 +73,7 @@ function build() {
     lock as unknown as SingleFlightLock,
     metrics,
     config,
+    { warn: vi.fn() } as unknown as PinoLogger,
   );
   const repo = new CachingProductRepository(
     source as unknown as DrizzleProductRepository,

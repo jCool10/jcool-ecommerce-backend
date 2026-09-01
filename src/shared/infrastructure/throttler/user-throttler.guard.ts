@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { ThrottlerModuleOptions, ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler';
+import { PinoLogger } from 'nestjs-pino';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { MeteredThrottlerGuard } from './metered-throttler.guard';
 import { USER_THROTTLER } from './throttler.constants';
@@ -23,8 +24,9 @@ export class UserThrottlerGuard extends MeteredThrottlerGuard {
     storageService: ThrottlerStorage,
     reflector: Reflector,
     @Inject(METRICS) metrics: MetricsPort,
+    logger: PinoLogger,
   ) {
-    super(options, storageService, reflector, metrics);
+    super(options, storageService, reflector, metrics, logger);
   }
 
   // The IP tiers belong to the global guard; running them again here would charge each request twice.

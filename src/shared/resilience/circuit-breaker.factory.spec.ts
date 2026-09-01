@@ -1,5 +1,10 @@
 import type { ConfigService } from '@nestjs/config';
-import { describe, expect, it, vi } from 'vitest';
+import { context as otelContext, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { ClsService } from 'nestjs-cls';
+import type { PinoLogger } from 'nestjs-pino';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { CircuitBreakerFactory } from './circuit-breaker.factory';
 import { DownstreamUnavailableError } from './outbound-call.port';
@@ -30,7 +35,16 @@ function build(overrides: Record<string, unknown> = {}) {
     recordBreakerCall: vi.fn<MetricsPort['recordBreakerCall']>(),
   };
   const config = { getOrThrow: (key: string) => values[key] } as unknown as ConfigService;
-  return { factory: new CircuitBreakerFactory(config, metrics as unknown as MetricsPort), metrics };
+  const logger = { warn: vi.fn(), info: vi.fn() };
+  // The real one drops the caller out of the request store; here there is none to drop out of.
+  const cls = { exit: <T>(run: () => T): T => run() } as unknown as ClsService;
+  const factory = new CircuitBreakerFactory(
+    config,
+    metrics as unknown as MetricsPort,
+    logger as unknown as PinoLogger,
+    cls,
+  );
+  return { factory, metrics, logger };
 }
 
 /** Stands in for the service on the other side of the network: it can fail, hang, or recover. */
@@ -241,5 +255,102 @@ describe('CircuitBreakerFactory', () => {
 
     expect(downstream.calls).toBe(5);
     expect(metrics.recordBreakerCall).not.toHaveBeenCalled();
+  });
+});
+
+// A real in-memory tracer, because the thing worth proving is what a refusal leaves behind for
+// someone reading a trace — and a refusal makes no network call, so nothing else records it.
+describe('CircuitBreakerFactory tracing', () => {
+  const exporter = new InMemorySpanExporter();
+  let provider: BasicTracerProvider;
+
+  beforeAll(() => {
+    otelContext.disable();
+    trace.disable();
+    provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    otelContext.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+    trace.setGlobalTracerProvider(provider);
+  });
+
+  afterAll(async () => {
+    await provider.shutdown();
+    otelContext.disable();
+    trace.disable();
+  });
+
+  beforeEach(() => exporter.reset());
+
+  const spanNamed = (name: string) => exporter.getFinishedSpans().filter((span) => span.name === name);
+
+  it('records a refused call as a span of its own, since it never reaches the network', async () => {
+    const { factory } = build();
+    const downstream = new FakeDownstream();
+    const call = factory.create(BREAKER);
+    await trip(call, downstream);
+    exporter.reset();
+
+    await expect(call.run(() => downstream.call())).rejects.toBeInstanceOf(DownstreamUnavailableError);
+
+    const spans = spanNamed(`breaker:${BREAKER}`);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].attributes).toMatchObject({
+      'breaker.name': BREAKER,
+      'breaker.state': 'open',
+      'breaker.result': 'rejected',
+    });
+  });
+
+  it('marks the trial call half_open, so a trace shows which call was the probe', async () => {
+    const { factory } = build();
+    const downstream = new FakeDownstream();
+    const call = factory.create(BREAKER);
+    await trip(call, downstream);
+    downstream.recover();
+    await sleep(RESET_MS + 40);
+    exporter.reset();
+
+    await expect(call.run(() => downstream.call())).resolves.toBe('ok');
+
+    expect(spanNamed(`breaker:${BREAKER}`)[0].attributes).toMatchObject({
+      'breaker.state': 'half_open',
+      'breaker.result': 'success',
+    });
+  });
+
+  it('hangs the transition off the call that caused it', async () => {
+    const { factory } = build();
+    const downstream = new FakeDownstream();
+    const call = factory.create(BREAKER);
+
+    await trip(call, downstream);
+    // Past the reset window, so the timer-driven half-open has also fired by now. It must not add
+    // a second event: the span it would land on belongs to the call that tripped the breaker a
+    // reset window ago and has long since ended.
+    await sleep(RESET_MS + 40);
+
+    const transitions = spanNamed(`breaker:${BREAKER}`)
+      .flatMap((span) => span.events)
+      .filter((event) => event.name === 'breaker.state_changed');
+    expect(transitions).toHaveLength(1);
+    expect(transitions[0].attributes).toMatchObject({ 'breaker.name': BREAKER, 'breaker.state': 'open' });
+  });
+
+  it('logs the timer-driven transition with no request context to misattribute it to', async () => {
+    const { factory, logger } = build();
+    const downstream = new FakeDownstream();
+    const call = factory.create(BREAKER);
+    // The pino mixin stamps requestId and traceId from whatever context the line is written in, so
+    // what a transition can see at log time is what ends up on it.
+    const contextAtLog: (string | undefined)[] = [];
+    logger.warn.mockImplementation(() => {
+      contextAtLog.push(trace.getActiveSpan()?.spanContext().spanId);
+    });
+
+    await trip(call, downstream);
+    await sleep(RESET_MS + 40);
+
+    const [openLine, halfOpenLine] = contextAtLog;
+    expect(openLine).toBeDefined();
+    expect(halfOpenLine).toBeUndefined();
   });
 });

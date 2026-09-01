@@ -26,7 +26,7 @@
   "timezone": "",
   "title": "JCool — Observability (SLO · Latency · Saturation)",
   "uid": "jcool-observability",
-  "version": 1,
+  "version": 2,
   "weekStart": "",
   "panels": [
     {
@@ -469,6 +469,132 @@
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "sum by (event, outcome) (rate(auth_events_total[5m]))",
           "legendFormat": "{{event}} / {{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Tier 4 — Resilience (breaker · rate limit · cache stampede)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 54 },
+      "id": 30,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Circuit breaker state (0 closed · 1 half-open · 2 open)",
+      "description": "max across replicas: breaker state is per-instance and in-memory, so replicas legitimately disagree and one of them refusing calls is already the incident. A bad API key never shows here — a 4xx is the provider answering, and is deliberately not counted as its fault.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 55 },
+      "id": 31,
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 2,
+          "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "fillOpacity": 20, "lineWidth": 2 },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "closed", "color": "green", "index": 0 }, "1": { "text": "half-open", "color": "yellow", "index": 1 }, "2": { "text": "open", "color": "red", "index": 2 } } }
+          ]
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (breaker) (circuit_breaker_state)",
+          "legendFormat": "{{breaker}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Circuit breaker calls by result (5m)",
+      "description": "rejected are calls the downstream never saw. A rising rejected rate with no failures is the breaker doing its job, not a new outage. success means the downstream answered — including a 4xx the caller disowned, which is not a business success.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 55 },
+      "id": 32,
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "sum"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (breaker, result) (rate(circuit_breaker_calls_total[5m]))",
+          "legendFormat": "{{breaker}} / {{result}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache rebuild duration p95 / p99 (5m)",
+      "description": "Measured while the single-flight lock is held, so this is the number the lease has to stay ahead of: once p99 approaches CACHE_LOCK_LEASE_MS, holders start losing the lock mid-rebuild and the herd comes back.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
+      "id": 33,
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 8, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(cache_rebuild_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(cache_rebuild_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache stampede lock outcomes (5m)",
+      "description": "lock_wait is the protection working — a caller parked behind the one rebuild. lock_timeout is the one path where it does not hold: the waiter gave up and read through, so a hot key costs one Postgres query per waiter after all.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
+      "id": 34,
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "sum"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (result) (rate(catalog_cache_operations_total{result=~\"lock_wait|lock_timeout|rebuild|store_rejected|error_fallthrough\"}[5m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate-limit rejections by tier / route (5m)",
+      "description": "The tier is what makes a 429 spike readable: default and account are anonymous flooding or one NAT'd office, user is a single authenticated account misbehaving.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 71 },
+      "id": 35,
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "sum"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (tier, route) (rate(rate_limit_rejections_total[5m]))",
+          "legendFormat": "{{tier}} / {{route}}",
           "refId": "A"
         }
       ]

@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { RedisService } from '@shared/infrastructure/redis';
+
+const LOG_CONTEXT = 'SingleFlightLock';
 
 /**
  * Outcome of one acquire. `held` (someone else is rebuilding) and `error` (Redis unreachable) are
@@ -27,9 +30,10 @@ return 0
  */
 @Injectable()
 export class SingleFlightLock {
-  private readonly logger = new Logger(SingleFlightLock.name);
-
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    private readonly logger: PinoLogger,
+  ) {}
 
   async acquire(key: string, leaseMs: number): Promise<LockAttempt> {
     const token = randomUUID();
@@ -65,7 +69,7 @@ export class SingleFlightLock {
   }
 
   private warn(op: string, key: string, caught: unknown): void {
-    const message = caught instanceof Error ? caught.message : String(caught);
-    this.logger.warn(`single-flight ${op} failed for "${key}": ${message}`);
+    const reason = caught instanceof Error ? caught.message : String(caught);
+    this.logger.warn({ context: LOG_CONTEXT, op, key, reason }, 'single-flight lock operation failed');
   }
 }
