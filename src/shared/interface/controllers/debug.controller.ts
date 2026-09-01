@@ -1,17 +1,19 @@
 import { Controller, Get, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
+import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@shared/infrastructure/throttler';
 import { Public } from '@shared/rbac';
 
 /**
  * Intentional-error endpoint for exercising the error pipeline end to end (exception filter →
  * structured log → Sentry capture with requestId/traceId). `@Public()` opts out of the global
- * JwtAuthGuard so it is reachable without a token; `@SkipThrottle()` keeps repeated checks off the
- * rate limiter. Reachable only in the known non-prod envs so it never exists in a real deployment.
- * See ADR-0016.
+ * JwtAuthGuard so it is reachable without a token; skipping the throttler keeps repeated checks off
+ * the rate limiter. Reachable only in the known non-prod envs so it never exists in a real
+ * deployment. See ADR-0016.
  */
 @Public()
-@SkipThrottle()
+// Both tiers must be named — bare `@SkipThrottle()` skips only `default`, leaving `account`.
+@SkipThrottle({ [DEFAULT_THROTTLER]: true, [ACCOUNT_THROTTLER]: true })
 @Controller('debug')
 export class DebugController {
   constructor(private readonly config: ConfigService) {}

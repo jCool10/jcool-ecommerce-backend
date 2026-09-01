@@ -12,6 +12,8 @@ import {
   ApiUnauthorizedResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { ORDER_THROTTLE, UserThrottlerGuard } from '@shared/infrastructure/throttler';
 import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
 import { CheckoutOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
@@ -37,7 +39,11 @@ export class OrderController {
   ) {}
 
   @Post()
-  @UseGuards(RequireIdempotencyKeyGuard)
+  // The per-user tier needs the id from the token, so it can only run here, after the global
+  // authentication guard — a 429 still costs the token checks. Listed ahead of the idempotency
+  // guard so a caller hammering checkout is shed before a key is claimed for it.
+  @Throttle(ORDER_THROTTLE)
+  @UseGuards(UserThrottlerGuard, RequireIdempotencyKeyGuard)
   @UseInterceptors(IdempotencyInterceptor)
   @ApiHeader({
     name: 'Idempotency-Key',

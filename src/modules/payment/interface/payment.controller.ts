@@ -1,4 +1,4 @@
-import { Controller, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Controller, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiConflictResponse,
@@ -8,6 +8,8 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { PAYMENT_SESSION_THROTTLE, UserThrottlerGuard } from '@shared/infrastructure/throttler';
 import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
 import { CreatePaymentSessionUseCase } from '../application/use-cases';
 import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
@@ -25,6 +27,10 @@ export class PaymentController {
   constructor(private readonly createSession: CreatePaymentSessionUseCase) {}
 
   @Post(':id/pay')
+  // Each attempt opens a session at the gateway, so this is throttled per authenticated user as
+  // well as per IP — one account can't turn a retry loop into outbound load we pay for.
+  @Throttle(PAYMENT_SESSION_THROTTLE)
+  @UseGuards(UserThrottlerGuard)
   @ApiParam({ name: 'id', format: 'uuid', description: 'Order id to pay' })
   @ApiCreatedResponse({ type: CreatePaymentSessionResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found (or not owned by the caller)' })

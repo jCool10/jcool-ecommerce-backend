@@ -6,7 +6,7 @@ import { RedisService } from '../redis';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import { GLOBAL_THROTTLERS } from './throttler.constants';
 
-/** App-wide rate limiting (brute-force + DoS) with counters in shared Redis so limits hold across instances and restarts; registered before AuthModule so its global guard sheds floods ahead of the auth guards. `THROTTLE_ENABLED=false` turns enforcement off in AccountAwareThrottlerGuard. See docs/engineering-notes.md (Auth — Rate limiting / brute-force protection). */
+/** App-wide rate limiting (brute-force + DoS) with counters in shared Redis so limits hold across instances and restarts; registered before AuthModule so its global guard sheds floods ahead of the auth guards. That ordering is also why the per-user tier can't be global — UserThrottlerGuard carries it per route instead, after authentication. `THROTTLE_ENABLED=false` turns enforcement off in MeteredThrottlerGuard. See docs/engineering-notes.md (Auth — Rate limiting / brute-force protection). */
 @Module({
   imports: [
     ThrottlerModule.forRootAsync({
