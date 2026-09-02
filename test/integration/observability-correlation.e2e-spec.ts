@@ -14,9 +14,6 @@ describe('Correlation id (integration)', () => {
 
   beforeAll(async () => {
     app = await createTestApp();
-    // Bind an ephemeral port so parallel supertest requests hit an already-listening
-    // server (firing concurrent requests at a non-listening server races on listen()).
-    await app.listen(0);
     server = app.getHttpServer() as Server;
   });
 

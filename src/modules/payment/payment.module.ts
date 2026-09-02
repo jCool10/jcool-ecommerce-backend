@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OrderModule } from '@modules/order/order.module';
+import { CircuitBreakerFactory, ResilienceModule } from '@shared/resilience';
 import { PAYMENT_REPOSITORY } from './application/ports/payment-repository.port';
 import { WEBHOOK_EVENT_REPOSITORY } from './application/ports/webhook-event-repository.port';
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './application/ports/payment-gateway.port';
@@ -19,6 +20,11 @@ import { DrizzleTransactionRunner } from './infrastructure/drizzle-transaction-r
 import { OrderReadAdapter } from './infrastructure/order-read.adapter';
 import { StripeGatewayAdapter } from './infrastructure/gateway/stripe-gateway.adapter';
 import { SepayGatewayAdapter } from './infrastructure/gateway/sepay-gateway.adapter';
+import { isStripeUnavailable } from './infrastructure/gateway/stripe-fault-classification';
+import {
+  BreakerPaymentGateway,
+  PAYMENT_GATEWAY_BREAKER,
+} from './infrastructure/gateway/breaker-payment-gateway.adapter';
 import { PaymentController } from './interface/payment.controller';
 import { WebhookController } from './interface/webhook.controller';
 import { ReconciliationScheduler } from './interface/reconciliation.scheduler';
@@ -26,17 +32,23 @@ import { OrderExpiredHandler } from './interface/queue/order-expired.handler';
 
 // Provider selected by env; changing gateways is an env + inject change, never a caller change.
 // Stripe is the coded path (see StripeGatewayAdapter); SePay is an interface-only seam.
-function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
-  if (config.get<string>('payment.provider') === 'sepay') {
-    return new SepayGatewayAdapter();
-  }
-  return new StripeGatewayAdapter({
-    webhookSecret: config.get<string>('payment.webhookSecret'),
-    toleranceSec: config.get<number>('payment.webhookToleranceSec') ?? 300,
-    secretKey: config.get<string>('payment.secretKey'),
-    successUrl: config.get<string>('payment.successUrl'),
-    cancelUrl: config.get<string>('payment.cancelUrl'),
-  });
+// Whichever is chosen is fronted by a circuit breaker: the gateway is the one dependency here that
+// lives on someone else's network, so it is the one whose slowness can exhaust our request slots.
+function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFactory): PaymentGatewayPort {
+  const sepay = config.get<string>('payment.provider') === 'sepay';
+  const gateway = sepay
+    ? new SepayGatewayAdapter()
+    : new StripeGatewayAdapter({
+        webhookSecret: config.get<string>('payment.webhookSecret'),
+        toleranceSec: config.get<number>('payment.webhookToleranceSec') ?? 300,
+        secretKey: config.get<string>('payment.secretKey'),
+        successUrl: config.get<string>('payment.successUrl'),
+        cancelUrl: config.get<string>('payment.cancelUrl'),
+      });
+  // Only the coded path can tell a provider fault from a rejected request; the seam has no errors of
+  // its own to classify yet, so every failure there counts.
+  const breaker = breakers.create(PAYMENT_GATEWAY_BREAKER, sepay ? {} : { isDownstreamFault: isStripeUnavailable });
+  return new BreakerPaymentGateway(gateway, breaker);
 }
 
 /**
@@ -45,12 +57,12 @@ function createPaymentGateway(config: ConfigService): PaymentGatewayPort {
  * settles one only through Order's exported FinalizeOrderUseCase — never Order's tables.
  */
 @Module({
-  imports: [OrderModule],
+  imports: [OrderModule, ResilienceModule],
   controllers: [PaymentController, WebhookController],
   providers: [
     { provide: PAYMENT_REPOSITORY, useClass: DrizzlePaymentRepository },
     { provide: WEBHOOK_EVENT_REPOSITORY, useClass: DrizzleWebhookEventRepository },
-    { provide: PAYMENT_GATEWAY, useFactory: createPaymentGateway, inject: [ConfigService] },
+    { provide: PAYMENT_GATEWAY, useFactory: createPaymentGateway, inject: [ConfigService, CircuitBreakerFactory] },
     { provide: ORDER_READ_PORT, useClass: OrderReadAdapter },
     { provide: TRANSACTION_RUNNER, useClass: DrizzleTransactionRunner },
     CreatePaymentSessionUseCase,

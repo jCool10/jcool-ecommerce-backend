@@ -1,5 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { RedisService } from '@shared/infrastructure/redis';
+
+const LOG_CONTEXT = 'CacheService';
 
 /** Outcome of one cache read. `miss` and `error` are kept apart because a cold key and an unreachable Redis are different incidents — folding them together hides an outage behind a plausible-looking miss rate. */
 export type CacheRead<T> = { status: 'hit'; value: T } | { status: 'miss' } | { status: 'error' };
@@ -13,9 +16,10 @@ export type CacheRead<T> = { status: 'hit'; value: T } | { status: 'miss' } | { 
  */
 @Injectable()
 export class CacheService {
-  private readonly logger = new Logger(CacheService.name);
-
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    private readonly logger: PinoLogger,
+  ) {}
 
   async read<T>(key: string): Promise<CacheRead<T>> {
     let raw: string | null;
@@ -39,13 +43,12 @@ export class CacheService {
 
   /** `false` means Redis rejected the write — the read still succeeded from the source, but the cache is not absorbing load. */
   async write(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
-    try {
-      await this.redis.getClient().set(key, JSON.stringify(value), 'EX', ttlSeconds);
-      return true;
-    } catch (caught) {
-      this.warn('write', key, caught);
-      return false;
-    }
+    return this.set(key, value, 'EX', ttlSeconds);
+  }
+
+  /** Same, at millisecond resolution — a jittered expiry needs finer granularity than a second to spread keys apart. */
+  async writeMs(key: string, value: unknown, ttlMs: number): Promise<boolean> {
+    return this.set(key, value, 'PX', ttlMs);
   }
 
   /**
@@ -72,8 +75,23 @@ export class CacheService {
     }
   }
 
+  private async set(key: string, value: unknown, unit: 'EX' | 'PX', ttl: number): Promise<boolean> {
+    try {
+      // Serialization is inside the guard on purpose: an unserializable payload (a cycle, a bigint)
+      // must degrade to an uncached read like any other failure, not throw into the caller.
+      const client = this.redis.getClient();
+      const payload = JSON.stringify(value);
+      // Branched rather than passed through: ioredis types the expiry flag as a literal per overload.
+      await (unit === 'EX' ? client.set(key, payload, 'EX', ttl) : client.set(key, payload, 'PX', ttl));
+      return true;
+    } catch (caught) {
+      this.warn('write', key, caught);
+      return false;
+    }
+  }
+
   private warn(op: string, key: string, caught: unknown): void {
-    const message = caught instanceof Error ? caught.message : String(caught);
-    this.logger.warn(`cache ${op} failed for "${key}": ${message}`);
+    const reason = caught instanceof Error ? caught.message : String(caught);
+    this.logger.warn({ context: LOG_CONTEXT, op, key, reason }, 'cache operation failed');
   }
 }

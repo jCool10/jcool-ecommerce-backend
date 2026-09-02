@@ -11,10 +11,7 @@ import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter
 import { replayDeadLetters } from '../../src/shared/messaging/queue/dead-letter.replay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import {
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-} from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 

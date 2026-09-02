@@ -23,7 +23,7 @@ async function renameBehindTheCache(app: INestApplication, productId: string, na
   await db.update(schema.products).set({ name }).where(eq(schema.products.id, productId));
 }
 
-async function readCacheCounter(app: INestApplication, result: 'hit' | 'miss' | 'error'): Promise<number> {
+async function readCacheCounter(app: INestApplication, result: 'hit_fresh' | 'miss' | 'error'): Promise<number> {
   const res = await request(app.getHttpServer())
     .get('/metrics')
     .set('Authorization', `Bearer ${METRICS_TOKEN}`)
@@ -38,7 +38,14 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
 
   beforeAll(async () => {
     process.env.METRICS_TOKEN = METRICS_TOKEN;
-    app = await createTestApp();
+    // Pinned rather than defaulted: every assertion below is about an entry still being fresh, and a
+    // local .env would otherwise get to decide how long that is.
+    app = await createTestApp({
+      CATALOG_CACHE_TTL_SEC: '60',
+      CACHE_STALE_WINDOW_SEC: '30',
+      CACHE_TTL_JITTER_SEC: '10',
+      CACHE_LOCK_WAIT_MS: '500',
+    });
     pool = app.get<Pool>(PG_POOL);
   });
 
@@ -106,13 +113,16 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
 
     it('counts hits and misses so cache effectiveness is measurable', async () => {
       const { slug } = await createTestProduct(app);
-      const [missesBefore, hitsBefore] = [await readCacheCounter(app, 'miss'), await readCacheCounter(app, 'hit')];
+      const [missesBefore, hitsBefore] = [
+        await readCacheCounter(app, 'miss'),
+        await readCacheCounter(app, 'hit_fresh'),
+      ];
 
       await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
       await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
 
       expect(await readCacheCounter(app, 'miss')).toBe(missesBefore + 1);
-      expect(await readCacheCounter(app, 'hit')).toBe(hitsBefore + 1);
+      expect(await readCacheCounter(app, 'hit_fresh')).toBe(hitsBefore + 1);
     });
   });
 
@@ -215,7 +225,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
       const { slug } = await createTestProduct(app);
       const token = await adminToken();
       await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
-      const hitsBefore = await readCacheCounter(app, 'hit');
+      const hitsBefore = await readCacheCounter(app, 'hit_fresh');
 
       await request(app.getHttpServer())
         .patch('/admin/products/0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f')
@@ -224,7 +234,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
         .expect(404);
 
       await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
-      expect(await readCacheCounter(app, 'hit')).toBe(hitsBefore + 1);
+      expect(await readCacheCounter(app, 'hit_fresh')).toBe(hitsBefore + 1);
     });
   });
 
@@ -266,13 +276,19 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
   });
 });
 
-describe('Catalog cache TTL (integration)', () => {
+describe('Catalog cache freshness window (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
 
   beforeAll(async () => {
-    // Shortest TTL the env schema accepts, so expiry is observable without a long sleep.
-    app = await createTestApp({ CATALOG_CACHE_TTL_SEC: '1' });
+    // Shortest fresh window the env schema accepts, so the stale path is reachable without a long
+    // sleep. The stale window is pinned wide and jitter off: with a local `CACHE_STALE_WINDOW_SEC=0`
+    // the entry would be deleted at the same moment it goes stale and this would test a miss.
+    app = await createTestApp({
+      CATALOG_CACHE_TTL_SEC: '1',
+      CACHE_STALE_WINDOW_SEC: '30',
+      CACHE_TTL_JITTER_SEC: '0',
+    });
     pool = app.get<Pool>(PG_POOL);
   });
 
@@ -280,7 +296,47 @@ describe('Catalog cache TTL (integration)', () => {
     await app.close();
   });
 
-  it('refills from Postgres once the entry expires, bounding how long a missed invalidation could stick', async () => {
+  it('answers from the stale entry the moment the fresh window closes, then from the refill behind it', async () => {
+    await resetDatabase(pool);
+    await resetCatalogCache(app);
+    const { productId, slug } = await createTestProduct(app);
+
+    const first = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+    await renameBehindTheCache(app, productId, 'Visible After Refresh');
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+    // Nobody waits on the rebuild: the read that finds the entry stale still answers from it.
+    const served = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+    expect(served.body.name).toBe(first.body.name);
+
+    await expect
+      .poll(async () => (await request(app.getHttpServer()).get(`/products/${slug}`)).body.name, { timeout: 5_000 })
+      .toBe('Visible After Refresh');
+  });
+});
+
+describe('Catalog cache hard expiry (integration)', () => {
+  let app: INestApplication;
+  let pool: Pool;
+
+  beforeAll(async () => {
+    process.env.METRICS_TOKEN = METRICS_TOKEN;
+    // Stale-serving and jitter switched off, so the entry's whole life is the fresh window. This is
+    // what bounds staleness after a missed invalidation: the three windows, and nothing beyond them.
+    app = await createTestApp({
+      CATALOG_CACHE_TTL_SEC: '1',
+      CACHE_STALE_WINDOW_SEC: '0',
+      CACHE_TTL_JITTER_SEC: '0',
+    });
+    pool = app.get<Pool>(PG_POOL);
+  });
+
+  afterAll(async () => {
+    delete process.env.METRICS_TOKEN;
+    await app.close();
+  });
+
+  it('drops the entry once the windows close, so the next read answers from Postgres', async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
     const { productId, slug } = await createTestProduct(app);
@@ -289,7 +345,11 @@ describe('Catalog cache TTL (integration)', () => {
     await renameBehindTheCache(app, productId, 'Visible After Expiry');
     await new Promise((resolve) => setTimeout(resolve, 1_200));
 
-    const res = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
-    expect(res.body.name).toBe('Visible After Expiry');
+    const missesBefore = await readCacheCounter(app, 'miss');
+    // No poll: with nothing left to serve, the read rebuilds inline rather than answering stale.
+    const served = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+
+    expect(served.body.name).toBe('Visible After Expiry');
+    expect(await readCacheCounter(app, 'miss')).toBe(missesBefore + 1);
   });
 });

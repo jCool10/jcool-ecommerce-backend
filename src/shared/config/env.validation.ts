@@ -114,7 +114,7 @@ export class EnvironmentVariables {
   @Max(50)
   QUEUE_WORKER_CONCURRENCY?: number;
 
-  // Deliveries before a message is dead-lettered; default 5 (configuration.ts). Capped at 10 rather
+  // Deliveries before a message is dead-lettered; default 8 (configuration.ts). Capped at 10 rather
   // than left open because the backoff doubles: ten tries already stretch the last wait past eight
   // minutes, and a message nobody can apply belongs in the DLQ long before that.
   @IsOptional()
@@ -298,13 +298,102 @@ export class EnvironmentVariables {
   @Min(0)
   RESERVATION_SWEEP_GRACE_SEC?: number;
 
-  // Catalog cache-aside TTL (s); default 60 (configuration.ts). Min 1 — a 0 would make every
-  // SET expire instantly and turn the cache into pure overhead.
+  // Catalog's fresh window (s); default 60 (configuration.ts). Total staleness is this plus
+  // CACHE_STALE_WINDOW_SEC plus CACHE_TTL_JITTER_SEC. Min 1 — a 0 would make every entry stale the
+  // instant it is written, turning every read into a stale serve plus a background rebuild.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   CATALOG_CACHE_TTL_SEC?: number;
+
+  // Stampede-protected cache windows; defaults 60s / 30s / 10s (configuration.ts). Min 1 on the
+  // fresh window because a 0 makes every entry stale the instant it is written, turning every read
+  // into a stale serve plus a background rebuild. The other two accept 0, which switches off
+  // stale-serving (resp. jitter) — switching off SWR takes both, since jitter also outlives freshness.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  CACHE_SOFT_TTL_SEC?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  CACHE_STALE_WINDOW_SEC?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  CACHE_TTL_JITTER_SEC?: number;
+
+  // Rebuild-lock lease (ms); default 5000 (configuration.ts). Min 100 because a lease shorter than a
+  // rebuild admits a second holder on every refill, which is the stampede this lock exists to stop.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  CACHE_LOCK_LEASE_MS?: number;
+
+  // How long a reader waits for the lock holder's value (ms); default 500 (configuration.ts).
+  // 0 is legal — it opts out of waiting and reads through to Postgres immediately.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  CACHE_LOCK_WAIT_MS?: number;
+
+  // Circuit-breaker kill-switch; on by default (configuration.ts). Off passes every guarded call
+  // straight through to its downstream.
+  @IsOptional()
+  @IsBooleanString()
+  BREAKER_ENABLED?: string;
+
+  // How long one outbound call may run before it is abandoned (ms); default 3000 (configuration.ts).
+  // Min 100 so a typo cannot make every call time out before the downstream can possibly answer.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  BREAKER_TIMEOUT_MS?: number;
+
+  // Failure share that opens the circuit; default 50 (configuration.ts). The share is compared
+  // strictly, so 100 never opens however many calls fail — capped at 99 so a breaker that reads as
+  // configured cannot in fact be switched off. At the low end 1 opens on the first failure once the
+  // window holds enough calls to count.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  BREAKER_ERROR_THRESHOLD_PCT?: number;
+
+  // How long the circuit stays open before a trial call (ms); default 10000 (configuration.ts).
+  // Min 100 keeps the open state from being so brief it never sheds any load.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  BREAKER_RESET_TIMEOUT_MS?: number;
+
+  // Window the failure share is measured over (ms); default 10000 (configuration.ts). Min 1000 —
+  // a window shorter than the calls it counts would forget each failure before the next arrives.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  BREAKER_ROLLING_WINDOW_MS?: number;
+
+  // Calls the window needs before the share counts; default 5 (configuration.ts). 0 and 1 behave
+  // identically — one failure is then the whole window — so the floor only rules out the value that
+  // reads as "no gate at all".
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  BREAKER_VOLUME_THRESHOLD?: number;
 
   // Stock-reservation locking strategy; defaults to pessimistic (configuration.ts).
   @IsOptional()

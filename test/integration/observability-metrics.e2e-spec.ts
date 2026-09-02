@@ -55,6 +55,13 @@ describe('Metrics endpoint (integration)', () => {
     expect(body).toContain('messaging_consume_total');
     expect(body).toContain('outbox_backlog_pending');
     expect(body).toContain('outbox_oldest_age_seconds');
+    // Resilience. Registered eagerly like the rest, so they describe themselves before the first
+    // rebuild, breaker trip or 429 — an alert written against them never queries a missing series.
+    expect(body).toContain('cache_rebuild_duration_seconds');
+    expect(body).toContain('circuit_breaker_state');
+    expect(body).toContain('circuit_breaker_transitions_total');
+    expect(body).toContain('circuit_breaker_calls_total');
+    expect(body).toContain('rate_limit_rejections_total');
   });
 
   it('labels the RED metric with the route TEMPLATE, never the concrete id (cardinality)', async () => {

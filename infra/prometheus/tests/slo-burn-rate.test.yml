@@ -1,0 +1,289 @@
+# Rule unit tests for slo-burn-rate.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+#
+# Multi-window burn-rate is the shape most likely to parse cleanly and still be wrong: two windows
+# joined by `and`, each against its own threshold, gated behind a `for`. `promtool check rules` sees
+# none of that. What these pin is the behavior the shape exists to produce — a page that clears
+# itself once the short window cools, and a burn between the two thresholds that tickets without
+# paging — plus the three messaging alerts, whose thresholds are the only thing standing between a
+# dead relay and silence.
+rule_files:
+  - ../rules/slo-burn-rate.yml
+
+# Must match the recording groups' own `interval`, or every `for` timer below runs on a different
+# clock than the one production evaluates on.
+evaluation_interval: 15s
+
+tests:
+  # A service serving no 5xx produces no error-rate series at all: an aggregation over a selector
+  # that matches nothing returns empty, not zero. Worth pinning twice over — it reads as a broken
+  # rule on a dashboard ("No data" where an operator expects 0%), and it is the reason neither
+  # availability alert can fire on a healthy service.
+  - name: healthy traffic records no error ratio and pages nobody
+    interval: 15s
+    input_series:
+      - series: 'http_requests_total{method="GET", route="/products", status_code="200"}'
+        values: '0+100x40'
+    promql_expr_test:
+      - expr: job:http_request_error_rate:ratio5m
+        eval_time: 5m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HighErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HighErrorBudgetBurnSlow
+        exp_alerts: []
+
+  # The self-resolve property, which is the whole reason the fast rule carries a 5m window it could
+  # have left out. 5% of requests failing is ~50x the budget; the errors stop after ten minutes.
+  - name: fast error burn pages, then clears itself when the short window cools
+    interval: 15s
+    input_series:
+      - series: 'http_requests_total{method="POST", route="/orders", status_code="200"}'
+        values: '0+100x120'
+      # 5xx for the first ten minutes only. The counter then goes flat, which is what recovery looks
+      # like to Prometheus — a counter never walks back down.
+      - series: 'http_requests_total{method="POST", route="/orders", status_code="500"}'
+        values: '0+5x40 200+0x80'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HighErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HighErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: availability
+            exp_annotations:
+              summary: 'Fast error-budget burn (availability SLO 99.9%)'
+              description: '5xx burn rate >14.4x over 1h and 5m — ~2 days to exhaust the 30-day budget.'
+      # Ten minutes after the last 5xx the 1h window is still well over the threshold, and only the
+      # cold 5m window turns the page off. Drop the `and` and this keeps paging for another fifty
+      # minutes at an incident that ended.
+      - eval_time: 20m
+        alertname: HighErrorBudgetBurnFast
+        exp_alerts: []
+    promql_expr_test:
+      - expr: job:http_request_error_rate:ratio5m > bool 0.0144
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 0
+      - expr: job:http_request_error_rate:ratio1h > bool 0.0144
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # 1% of requests failing is 10x the 99.9% budget: past the slow threshold (6x), short of the fast
+  # one (14.4x). Separating those two is the only thing that decides whether someone is woken up.
+  - name: an error burn between the thresholds tickets and does not page
+    interval: 15s
+    input_series:
+      - series: 'http_requests_total{method="GET", route="/products", status_code="200"}'
+        values: '0+99x160'
+      - series: 'http_requests_total{method="GET", route="/products", status_code="503"}'
+        values: '0+1x160'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighErrorBudgetBurnSlow
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: HighErrorBudgetBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: availability
+            exp_annotations:
+              summary: 'Slow error-budget burn (availability SLO 99.9%)'
+              description: '5xx burn rate >6x over 6h and 30m — ~10 days to exhaust the 30-day budget.'
+      - eval_time: 20m
+        alertname: HighErrorBudgetBurnFast
+        exp_alerts: []
+
+  # The latency SLI is a violation ratio built from `count - bucket{le="0.25"}`, so it breaks in a
+  # way the availability one cannot: if the 0.25 boundary ever leaves HTTP_LATENCY_BUCKETS the
+  # subtrahend goes empty and the ratio silently becomes empty rather than 100%.
+  - name: latency fast burn pages on the share of requests past the 250ms objective
+    interval: 15s
+    input_series:
+      - series: 'http_request_duration_seconds_count{route="/orders"}'
+        values: '0+100x120'
+      # 80 of every 100 requests land at or under 250ms, so 20% breach it — over the 14.4x fast
+      # threshold on a 1% budget.
+      - series: 'http_request_duration_seconds_bucket{route="/orders", le="0.25"}'
+        values: '0+80x120'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HighLatencyBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HighLatencyBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: latency
+            exp_annotations:
+              summary: 'Fast latency-budget burn (latency SLO 99% < 250ms)'
+              description: '>14.4% of requests slower than 250ms over 1h and 5m — ~2 days to exhaust the 30-day budget.'
+    # Banded rather than pinned to 0.2 exactly: the subtraction lands on 0.19999999999999998, and an
+    # exact expectation would fail for a reason that says nothing about the rule.
+    promql_expr_test:
+      - expr: job:http_request_latency_violation:ratio5m > bool 0.19
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: job:http_request_latency_violation:ratio5m < bool 0.21
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # The failure mode the SLI's shape allows and the availability one does not. Drop 0.25 from
+  # HTTP_LATENCY_BUCKETS and the subtrahend matches nothing, so the ratio goes EMPTY — not 100%.
+  # Every latency alert then stops firing on a service that has stopped meeting its objective, and
+  # the only visible symptom is a gap in a dashboard.
+  - name: losing the 250ms bucket boundary silences the latency SLI rather than maxing it
+    interval: 15s
+    input_series:
+      - series: 'http_request_duration_seconds_count{route="/orders"}'
+        values: '0+100x40'
+      - series: 'http_request_duration_seconds_bucket{route="/orders", le="0.5"}'
+        values: '0+80x40'
+    promql_expr_test:
+      - expr: job:http_request_latency_violation:ratio5m
+        eval_time: 5m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HighLatencyBudgetBurnFast
+        exp_alerts: []
+
+  - name: a latency burn between the thresholds tickets and does not page
+    interval: 15s
+    input_series:
+      - series: 'http_request_duration_seconds_count{route="/products"}'
+        values: '0+100x160'
+      - series: 'http_request_duration_seconds_bucket{route="/products", le="0.25"}'
+        values: '0+90x160'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HighLatencyBudgetBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: latency
+            exp_annotations:
+              summary: 'Slow latency-budget burn (latency SLO 99% < 250ms)'
+              description: '>6% of requests slower than 250ms over 6h and 30m — ~10 days to exhaust the 30-day budget.'
+      - eval_time: 20m
+        alertname: HighLatencyBudgetBurnFast
+        exp_alerts: []
+
+  # Asserted as inequalities rather than exact values: histogram_quantile interpolates, so the
+  # result carries float noise that would make an exact expectation fail for a reason that says
+  # nothing about the rule. What matters is that the two routes stay apart — collapse `route` out of
+  # the `by` clause and a slow endpoint disappears into the average of a fast one.
+  - name: p99 is computed per route, not averaged across them
+    interval: 15s
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{route="/products", le="0.05"}'
+        values: '0+90x40'
+      - series: 'http_request_duration_seconds_bucket{route="/products", le="0.25"}'
+        values: '0+100x40'
+      - series: 'http_request_duration_seconds_bucket{route="/products", le="1"}'
+        values: '0+100x40'
+      - series: 'http_request_duration_seconds_bucket{route="/products", le="+Inf"}'
+        values: '0+100x40'
+      # argon2 puts registration in a different class entirely; nothing here lands under 250ms.
+      - series: 'http_request_duration_seconds_bucket{route="/auth/register", le="0.05"}'
+        values: '0+0x40'
+      - series: 'http_request_duration_seconds_bucket{route="/auth/register", le="0.25"}'
+        values: '0+0x40'
+      - series: 'http_request_duration_seconds_bucket{route="/auth/register", le="1"}'
+        values: '0+100x40'
+      - series: 'http_request_duration_seconds_bucket{route="/auth/register", le="+Inf"}'
+        values: '0+100x40'
+    promql_expr_test:
+      - expr: count(route:http_request_duration_seconds:p99)
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 2
+      - expr: route:http_request_duration_seconds:p99{route="/products"} < bool 0.25
+        eval_time: 5m
+        exp_samples:
+          - labels: '{route="/products"}'
+            value: 1
+      - expr: route:http_request_duration_seconds:p99{route="/auth/register"} > bool 0.5
+        eval_time: 5m
+        exp_samples:
+          - labels: '{route="/auth/register"}'
+            value: 1
+
+  # Age is the page and count is the ticket, so the two thresholds have to fire in that order: a
+  # wedged relay is visible in the age within minutes, while the backlog it leaves behind takes far
+  # longer to look alarming — and on a quiet shop may never get there at all.
+  - name: outbox age pages before the backlog it causes tickets
+    interval: 15s
+    input_series:
+      - series: outbox_oldest_age_seconds
+        values: '2+0x8 61+2x80'
+      - series: outbox_backlog_pending
+        values: '5+0x8 5+3x80'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OutboxMessageStale
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: OutboxMessageStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OutboxMessageStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'Outbox relay is not draining'
+              description: 'Oldest unpublished outbox row older than 60s for 2m — events are committed but never delivered.'
+      # Same outage, fifteen minutes later, before the row count crosses 100.
+      - eval_time: 6m
+        alertname: OutboxBacklogGrowing
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: OutboxBacklogGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Outbox backlog above 100 rows'
+              description: 'Sustained backlog — read against outbox_oldest_age_seconds to tell a burst from a stall.'
+
+  - name: a single dead letter pages at once and resolves once it ages out
+    interval: 15s
+    input_series:
+      - series: 'messaging_dlq_total{event_type="order.expired", reason="attempts_exhausted"}'
+        values: '0+0x8 1+0x60'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DeadLetterQueued
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DeadLetterQueued
+        exp_alerts:
+          - exp_labels:
+              event_type: order.expired
+              reason: attempts_exhausted
+              severity: page
+            exp_annotations:
+              summary: 'Message moved to the dead-letter queue'
+              description: 'Parked after exhausting retries or a permanent failure. Inspect with `npm run queue:replay-dlq`, deploy the fix, then replay.'
+      # No `for` means no latch either: once the step leaves the 5m window the alert resolves on its
+      # own while the message is still parked. It announces an arrival, it does not track a
+      # condition — the queue depth is what says whether anything was replayed.
+      - eval_time: 9m
+        alertname: DeadLetterQueued
+        exp_alerts: []

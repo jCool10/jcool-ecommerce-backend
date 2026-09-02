@@ -1,5 +1,5 @@
 import type { Provider } from '@nestjs/common';
-import { makeCounterProvider, makeHistogramProvider } from '@willsoto/nestjs-prometheus';
+import { makeCounterProvider, makeGaugeProvider, makeHistogramProvider } from '@willsoto/nestjs-prometheus';
 import { OUTBOX_BACKLOG_PROVIDERS } from './outbox-backlog.collector';
 
 // Metric names in one place so the providers, the @InjectMetric() consumers, and the tests
@@ -16,6 +16,23 @@ export const ORDER_VALUE_MINOR = 'order_value_minor';
 export const CART_OPERATIONS_TOTAL = 'cart_operations_total';
 export const CATALOG_CACHE_OPERATIONS_TOTAL = 'catalog_cache_operations_total';
 export const AUTH_EVENTS_TOTAL = 'auth_events_total';
+
+// --- Resilience ---
+// How long the source takes to answer while a rebuild lock is held. It is the number the lock lease
+// has to stay ahead of: once the p99 here approaches the lease, holders start losing the lock
+// mid-rebuild and the herd comes back.
+export const CACHE_REBUILD_DURATION_SECONDS = 'cache_rebuild_duration_seconds';
+// The breaker's current position, per breaker. A gauge rather than a counter because "open right
+// now" is what pages someone; how often it got there is the transitions counter below.
+export const CIRCUIT_BREAKER_STATE = 'circuit_breaker_state';
+export const CIRCUIT_BREAKER_TRANSITIONS_TOTAL = 'circuit_breaker_transitions_total';
+// The two halves of a breaker's story: `failure`/`timeout` are calls the downstream actually cost
+// us, `rejected` are the ones it never saw because the breaker was open — a rising rejected rate
+// with no failures is the breaker doing its job, not a new outage.
+export const CIRCUIT_BREAKER_CALLS_TOTAL = 'circuit_breaker_calls_total';
+// Requests refused by the rate limiter. Read per tier: a spike on the pre-auth tiers is an attack
+// or a NAT'd office, the same spike on the per-user tier is one account misbehaving.
+export const RATE_LIMIT_REJECTIONS_TOTAL = 'rate_limit_rejections_total';
 
 // --- Messaging ---
 // Publishes are the producer half of the pipeline, and the only place a queue outage is visible as
@@ -67,6 +84,10 @@ export const ORDER_VALUE_BUCKETS = [
   100_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000, 15_000_000, 20_000_000, 30_000_000, 50_000_000,
   100_000_000,
 ];
+// Rebuild buckets (seconds). A rebuild is one catalog query, so resolution sits where those land
+// (single-digit ms to ~100ms); the 5s tail exists to make a rebuild that outlives the default lock
+// lease visible rather than lumped into +Inf.
+export const CACHE_REBUILD_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5];
 
 /**
  * Every metric registered as an eager DI provider, so all appear in `/metrics` (HELP/TYPE)
@@ -101,7 +122,7 @@ export const METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: CATALOG_CACHE_OPERATIONS_TOTAL,
-    help: 'Catalog cache-aside lookups, by result (hit/miss/error — error = Redis unreachable, served from Postgres).',
+    help: 'Catalog cache lookups. Exactly one outcome per lookup: hit_fresh/hit_stale/miss when the cache answered or refilled, error/error_fallthrough when Redis was unreachable and Postgres answered instead. The same metric also counts the work a lookup did — lock_acquired, rebuild, lock_wait, lock_timeout (waited for another rebuilder and got nothing), store_rejected — so a hit ratio must name the outcome values on both sides of the division instead of dividing by the total.',
     labelNames: ['result'],
   }),
   makeCounterProvider({
@@ -142,6 +163,31 @@ export const METRIC_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: RESERVATION_EXPIRY_TOTAL,
     help: 'Orders the reservation sweep expired because their hold had lapsed. Orders, not reservation rows: a multi-line order is one hold to the sweep.',
+  }),
+  makeHistogramProvider({
+    name: CACHE_REBUILD_DURATION_SECONDS,
+    help: 'Time to rebuild one cache entry from its source, measured while the single-flight lock is held.',
+    buckets: CACHE_REBUILD_BUCKETS,
+  }),
+  makeGaugeProvider({
+    name: CIRCUIT_BREAKER_STATE,
+    help: 'Current circuit-breaker state per breaker: 0 = closed, 1 = half_open, 2 = open.',
+    labelNames: ['breaker'],
+  }),
+  makeCounterProvider({
+    name: CIRCUIT_BREAKER_TRANSITIONS_TOTAL,
+    help: 'Circuit-breaker state changes, by breaker and the state entered (to).',
+    labelNames: ['breaker', 'to'],
+  }),
+  makeCounterProvider({
+    name: CIRCUIT_BREAKER_CALLS_TOTAL,
+    help: 'Calls through a circuit breaker, by breaker and result (success/failure/timeout/rejected = refused while open/fallback = the degraded answer served instead).',
+    labelNames: ['breaker', 'result'],
+  }),
+  makeCounterProvider({
+    name: RATE_LIMIT_REJECTIONS_TOTAL,
+    help: 'Requests rejected with 429, by throttler tier and route (template, never a concrete path).',
+    labelNames: ['tier', 'route'],
   }),
   ...OUTBOX_BACKLOG_PROVIDERS,
 ];

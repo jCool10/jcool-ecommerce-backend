@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto';
-import { Injectable, type ExecutionContext } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { Inject, Injectable, type ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import type { ThrottlerModuleOptions, ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler';
 import type { Request } from 'express';
-import { ACCOUNT_THROTTLER } from './throttler.constants';
+import { PinoLogger } from 'nestjs-pino';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { MeteredThrottlerGuard } from './metered-throttler.guard';
+import { ACCOUNT_THROTTLER, USER_THROTTLER } from './throttler.constants';
 
 /**
  * ThrottlerGuard that keys the `account` tier by IP + hashed email, so brute-forcing one account
@@ -10,14 +14,24 @@ import { ACCOUNT_THROTTLER } from './throttler.constants';
  * See docs/engineering-notes.md (Auth — Rate limiting / brute-force protection).
  */
 @Injectable()
-export class AccountAwareThrottlerGuard extends ThrottlerGuard {
-  // Global kill-switch (load tests / e2e). Enforced here, not via the module's `skipIf`
-  // option, which this throttler version leaves unapplied so enforcement never turns off.
-  override canActivate(context: ExecutionContext): Promise<boolean> {
-    if (process.env.THROTTLE_ENABLED === 'false') {
+export class AccountAwareThrottlerGuard extends MeteredThrottlerGuard {
+  constructor(
+    options: ThrottlerModuleOptions,
+    storageService: ThrottlerStorage,
+    reflector: Reflector,
+    @Inject(METRICS) metrics: MetricsPort,
+    logger: PinoLogger,
+  ) {
+    super(options, storageService, reflector, metrics, logger);
+  }
+
+  // This guard is global, so it runs before authentication and has no user to key the `user` tier
+  // by; UserThrottlerGuard enforces that tier per route, after JwtAuthGuard has run.
+  protected override handleRequest(request: ThrottlerRequest): Promise<boolean> {
+    if (request.throttler.name === USER_THROTTLER) {
       return Promise.resolve(true);
     }
-    return super.canActivate(context);
+    return super.handleRequest(request);
   }
 
   protected generateKey(context: ExecutionContext, suffix: string, name: string): string {

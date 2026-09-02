@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { PinoLogger } from 'nestjs-pino';
-import type { Counter, Histogram } from 'prom-client';
+import type { Counter, Gauge, Histogram } from 'prom-client';
 import type {
+  BreakerCallResult,
+  BreakerState,
   CacheResult,
   CartOperation,
   CompensationTrigger,
@@ -14,20 +16,29 @@ import type {
 } from './metrics.port';
 import {
   AUTH_EVENTS_TOTAL,
+  CACHE_REBUILD_DURATION_SECONDS,
   CART_OPERATIONS_TOTAL,
   CATALOG_CACHE_OPERATIONS_TOTAL,
+  CIRCUIT_BREAKER_CALLS_TOTAL,
+  CIRCUIT_BREAKER_STATE,
+  CIRCUIT_BREAKER_TRANSITIONS_TOTAL,
   MESSAGING_CONSUME_RETRIES_TOTAL,
   MESSAGING_CONSUME_TOTAL,
   MESSAGING_DLQ_TOTAL,
   MESSAGING_PUBLISH_TOTAL,
   ORDERS_CREATED_TOTAL,
   ORDER_VALUE_MINOR,
+  RATE_LIMIT_REJECTIONS_TOTAL,
   RESERVATION_EXPIRY_TOTAL,
   SAGA_COMPENSATION_TOTAL,
   SAGA_STEP_TOTAL,
 } from './metric-definitions';
 
 const LOG_CONTEXT = 'BusinessMetrics';
+
+// A gauge holds a number, so the states are ordered by severity: an alert can fire on `>= 2`
+// (open) without enumerating labels, and a graph reads as escalation.
+const BREAKER_STATE_VALUES: Record<BreakerState, number> = { closed: 0, half_open: 1, open: 2 };
 
 /**
  * prom-client implementation of MetricsPort. Every record is wrapped in `safely()` so a
@@ -48,6 +59,11 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(SAGA_STEP_TOTAL) private readonly sagaSteps: Counter<string>,
     @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
     @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
+    @InjectMetric(CACHE_REBUILD_DURATION_SECONDS) private readonly cacheRebuildDuration: Histogram<string>,
+    @InjectMetric(CIRCUIT_BREAKER_STATE) private readonly breakerState: Gauge<string>,
+    @InjectMetric(CIRCUIT_BREAKER_TRANSITIONS_TOTAL) private readonly breakerTransitions: Counter<string>,
+    @InjectMetric(CIRCUIT_BREAKER_CALLS_TOTAL) private readonly breakerCalls: Counter<string>,
+    @InjectMetric(RATE_LIMIT_REJECTIONS_TOTAL) private readonly rateLimitRejections: Counter<string>,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -97,6 +113,26 @@ export class BusinessMetrics implements MetricsPort {
 
   recordReservationExpiry(): void {
     this.safely('reservation_expiry', () => this.reservationExpiries.inc());
+  }
+
+  observeCacheRebuild(seconds: number): void {
+    this.safely('cache_rebuild', () => this.cacheRebuildDuration.observe(seconds));
+  }
+
+  setBreakerState(breaker: string, state: BreakerState): void {
+    this.safely('breaker_state', () => this.breakerState.set({ breaker }, BREAKER_STATE_VALUES[state]));
+  }
+
+  recordBreakerTransition(breaker: string, to: BreakerState): void {
+    this.safely('breaker_transition', () => this.breakerTransitions.inc({ breaker, to }));
+  }
+
+  recordBreakerCall(breaker: string, result: BreakerCallResult): void {
+    this.safely('breaker_call', () => this.breakerCalls.inc({ breaker, result }));
+  }
+
+  recordRateLimitRejection(tier: string, route: string): void {
+    this.safely('rate_limit_rejection', () => this.rateLimitRejections.inc({ tier, route }));
   }
 
   // Swallow-and-log: a telemetry error is logged (so it's not invisible) but never rethrown.

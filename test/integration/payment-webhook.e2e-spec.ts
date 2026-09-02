@@ -231,7 +231,10 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   it('finalizes the Order to PAID after a success webhook (payment settle drives order finalize)', async () => {
     const { token, orderId, sessionId, charge } = await openPayment();
     await postWebhook(
-      signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_final' }) }),
+      signWebhook({
+        secret: WEBHOOK_SECRET,
+        event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_final' }),
+      }),
     ).then((r) => expect(r.status).toBe(200));
 
     const order = await request(server()).get(`/orders/${orderId}`).set(authHeader(token)).expect(200);
