@@ -28,7 +28,7 @@ import { Counter } from 'k6/metrics';
 // silently degrades this into a read-only run fails the run loudly instead of passing green.
 const writeOps = new Counter('sim_write_ops');
 
-// Counts order placements that returned 200. Placement now reserves stock, so an all-409 place
+// Counts order placements that returned 201. Placement reserves stock, so an all-409 checkout
 // path (stock not seeded, or depleted) drops this to zero and fails the run loudly instead of
 // only surfacing as http_req_failed noise.
 const placeOps = new Counter('sim_place_ops');
@@ -77,6 +77,15 @@ export const options = {
 
 function pick(a) {
   return a[Math.floor(Math.random() * a.length)];
+}
+
+// POST /orders is guarded by a required Idempotency-Key (any UUID). A fresh one per attempt keeps
+// each VU's placements distinct — a repeated key would replay the first order instead of creating one.
+function uuidv4() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
 
 // setup() runs once — discover live slugs + variant ids so cart/order hit real SKUs.
@@ -143,20 +152,15 @@ export function write(data) {
     });
   }
   if (Math.random() < 0.5) {
-    const oc = http.post(`${BASE}/orders`, null, { ...auth, tags: { name: 'POST /orders' } });
-    check(oc, { 'order created 201': (r) => r.status === 201 });
-    const orderId = oc.json('id');
-    if (orderId) {
-      // Placement reserves stock atomically: 200 means the hold committed. A 409 means stock
-      // wasn't seeded (or was depleted) — the check + counter surface that as a run failure
-      // instead of it hiding in http_req_failed.
-      const pl = http.post(`${BASE}/orders/${orderId}/place`, null, {
-        ...auth,
-        tags: { name: 'POST /orders/:id/place' },
-      });
-      if (check(pl, { 'order placed 200': (r) => r.status === 200 })) {
-        placeOps.add(1);
-      }
+    const oc = http.post(`${BASE}/orders`, null, {
+      headers: { ...auth.headers, 'Idempotency-Key': uuidv4() },
+      tags: { name: 'POST /orders' },
+    });
+    // Checkout snapshots the cart and reserves stock in one transaction, so a 201 IS the placement.
+    // A 409 means stock wasn't seeded (or was depleted) — the check + counter surface that as a run
+    // failure instead of it hiding in http_req_failed.
+    if (check(oc, { 'order placed 201': (r) => r.status === 201 })) {
+      placeOps.add(1);
     }
     http.get(`${BASE}/orders`, { ...auth, tags: { name: 'GET /orders' } });
   }

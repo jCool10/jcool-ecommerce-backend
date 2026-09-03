@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
 
@@ -36,6 +37,16 @@ export async function createTestCategory(app: INestApplication, name = 'Test Cat
     .values({ name: `${name} ${suffix}`, slug: `test-category-${suffix}` })
     .returning();
   return { id: category.id, slug: category.slug };
+}
+
+// Direct update rather than the admin endpoint, which refuses to archive a category that still
+// has products — and a category with products is the case worth testing.
+export async function archiveTestCategory(app: INestApplication, categoryId: string): Promise<void> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  await db
+    .update(schema.categories)
+    .set({ archivedAt: new Date() })
+    .where(eq(schema.categories.id, categoryId));
 }
 
 // Full sellable unit: category → product → variant (SKU) → price.

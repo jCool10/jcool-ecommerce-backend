@@ -113,6 +113,13 @@
       "when": 1787818921272,
       "tag": "0015_supreme_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788362879904,
+      "tag": "0016_long_sheva_callister",
+      "breakpoints": true
     }
   ]
 }

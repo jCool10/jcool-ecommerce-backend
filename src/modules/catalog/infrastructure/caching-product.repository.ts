@@ -76,9 +76,14 @@ export class CachingProductRepository implements ProductRepositoryPort {
     );
   }
 
-  // Uncached passthrough: Cart prices a line off this read and Order snapshots the price it charges
-  // from the same one, where a stale price or a stale isActive is a wrong order, not a slow one.
+  // Uncached passthroughs: Cart prices a line off these reads and Order snapshots the price it
+  // charges from the same ones, where a stale price or a stale isActive is a wrong order, not a
+  // slow one.
   findSkuView(skuId: string): Promise<SkuView | null> {
     return this.source.findSkuView(skuId);
+  }
+
+  findManySkuViews(skuIds: string[]): Promise<SkuView[]> {
+    return this.source.findManySkuViews(skuIds);
   }
 }

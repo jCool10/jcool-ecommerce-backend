@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { and, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { categories, prices, productVariants, products } from './schema/catalog.schema';
-import type { Product } from '../domain/entities';
+import type { Product, ProductStatus } from '../domain/entities';
 import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../application/ports';
 import type { SkuView } from '../application/public/catalog-sku-query.port';
 import { assembleProducts } from './product-row.mapper';
@@ -31,6 +31,38 @@ const flatColumns = {
   priceAmountMinor: prices.amountMinor,
 };
 
+// `uq_prices_variant_currency` is what keeps a many-id read from fanning a SKU out into duplicate
+// rows; the left join is what keeps an unpriced SKU resolvable. Only the projection is shared below —
+// the two reads repeat the joins and the id predicate, so a change to one must be mirrored in the
+// other or `POST /cart/items` and `GET /cart` will disagree on whether a SKU exists.
+const skuViewColumns = {
+  skuId: productVariants.id,
+  productName: products.name,
+  productStatus: products.status,
+  variantArchivedAt: productVariants.archivedAt,
+  amountMinor: prices.amountMinor,
+  currency: prices.currency,
+};
+
+interface SkuViewRow {
+  skuId: string;
+  productName: string;
+  productStatus: ProductStatus;
+  variantArchivedAt: Date | null;
+  amountMinor: number | null;
+  currency: string | null;
+}
+
+function toSkuView(row: SkuViewRow): SkuView {
+  return {
+    skuId: row.skuId,
+    productName: row.productName,
+    unitPriceMinor: row.amountMinor ?? null,
+    currency: row.currency ?? DEFAULT_CURRENCY,
+    isActive: row.productStatus === 'ACTIVE' && row.variantArchivedAt === null,
+  };
+}
+
 // Escape LIKE/ILIKE wildcards so a user's `q` cannot inject `%`/`_` patterns.
 // Backslash is Postgres' default ILIKE escape char (no ESCAPE clause needed).
 function escapeLike(input: string): string {
@@ -50,21 +82,31 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
   async findManyActive(criteria: FindManyActiveCriteria): Promise<FindManyActiveResult> {
     const { page, pageSize, categorySlug, q } = criteria;
 
-    // Live products in live categories only — filtering the inner-joined category here is the
-    // authoritative archived-category guard (the write-side check is just the first line).
-    const conditions: SQL[] = [eq(products.status, 'ACTIVE'), isNull(categories.archivedAt)];
-    if (categorySlug) {
-      conditions.push(eq(categories.slug, categorySlug));
-    }
-    if (q) {
-      conditions.push(ilike(products.name, `%${escapeLike(q)}%`));
-    }
-    const where = and(...conditions);
-
     // One snapshot for page + count; two-step pagination — LIMIT/OFFSET on products alone
     // (a LIMIT over the flattened join would count join rows), then hydrate that page's ids.
     return this.db.transaction(
       async (tx) => {
+        // Live products in live categories only — filtering the inner-joined category here is the
+        // authoritative archived-category guard (the write-side check is just the first line).
+        const conditions: SQL[] = [eq(products.status, 'ACTIVE'), isNull(categories.archivedAt)];
+        if (categorySlug) {
+          // Filtered across the join, `categories.slug` leaves the planner with only the average
+          // category size, so it scans the whole ordered ACTIVE index; binding the id lets it seek.
+          const [category] = await tx
+            .select({ id: categories.id })
+            .from(categories)
+            .where(eq(categories.slug, categorySlug))
+            .limit(1);
+          if (!category) {
+            return { items: [], total: 0 };
+          }
+          conditions.push(eq(products.categoryId, category.id));
+        }
+        if (q) {
+          conditions.push(ilike(products.name, `%${escapeLike(q)}%`));
+        }
+        const where = and(...conditions);
+
         const idRows = await tx
           .select({ id: products.id })
           .from(products)
@@ -145,36 +187,34 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
     return assembleProducts(rows)[0] ?? null;
   }
 
+  // Neither this read nor `findManySkuViews` filters on ACTIVE: a SKU whose product was archived
+  // after it was added still resolves, flagged isActive=false — the cart shows it, Order
+  // re-validates at checkout.
   async findSkuView(skuId: string): Promise<SkuView | null> {
-    // Inner-join the product (a variant always has one) for name + status; the
-    // price is left-joined at the default currency (unique per variant+currency,
-    // so at most one row), leaving unitPriceMinor null when the SKU is unpriced.
-    // No ACTIVE filter: a SKU whose product was archived after add still resolves,
-    // flagged isActive=false — the cart shows it, Order re-validates at checkout.
     const [row] = await this.db
-      .select({
-        skuId: productVariants.id,
-        productName: products.name,
-        productStatus: products.status,
-        variantArchivedAt: productVariants.archivedAt,
-        amountMinor: prices.amountMinor,
-        currency: prices.currency,
-      })
+      .select(skuViewColumns)
       .from(productVariants)
       .innerJoin(products, eq(productVariants.productId, products.id))
       .leftJoin(prices, and(eq(prices.variantId, productVariants.id), eq(prices.currency, DEFAULT_CURRENCY)))
       .where(eq(productVariants.id, skuId))
       .limit(1);
 
-    if (!row) {
-      return null;
+    return row ? toSkuView(row) : null;
+  }
+
+  async findManySkuViews(skuIds: string[]): Promise<SkuView[]> {
+    // An empty cart must not cost a round-trip; drizzle would otherwise emit a valid `WHERE false`.
+    if (skuIds.length === 0) {
+      return [];
     }
-    return {
-      skuId: row.skuId,
-      productName: row.productName,
-      unitPriceMinor: row.amountMinor ?? null,
-      currency: row.currency ?? DEFAULT_CURRENCY,
-      isActive: row.productStatus === 'ACTIVE' && row.variantArchivedAt === null,
-    };
+
+    const rows = await this.db
+      .select(skuViewColumns)
+      .from(productVariants)
+      .innerJoin(products, eq(productVariants.productId, products.id))
+      .leftJoin(prices, and(eq(prices.variantId, productVariants.id), eq(prices.currency, DEFAULT_CURRENCY)))
+      .where(inArray(productVariants.id, skuIds));
+
+    return rows.map(toSkuView);
   }
 }

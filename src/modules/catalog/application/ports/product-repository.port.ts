@@ -30,4 +30,7 @@ export interface ProductRepositoryPort {
    * it was added. `isActive` reflects the current status; null if no such variant.
    */
   findSkuView(skuId: string): Promise<SkuView | null>;
+
+  /** `findSkuView` for many ids in one query; an id with no variant is absent from the result. */
+  findManySkuViews(skuIds: string[]): Promise<SkuView[]>;
 }

@@ -16,6 +16,10 @@ export interface OrderSkuView {
 }
 
 export interface CatalogQueryPort {
-  /** One SKU's live view by variant id; null if no such SKU exists in Catalog. */
-  getSkuView(skuId: string): Promise<OrderSkuView | null>;
+  /**
+   * Every line of the cart being checked out, in one read. An id Catalog does not know is absent
+   * from the result, and the order is Catalog's — key the result by `skuId`, never by position.
+   * Order only ever prices a whole cart, so there is no single-id read here.
+   */
+  getSkuViews(skuIds: string[]): Promise<OrderSkuView[]>;
 }

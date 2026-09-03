@@ -19,6 +19,10 @@ class MockProductRepository implements ProductRepositoryPort {
   findSkuView(): Promise<null> {
     return Promise.resolve(null);
   }
+
+  findManySkuViews(): Promise<[]> {
+    return Promise.resolve([]);
+  }
 }
 
 function product(id: string): Product {

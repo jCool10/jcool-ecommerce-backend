@@ -4,7 +4,12 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { authHeader } from '../setup/auth.helper';
-import { createTestProduct, seedProducts } from '../setup/fixtures/catalog.fixture';
+import {
+  archiveTestCategory,
+  createTestCategory,
+  createTestProduct,
+  seedProducts,
+} from '../setup/fixtures/catalog.fixture';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
@@ -71,6 +76,35 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.items).toEqual([]);
+    });
+
+    it('filters to the requested category and excludes every other one', async () => {
+      const category = await createTestCategory(app);
+      await seedProducts(app, 3, { categoryId: category.id });
+      await seedProducts(app, 2);
+
+      const res = await request(app.getHttpServer()).get('/products').query({ categorySlug: category.slug });
+
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(3);
+      expect(res.body.items).toHaveLength(3);
+    });
+
+    // The list resolves the slug to an id before filtering, so the archived-category guard has to
+    // keep holding on the join rather than riding along with the slug lookup.
+    it('hides live products under an archived category, filtered by slug or not', async () => {
+      const category = await createTestCategory(app);
+      await seedProducts(app, 3, { categoryId: category.id });
+      await archiveTestCategory(app, category.id);
+
+      const filtered = await request(app.getHttpServer()).get('/products').query({ categorySlug: category.slug });
+      const unfiltered = await request(app.getHttpServer()).get('/products');
+
+      expect(filtered.status).toBe(200);
+      expect(filtered.body.items).toEqual([]);
+      expect(filtered.body.total).toBe(0);
+      expect(unfiltered.body.items).toEqual([]);
+      expect(unfiltered.body.total).toBe(0);
     });
 
     it('slices by page/pageSize without overlap across pages', async () => {

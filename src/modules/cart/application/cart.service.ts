@@ -86,20 +86,21 @@ export class CartService {
     return this.buildView(cartId);
   }
 
-  // Load lines, resolve each SKU's live view from Catalog, then assemble the DTO
-  // lines here (presentation data) while the domain computes the money subtotal.
+  // Load lines, resolve the whole cart's SKU views from Catalog in one read, then assemble the
+  // DTO lines here (presentation data) while the domain computes the money subtotal.
   private async buildView(cartId: string): Promise<CartView> {
     const items = await this.repo.findItems(cartId);
-    // One Catalog read per line (parallelized). Acceptable at scratch-cart scale;
-    // if carts grow, add a batch `getSkuViews(ids)` to CatalogQueryPort and fold
-    // this into a single query. Deferred (YAGNI) until checkout needs it.
-    const views = await Promise.all(items.map((item) => this.catalog.getSkuView(item.skuId)));
-    const viewBySku = new Map<string, CartSkuView | null>(items.map((item, i) => [item.skuId, views[i]]));
+    const views = await this.catalog.getSkuViews(items.map((item) => item.skuId));
+    const viewBySku = new Map<string, CartSkuView>(views.map((view) => [view.skuId, view]));
 
-    // Cart currency = the first priced line's currency (single-currency for now).
-    // Uppercased to match Money's normalized code, so the domain's same-currency
-    // subtotal guard never drops a line over a mere case mismatch.
-    const currency = (views.find((v) => v?.unitPriceMinor != null)?.currency ?? DEFAULT_CURRENCY).toUpperCase();
+    // Cart currency = the first priced line's currency, walked in cart order rather than in the
+    // batch read's order, which would anchor a mixed-currency cart on a different line. Uppercased
+    // to match Money's normalized code, so the domain's same-currency subtotal guard never drops a
+    // line over a mere case mismatch.
+    const currency = (
+      items.map((item) => viewBySku.get(item.skuId)).find((v) => v?.unitPriceMinor != null)?.currency ??
+      DEFAULT_CURRENCY
+    ).toUpperCase();
 
     const priceOf = (skuId: string): Money | null => {
       const v = viewBySku.get(skuId);

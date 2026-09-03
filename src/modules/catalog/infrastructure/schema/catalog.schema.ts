@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
@@ -47,7 +48,23 @@ export const products = pgTable(
       .references(() => categories.id),
     ...stamps,
   },
-  (t) => [index('idx_products_category').on(t.categoryId), index('idx_products_status').on(t.status)],
+  (t) => [
+    index('idx_products_category').on(t.categoryId),
+    index('idx_products_status').on(t.status),
+    // Supplies the list page's `ORDER BY created_at DESC, id DESC` so its top-N sort disappears.
+    // `nullsFirst` is load-bearing: a query's `desc()` means DESC NULLS FIRST, which a NULLS LAST
+    // index cannot supply, so drizzle-kit's default would build an index the planner never uses.
+    index('idx_products_active_created')
+      .on(t.createdAt.desc().nullsFirst(), t.id.desc().nullsFirst())
+      .where(sql`${t.status} = 'ACTIVE'`),
+    // Only reachable when the query binds `category_id` itself, not when it filters the category
+    // across the join. The trailing `id` covers the id-page projection.
+    index('idx_products_category_active_created')
+      .on(t.categoryId, t.createdAt.desc().nullsFirst(), t.id.desc().nullsFirst())
+      .where(sql`${t.status} = 'ACTIVE'`),
+    // `ILIKE '%q%'` leads with a wildcard, so btree cannot seek and only trigrams can index it.
+    index('idx_products_name_trgm').using('gin', sql`${t.name} gin_trgm_ops`),
+  ],
 );
 
 // A ProductVariant IS the sellable SKU; `sku` is globally unique. Inventory will

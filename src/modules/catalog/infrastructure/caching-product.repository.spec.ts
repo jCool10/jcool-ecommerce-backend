@@ -52,6 +52,7 @@ function build() {
     findManyActive: vi.fn(),
     findActiveByIdOrSlug: vi.fn(),
     findSkuView: vi.fn(),
+    findManySkuViews: vi.fn(),
   };
   const cache = {
     read: vi.fn().mockResolvedValue({ status: 'miss' }),
@@ -318,6 +319,20 @@ describe('CachingProductRepository', () => {
 
     await expect(ctx.repo.findSkuView('v-1')).resolves.toBe(view);
 
+    expect(ctx.cache.read).not.toHaveBeenCalled();
+    expect(ctx.cache.writeMs).not.toHaveBeenCalled();
+  });
+
+  it('leaves findManySkuViews uncached too — batching a whole cart must not make its prices stale', async () => {
+    const views = [
+      { skuId: 'v-1', productName: 'Headphones', unitPriceMinor: 199_000, currency: 'VND', isActive: true },
+      { skuId: 'v-2', productName: 'Cable', unitPriceMinor: 49_000, currency: 'VND', isActive: true },
+    ];
+    ctx.source.findManySkuViews.mockResolvedValue(views);
+
+    await expect(ctx.repo.findManySkuViews(['v-1', 'v-2'])).resolves.toBe(views);
+
+    expect(ctx.source.findManySkuViews).toHaveBeenCalledWith(['v-1', 'v-2']);
     expect(ctx.cache.read).not.toHaveBeenCalled();
     expect(ctx.cache.writeMs).not.toHaveBeenCalled();
   });
