@@ -345,6 +345,26 @@ export class EnvironmentVariables {
   @Min(0)
   CACHE_LOCK_WAIT_MS?: number;
 
+  // Catalog search kill-switch; off unless "true" (configuration.ts), so dev, unit tests and any
+  // boot without a search engine still start — the index is a derived read path, never required.
+  @IsOptional()
+  @IsBooleanString()
+  SEARCH_ENABLED?: string;
+
+  // Search engine base URL; default http://localhost:7700 (configuration.ts). @IsNotEmpty so a
+  // blank value fails at boot instead of silently falling back to the local default.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  SEARCH_URL?: string;
+
+  // Search engine master/admin key. Optional because a local engine may run keyless; MinLength
+  // keeps it non-trivial where it is set (same reasoning as METRICS_TOKEN).
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  SEARCH_API_KEY?: string;
+
   // Circuit-breaker kill-switch; on by default (configuration.ts). Off passes every guarded call
   // straight through to its downstream.
   @IsOptional()
