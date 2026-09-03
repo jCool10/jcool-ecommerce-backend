@@ -16,6 +16,7 @@ import type { CheckoutPersistResult, OrderRepositoryPort } from '../ports/order-
 import { CheckoutOrderUseCase } from './checkout-order.use-case';
 
 const SKU = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const OTHER_SKU = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const SCOPE = 'user:u1';
 const KEY = '9f8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const TX = {} as DrizzleTx;
@@ -33,13 +34,22 @@ function skuView(overrides: Partial<OrderSkuView> = {}): OrderSkuView {
 }
 
 function build(
-  opts: { lines?: OrderCartLine[]; view?: OrderSkuView | null; checkout?: Checkout; noContext?: boolean } = {},
+  opts: {
+    lines?: OrderCartLine[];
+    view?: OrderSkuView | null;
+    /** The whole batch result verbatim, for multi-line carts and for control over its order. */
+    views?: OrderSkuView[];
+    checkout?: Checkout;
+    noContext?: boolean;
+  } = {},
 ) {
   // Standalone spies so assertions target plain Mocks, not object members (avoids unbound-method).
   const createCheckout = vi.fn(opts.checkout);
   const findForUser = vi.fn();
   const getLines = vi.fn().mockResolvedValue(opts.lines ?? [{ skuId: SKU, quantity: 2 }]);
-  const getSkuView = vi.fn().mockResolvedValue(opts.view === undefined ? skuView() : opts.view);
+  // `opts.view === null` models a cart line Catalog no longer knows: absent from the batch result.
+  const view = opts.view === undefined ? skuView() : opts.view;
+  const getSkuViews = vi.fn().mockResolvedValue(opts.views ?? (view ? [view] : []));
   const reserve = vi.fn().mockResolvedValue(undefined);
   const commit = vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 });
   const release = vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 });
@@ -51,7 +61,7 @@ function build(
 
   const repo = { createCheckout, findForUser, findAllForUser: vi.fn() } as unknown as OrderRepositoryPort;
   const cart: CartSnapshotReaderPort = { getLines };
-  const catalog: CatalogQueryPort = { getSkuView };
+  const catalog: CatalogQueryPort = { getSkuViews };
   const reservation: InventoryReservationPort = { reserve, commit, release, findExpiredHolds: vi.fn() };
   const store = { markCompleted } as unknown as IdempotencyStorePort;
   const outbox: OutboxWriterPort = { append };
@@ -81,6 +91,47 @@ function build(
 describe('CheckoutOrderUseCase', () => {
   it('rejects an empty cart with 400 and never opens the checkout', async () => {
     const { useCase, spies } = build({ lines: [] });
+
+    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(spies.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('prices each line from its own SKU, whatever order the batch read came back in', async () => {
+    // Catalog answers a whole cart in one read and may return the rows in any order; reading that
+    // result by position would charge each line at its neighbour's price.
+    const { useCase } = build({
+      lines: [
+        { skuId: SKU, quantity: 1 },
+        { skuId: OTHER_SKU, quantity: 2 },
+      ],
+      views: [skuView({ skuId: OTHER_SKU, productName: 'Gadget', unitPriceMinor: 50_000 }), skuView()],
+      checkout: () => Promise.resolve({ orderId: 'order-1', created: true }),
+    });
+
+    const view = await useCase.execute('u1');
+
+    expect(view.totalAmountMinor).toBe(100_000 * 1 + 50_000 * 2);
+    expect(view.items).toEqual([
+      expect.objectContaining({ skuId: SKU, productName: 'Widget', unitPriceMinor: 100_000, quantity: 1 }),
+      expect.objectContaining({ skuId: OTHER_SKU, productName: 'Gadget', unitPriceMinor: 50_000, quantity: 2 }),
+    ]);
+  });
+
+  it('rejects a cart mixing currencies with 400', async () => {
+    const { useCase, spies } = build({
+      lines: [
+        { skuId: SKU, quantity: 1 },
+        { skuId: OTHER_SKU, quantity: 1 },
+      ],
+      views: [skuView(), skuView({ skuId: OTHER_SKU, currency: 'USD' })],
+    });
+
+    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(spies.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unpriced SKU with 400', async () => {
+    const { useCase, spies } = build({ view: skuView({ unitPriceMinor: null }) });
 
     await expect(useCase.execute('u1')).rejects.toBeInstanceOf(BadRequestException);
     expect(spies.createCheckout).not.toHaveBeenCalled();

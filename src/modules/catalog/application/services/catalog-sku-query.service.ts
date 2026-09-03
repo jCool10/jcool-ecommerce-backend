@@ -17,4 +17,8 @@ export class CatalogSkuQueryService implements CatalogSkuQuery {
   getSkuView(skuId: string): Promise<SkuView | null> {
     return this.products.findSkuView(skuId);
   }
+
+  getSkuViews(skuIds: string[]): Promise<SkuView[]> {
+    return this.products.findManySkuViews(skuIds);
+  }
 }

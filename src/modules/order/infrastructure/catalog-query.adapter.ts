@@ -19,9 +19,9 @@ export class CatalogQueryAdapter implements CatalogQueryPort {
     private readonly catalog: CatalogSkuQuery,
   ) {}
 
-  async getSkuView(skuId: string): Promise<OrderSkuView | null> {
-    const view = await this.catalog.getSkuView(skuId);
-    return view ? toOrderSkuView(view) : null;
+  async getSkuViews(skuIds: string[]): Promise<OrderSkuView[]> {
+    const views = await this.catalog.getSkuViews(skuIds);
+    return views.map(toOrderSkuView);
   }
 }
 

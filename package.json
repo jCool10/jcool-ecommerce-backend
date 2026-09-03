@@ -30,6 +30,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/shared/infrastructure/database/seed.ts",
+    "db:seed:perf": "tsx scripts/perf-seed.ts",
     "seed:users:bulk": "tsx scripts/seed-users-bulk.ts",
     "db:metrics:users": "tsx scripts/capture-db-metrics.ts",
     "queue:replay-dlq": "tsx scripts/replay-dlq.ts",

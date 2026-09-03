@@ -22,4 +22,11 @@ export interface SkuView {
 export interface CatalogSkuQuery {
   /** One SKU's live view by variant id; null if no such variant exists. */
   getSkuView(skuId: string): Promise<SkuView | null>;
+
+  /**
+   * Many SKUs in one read, for a consumer holding a whole cart's worth of ids. An id with no
+   * variant is absent from the result rather than null-filled, and the order is the database's —
+   * key the result by `skuId`, never by position.
+   */
+  getSkuViews(skuIds: string[]): Promise<SkuView[]>;
 }

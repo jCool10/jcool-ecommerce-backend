@@ -117,14 +117,17 @@ export class CheckoutOrderUseCase {
       throw new BadRequestException('Cart is empty');
     }
 
-    const views = await Promise.all(lines.map((line) => this.catalog.getSkuView(line.skuId)));
-    const currency = views.find((v): v is OrderSkuView => v != null)?.currency;
+    const views = await this.catalog.getSkuViews(lines.map((line) => line.skuId));
+    const viewBySku = new Map<string, OrderSkuView>(views.map((view) => [view.skuId, view]));
+    // The order's currency is the first surviving line's, walked in cart order rather than in the
+    // batch read's order, which would anchor on a different line and blame a different one below.
+    const currency = lines.map((line) => viewBySku.get(line.skuId)).find((v) => v != null)?.currency;
     if (!currency) {
       throw new BadRequestException('Cart items no longer exist in catalog');
     }
 
-    const items = lines.map((line, i) => {
-      const v = views[i];
+    const items = lines.map((line) => {
+      const v = viewBySku.get(line.skuId);
       if (!v) {
         throw new BadRequestException(`SKU no longer exists in catalog: ${line.skuId}`);
       }

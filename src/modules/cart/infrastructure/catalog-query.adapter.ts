@@ -24,6 +24,11 @@ export class CatalogQueryAdapter implements CatalogQueryPort {
     const view = await this.catalog.getSkuView(skuId);
     return view ? toCartSkuView(view) : null;
   }
+
+  async getSkuViews(skuIds: string[]): Promise<CartSkuView[]> {
+    const views = await this.catalog.getSkuViews(skuIds);
+    return views.map(toCartSkuView);
+  }
 }
 
 function toCartSkuView(view: SkuView): CartSkuView {
