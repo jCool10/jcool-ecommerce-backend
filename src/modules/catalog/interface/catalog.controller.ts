@@ -1,8 +1,15 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiNotFoundResponse, ApiOkResponse, ApiParam, ApiTags } from '@nestjs/swagger';
 import { Public } from '@shared/rbac';
-import { GetProductDetailUseCase, ListProductsUseCase } from '../application/use-cases';
-import { ListProductsQueryDto, PaginatedProductsResponseDto, ProductResponseDto } from './dto';
+import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from '../application/use-cases';
+import {
+  ListProductsQueryDto,
+  PaginatedProductsResponseDto,
+  ProductResponseDto,
+  ProductSearchResponseDto,
+  SearchHitDto,
+  SearchProductsQueryDto,
+} from './dto';
 
 /** Catalog read paths — thin (validate, call a use case, map to a response DTO); `@Public()` is applied per handler so any future write handler here defaults to protected. */
 @ApiTags('catalog')
@@ -11,6 +18,7 @@ export class CatalogController {
   constructor(
     private readonly listProducts: ListProductsUseCase,
     private readonly getProductDetail: GetProductDetailUseCase,
+    private readonly searchProducts: SearchProductsUseCase,
   ) {}
 
   @Public()
@@ -25,6 +33,27 @@ export class CatalogController {
     });
     return {
       items: result.items.map((product) => ProductResponseDto.fromEntity(product)),
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+    };
+  }
+
+  // Declared before `:idOrSlug`: routes match in declaration order, so the param route below would
+  // otherwise claim this path and answer with a 404 for a product slugged "search".
+  @Public()
+  @Get('search')
+  @ApiOkResponse({ type: ProductSearchResponseDto })
+  async search(@Query() query: SearchProductsQueryDto): Promise<ProductSearchResponseDto> {
+    const result = await this.searchProducts.execute({
+      q: query.q,
+      page: query.page,
+      pageSize: query.pageSize,
+      categorySlug: query.categorySlug,
+    });
+    return {
+      items: result.items.map((hit) => SearchHitDto.fromHit(hit)),
       total: result.total,
       page: result.page,
       pageSize: result.pageSize,

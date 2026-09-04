@@ -8,7 +8,12 @@ import type {
   SearchResult,
   SearchableProduct,
 } from '../../application/ports';
-import { PRODUCTS_INDEX_PRIMARY_KEY, PRODUCTS_INDEX_SETTINGS, PRODUCTS_INDEX_UID } from './index-settings';
+import {
+  PRODUCTS_INDEX_PRIMARY_KEY,
+  PRODUCTS_INDEX_SETTINGS,
+  PRODUCTS_INDEX_UID,
+  SEARCH_MAX_TOTAL_HITS,
+} from './index-settings';
 
 const HIGHLIGHT_PRE_TAG = '<em>';
 const HIGHLIGHT_POST_TAG = '</em>';
@@ -16,6 +21,11 @@ const HIGHLIGHT_POST_TAG = '</em>';
 // Cap one addDocuments payload so a full reindex of a growing catalog never sends the whole table in
 // a single request; the caller may still hand over more than a page at a time.
 const BULK_INDEX_CHUNK = 1000;
+
+// Only ACTIVE products are ever indexed, but a delete that failed while the engine was unreachable
+// leaves its document behind until a reset reindex prunes it. Filtering on read means a product that
+// left the public projection stops being findable immediately, without waiting for that convergence.
+const ACTIVE_ONLY_FILTER = 'status = "ACTIVE"';
 
 type FormattedHit = SearchableProduct & { _formatted?: Partial<SearchableProduct> };
 
@@ -33,6 +43,15 @@ async function settled(pending: { waitTask: () => Promise<SettledTask> }): Promi
   if (task.status !== 'succeeded') {
     throw new Error(`search engine task ${task.status}: ${task.error?.message ?? 'no error detail'}`);
   }
+}
+
+/**
+ * Render a value as a filter literal. The engine parses a filter as an expression, so an unescaped
+ * quote inside a value ends the literal and turns the rest of the caller's string into filter syntax
+ * — enough to bolt an `OR` onto the query. Escaping keeps a value a value.
+ */
+function quoted(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /**
@@ -108,10 +127,17 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
     if (!index) return { items: [], total: 0 };
 
     try {
+      const filter = [ACTIVE_ONLY_FILTER];
+      if (criteria.categorySlug) {
+        filter.push(`categorySlug = ${quoted(criteria.categorySlug)}`);
+      }
+
       const response = await index.search(criteria.q, {
         limit: criteria.pageSize,
         offset: (criteria.page - 1) * criteria.pageSize,
-        filter: criteria.categorySlug ? [`categorySlug = "${criteria.categorySlug}"`] : undefined,
+        // Separate array entries are ANDed, so the status constraint cannot be widened by whatever
+        // the category filter turns out to match.
+        filter,
         attributesToHighlight: ['name', 'description'],
         highlightPreTag: HIGHLIGHT_PRE_TAG,
         highlightPostTag: HIGHLIGHT_POST_TAG,
@@ -119,7 +145,10 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
 
       return {
         items: response.hits.map(toSearchHit),
-        total: response.estimatedTotalHits ?? response.hits.length,
+        // The engine reports how many documents matched but only serves the first
+        // SEARCH_MAX_TOTAL_HITS of them, so reporting the raw estimate would advertise pages that
+        // always come back empty. Capping it keeps every page the caller is told about fetchable.
+        total: Math.min(response.estimatedTotalHits ?? response.hits.length, SEARCH_MAX_TOTAL_HITS),
       };
     } catch (err) {
       this.logger.warn(`catalog search failed: ${err instanceof Error ? err.message : String(err)}`);

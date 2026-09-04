@@ -4,10 +4,10 @@ import { NestFactory } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
-import { toSearchableProduct } from '../../application/catalog-search.mapper';
 import type { CatalogSearchPort, ProductRepositoryPort } from '../../application/ports';
 import { DrizzleProductRepository } from '../drizzle-product.repository';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
+import { reindexAll } from './reindex-runner';
 
 // Minimal context for the reindex CLI: config + database + the search adapter only, deliberately
 // NOT the full app — so no queue consumers or scheduled sweeps run for the command's lifetime.
@@ -22,15 +22,6 @@ import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
 })
 class ReindexContext {}
 
-// The search index is a derived, read-only replica of Postgres (the single source of truth). This
-// reads every ACTIVE product straight from the database — the non-caching repository, so a rebuild is
-// never served a stale snapshot — and upserts by id, making re-runs idempotent. A default run re-adds
-// every current ACTIVE product but does NOT remove documents for products that have since left the
-// ACTIVE set; pass `--reset` to clear the index first for a clean, authoritative rebuild (at the cost
-// of a brief empty-search window while it reloads).
-
-const PAGE_SIZE = 500;
-
 async function reindex(): Promise<void> {
   const reset = process.argv.includes('--reset');
   const app = await NestFactory.createApplicationContext(ReindexContext, { logger: ['error', 'warn'] });
@@ -41,23 +32,11 @@ async function reindex(): Promise<void> {
       throw new Error('SEARCH_ENABLED is not "true": the search adapter would no-op and index nothing');
     }
 
+    // The non-caching repository on purpose: a rebuild reads the source of truth, never a snapshot.
     const repo: ProductRepositoryPort = app.get(DrizzleProductRepository);
     const search: CatalogSearchPort = app.get(MeilisearchCatalogSearch);
 
-    await search.ensureIndex();
-    if (reset) await search.resetIndex();
-
-    let page = 1;
-    let indexed = 0;
-    for (;;) {
-      const { items, total } = await repo.findManyActive({ page, pageSize: PAGE_SIZE });
-      if (items.length === 0) break;
-      await search.bulkIndex(items.map(toSearchableProduct));
-      indexed += items.length;
-      if (indexed >= total) break;
-      page += 1;
-    }
-
+    const indexed = await reindexAll(repo, search, { reset });
     console.log(`Reindex complete: ${indexed} ACTIVE products indexed${reset ? ' (index reset first)' : ''}`);
   } finally {
     await app.close();
