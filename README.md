@@ -219,17 +219,20 @@ npm ci
 cp .env.example .env
 ```
 
-Then edit `.env`. At minimum, set a strong `JWT_ACCESS_SECRET` and `IDENTITY_BUCKET_KEY`
-(≥ 32 chars each; both are left unset in the template, and boot fails without them):
+Then edit `.env`. Two secrets need a real value (≥ 32 chars each), and they fail differently:
 
 ```bash
-# generate a secure secret — run once per variable, never reuse one value for both
+# generate a secure value — run once per variable, never reuse one value for both
 openssl rand -base64 48
 ```
 
-`IDENTITY_BUCKET_KEY` is **permanent**: it keys the routing bucket carried inside every user id,
-so changing it later orphans every existing account from the shard holding its rows. Store it in
-the secret manager and back it up alongside the database.
+- `IDENTITY_BUCKET_KEY` is left **unset** in the template, so boot fails until you set it. It is
+  also **permanent**: it keys the routing bucket carried inside every user id, so changing it later
+  orphans every existing account from the shard holding its rows. Store it in the secret manager
+  and back it up alongside the database.
+- `JWT_ACCESS_SECRET` ships a **git-public dev placeholder** that is long enough to pass validation,
+  so nothing will stop a deploy that still uses it — anyone who can read this repo could then mint a
+  valid access token for any user. Replace it by hand for any shared or production environment.
 
 ### 3. Start infrastructure (Postgres + Redis)
 

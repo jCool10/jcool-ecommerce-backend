@@ -30,13 +30,16 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+// mulberry32 yields k / 2**32 for an integer k, so a single draw scaled to a >32-bit range lands
+// on an exact multiple — `rand() * 2**48` would leave tsMs's low 16 bits (and random's low 8)
+// zero in every sample. The wide fields are composed from two draws so all 122 bits actually vary.
 function randomFields(rand: () => number): UuidV8Fields {
   return {
-    tsMs: Math.floor(rand() * (MAX_TIMESTAMP_MS + 1)),
+    tsMs: Math.floor(rand() * 2 ** 24) * 2 ** 24 + Math.floor(rand() * 2 ** 24),
     bucket: Math.floor(rand() * BUCKET_COUNT),
     nodeId: Math.floor(rand() * NODE_COUNT),
     sequence: Math.floor(rand() * SEQUENCE_COUNT),
-    random: Math.floor(rand() * (MAX_RANDOM + 1)),
+    random: Math.floor(rand() * 2 ** 20) * 2 ** 20 + Math.floor(rand() * 2 ** 20),
   };
 }
 
@@ -113,6 +116,20 @@ describe('uuid-v8 codec', () => {
   it('encodes to a canonical 8-4-4-4-12 lowercase hex string', () => {
     const id = encode({ tsMs: 1_756_000_000_000, bucket: 2731, nodeId: 511, sequence: 4095, random: 1 });
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  // encode/decode agree with each other under ANY layout, so self-consistency cannot pin where a
+  // field physically sits. These freeze the wire format: a shard router, a SQL predicate or an ops
+  // query reads the bucket positionally, and swapping two same-width fields would be invisible
+  // to every other test in this file while silently re-routing every row.
+  it('places each field at its documented bit position (frozen wire format)', () => {
+    const id = encode({ tsMs: 1_756_000_000_000, bucket: 2731, nodeId: 511, sequence: 4095, random: 1 });
+
+    expect(id).toBe('0198d9c1-9800-8aab-9fff-ff0000000001');
+    expect(parseInt(id.slice(0, 8) + id.slice(9, 13), 16)).toBe(1_756_000_000_000); // 48-bit ts
+    expect(parseInt(id[14], 16)).toBe(UUID_VERSION);
+    expect(parseInt(id.slice(15, 18), 16)).toBe(2731); // 12-bit bucket
+    expect(parseInt(id[19], 16) >>> 2).toBe(UUID_VARIANT);
   });
 
   it('rejects out-of-range fields instead of truncating them', () => {

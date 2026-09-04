@@ -41,6 +41,20 @@ function chiSquare(counts: number[], total: number): number {
 }
 
 describe('email bucket', () => {
+  // Frozen vectors. Every other assertion here is a *property* (in range, deterministic, key-
+  // dependent, uniform), and a re-derivation that stays uniform satisfies all of them while moving
+  // every user to a different bucket — proven by mutating the truncation and watching the suite
+  // stay green. Since the mapping is permanent and old buckets are not recomputable, the derivation
+  // itself has to be pinned: change the hash, the offset or the bit extraction and this goes red.
+  it('matches its known-answer vectors', () => {
+    expect(bucketForEmail(normalizeEmail('alice@example.com'), KEY)).toBe(3019);
+    expect(bucketForEmail(normalizeEmail('bob@example.com'), KEY)).toBe(2086);
+    expect(bucketForEmail(normalizeEmail('user0@example.com'), KEY)).toBe(3918);
+    expect(bucketForEmail(normalizeEmail('Round.Trip+1@Example.com'), KEY)).toBe(2862);
+    expect(identityKeyFingerprint(KEY)).toBe('e45b6ab311262c87');
+    expect(identityKeyFingerprint(OTHER_KEY)).toBe('aadb15336dbcde68');
+  });
+
   it('derives a bucket inside the 12-bit range', () => {
     for (let i = 0; i < 1000; i++) {
       const bucket = bucketForEmail(normalizeEmail(`user${i}@example.com`), KEY);
