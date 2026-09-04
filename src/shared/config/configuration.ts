@@ -144,6 +144,11 @@ export default () => ({
     // When true, an unverified account cannot log in (403 after correct creds). Off by default.
     requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
   },
+  identity: {
+    // HMAC key behind the routing bucket in every user-context id. Required by the env schema, so a
+    // boot that reaches here always has it — read through with no default, like jwtAccessSecret.
+    bucketKey: process.env.IDENTITY_BUCKET_KEY,
+  },
   argon2: {
     // OWASP-minimum argon2id params (m=19 MiB, t=2, p=1); override via env to tune.
     memoryCost: parseInt(process.env.ARGON2_MEMORY_COST ?? '19456', 10),

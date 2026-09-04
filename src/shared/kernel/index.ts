@@ -2,6 +2,7 @@
 // framework/DB imports (importable from any layer) and no context-specific business rules.
 export * from './domain-error';
 export * from './duration-to-ms';
+export * from './normalize-email';
 export * from './guard';
 export * from './value-object';
 export * from './entity';

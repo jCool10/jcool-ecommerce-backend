@@ -41,7 +41,7 @@ export enum PaymentProvider {
   Sepay = 'sepay',
 }
 
-/** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET; optional vars fall back to defaults applied in configuration.ts. */
+/** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, IDENTITY_BUCKET_KEY; optional vars fall back to defaults applied in configuration.ts. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
   NODE_ENV!: NodeEnv;
@@ -482,6 +482,18 @@ export class EnvironmentVariables {
   @IsString()
   @MinLength(32)
   JWT_ACCESS_SECRET!: string;
+
+  // HMAC key deriving the routing bucket baked into every user-context id. PERMANENT, never
+  // rotated: rotating it routes every existing account to a shard that does not hold its rows, and
+  // the old buckets are not recomputable. Back it up with the same rank as the database.
+  // MinLength(32) gates length, NOT entropy — an attacker self-registers a few accounts, harvests
+  // (email, bucket) pairs from the register/`me` responses and can offline-brute-force a long but
+  // low-entropy key (a passphrase, a reused string), reopening the email oracle the HMAC exists to
+  // close. Generate it with a CSPRNG (`openssl rand -base64 48`); an entropy check on a 32-byte
+  // string is unreliable, so that requirement is documented rather than machine-enforced.
+  @IsString()
+  @MinLength(32)
+  IDENTITY_BUCKET_KEY!: string;
 
   // TTLs in "15m"/"7d" string form; defaults applied in configuration.ts.
   @IsOptional()

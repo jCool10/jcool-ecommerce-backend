@@ -219,12 +219,17 @@ npm ci
 cp .env.example .env
 ```
 
-Then edit `.env`. At minimum, set a strong `JWT_ACCESS_SECRET` (≥ 32 chars):
+Then edit `.env`. At minimum, set a strong `JWT_ACCESS_SECRET` and `IDENTITY_BUCKET_KEY`
+(≥ 32 chars each; both are left unset in the template, and boot fails without them):
 
 ```bash
-# generate a secure secret
+# generate a secure secret — run once per variable, never reuse one value for both
 openssl rand -base64 48
 ```
+
+`IDENTITY_BUCKET_KEY` is **permanent**: it keys the routing bucket carried inside every user id,
+so changing it later orphans every existing account from the shard holding its rows. Store it in
+the secret manager and back it up alongside the database.
 
 ### 3. Start infrastructure (Postgres + Redis)
 
@@ -274,6 +279,7 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `DB_POOL_IDLE_TIMEOUT_MS` | No  | `10000`          | Reap an idle pooled connection after this long |
 | `REDIS_URL`          |   Yes    | —                | Redis connection string                     |
 | `JWT_ACCESS_SECRET`  |   Yes    | —                | HS256 secret, **min 32 chars** (no default) |
+| `IDENTITY_BUCKET_KEY` |  Yes    | —                | HMAC key for the routing bucket in every user id, **min 32 chars**, CSPRNG-generated. **Permanent — never rotate** (rotating orphans every existing account from its shard); back it up with the database |
 | `JWT_ACCESS_TTL`     |    No    | `5m`             | Access-token lifetime                       |
 | `REFRESH_TOKEN_TTL`  |    No    | `7d`             | Refresh-token lifetime                      |
 | `ARGON2_MEMORY_COST` |    No    | `19456`          | Argon2id memory cost (KiB)                  |

@@ -48,6 +48,9 @@ export async function createTestApp(
   // Assigned unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's
   // .env into process.env, so from the second app onwards `??=` would silently inherit whatever
   // that file happens to say — making the suite's behaviour depend on an untracked local file.
+  // Assigned unconditionally for the same reason, and one more: two apps in a run that bucket under
+  // different keys would put a user's id and its token ids in different buckets.
+  process.env.IDENTITY_BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secret-000';
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
