@@ -17,11 +17,17 @@ export interface TestProductOptions {
   status?: 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
   priceMinor?: number; // integer smallest units (VND đồng)
   currency?: string;
+  // Overridable so a relevance test can put known words in the fields the search index ranks on.
+  // The slug stays generated either way, keeping products unique however they are named.
+  name?: string;
+  description?: string;
+  sku?: string;
 }
 
 export interface TestProduct {
   categoryId: string;
   productId: string;
+  name: string;
   slug: string;
   variantId: string;
   sku: string;
@@ -60,9 +66,9 @@ export async function createTestProduct(app: INestApplication, options: TestProd
   const [product] = await db
     .insert(schema.products)
     .values({
-      name: `Test Product ${suffix}`,
+      name: options.name ?? `Test Product ${suffix}`,
       slug: `test-product-${suffix}`,
-      description: 'Fixture product',
+      description: options.description ?? 'Fixture product',
       status: options.status ?? 'ACTIVE',
       categoryId,
     })
@@ -70,7 +76,11 @@ export async function createTestProduct(app: INestApplication, options: TestProd
 
   const [variant] = await db
     .insert(schema.productVariants)
-    .values({ sku: `TEST-SKU-${suffix}`, name: `Test Variant ${suffix}`, productId: product.id })
+    .values({
+      sku: options.sku ?? `TEST-SKU-${suffix}`,
+      name: `Test Variant ${suffix}`,
+      productId: product.id,
+    })
     .returning();
 
   const [price] = await db
@@ -81,6 +91,7 @@ export async function createTestProduct(app: INestApplication, options: TestProd
   return {
     categoryId,
     productId: product.id,
+    name: product.name,
     slug: product.slug,
     variantId: variant.id,
     sku: variant.sku,

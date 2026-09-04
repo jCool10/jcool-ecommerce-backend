@@ -220,6 +220,14 @@ export default () => ({
     // that failure, and the fix is a faster rebuild or a longer wait, not a longer lease.
     waitMs: parseIntOr(process.env.CACHE_LOCK_WAIT_MS, 500),
   },
+  search: {
+    // Off unless explicitly on: the search index is derived from Postgres and only ever an extra
+    // read path, so nothing boots or tests against a required engine.
+    enabled: process.env.SEARCH_ENABLED === 'true',
+    url: process.env.SEARCH_URL ?? 'http://localhost:7700',
+    // Undefined → keyless engine, which the engine permits only outside its production mode.
+    apiKey: process.env.SEARCH_API_KEY,
+  },
   resilience: {
     // Circuit breakers around calls that leave the process (currently the payment gateway).
     breaker: {

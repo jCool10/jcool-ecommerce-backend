@@ -6,6 +6,8 @@ export * from './create-sku.dto';
 export * from './list-products-query.dto';
 export * from './paginated-response.dto';
 export * from './product-response.dto';
+export * from './product-search-response.dto';
+export * from './search-products-query.dto';
 export * from './set-price.dto';
 export * from './update-category.dto';
 export * from './update-product.dto';

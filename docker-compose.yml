@@ -7,8 +7,8 @@
 # All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here.
 # PREREQUISITE: copy `.env.example` → `.env` first. The `app` service reads it via `env_file`, so a
 # missing `.env` fails `up` fast (clearer than a later env-validation crash inside the container).
-#   Core (dev default):     docker compose up -d                            # postgres + redis + app
-#   Infra only:             docker compose up -d postgres redis
+#   Core (dev default):     docker compose up -d                            # postgres + redis + meilisearch + app
+#   Infra only:             docker compose up -d postgres redis meilisearch
 #   + observability stack:  docker compose --profile observability up -d    # + collector/jaeger/prometheus/grafana
 #   Reset everything:       docker compose down -v
 #
@@ -55,6 +55,29 @@ services:
     networks:
       - jcool-net
 
+  # Search engine holding the catalog search index. The index is derived from Postgres and
+  # rebuildable from it, so this volume is a cache, not a system of record.
+  meilisearch:
+    image: getmeili/meilisearch:v1.53.1
+    container_name: jcool-meilisearch
+    restart: unless-stopped
+    ports:
+      - "${SEARCH_HOST_PORT:-7700}:7700"
+    environment:
+      # Blank runs the engine keyless, which only MEILI_ENV=development allows.
+      MEILI_MASTER_KEY: ${SEARCH_MASTER_KEY:-}
+      MEILI_ENV: development
+    volumes:
+      - meilidata:/meili_data
+    healthcheck:
+      # curl ships in this image (unlike the node-only app image below).
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
   # Convenience: run the whole stack in-network. Not required to be up this week
   # (the app has no DB access until Phase 3); brought up from P3+ once it uses the DB.
   # Inside the compose network the app reaches services by NAME, never localhost.
@@ -77,12 +100,15 @@ services:
       # Inside the compose network the app reaches services by NAME, not the host-mapped ports.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       REDIS_URL: redis://redis:6379
+      SEARCH_URL: http://meilisearch:7700
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     # Preload the OTel/Sentry instrumentation before the app (no-op unless OTEL_ENABLED=true /
     # SENTRY_DSN set). Mirrors `npm run start:prod`; the Dockerfile CMD stays plain for other runs.
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
+    # meilisearch is deliberately not listed: search is an optional read path the app must boot
+    # and serve without.
     depends_on:
       postgres:
         condition: service_healthy
@@ -187,6 +213,7 @@ services:
 volumes:
   pgdata:
   redisdata:
+  meilidata:
   promdata:
   grafanadata:
 
