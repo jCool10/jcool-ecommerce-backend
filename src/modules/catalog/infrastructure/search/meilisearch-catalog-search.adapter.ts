@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Meilisearch, type Index } from 'meilisearch';
 import type {
@@ -8,17 +8,14 @@ import type {
   SearchResult,
   SearchableProduct,
 } from '../../application/ports';
+import { PRODUCTS_INDEX_PRIMARY_KEY, PRODUCTS_INDEX_SETTINGS, PRODUCTS_INDEX_UID } from './index-settings';
 
-const INDEX_UID = 'products';
 const HIGHLIGHT_PRE_TAG = '<em>';
 const HIGHLIGHT_POST_TAG = '</em>';
 
-// Baseline index settings. Ranking rules are left at the engine defaults
-// (words → typo → proximity → attribute → sort → exactness), which give typo-tolerant relevance
-// with no configuration — the reason for choosing a search engine over `ilike`.
-const SEARCHABLE_ATTRIBUTES = ['name', 'description', 'skus', 'categoryName'];
-const FILTERABLE_ATTRIBUTES = ['categorySlug', 'status'];
-const SORTABLE_ATTRIBUTES = ['createdAtEpoch', 'minPriceMinor'];
+// Cap one addDocuments payload so a full reindex of a growing catalog never sends the whole table in
+// a single request; the caller may still hand over more than a page at a time.
+const BULK_INDEX_CHUNK = 1000;
 
 type FormattedHit = SearchableProduct & { _formatted?: Partial<SearchableProduct> };
 
@@ -35,7 +32,9 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
   // Stateless HTTP client — nothing to open or close, so no shutdown hook (unlike the Redis client).
   private readonly client: Meilisearch | null;
 
-  constructor(config: ConfigService) {
+  // Explicit @Inject rather than type reflection: the reindex CLI builds this under tsx/esbuild,
+  // which emits no decorator metadata, so an inferred constructor type resolves to undefined there.
+  constructor(@Inject(ConfigService) config: ConfigService) {
     const enabled = config.get<boolean>('search.enabled') ?? false;
     this.client = enabled
       ? new Meilisearch({
@@ -46,7 +45,7 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
   }
 
   private index(): Index<SearchableProduct> | null {
-    return this.client?.index<SearchableProduct>(INDEX_UID) ?? null;
+    return this.client?.index<SearchableProduct>(PRODUCTS_INDEX_UID) ?? null;
   }
 
   async ensureIndex(): Promise<void> {
@@ -55,29 +54,31 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
     // and always (re)apply settings, which is itself idempotent — a real down-engine error still
     // surfaces from updateSettings below.
     await this.client
-      .createIndex(INDEX_UID, { primaryKey: 'id' })
+      .createIndex(PRODUCTS_INDEX_UID, { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY })
       .waitTask()
       .catch(() => undefined);
-    await this.client
-      .index(INDEX_UID)
-      .updateSettings({
-        searchableAttributes: SEARCHABLE_ATTRIBUTES,
-        filterableAttributes: FILTERABLE_ATTRIBUTES,
-        sortableAttributes: SORTABLE_ATTRIBUTES,
-      })
-      .waitTask();
+    await this.client.index(PRODUCTS_INDEX_UID).updateSettings(PRODUCTS_INDEX_SETTINGS).waitTask();
+  }
+
+  async resetIndex(): Promise<void> {
+    const index = this.index();
+    if (!index) return;
+    await index.deleteAllDocuments().waitTask();
   }
 
   async bulkIndex(docs: SearchableProduct[]): Promise<void> {
     const index = this.index();
     if (!index || docs.length === 0) return;
-    await index.addDocuments(docs, { primaryKey: 'id' }).waitTask();
+    for (let offset = 0; offset < docs.length; offset += BULK_INDEX_CHUNK) {
+      const chunk = docs.slice(offset, offset + BULK_INDEX_CHUNK);
+      await index.addDocuments(chunk, { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY }).waitTask();
+    }
   }
 
   async indexProduct(doc: SearchableProduct): Promise<void> {
     const index = this.index();
     if (!index) return;
-    await index.addDocuments([doc], { primaryKey: 'id' }).waitTask();
+    await index.addDocuments([doc], { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY }).waitTask();
   }
 
   async deleteProduct(id: string): Promise<void> {

@@ -46,6 +46,9 @@ export interface SearchResult {
 export interface CatalogSearchPort {
   // Create the index and apply its settings; idempotent so a reindex or a restart may call it freely.
   ensureIndex(): Promise<void>;
+  // Drop every document (keeping the index and its settings) so a full reindex can rebuild from the
+  // source of truth without leaving behind docs whose product has since left the indexed set.
+  resetIndex(): Promise<void>;
   bulkIndex(docs: SearchableProduct[]): Promise<void>;
   indexProduct(doc: SearchableProduct): Promise<void>;
   deleteProduct(id: string): Promise<void>;

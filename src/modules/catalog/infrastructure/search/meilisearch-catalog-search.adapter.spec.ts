@@ -41,6 +41,7 @@ describe('MeilisearchCatalogSearch (disabled)', () => {
 
   it('write methods resolve as no-ops', async () => {
     await expect(adapter.ensureIndex()).resolves.toBeUndefined();
+    await expect(adapter.resetIndex()).resolves.toBeUndefined();
     await expect(adapter.indexProduct(DOC)).resolves.toBeUndefined();
     await expect(adapter.bulkIndex([DOC])).resolves.toBeUndefined();
     await expect(adapter.deleteProduct('p1')).resolves.toBeUndefined();
