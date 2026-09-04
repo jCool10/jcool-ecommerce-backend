@@ -1,3 +1,5 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { ConfigService } from '@nestjs/config';
 import type { SearchableProduct } from '../../application/ports';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
@@ -45,5 +47,61 @@ describe('MeilisearchCatalogSearch (disabled)', () => {
     await expect(adapter.indexProduct(DOC)).resolves.toBeUndefined();
     await expect(adapter.bulkIndex([DOC])).resolves.toBeUndefined();
     await expect(adapter.deleteProduct('p1')).resolves.toBeUndefined();
+  });
+});
+
+// The engine accepts a write as a task and reports the outcome only when that task settles, so an
+// HTTP 202 says nothing about whether the document landed. These pin the write methods against a
+// stub engine that settles the task either way.
+describe('MeilisearchCatalogSearch (engine task outcome)', () => {
+  let server: http.Server;
+  let adapter: MeilisearchCatalogSearch;
+  let taskStatus: 'succeeded' | 'failed';
+
+  beforeAll(async () => {
+    server = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.startsWith('/tasks/')) {
+        res.end(
+          JSON.stringify({
+            uid: 1,
+            indexUid: 'products',
+            type: 'documentAdditionOrUpdate',
+            status: taskStatus,
+            error: taskStatus === 'failed' ? { message: 'no space left on device' } : null,
+          }),
+        );
+        return;
+      }
+      res.statusCode = 202;
+      res.end(JSON.stringify({ taskUid: 1, indexUid: 'products', status: 'enqueued' }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    const { port } = server.address() as AddressInfo;
+    adapter = new MeilisearchCatalogSearch(
+      configStub({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
+    );
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('resolves when the engine applied the write', async () => {
+    taskStatus = 'succeeded';
+    await expect(adapter.indexProduct(DOC)).resolves.toBeUndefined();
+    await expect(adapter.deleteProduct('p1')).resolves.toBeUndefined();
+    await expect(adapter.bulkIndex([DOC])).resolves.toBeUndefined();
+  });
+
+  // waitTask() resolves for any settled task, so without an explicit status check a rejected write
+  // reads exactly like a stored one and the caller's best-effort handler never runs.
+  it('rejects when the engine rejected the write', async () => {
+    taskStatus = 'failed';
+    await expect(adapter.indexProduct(DOC)).rejects.toThrow('no space left on device');
+    await expect(adapter.deleteProduct('p1')).rejects.toThrow('no space left on device');
+    await expect(adapter.bulkIndex([DOC])).rejects.toThrow('no space left on device');
+    await expect(adapter.resetIndex()).rejects.toThrow('no space left on device');
   });
 });

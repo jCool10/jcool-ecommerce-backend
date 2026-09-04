@@ -1,5 +1,5 @@
-import type { Product } from '../../domain/entities';
-import type { SearchableProduct } from '../../application/ports';
+import type { Product } from '../domain/entities';
+import type { SearchableProduct } from './ports';
 
 // Sole pricing currency today; a variant priced only in another currency reads as unpriced here, the
 // same VND-scoped read the SKU view uses, so search and product detail agree on the price shown.
@@ -8,7 +8,8 @@ const DEFAULT_CURRENCY = 'VND';
 /**
  * Flatten a Product graph into one denormalized search document. The engine cannot join, so SKU codes
  * and the price range are folded in for matching, filtering and display in a single query. Pure — no
- * SDK, no I/O.
+ * SDK, no I/O — which is why it sits in application: both the reindex command (infrastructure) and
+ * the admin write path (application) build documents through it.
  */
 export function toSearchableProduct(product: Product): SearchableProduct {
   const amountsMinor = product.variants

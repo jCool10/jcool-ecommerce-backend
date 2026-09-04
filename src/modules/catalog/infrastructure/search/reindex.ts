@@ -4,9 +4,9 @@ import { NestFactory } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
+import { toSearchableProduct } from '../../application/catalog-search.mapper';
 import type { CatalogSearchPort, ProductRepositoryPort } from '../../application/ports';
 import { DrizzleProductRepository } from '../drizzle-product.repository';
-import { toSearchableProduct } from './catalog-search.mapper';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
 
 // Minimal context for the reindex CLI: config + database + the search adapter only, deliberately

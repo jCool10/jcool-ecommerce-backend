@@ -1,5 +1,5 @@
 import { Money } from '@shared/kernel';
-import { Product, type ProductVariant } from '../../domain/entities';
+import { Product, type ProductVariant } from '../domain/entities';
 import { toSearchableProduct } from './catalog-search.mapper';
 
 function variant(sku: string, ...prices: Money[]): ProductVariant {
@@ -32,6 +32,24 @@ describe('toSearchableProduct', () => {
 
   it('reads as unpriced when no variant has a price', () => {
     const doc = toSearchableProduct(product([variant('WH-BLK')]));
+
+    expect(doc.minPriceMinor).toBeNull();
+    expect(doc.currency).toBeNull();
+  });
+
+  // A cheaper non-VND amount must not become the floor: the number and the currency label are
+  // rendered together, so mixing them would advertise a USD price as VND.
+  it('ignores a non-VND price when picking the floor', () => {
+    const doc = toSearchableProduct(
+      product([variant('WH-BLK', Money.of(1_990_000, 'VND')), variant('WH-USD', Money.of(1299, 'USD'))]),
+    );
+
+    expect(doc.minPriceMinor).toBe(1_990_000);
+    expect(doc.currency).toBe('VND');
+  });
+
+  it('reads as unpriced when every price is in another currency', () => {
+    const doc = toSearchableProduct(product([variant('WH-USD', Money.of(1299, 'USD'))]));
 
     expect(doc.minPriceMinor).toBeNull();
     expect(doc.currency).toBeNull();

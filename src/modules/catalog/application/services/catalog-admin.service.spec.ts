@@ -1,11 +1,14 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { Money } from '@shared/kernel';
 import { type Mock, vi } from 'vitest';
+import { Product } from '../../domain/entities';
 import type { AdminProduct, Category, Price, Sku } from '../../domain/entities';
-import type { CatalogAdminRepositoryPort } from '../ports';
+import type { CatalogAdminRepositoryPort, CatalogSearchPort, ProductRepositoryPort } from '../ports';
 import { CatalogAdminService } from './catalog-admin.service';
 
 // Pins the service's business decisions over a mocked port: 404 for missing refs
-// and 409 for a refused archive (unique-violation 409s live in the adapter).
+// and 409 for a refused archive (unique-violation 409s live in the adapter), plus the
+// best-effort search write-through each mutation runs once its write has committed.
 describe('CatalogAdminService', () => {
   const now = new Date('2026-01-01T00:00:00.000Z');
   const category = (over: Partial<Category> = {}): Category => ({
@@ -36,6 +39,17 @@ describe('CatalogAdminService', () => {
     createdAt: now,
     ...over,
   });
+  const activeProjection = (): Product =>
+    new Product(
+      'prod1',
+      'Headphones',
+      'headphones',
+      null,
+      'ACTIVE',
+      { slug: 'electronics', name: 'Electronics' },
+      [{ id: 'sku1', sku: 'WH-BLK', name: 'Black', prices: [Money.of(1_990_000, 'VND')] }],
+      now,
+    );
 
   // Members typed as plain `Mock` so `expect(repo.method)` isn't flagged as
   // an unbound method; `keyof` still pins the port shape.
@@ -59,12 +73,33 @@ describe('CatalogAdminService', () => {
     };
   }
 
+  type MockProducts = Record<keyof ProductRepositoryPort, Mock>;
+  type MockSearch = Record<keyof CatalogSearchPort, Mock>;
+
   let repo: MockRepo;
+  let products: MockProducts;
+  let search: MockSearch;
   let service: CatalogAdminService;
 
   beforeEach(() => {
     repo = makeRepo();
-    service = new CatalogAdminService(repo);
+    products = {
+      findManyActive: vi.fn(),
+      // Default: nothing publicly visible, so a mutation's write-through resolves to a delete
+      // unless a test says the product is ACTIVE.
+      findActiveByIdOrSlug: vi.fn().mockResolvedValue(null),
+      findSkuView: vi.fn(),
+      findManySkuViews: vi.fn(),
+    };
+    search = {
+      ensureIndex: vi.fn().mockResolvedValue(undefined),
+      resetIndex: vi.fn().mockResolvedValue(undefined),
+      bulkIndex: vi.fn().mockResolvedValue(undefined),
+      indexProduct: vi.fn().mockResolvedValue(undefined),
+      deleteProduct: vi.fn().mockResolvedValue(undefined),
+      search: vi.fn(),
+    };
+    service = new CatalogAdminService(repo, products, search);
   });
 
   describe('createProduct', () => {
@@ -165,6 +200,134 @@ describe('CatalogAdminService', () => {
       repo.setPrice.mockResolvedValue({ variantId: 'sku1', currency: 'USD', amountMinor: 500 });
       await service.setPrice('sku1', { amountMinor: 500, currency: 'USD' });
       expect(repo.setPrice).toHaveBeenCalledWith('sku1', { currency: 'USD', amountMinor: 500 });
+    });
+  });
+
+  describe('search write-through', () => {
+    it('indexes the re-read ACTIVE projection after a product write', async () => {
+      repo.findCategoryById.mockResolvedValue(category());
+      repo.createProduct.mockResolvedValue(product({ status: 'ACTIVE' }));
+      products.findActiveByIdOrSlug.mockResolvedValue(activeProjection());
+
+      await service.createProduct({ name: 'P', slug: 'p', status: 'ACTIVE', categoryId: 'cat1' });
+
+      expect(products.findActiveByIdOrSlug).toHaveBeenCalledWith('prod1');
+      expect(search.indexProduct).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'prod1', skus: ['WH-BLK'], minPriceMinor: 1_990_000 }),
+      );
+      expect(search.deleteProduct).not.toHaveBeenCalled();
+    });
+
+    it('deletes the document when the product is no longer publicly visible', async () => {
+      repo.archiveProduct.mockResolvedValue(product({ status: 'ARCHIVED' }));
+
+      await service.archiveProduct('prod1');
+
+      expect(search.deleteProduct).toHaveBeenCalledWith('prod1');
+      expect(search.indexProduct).not.toHaveBeenCalled();
+    });
+
+    it('indexes after a successful product update', async () => {
+      repo.updateProduct.mockResolvedValue(product({ status: 'ACTIVE' }));
+      products.findActiveByIdOrSlug.mockResolvedValue(activeProjection());
+
+      await service.updateProduct('prod1', { name: 'Headphones II' });
+
+      expect(search.indexProduct).toHaveBeenCalledWith(expect.objectContaining({ id: 'prod1' }));
+    });
+
+    // Unpublishing is the transition that must remove a live document, not just stop refreshing it.
+    it('deletes the document when a product is unpublished to DRAFT', async () => {
+      repo.updateProduct.mockResolvedValue(product({ status: 'DRAFT' }));
+
+      await service.updateProduct('prod1', { status: 'DRAFT' });
+
+      expect(search.deleteProduct).toHaveBeenCalledWith('prod1');
+      expect(search.indexProduct).not.toHaveBeenCalled();
+    });
+
+    it('re-indexes the parent product after a SKU is renamed', async () => {
+      repo.updateSku.mockResolvedValue(sku({ productId: 'parent-prod' }));
+
+      await service.updateSku('sku1', { name: 'Midnight Black' });
+
+      expect(products.findActiveByIdOrSlug).toHaveBeenCalledWith('parent-prod');
+    });
+
+    // The parent comes from the created row, not the argument, so the two differ here on purpose.
+    it('re-indexes the created SKU parent rather than the SKU itself', async () => {
+      repo.findProductById.mockResolvedValue(product());
+      repo.createSku.mockResolvedValue(sku({ id: 'sku9', productId: 'parent-prod' }));
+
+      await service.createSku('prod1', { sku: 'WH-RED', name: 'Red' });
+
+      expect(products.findActiveByIdOrSlug).toHaveBeenCalledWith('parent-prod');
+    });
+
+    // findActiveByIdOrSlug also matches on slug, so a product whose slug equals this id would answer
+    // for it once the real row leaves the ACTIVE set — indexing that stranger under the wrong id.
+    it('deletes rather than indexing when another product answers on a colliding slug', async () => {
+      repo.archiveProduct.mockResolvedValue(product({ status: 'ARCHIVED' }));
+      const impostor = activeProjection();
+      products.findActiveByIdOrSlug.mockResolvedValue(
+        new Product(
+          'other-prod',
+          impostor.name,
+          'prod1',
+          impostor.description,
+          impostor.status,
+          impostor.category,
+          impostor.variants,
+          impostor.createdAt,
+        ),
+      );
+
+      await service.archiveProduct('prod1');
+
+      expect(search.indexProduct).not.toHaveBeenCalled();
+      expect(search.deleteProduct).toHaveBeenCalledWith('prod1');
+    });
+
+    it('re-indexes the parent product after a price change', async () => {
+      repo.findSkuById.mockResolvedValue(sku({ productId: 'parent-prod' }));
+      repo.setPrice.mockResolvedValue({ variantId: 'sku1', currency: 'VND', amountMinor: 1000 });
+
+      await service.setPrice('sku1', { amountMinor: 1000 });
+
+      expect(products.findActiveByIdOrSlug).toHaveBeenCalledWith('parent-prod');
+    });
+
+    it('re-indexes the parent product after a SKU is archived', async () => {
+      repo.archiveSku.mockResolvedValue(sku({ productId: 'parent-prod', archivedAt: now }));
+
+      await service.archiveSku('sku1');
+
+      expect(products.findActiveByIdOrSlug).toHaveBeenCalledWith('parent-prod');
+    });
+
+    it('leaves the index alone when a category archive is allowed through', async () => {
+      repo.countActiveProductsInCategory.mockResolvedValue(0);
+      repo.archiveCategory.mockResolvedValue(category({ archivedAt: now }));
+
+      await service.archiveCategory('cat1');
+
+      expect(search.indexProduct).not.toHaveBeenCalled();
+      expect(search.deleteProduct).not.toHaveBeenCalled();
+    });
+
+    it('still completes the mutation when the search engine is down', async () => {
+      repo.archiveProduct.mockResolvedValue(product({ status: 'ARCHIVED' }));
+      search.deleteProduct.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+      await expect(service.archiveProduct('prod1')).resolves.toEqual(product({ status: 'ARCHIVED' }));
+    });
+
+    it('still completes the mutation when the projection read for the document fails', async () => {
+      repo.findCategoryById.mockResolvedValue(category());
+      repo.createProduct.mockResolvedValue(product());
+      products.findActiveByIdOrSlug.mockRejectedValue(new Error('db unavailable'));
+
+      await expect(service.createProduct({ name: 'P', slug: 'p', categoryId: 'cat1' })).resolves.toEqual(product());
     });
   });
 });

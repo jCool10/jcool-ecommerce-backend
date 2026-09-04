@@ -19,6 +19,22 @@ const BULK_INDEX_CHUNK = 1000;
 
 type FormattedHit = SearchableProduct & { _formatted?: Partial<SearchableProduct> };
 
+// The shape of a settled engine task, narrowed to what decides success.
+type SettledTask = { status: string; error?: { message?: string } | null };
+
+/**
+ * Await a write and fail on a task the engine rejected. `waitTask()` resolves for EVERY terminal
+ * task, `failed` included, so without this an out-of-space or unknown-index rejection is
+ * indistinguishable from a successful write — leaving the caller's best-effort handler dead and a
+ * full reindex reporting a count it never actually stored.
+ */
+async function settled(pending: { waitTask: () => Promise<SettledTask> }): Promise<void> {
+  const task = await pending.waitTask();
+  if (task.status !== 'succeeded') {
+    throw new Error(`search engine task ${task.status}: ${task.error?.message ?? 'no error detail'}`);
+  }
+}
+
 /**
  * The single place the search engine SDK is bound (ADR 0009). `SEARCH_ENABLED=false` leaves the
  * client unbuilt and every method a no-op, so dev and unit tests need no engine — the same gating
@@ -57,13 +73,13 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
       .createIndex(PRODUCTS_INDEX_UID, { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY })
       .waitTask()
       .catch(() => undefined);
-    await this.client.index(PRODUCTS_INDEX_UID).updateSettings(PRODUCTS_INDEX_SETTINGS).waitTask();
+    await settled(this.client.index(PRODUCTS_INDEX_UID).updateSettings(PRODUCTS_INDEX_SETTINGS));
   }
 
   async resetIndex(): Promise<void> {
     const index = this.index();
     if (!index) return;
-    await index.deleteAllDocuments().waitTask();
+    await settled(index.deleteAllDocuments());
   }
 
   async bulkIndex(docs: SearchableProduct[]): Promise<void> {
@@ -71,20 +87,20 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
     if (!index || docs.length === 0) return;
     for (let offset = 0; offset < docs.length; offset += BULK_INDEX_CHUNK) {
       const chunk = docs.slice(offset, offset + BULK_INDEX_CHUNK);
-      await index.addDocuments(chunk, { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY }).waitTask();
+      await settled(index.addDocuments(chunk, { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY }));
     }
   }
 
   async indexProduct(doc: SearchableProduct): Promise<void> {
     const index = this.index();
     if (!index) return;
-    await index.addDocuments([doc], { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY }).waitTask();
+    await settled(index.addDocuments([doc], { primaryKey: PRODUCTS_INDEX_PRIMARY_KEY }));
   }
 
   async deleteProduct(id: string): Promise<void> {
     const index = this.index();
     if (!index) return;
-    await index.deleteDocument(id).waitTask();
+    await settled(index.deleteDocument(id));
   }
 
   async search(criteria: SearchCriteria): Promise<SearchResult> {
