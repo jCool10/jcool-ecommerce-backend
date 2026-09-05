@@ -68,6 +68,14 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   DATABASE_URL!: string;
 
+  // Overrides where the migration runner looks for .sql files; the production image sets it because
+  // it ships migrations/ without the src/ tree. Read by the migrate CLI outside Nest, declared here
+  // to fail-fast if blank (same reason as the OTEL_*/SENTRY_* vars instrumentation.ts reads raw).
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  MIGRATIONS_DIR?: string;
+
   // App-side pg pool bounds; validated so an out-of-range value fails at boot.
   // Defaults (10 / 5000ms / 10000ms) applied in configuration.ts. Timeouts allow 0
   // to opt back into pg's native behavior (0 = wait forever / never reap idle).

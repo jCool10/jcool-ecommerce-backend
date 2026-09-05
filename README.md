@@ -471,8 +471,9 @@ is the separate type-check gate.
 
 ## Docker
 
-A multi-stage [`Dockerfile`](./Dockerfile) builds a lean production image (Node 20
-Alpine, non-root user, prod-only dependencies).
+A multi-stage [`Dockerfile`](./Dockerfile) builds a lean image (Node 24 Alpine, non-root user,
+prod-only dependencies). Note the runtime stage copies only `dist/`, so the migration `.sql`
+files are not in the image and it cannot apply migrations on its own yet.
 
 ```bash
 # Infrastructure only (recommended for local dev)
@@ -546,9 +547,10 @@ rationale and trade-offs for each pillar live in
 ## Roadmap
 
 - [x] **Foundation** — NestJS + Drizzle + Postgres + Docker Compose; Auth (JWT + refresh rotation + RBAC); Catalog CRUD + OpenAPI.
-- [ ] **Core problems** — Inventory & reservations (oversell protection: optimistic vs pessimistic locking); idempotent `POST /orders`; payment webhooks (signature verification, dedup, reconciliation); Catalog caching + invalidation.
-- [ ] **Distributed & reliable** — Saga + Outbox checkout with compensation; queues (retry/backoff/dead-letter); advanced cache invalidation; rate limiting + circuit breaker.
-- [ ] **Scale & operate** — Observability (Pino + OpenTelemetry + Sentry); k6 load testing; search; production deployment + CI/CD.
+- [x] **Core problems** — Inventory & reservations (oversell protection: optimistic vs pessimistic locking); idempotent `POST /orders`; payment webhooks (signature verification, dedup, reconciliation); Catalog caching + invalidation.
+- [x] **Distributed & reliable** — Saga + Outbox checkout with compensation; queues (retry/backoff/dead-letter); advanced cache invalidation; rate limiting + circuit breaker.
+- [x] **Scale & operate** — Observability (Pino + OpenTelemetry + Sentry); k6 load testing; search (Meilisearch); DB indexing; CI on GitHub Actions.
+- [ ] **Deploy** — deliberately deferred: the system is local-first, run with `docker compose up`. There is no hosted instance and no CD pipeline. Behaviour is evidenced by 50 integration specs against real Postgres and Redis (`npm run test:e2e`), not by a live URL.
 
 ## Documentation
 

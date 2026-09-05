@@ -28,3 +28,14 @@ README.md
 Dockerfile
 .dockerignore
 docker-compose.yml
+
+# Local-stack material. `infra` matters most: it holds infra/prometheus/secrets/, which the
+# builder's `COPY . .` would otherwise bake into a layer. Compose reaches these by bind mount
+# from the host, so excluding them from the build context costs nothing.
+infra
+bruno
+k6
+
+# Not compiled into the image — tsconfig.build.json already excludes both.
+test
+scripts
