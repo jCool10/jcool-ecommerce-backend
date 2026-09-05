@@ -25,8 +25,8 @@ function toDomain(row: UserRow): User {
 // uniqueness guarantee: create() inserts ON CONFLICT DO NOTHING so concurrent
 // signups serialize on the index — the losing writer gets a null row, not a 23505.
 //
-// Ids are minted here rather than upstream because the routing bucket the id carries is the same
-// value a sharded `findByEmail`/`findById` will route on: write-routing belongs beside read-routing.
+// Ids are minted here, not upstream: the bucket the id carries is what a sharded findByEmail/findById
+// will route on, so write-routing belongs beside read-routing.
 @Injectable()
 export class DrizzleUserRepository implements UserRepositoryPort {
   constructor(
@@ -48,8 +48,7 @@ export class DrizzleUserRepository implements UserRepositoryPort {
     const [row] = await this.db
       .insert(users)
       .values({
-        // Minted from the email, so a row that loses the ON CONFLICT race simply discards this id —
-        // the winner's id is the one derived from the email that actually holds the row.
+        // A writer that loses the ON CONFLICT race just discards this id.
         id: this.identity.mintUserId(input.email),
         email: input.email,
         passwordHash: input.passwordHash,

@@ -17,8 +17,7 @@ export default defineConfig({
       DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
       REDIS_URL: 'redis://127.0.0.1:6379',
       JWT_ACCESS_SECRET: '2b557f0c-ac0e-469d-bd24-9a380d07e3bc', // ≥32 chars for the schema
-      // Deterministic so every app in a run buckets identically. Lives here and in
-      // test-app.factory.ts only — never in .env.example, which is copied to real environments.
+      // Deterministic so every app in a run buckets identically; mirrored in test-app.factory.ts.
       IDENTITY_BUCKET_KEY: 'e2e-identity-bucket-key-not-a-real-secret-000',
     },
     // Path aliases (mirror tsconfig paths) for the e2e runner. Semantic aliases

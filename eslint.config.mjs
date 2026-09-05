@@ -43,12 +43,10 @@ export default tseslint.config(
       'prettier/prettier': 'error',
     },
   },
-  // Id generation must stay fully synchronous. An `await` between reading the clock and stamping
-  // the sequence lets a second caller interleave, and both emit the same (timestamp, node,
-  // sequence) triple — a uniqueness break that only 40 random bits would still be covering. Fenced
-  // across every file that section runs through, not just the generator: the same interleave is
-  // reachable through the entropy draw and the encode it calls. Callers above `generate()` hold no
-  // clock state between statements and are free to await.
+  // Id generation must stay synchronous: an await between reading the clock and stamping the
+  // sequence lets two callers emit the same (timestamp, node, sequence) triple. Fenced across every
+  // file `generate()` runs through, since the interleave is reachable via the entropy draw and the
+  // encode too. Callers above it hold no clock state and are free to await.
   {
     files: [
       'src/shared/identity/uuid-v8.generator.ts',
@@ -73,15 +71,11 @@ export default tseslint.config(
       ],
     },
   },
-  // Where user-context ids are minted. Every id here carries a routing bucket derived from the
-  // owner's email, so an id from a general-purpose generator is unroutable — and, because nothing
-  // reads a bucket until a shard split, unroutable rows go unnoticed for as long as it takes to get
-  // there. The DB CHECK rejects such a row at write time; this catches the reach for one at edit
-  // time. Not a global ban: `jti` and `familyId` have no bucket and stay on uuidv7. Specs are
-  // exempt — proving a non-v8 id is rejected requires minting one.
-  //
-  // All of `scripts/` rather than only the seeder that writes users today: a script reaches the same
-  // table over raw SQL, where nothing else stands between a stray `randomUUID()` and a row.
+  // Where user-context ids are minted: an id from a general-purpose generator carries no routing
+  // bucket, and nothing notices until a shard split. The DB CHECK rejects such a row at write time;
+  // this catches the reach for one at edit time. Not a global ban — `jti` and `familyId` have no
+  // bucket and stay on uuidv7, and specs must be able to mint a non-v8 id to prove it is rejected.
+  // All of `scripts/`, not just today's user seeder: scripts reach the table over raw SQL.
   {
     files: [
       'src/modules/user/infrastructure/**/*.ts',

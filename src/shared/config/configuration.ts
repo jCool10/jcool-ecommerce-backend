@@ -145,8 +145,7 @@ export default () => ({
     requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
   },
   identity: {
-    // HMAC key behind the routing bucket in every user-context id. Required by the env schema, so a
-    // boot that reaches here always has it — read through with no default, like jwtAccessSecret.
+    // No default, like jwtAccessSecret: the env schema requires it, so a boot reaching here has it.
     bucketKey: process.env.IDENTITY_BUCKET_KEY,
   },
   argon2: {

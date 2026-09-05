@@ -118,10 +118,9 @@ describe('uuid-v8 codec', () => {
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
-  // encode/decode agree with each other under ANY layout, so self-consistency cannot pin where a
-  // field physically sits. These freeze the wire format: a shard router, a SQL predicate or an ops
-  // query reads the bucket positionally, and swapping two same-width fields would be invisible
-  // to every other test in this file while silently re-routing every row.
+  // Round-tripping agrees under ANY layout, so it cannot pin where a field physically sits. These
+  // freeze the wire format: a shard router reads the bucket positionally, and swapping two
+  // same-width fields is invisible to every other test here while re-routing every row.
   it('places each field at its documented bit position (frozen wire format)', () => {
     const id = encode({ tsMs: 1_756_000_000_000, bucket: 2731, nodeId: 511, sequence: 4095, random: 1 });
 

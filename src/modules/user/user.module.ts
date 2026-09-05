@@ -9,8 +9,7 @@ import { Argon2PasswordHasher, DrizzleUserRepository, IdentityBucketKeyVerifier 
   providers: [
     { provide: USER_REPOSITORY, useClass: DrizzleUserRepository },
     { provide: PASSWORD_HASHER, useClass: Argon2PasswordHasher },
-    // Boot-time check on the key behind those ids. It sits in this context because the tables it
-    // reads are this context's; nothing injects it, it only runs.
+    // Boot-time check on the key behind those ids; nothing injects it, it only runs.
     IdentityBucketKeyVerifier,
   ],
   exports: [USER_REPOSITORY, PASSWORD_HASHER],

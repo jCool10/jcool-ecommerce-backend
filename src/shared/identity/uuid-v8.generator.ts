@@ -6,13 +6,10 @@ import { NODE_COUNT, RANDOM_BITS, SEQUENCE_COUNT, encode } from './uuid-v8.codec
 const RANDOM_BYTES = RANDOM_BITS / 8;
 const NS_PER_MS = 1_000_000n;
 
-// A spin normally ends inside one millisecond, so both bounds only matter once the clock has
-// stopped. They are not two independent views of that: `systemClock` answers `monotonicMs` and
-// `elapsedNs` from the same `hrtime` reading, so a host whose clock is frozen reports no elapsed
-// time either and the loop cap is the guard that actually fires. Its real bound is iterations, not
-// time, so it is sized to land in the same single-digit milliseconds the deadline describes (an
-// iteration costs ~110ns here) instead of a round number the blocking would dwarf. Neither guard
-// falls through to reuse a (timestamp, node, sequence) triple.
+// Both bounds only matter once the clock has stopped. `systemClock` serves `monotonicMs` and
+// `elapsedNs` from one `hrtime` reading, so a frozen clock reports no elapsed time either and the
+// loop cap is the guard that fires; it is sized (~110ns/iteration) to blocking the same single-digit
+// milliseconds the deadline describes. Neither falls through to reusing a (ts, node, seq) triple.
 const SPIN_DEADLINE_NS = 10n * NS_PER_MS;
 const SPIN_LOOP_CAP = 40_000;
 
@@ -24,12 +21,7 @@ export interface IdentityClock {
   wallMs(): number;
   /** Non-decreasing milliseconds from an arbitrary origin. */
   monotonicMs(): number;
-  /**
-   * Real elapsed nanoseconds, bounding how long a spin may block. `systemClock` serves it from the
-   * same `hrtime` reading as `monotonicMs`, so on a healthy host the deadline is reachable only by
-   * a deschedule landing between the two reads — which is why the spin re-checks the clock before
-   * calling that a stall. A test clock can drive the two apart to exercise the guard directly.
-   */
+  /** Real elapsed nanoseconds, bounding how long a spin may block. */
   elapsedNs(): bigint;
 }
 
@@ -43,14 +35,12 @@ const systemClock: IdentityClock = {
  * Mints UUIDv8 ids for one writer: the caller's routing bucket plus this generator's node id, a
  * per-millisecond sequence, and 40 random bits.
  *
- * Fully synchronous by design, and lint-enforced to stay that way: a suspension point between
- * reading the clock and stamping the sequence would let a second caller interleave, and both would
- * emit the same `(timestamp, node, sequence)` triple.
+ * Synchronous by design and lint-enforced to stay that way — an await between reading the clock and
+ * stamping the sequence lets two callers emit the same `(timestamp, node, sequence)` triple.
  *
- * Uniqueness across writers rests on distinct node ids, and within one writer on the sequence never
- * being replayed — which a restart inside the millisecond of the process's last mint does replay,
- * since both the sequence and the clock base start fresh. In either case the 40 random bits are all
- * that separate two ids — enough to keep them distinct, not enough to keep them ordered.
+ * Uniqueness rests on distinct node ids across writers, and on the sequence never being replayed
+ * within one. A restart inside the millisecond of the last mint does replay it (sequence and clock
+ * base both start fresh); the 40 random bits keep those ids distinct but not ordered.
  */
 export class UuidV8Generator {
   private nodeIdValue: number;
@@ -79,7 +69,7 @@ export class UuidV8Generator {
     return new UuidV8Generator(options.nodeId, systemClock, new EntropyPool());
   }
 
-  /** @internal The only path that accepts a clock — `create` has no such parameter, so the seam is closed by type rather than by convention. */
+  /** @internal The only path that accepts a clock, so the seam is closed by type rather than by convention. */
   static createWithClock(options: { nodeId: number; clock: IdentityClock }): UuidV8Generator {
     return new UuidV8Generator(options.nodeId, options.clock, new EntropyPool());
   }
@@ -88,7 +78,7 @@ export class UuidV8Generator {
     return this.nodeIdValue;
   }
 
-  /** Milliseconds of one-way catch-up applied since construction: how far the monotonic base has fallen behind the wall clock. A suspended host resumes with the whole gap here. */
+  /** Milliseconds of one-way catch-up applied since construction. A suspended host resumes with the whole gap here. */
   get clockDriftMs(): number {
     return this.offsetMs;
   }
@@ -100,9 +90,8 @@ export class UuidV8Generator {
   generate(bucket: number): string {
     let tsMs = this.now();
 
-    // `<=`, not `===`: `now()` cannot regress, but a clock that somehow did would fall into the
-    // fresh-millisecond branch, reset the sequence and re-mint ids already emitted. Holding at
-    // `lastMs` keeps the triple unique even then.
+    // `<=`, not `===`: a regressing clock would otherwise take the fresh-millisecond branch, reset
+    // the sequence and re-mint ids already emitted.
     if (tsMs <= this.lastMs) {
       tsMs = this.lastMs;
       if (this.sequence === SEQUENCE_COUNT - 1) {
@@ -125,9 +114,9 @@ export class UuidV8Generator {
     });
   }
 
-  // Monotonic base plus an offset that only ever grows, so the result cannot go backwards. The
-  // obvious `max(wall, monotonic)` does go backwards: an NTP step forward is adopted as the max,
-  // and the correcting step back drops the id timestamp by the whole excursion.
+  // Monotonic base plus an offset that only grows, so the result cannot go backwards. The obvious
+  // `max(wall, monotonic)` does: it adopts an NTP step forward, then drops the whole excursion when
+  // the correcting step comes back.
   private now(): number {
     const monotonic = this.originWallMs + (this.clock.monotonicMs() - this.originMonotonicMs);
     const behind = this.clock.wallMs() - (monotonic + this.offsetMs);
@@ -139,9 +128,9 @@ export class UuidV8Generator {
 
   private spinPast(ms: number): number {
     const deadlineNs = this.clock.elapsedNs() + SPIN_DEADLINE_NS;
-    // A stopped clock stays stopped, so once a spin has given up at this millisecond the next mint
-    // reaches the same answer in one read. Paying the full cap again per request is what keeps a
-    // stalled host too busy to answer its own health checks and shed load.
+    // Once a spin has given up at this millisecond, the next mint reaches the same answer in one
+    // read. Paying the full cap per request would keep a stalled host too busy to fail its own
+    // health checks and shed load.
     const cap = this.stalledAtMs === ms ? 1 : SPIN_LOOP_CAP;
 
     for (let i = 0; i < cap; i++) {
@@ -150,8 +139,8 @@ export class UuidV8Generator {
         this.stalledAtMs = NO_STALL;
         return tsMs;
       }
-      // Re-read the clock: a deschedule between the two readings above blows the deadline on a
-      // perfectly healthy host, and refusing there would answer 503 to a mint about to succeed.
+      // Re-read the clock: a deschedule between the two readings blows the deadline on a healthy
+      // host, and refusing there would 503 a mint that was about to succeed.
       if (this.clock.elapsedNs() > deadlineNs && this.now() <= ms) {
         throw this.stall(ms, 'deadline');
       }

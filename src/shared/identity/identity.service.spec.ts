@@ -21,9 +21,8 @@ describe('IdentityService', () => {
     expect(bucketOf(service().mintUserId(email))).toBe(bucketForEmail(email, KEY));
   });
 
-  // A service that ignored its injected key and reached for a constant would satisfy one of these
-  // and fail the other — which is the wiring mistake worth catching, since a wrong key produces ids
-  // that look perfectly valid and route to a shard that does not hold the row.
+  // A service that ignored its injected key and reached for a constant passes one of these and
+  // fails the other. A wrong key produces ids that look valid and route to the wrong shard.
   it('buckets under the key it was given, not a fixed one', () => {
     for (const raw of ['a@example.com', 'b@example.com', 'c@example.com']) {
       const email = normalizeEmail(raw);
@@ -43,16 +42,15 @@ describe('IdentityService', () => {
     expect(new Set(owned).size).toBe(owned.length);
   });
 
-  // The rows that own each other are inserted by different code paths, so nothing but this refusal
-  // stops a token being minted against an id that predates the routing bucket and silently landing
-  // in whichever bucket a v4/v7 id's bits happen to spell.
+  // Owner and owned rows are inserted by different code paths, so nothing but this refusal stops a
+  // token minted against a pre-routing id from landing in whichever bucket its bits happen to spell.
   it('refuses an owner id that carries no bucket of its own', () => {
     expect(() => service().mintOwnedBy(randomUUID())).toThrow(/Not a UUIDv8/);
     expect(() => service().mintOwnedBy('not-a-uuid')).toThrow(/Not a canonical UUID/);
   });
 
-  // Env validation covers the app, but the seed scripts construct this directly and never pass
-  // through it — so the refusal has to live at the constructor to reach both writers.
+  // Env validation covers the app; the seed scripts construct this directly, so the refusal has to
+  // live at the constructor to reach both writers.
   it('refuses a key too short to resist an offline search', () => {
     expect(() => service('')).toThrow(RangeError);
     expect(() => service('k'.repeat(MIN_BUCKET_KEY_LENGTH - 1))).toThrow(RangeError);

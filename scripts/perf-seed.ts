@@ -42,8 +42,7 @@ import { normalizeEmail } from '../src/shared/kernel/normalize-email';
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';
 const SKU_PREFIX = 'PERF-';
-// Normalized at the constant so the insert, the lookups and the cleanup all match on the bytes the
-// unique index actually stores — and so the mint site gets the same bytes it hashes into the bucket.
+// Normalized here so the insert, the lookups, the cleanup and the bucket derivation share bytes.
 const PERF_USER_EMAIL = normalizeEmail('perf@loadtest.jcool.local');
 
 // Unlike the bulk user seeder's rows, this account is meant to authenticate over HTTP, so the
@@ -53,9 +52,8 @@ function perfUserPassword(): string {
   return process.env.PERF_USER_PASSWORD ?? 'perf-load-not-a-real-secret';
 }
 
-// The app derives a user's id from their email under this key; seeding under a different one (or no
-// key) writes an account whose id routes to a bucket its email does not, which nothing downstream
-// would notice until a shard split. Refuse rather than invent a default.
+// Must be the app's own key: seeding under another writes an account whose id routes to a bucket its
+// email does not, which nothing notices until a shard split. Refuse rather than invent a default.
 function identity(): IdentityService {
   const bucketKey = process.env.IDENTITY_BUCKET_KEY;
   if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to mint the perf user id');

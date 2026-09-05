@@ -15,8 +15,8 @@ import { UuidV8Generator } from './uuid-v8.generator';
 
 const KEY = 'identity-module-spec-bucket-key-not-a-real-secret';
 
-// Two consumers that each import IdentityModule — the shape UserModule and AuthModule have, and the
-// one that would hand out two generators if the module were ever provided per importer.
+// The shape UserModule and AuthModule have: two consumers each importing IdentityModule, which would
+// hand out two generators if the module were ever provided per importer.
 @Injectable()
 class UserSideWriter {
   constructor(
@@ -39,8 +39,8 @@ class AuthSideWriter {
 @Module({ imports: [IdentityModule], providers: [AuthSideWriter] })
 class AuthSideModule {}
 
-// The metrics live in the default registry, as MetricsModule puts them there; this file asserts the
-// module's binding lifecycle against them rather than the collector's own behaviour.
+// Registered in the default registry, as MetricsModule does it; asserted here for the module's
+// binding lifecycle, not the collector's own behaviour.
 for (const provider of IDENTITY_CLOCK_PROVIDERS as FactoryProvider[]) {
   provider.useFactory(undefined);
 }
@@ -51,8 +51,8 @@ async function driftSample(): Promise<string | undefined> {
 
 function build(): Promise<INestApplication> {
   return Test.createTestingModule({
-    // The shipped `configuration` rather than a stub: resolving through it is what proves the
-    // `identity.bucketKey` path the module reads is spelled the same in both files.
+    // The shipped `configuration`, not a stub, so `identity.bucketKey` is proven spelled the same
+    // in both files.
     imports: [
       ConfigModule.forRoot({ load: [configuration], ignoreEnvFile: true, isGlobal: true }),
       UserSideModule,
@@ -79,9 +79,8 @@ describe('IdentityModule', () => {
     else process.env.IDENTITY_BUCKET_KEY = savedKey;
   });
 
-  // A second generator in this process would mint under the same node id and collide, and nothing
-  // detects that at runtime. Asserted rather than assumed, because DI silently hands out a second
-  // instance the moment the provider is re-registered in a consumer module.
+  // Two generators share this node id and collide, with nothing detecting it at runtime — and DI
+  // hands out a second the moment the provider is re-registered in a consumer module.
   it('hands every importer the same generator', () => {
     const user = app.get(UserSideWriter);
     const auth = app.get(AuthSideWriter);
@@ -104,8 +103,8 @@ describe('IdentityModule', () => {
     expect(bucketOf(id)).toBe(bucketForEmail(email, KEY));
   });
 
-  // The gauge is registered process-wide and outlives any one app, so an app that closed without
-  // releasing it would keep publishing drift for a generator nothing mints through any more.
+  // The gauge outlives any one app, so an app closing without releasing it would keep publishing
+  // drift for a generator nothing mints through.
   it('stops publishing drift once the app closes', async () => {
     await expect(driftSample()).resolves.toBeDefined();
 
@@ -116,8 +115,8 @@ describe('IdentityModule', () => {
     app = await build();
   });
 
-  // Without the key the bucket would have to be invented, and every id minted afterwards would route
-  // somewhere its email does not — unrecoverably, since the bucket cannot be recomputed later.
+  // Without the key the bucket would have to be invented, and the misrouting is unrecoverable —
+  // the original bucket cannot be recomputed later.
   it('refuses to construct without a bucket key', async () => {
     await app.close();
     delete process.env.IDENTITY_BUCKET_KEY;

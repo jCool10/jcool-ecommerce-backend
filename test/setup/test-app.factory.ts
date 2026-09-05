@@ -49,8 +49,8 @@ export async function createTestApp(
   // Assigned unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's
   // .env into process.env, so from the second app onwards `??=` would silently inherit whatever
   // that file happens to say — making the suite's behaviour depend on an untracked local file.
-  // Assigned unconditionally for the same reason, and one more: two apps in a run that bucket under
-  // different keys would put a user's id and its token ids in different buckets.
+  // Same reason, plus: two apps in a run bucketing under different keys would split a user's id and
+  // its token ids across buckets.
   process.env.IDENTITY_BUCKET_KEY = E2E_IDENTITY_BUCKET_KEY;
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
@@ -114,11 +114,10 @@ export async function createTestApp(
       await waitForRedisReady(app.get(RedisService).getClient());
       return app;
     } catch (error) {
-      // Providers are already constructed by the time init can fail, so the pool and the Redis
-      // socket are open and the caller never receives a handle to close them. A suite that asserts a
-      // boot guard refuses would leak one set per assertion and hold the run open at the end.
-      // Reported, not swallowed: the init failure is the one worth throwing, but a close that also
-      // failed means handles are still open and the run may hang long after this line.
+      // Providers are constructed by the time init can fail, so the pool and Redis socket are open
+      // and the caller never gets a handle to close them — a suite asserting a boot guard would leak
+      // one set per assertion. The close error is logged, not thrown: the init failure is the useful
+      // one, but a failed close means handles are still open and the run may hang later.
       await app.close().catch((closeError) => {
         console.error('createTestApp: closing a partially initialised app failed', closeError);
       });

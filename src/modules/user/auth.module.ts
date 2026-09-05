@@ -50,8 +50,8 @@ import { UserModule } from './user.module';
 @Module({
   imports: [
     UserModule,
-    // The three token repositories are provided here, not in UserModule, and each mints its own row
-    // ids — so this import is load-bearing even though UserModule already has one.
+    // Load-bearing despite UserModule's own import: the three token repositories are provided here
+    // and each mints its own row ids.
     IdentityModule,
     PassportModule,
     JwtModule.registerAsync({

@@ -2,8 +2,7 @@ import { Buffer } from 'node:buffer';
 
 // RFC 9562 §5.8 custom layout, MSB -> LSB:
 //   48 ts_ms | 4 ver=8 | 12 bucket | 2 var=0b10 | 10 node | 12 seq | 40 random
-// The 12-bit bucket is the routing key a future `users` shard-split reads straight out of the id,
-// so it must survive encode/decode byte-identically — everything else here exists to guarantee that.
+// A future shard split reads the bucket straight out of the id, so the layout is a wire format.
 
 export const UUID_VERSION = 8;
 export const UUID_VARIANT = 0b10;
@@ -36,9 +35,7 @@ function assertField(name: string, value: number, max: number): void {
   }
 }
 
-// Rejects anything that is not a canonical 8-4-4-4-12 hex UUID. Deliberately strict: a lenient
-// parse would let a malformed id through as NaN fields, and a NaN routing bucket is exactly the
-// silent misroute this codec exists to make impossible.
+// Strict on purpose: a lenient parse yields NaN fields, and a NaN bucket is a silent misroute.
 function toBytes(id: string): Buffer {
   if (typeof id !== 'string' || !CANONICAL_UUID.test(id)) {
     throw new TypeError('Not a canonical UUID string');
@@ -88,7 +85,7 @@ export function decode(id: string): UuidV8Fields {
   };
 }
 
-/** The routing bucket carried by a v8 id. Throws on a v4/v7/malformed id — a caller must never get a fallback bucket, because that would route the row to a shard that does not hold it. */
+/** Routing bucket carried by a v8 id. Throws on a v4/v7/malformed id rather than returning a fallback, which would route the row to a shard that does not hold it. */
 export function bucketOf(id: string): number {
   return decode(id).bucket;
 }

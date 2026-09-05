@@ -16,9 +16,8 @@ import { normalizeEmail, type NormalizedEmail } from '../src/shared/kernel/norma
 // STDIN` (add pg-copy-streams) — the tuple generator already emits COPY-ready
 // rows.
 //
-// It writes `users.id` itself over raw SQL, so nothing in the type system ties these rows to the
-// app's minting path — the ids have to be derived here the same way, or the version-nibble CHECK on
-// `users.id` rejects the batch.
+// Ids are written over raw SQL, so nothing in the type system ties these rows to the app's minting
+// path — derive them the same way or the version-nibble CHECK on `users.id` rejects the batch.
 
 const EMAIL_PREFIX = 'loadtest+';
 const EMAIL_DOMAIN = 'loadtest.jcool.local';
@@ -31,9 +30,8 @@ function emailFor(i: number): NormalizedEmail {
   return normalizeEmail(`${EMAIL_PREFIX}${i}@${EMAIL_DOMAIN}`);
 }
 
-// Node 1023 keeps a seed run from colliding with a live app on the (timestamp, node, sequence)
-// triple. The key must be the app's own: seeding under a different one writes ids that route to
-// buckets their emails do not hash to, which no query notices until a shard split.
+// The scripts node id keeps a seed run from colliding with a live app on the (ts, node, seq) triple.
+// The key must be the app's own — seeding under another writes misrouted ids no query notices.
 function identity(): IdentityService {
   const bucketKey = process.env.IDENTITY_BUCKET_KEY;
   if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to mint user ids');

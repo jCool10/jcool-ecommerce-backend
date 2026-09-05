@@ -7,12 +7,7 @@ import type { User } from '../../domain/entities/user.entity';
 export const USER_REPOSITORY = Symbol('USER_REPOSITORY');
 
 export interface CreateUserInput {
-  /**
-   * Branded, because these exact bytes are hashed into the row's routing bucket as well as stored
-   * under the unique index. Normalizing twice — or once here and once at the bucket — is how the two
-   * drift, and a caller holding a raw `string` is a compile error rather than a row whose id routes
-   * somewhere its email does not.
-   */
+  /** Branded: these exact bytes are both stored under the unique index and hashed into the row's routing bucket, so a raw `string` here is a compile error rather than a misrouted row. */
   email: NormalizedEmail;
   passwordHash: string;
   /** Omit to accept the DB default (CUSTOMER). */

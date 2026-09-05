@@ -7,9 +7,8 @@ import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid
 // Matches the Role union (src/shared/rbac/role.enum.ts).
 export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 
-// No default: every id in this context carries a routing bucket only the writer can compute, so a
-// generated fallback would silently mint an unroutable row. Leaving it out makes each Drizzle insert
-// site supply an id or fail to compile.
+// No default: every id here carries a routing bucket only the writer can compute, so a fallback
+// would mint unroutable rows. Without one, each insert site supplies an id or fails to compile.
 const id = () => uuid('id').primaryKey();
 
 // Timezone-aware audit stamps; `updatedAt` bumped app-side on every UPDATE.
@@ -85,11 +84,9 @@ export const refreshTokens = pgTable(
 );
 
 /**
- * Fingerprint of the HMAC key the ids above were minted under — one row, written the first time a
- * key boots against a database and compared on every boot after.
- *
- * In the database rather than the environment so that it travels with a backup: a restore carries
- * the fingerprint of the key that built the data, and a boot under any other key refuses.
+ * Fingerprint of the HMAC key the ids above were minted under — written on the first boot against a
+ * database, compared on every boot after. Stored here rather than in the environment so it travels
+ * with a backup: a restore into an environment holding a different key refuses to boot.
  */
 export const identityKeyPin = pgTable(
   'identity_key_pin',

@@ -2,14 +2,14 @@ import { Buffer } from 'node:buffer';
 import { randomFillSync } from 'node:crypto';
 
 const DEFAULT_POOL_BYTES = 5120;
-// The widest draw `readUIntBE` can serve; a pool below it would refill on every `take` and then
-// still read past its own end.
+// Widest draw `readUIntBE` can serve; a smaller pool would refill every `take` and still read past
+// its own end.
 const MAX_DRAW_BYTES = 6;
 
 /**
  * Pre-drawn CSPRNG bytes handed out as integers, so id generation pays one `randomFillSync` per
- * ~1000 ids instead of one per id. `take` returns a number rather than a view into the pool: a view
- * would be overwritten by the next refill while the caller still held it.
+ * ~1000 ids. `take` returns a number, not a view — a view would be overwritten by the next refill
+ * while the caller still held it.
  */
 export class EntropyPool {
   private readonly pool: Buffer;
@@ -23,8 +23,8 @@ export class EntropyPool {
   }
 
   take(byteCount: number): number {
-    // Refill only on a whole-draw boundary. `readUIntBE` cannot span a refill, and stitching two
-    // halves buys nothing over discarding the few leftover bytes.
+    // Refill on a whole-draw boundary: `readUIntBE` cannot span a refill, and stitching two halves
+    // buys nothing over discarding the few leftover bytes.
     if (this.offset + byteCount > this.pool.length) {
       randomFillSync(this.pool);
       this.offset = 0;

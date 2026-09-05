@@ -1,10 +1,7 @@
 import { bucketForEmail } from '../../src/shared/identity';
 import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
 
-/**
- * The bucket key every app in an e2e run boots under. Spelled out again as a literal in
- * `vitest-e2e.config.mts`, which has to satisfy env validation before any module of this repo loads.
- */
+/** Duplicated as a literal in `vitest-e2e.config.mts`, which must satisfy env validation before any module of this repo loads. */
 export const E2E_IDENTITY_BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secret-000';
 
 /** A second key of the same shape, for the boot guard's mismatch paths. */

@@ -8,18 +8,15 @@ import { E2E_IDENTITY_BUCKET_KEY, WRONG_IDENTITY_BUCKET_KEY } from '../setup/ide
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// The bucket key is permanent, and booting under the wrong one misfiles every id minted from then
-// on — silently, because nothing reads a bucket until a shard split years later. These are the two
-// guards that make that loud, driven through a real application boot rather than a constructed
-// verifier: the unit suite proves the branches, this proves the wiring reaches them.
+// Booting under the wrong key misfiles every id minted from then on, silently. The unit suite proves
+// the guard's branches; this proves a real application boot reaches them.
 describe('Identity bucket key boot guards (integration)', () => {
   let pool: Pool;
 
   const password = 'Password123!';
 
-  // The canary compares one row's carried bucket against the bucket its address hashes to under the
-  // running key, so the address has to be one the two keys disagree about — otherwise the canary
-  // passes and the pin raises a different error than the one under test.
+  // The address has to be one the two keys bucket differently, or the canary passes and the pin
+  // raises a different error than the one under test.
   function addressTheKeysDisagreeAbout(): string {
     for (let i = 0; i < 100; i++) {
       const email = `key-pin-canary-${i}@test.local`;
@@ -38,8 +35,8 @@ describe('Identity bucket key boot guards (integration)', () => {
   });
 
   afterAll(async () => {
-    // The last test leaves a fingerprint from a key nothing in the run uses; every other spec file
-    // boots its app ahead of its own truncate, so the next one would be refused at boot.
+    // The last test leaves a fingerprint from a key nothing else in the run uses, and every other
+    // spec file boots its app ahead of its own truncate — so the next one would be refused at boot.
     await resetDatabase(pool);
     await pool.end();
   });
@@ -59,8 +56,7 @@ describe('Identity bucket key boot guards (integration)', () => {
     }
   });
 
-  // No rows to sample, so the canary has nothing to say — this is the case it structurally cannot
-  // catch, and the reason the pin exists at all.
+  // No rows to sample, so the canary cannot speak — the case the pin exists for.
   it('refuses to boot under a different key against an empty database', async () => {
     await (await createTestApp()).close();
 
@@ -69,8 +65,8 @@ describe('Identity bucket key boot guards (integration)', () => {
     );
   });
 
-  // Ordering, not just detection: the pin writes, and a pin recorded before the canary has spoken
-  // would hold every later boot to the wrong key and blame the database for it.
+  // Ordering, not just detection: a pin recorded before the canary has spoken would hold every later
+  // boot to the wrong key.
   it('refuses on a misrouted row without pinning the key that found it', async () => {
     const first = await createTestApp();
     await createTestUser(first, { email: addressTheKeysDisagreeAbout() });
@@ -85,8 +81,7 @@ describe('Identity bucket key boot guards (integration)', () => {
     expect(rows).toHaveLength(0);
   });
 
-  // Fail open: the app cannot serve without its database anyway, and no id is minted while it is
-  // down, so a guard that fails closed here would only add an outage to an outage.
+  // Fail open: no id is minted while the database is down, so failing closed adds an outage to an outage.
   it('boots and mints when the pin cannot be read at all', async () => {
     // Renamed rather than dropped: every later spec file in the run shares this database.
     await pool.query(`ALTER TABLE identity_key_pin RENAME TO identity_key_pin_unreachable`);
@@ -105,8 +100,8 @@ describe('Identity bucket key boot guards (integration)', () => {
     }
   });
 
-  // A database was built under one key, so a second pinned fingerprint would mean two answers to
-  // which one — and the boot guard reads the row by primary key without noticing there were others.
+  // A second pinned fingerprint would mean two answers to which key built this database, and the
+  // boot guard reads by primary key without noticing there were others.
   it('holds the pin to a single row', async () => {
     await pool.query(`INSERT INTO identity_key_pin (id, fingerprint) VALUES (1, 'deadbeefdeadbeef')`);
 

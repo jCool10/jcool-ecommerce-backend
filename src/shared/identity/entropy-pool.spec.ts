@@ -47,9 +47,9 @@ describe('entropy pool', () => {
     expect(repeats).toBe(0);
   }, 60_000);
 
-  // A draw straddling a refill would mix stale bytes into a fresh value. The pool size here is not
-  // a multiple of the draw, so two whole draws fit and the third must start at offset 0 of a fresh
-  // fill; the byte pattern varies with position, so reading at the wrong offset fails too.
+  // A draw straddling a refill would mix stale bytes into a fresh value. The pool size is not a
+  // multiple of the draw, so two fit and the third must start at offset 0 of a fresh fill; the fill
+  // pattern varies with position, so reading at the wrong offset fails too.
   it('refills on a whole-draw boundary, never splicing one draw across two fills', () => {
     let fills = 0;
     fillMock.mockImplementation((buffer: Buffer) => {
@@ -66,8 +66,7 @@ describe('entropy pool', () => {
     expect(fills).toBe(2);
   });
 
-  // Too small a pool refills on every draw and then reads past its own end, so the failure would
-  // surface as an out-of-bounds read at the first mint rather than at the bad construction.
+  // Otherwise the failure surfaces as an out-of-bounds read at the first mint rather than here.
   it('rejects a pool too small to serve a draw', () => {
     expect(() => new EntropyPool(4)).toThrow(RangeError);
     expect(() => new EntropyPool(0)).toThrow(RangeError);

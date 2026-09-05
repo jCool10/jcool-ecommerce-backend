@@ -11,11 +11,10 @@ import { bucketForTestEmail } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Every primary key in the user context is minted by an adapter, one adapter per table, and each
-// mint is reachable only through the request that needs it. This drives all five of them over real
-// HTTP and reads the rows back out of Postgres, because the two properties that matter — the id is
-// a UUIDv8, and a token sits in its owner's bucket — are invisible to every query the app makes
-// until the day the table is split across shards.
+// Each mint site is reachable only through the request that needs it, so this drives all five over
+// real HTTP and reads the rows back out of Postgres — the two properties that matter (the id is a
+// UUIDv8, a token sits in its owner's bucket) are invisible to every query the app makes until the
+// table is split across shards.
 describe('Identity routing across the auth paths (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -55,8 +54,7 @@ describe('Identity routing across the auth paths (integration)', () => {
     expect(versionNibble(id)).toBe('8');
     expect(bucketOf(id)).toBe(bucketForTestEmail(email));
 
-    // The response could be right while the row is not: the id is minted in the adapter, so the
-    // stored value is the one the shard map will read.
+    // The response can be right while the row is not; the stored value is what the shard map reads.
     const { rows } = await pool.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [email]);
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(id);
@@ -73,8 +71,8 @@ describe('Identity routing across the auth paths (integration)', () => {
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 
-  // The successor is minted inside the rotation transaction, from a user id read off the locked row
-  // rather than passed in — the one mint site with no caller to notice if it regressed to a default.
+  // The successor is minted inside the rotation transaction from a user id read off the locked row —
+  // the one mint site with no caller to notice if it regressed to a default.
   it('puts the successor a refresh rotation mints in the same bucket', async () => {
     const { user } = await createTestUser(app);
     const session = await loginAs(app, { email: user.email, password });
@@ -87,8 +85,8 @@ describe('Identity routing across the auth paths (integration)', () => {
     );
     expect(rows).toHaveLength(2);
 
-    // Named from the predecessor's pointer rather than by elimination, so this asserts the row the
-    // lineage actually leads to.
+    // From the predecessor's pointer rather than by elimination, so this asserts the row the lineage
+    // actually leads to.
     const successorId = rows.find((row) => row.replaced_by_token_id !== null)?.replaced_by_token_id;
     if (!successorId) throw new Error('rotation left no token pointing at a successor');
     expect(rows.map((row) => row.id)).toContain(successorId);
@@ -119,13 +117,12 @@ describe('Identity routing across the auth paths (integration)', () => {
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 
-  // The documented break: a database carrying pre-routing user ids cannot mint tokens at all. It
-  // surfaces here rather than as a mysterious 500 the first time someone restores an old dump.
+  // The documented break: a database carrying pre-routing user ids cannot mint tokens at all.
   it('refuses to mint a token for an owner whose id carries no bucket', () => {
     const identity = app.get(IdentityService);
 
-    // By message, not by class: a `TypeError` is also what an undefined argument or a typo'd property
-    // access raises, so the class alone would keep passing if the refusal stopped happening.
+    // By message, not class: an undefined argument or typo'd property access also raises TypeError,
+    // so the class alone would keep passing if the refusal stopped happening.
     expect(() => identity.mintOwnedBy(uuidv7())).toThrow(/Not a UUIDv8/);
   });
 });

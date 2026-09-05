@@ -10,9 +10,9 @@ import { E2E_IDENTITY_BUCKET_KEY, bucketForTestEmail } from '../setup/identity.h
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Full locally, reduced on CI. Both sizes keep the expected count per bucket well above the handful
-// below which "one bucket is hot" stops being distinguishable from noise; the 1M-sample verdict on
-// the hash itself belongs to the unit suite, where a sample costs nothing. Here a sample is a row.
+// Full locally, reduced on CI. Both keep the expected count per bucket above the handful below which
+// "one bucket is hot" is indistinguishable from noise. The verdict on the hash itself belongs to the
+// unit suite; here a sample is a row.
 const USERS = process.env.CI ? 50_000 : 100_000;
 const INSERT_BATCH = 2_000;
 
@@ -22,13 +22,13 @@ const HOT_BUCKET_TOLERANCE = 3;
 const MAX_UNUSED_BUCKET_RATIO = 0.01;
 
 const execFileAsync = promisify(execFile);
-// Resolved from the working directory rather than from this file: specs typecheck as CommonJS, where
-// `import.meta` is a compile error. `npm run test:e2e` always starts the runner at the package root.
+// From the working directory, not this file: specs typecheck as CommonJS where `import.meta` is a
+// compile error, and `npm run test:e2e` always starts the runner at the package root.
 const repoRoot = process.cwd();
 const SCAN_TIMEOUT_MS = 90_000;
 
-// One id per row, minted the way the app mints it and read back out of Postgres, because the claim
-// is about what the shard map will find — not about what the hash returned in memory.
+// Read back out of Postgres: the claim is about what the shard map will find, not what the hash
+// returned in memory.
 describe('Identity colocation at scale (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -47,8 +47,7 @@ describe('Identity colocation at scale (integration)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: inject('DATABASE_URL') });
-    // Before the app boots, so it pins its key against a database it is the first to touch — the
-    // operator scan below reads that pin.
+    // Before the app boots, so it pins its key against a database it is the first to touch.
     await resetDatabase(pool);
     app = await createTestApp();
 
@@ -70,8 +69,7 @@ describe('Identity colocation at scale (integration)', () => {
 
   afterAll(async () => {
     await app.close();
-    // These rows are minted, not fixtures: leaving six figures of them behind would slow every
-    // truncate and every sequential scan for the rest of the run.
+    // Six figures of leftover rows would slow every truncate and sequential scan for the rest of the run.
     await resetDatabase(pool);
     await pool.end();
   });
@@ -81,8 +79,8 @@ describe('Identity colocation at scale (integration)', () => {
 
     const misrouted = rows.filter((row) => carriedBucket(row.id) !== bucketForTestEmail(row.email));
 
-    // Capped before the length assertion: a wrong key misroutes every row, and printing them all
-    // would bury the run in output before the failure is readable.
+    // Capped before the assertion: a wrong key misroutes every row, and printing them all buries the
+    // failure in output.
     expect(misrouted.slice(0, 5)).toEqual([]);
     expect(misrouted).toHaveLength(0);
   });
@@ -101,9 +99,8 @@ describe('Identity colocation at scale (integration)', () => {
     expect(unused / BUCKET_COUNT).toBeLessThan(MAX_UNUSED_BUCKET_RATIO);
   });
 
-  // The tool an operator runs after provisioning a key, and the only automated cover it has. It
-  // pages the whole table on the primary key rather than sampling, so this is also the assertion
-  // that the paging terminates and reads every row exactly once.
+  // The only automated cover the operator scan has. It pages the whole table on the primary key, so
+  // this also asserts the paging terminates and reads every row exactly once.
   it(
     'passes the operator scan over every row',
     async () => {
@@ -115,8 +112,8 @@ describe('Identity colocation at scale (integration)', () => {
     SCAN_TIMEOUT_MS * 2,
   );
 
-  // The scan reports misrouted rows on stdout, which `execFile` moves onto the rejection instead of
-  // returning once the exit code is non-zero — so without this a real finding surfaces as "exit 1".
+  // On a non-zero exit `execFile` rejects and moves stdout onto the error, so without this a real
+  // finding surfaces as bare "exit 1".
   async function runOperatorScan(): Promise<string> {
     try {
       const { stdout } = await execFileAsync(
@@ -125,7 +122,7 @@ describe('Identity colocation at scale (integration)', () => {
         {
           cwd: repoRoot,
           // Under the test's own timeout, so a scan that stops paging is killed here and reports what
-          // it had read rather than dying anonymously with the rest of the file.
+          // it read rather than dying anonymously with the rest of the file.
           timeout: SCAN_TIMEOUT_MS,
           env: {
             ...process.env,

@@ -484,14 +484,11 @@ export class EnvironmentVariables {
   @MinLength(32)
   JWT_ACCESS_SECRET!: string;
 
-  // HMAC key deriving the routing bucket baked into every user-context id. PERMANENT, never
-  // rotated: rotating it routes every existing account to a shard that does not hold its rows, and
-  // the old buckets are not recomputable. Back it up with the same rank as the database.
-  // The minimum gates length, NOT entropy — an attacker self-registers a few accounts, harvests
-  // (email, bucket) pairs from the register/`me` responses and can offline-brute-force a long but
-  // low-entropy key (a passphrase, a reused string), reopening the email oracle the HMAC exists to
-  // close. Generate it with a CSPRNG (`openssl rand -base64 48`); an entropy check on a 32-byte
-  // string is unreliable, so that requirement is documented rather than machine-enforced.
+  // HMAC key behind the routing bucket in every user-context id. PERMANENT — rotating it routes
+  // every existing account to a shard that does not hold its rows, and old buckets are not
+  // recomputable. Back it up with the same rank as the database.
+  // MinLength gates length, not entropy: a long passphrase is brute-forceable from a few
+  // self-registered (email, bucket) pairs. Generate with `openssl rand -base64 48`.
   @IsString()
   @MinLength(MIN_BUCKET_KEY_LENGTH)
   IDENTITY_BUCKET_KEY!: string;

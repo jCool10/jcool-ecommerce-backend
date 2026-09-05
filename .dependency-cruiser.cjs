@@ -72,7 +72,7 @@ module.exports = {
       name: 'shared-no-module-internals',
       severity: 'error',
       comment:
-        'shared/ is the leaf layer every context imports; importing a context back turns it into a hidden context. The whole of src/modules is off limits, not just the four layer directories — a context`s own `*.module.ts` sits above them and drags its providers, controllers and schema along, which is the same violation by a shorter path. Only the two composition roots are exempt — shared/messaging wires context handlers into DI, and the schema barrel collects every context table for the migrator (ADR 0007).',
+        'shared/ is the leaf layer every context imports; importing a context back turns it into a hidden context. All of src/modules is off limits, including a context`s own *.module.ts, which drags its providers, controllers and schema along. Exempt: the two composition roots — shared/messaging wires context handlers into DI, and the schema barrel collects every context table for the migrator (ADR 0007).',
       from: {
         path: '^src/shared/',
         pathNot: '^src/shared/(messaging|infrastructure/database/schema)/',

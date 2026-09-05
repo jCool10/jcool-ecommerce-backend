@@ -24,8 +24,8 @@ function fakeClock(): { clock: IdentityClock; stepWall: (ms: number) => void } {
   };
 }
 
-// Registration is the point: the factories put both metrics and their collect hooks into the default
-// registry exactly as MetricsModule does. willsoto puts its own options token first in `inject`.
+// Through the real factories, so both metrics and their collect hooks land in the default registry
+// exactly as MetricsModule does. willsoto puts its own options token first in `inject`.
 for (const provider of IDENTITY_CLOCK_PROVIDERS as FactoryProvider[]) {
   provider.useFactory(undefined);
 }
@@ -42,10 +42,8 @@ function stall(generator: UuidV8Generator): void {
 }
 
 describe('identity clock collector', () => {
-  // Must stay the first test that binds anything: binding is process-wide, so the never-yet-bound
-  // assertion is only reachable here. A drift gauge sitting at 0 because nothing is measuring is
-  // indistinguishable on a dashboard from a healthy clock, which is why it has to be absent rather
-  // than zero.
+  // Must stay first: binding is process-wide, so the never-yet-bound state is only reachable here.
+  // Absent rather than 0, which on a dashboard is indistinguishable from a healthy clock.
   it('publishes no drift until a generator is bound, then tracks it', async () => {
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBeUndefined();
 
@@ -73,8 +71,7 @@ describe('identity clock collector', () => {
   });
 
   // The registry get-or-creates by name, so a collect hook that captured its generator would stay on
-  // the first app built in the process. A suite that boots a second app would then inject drift into
-  // one generator and scrape another, and read the flat 0 as proof the clock is fine.
+  // the first app built in the process and report a flat 0 as proof the clock is fine.
   it('follows the most recently built generator', async () => {
     const first = fakeClock();
     bindIdentityClockMetrics(UuidV8Generator.createWithClock({ nodeId: 0, clock: first.clock }));
@@ -89,8 +86,8 @@ describe('identity clock collector', () => {
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBe(1_500);
   });
 
-  // Apps do not close in the order they were built, so an unguarded release would let a shutting-down
-  // app blind the metrics for the one still serving.
+  // Apps do not close in build order, so an unguarded release lets a shutting-down app blind the
+  // metrics for the one still serving.
   it('releases only the generator that is actually bound', async () => {
     const superseded = UuidV8Generator.createWithClock({ nodeId: 0, clock: fakeClock().clock });
     bindIdentityClockMetrics(superseded);

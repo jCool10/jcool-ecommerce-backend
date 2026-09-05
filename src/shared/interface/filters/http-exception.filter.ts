@@ -4,8 +4,8 @@ import * as Sentry from '@sentry/nestjs';
 import type { Request, Response } from 'express';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
-// The error module, never the generator: mapping a status must not pull the id generator and its
-// clock state into this filter's import graph.
+// The error module, never the barrel: a status mapping must not pull the generator into this
+// filter's import graph.
 import { ClockStalledError } from '@shared/identity/identity.errors';
 import {
   REQUEST_ID_HEADER,
@@ -130,8 +130,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       return exception.getStatus();
     }
-    // A stalled clock is a transient host fault, not a bad request or a bug in the handler — the
-    // caller may retry. Mapped here rather than at the call site so every mint path answers alike.
+    // Transient host fault, not a handler bug — the caller may retry. Mapped here so every mint path
+    // answers alike.
     if (exception instanceof ClockStalledError) {
       return SERVICE_UNAVAILABLE;
     }

@@ -7,17 +7,15 @@ import { createTestApp } from '../setup/test-app.factory';
 
 const METRICS_TOKEN = 'e2e-identity-clock-token-abcdef';
 const CLOCK_JUMP_MS = 90_000;
-// The generator measures the jump as the difference between a wall reading and a monotonic one, and
-// the two floor to whole milliseconds independently — so the absorbed drift can land a millisecond or
-// two under the step. The claim is that the jump reached the gauge, not that it did to the millisecond.
+// Wall and monotonic readings floor to whole milliseconds independently, so absorbed drift can land
+// a millisecond or two under the step. The claim is that the jump reached the gauge.
 const CLOCK_READ_SKEW_MS = 2;
 const ABSORBED_DRIFT_MS = CLOCK_JUMP_MS - CLOCK_READ_SKEW_MS;
 
-// One Prometheus registry serves the whole process, and it get-or-creates a metric by name — so the
-// drift gauge is created once and has to find its way to whichever generator is currently minting.
-// The collector's own suite proves that with fakes; this proves the wiring around it, through real
-// application boots and a real /metrics scrape, because the failure it guards against (a gauge stuck
-// on a dead generator, reporting a flat 0) looks exactly like a healthy clock.
+// One registry serves the whole process and get-or-creates by name, so the drift gauge is created
+// once and has to find whichever generator is currently minting. The collector's own suite proves
+// that with fakes; this proves the wiring through real boots and a real /metrics scrape, because the
+// failure it guards against — a gauge stuck on a dead generator — looks like a healthy clock.
 describe('Identity clock metrics (integration)', () => {
   const started: INestApplication[] = [];
 
@@ -38,8 +36,8 @@ describe('Identity clock metrics (integration)', () => {
     return line === undefined ? undefined : Number(line.slice(ID_CLOCK_DRIFT_MS.length + 1));
   }
 
-  // Drift is one-way catch-up the generator absorbs, so stepping the wall clock forward over a
-  // single mint is the only way to produce a reading no other app in the process shares.
+  // Drift is one-way catch-up, so stepping the wall clock forward over a single mint is the only way
+  // to produce a reading no other app in the process shares.
   function absorbClockJump(app: INestApplication): void {
     const realNow = Date.now.bind(Date);
     const stepped = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + CLOCK_JUMP_MS);
@@ -59,8 +57,8 @@ describe('Identity clock metrics (integration)', () => {
   });
 
   afterEach(async () => {
-    // Reverse order, and tolerant of a test that already closed one: a leaked app keeps its
-    // generator bound and hands the next test a reading it did not produce.
+    // Reverse order, tolerant of an already-closed app: a leaked one keeps its generator bound and
+    // hands the next test a reading it did not produce.
     for (const app of started.reverse()) {
       await app.close().catch(() => undefined);
     }
@@ -74,8 +72,8 @@ describe('Identity clock metrics (integration)', () => {
     await expect(drift(second)).resolves.toBe(0);
     absorbClockJump(second);
 
-    // Scraped through the FIRST app on purpose: both endpoints read the one registry, so a collector
-    // still holding the first app's generator would answer with its untouched 0.
+    // Through the FIRST app on purpose: both endpoints read the one registry, so a collector still
+    // holding the first app's generator would answer with its untouched 0.
     await expect(drift(first)).resolves.toBeGreaterThanOrEqual(ABSORBED_DRIFT_MS);
 
     await first.close();

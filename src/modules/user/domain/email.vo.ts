@@ -20,7 +20,6 @@ export class Email extends ValueObject<EmailProps> {
     return new Email({ value });
   }
 
-  /** Carries the brand outward: this is the value the unique index and the routing bucket both consume, and they must consume the same bytes. */
   get value(): NormalizedEmail {
     return this.props.value;
   }

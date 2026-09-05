@@ -41,11 +41,9 @@ function chiSquare(counts: number[], total: number): number {
 }
 
 describe('email bucket', () => {
-  // Frozen vectors. Every other assertion here is a *property* (in range, deterministic, key-
-  // dependent, uniform), and a re-derivation that stays uniform satisfies all of them while moving
-  // every user to a different bucket — proven by mutating the truncation and watching the suite
-  // stay green. Since the mapping is permanent and old buckets are not recomputable, the derivation
-  // itself has to be pinned: change the hash, the offset or the bit extraction and this goes red.
+  // Frozen vectors. Every other assertion here is a property (in range, deterministic, key-dependent,
+  // uniform), and a re-derivation that stays uniform satisfies all of them while moving every user to
+  // a different bucket. The mapping is permanent, so the derivation itself has to be pinned.
   it('matches its known-answer vectors', () => {
     expect(bucketForEmail(normalizeEmail('alice@example.com'), KEY)).toBe(3019);
     expect(bucketForEmail(normalizeEmail('bob@example.com'), KEY)).toBe(2086);
@@ -121,8 +119,7 @@ describe('identity key fingerprint', () => {
     expect(identityKeyFingerprint(KEY.replace('test', 'Test'))).not.toBe(identityKeyFingerprint(KEY));
   });
 
-  // Computable at boot with an empty users table — the property the DB key pin rests on, and
-  // exactly the 0-row deploy the row canary is blind to.
+  // Computable with an empty users table — the property the DB key pin rests on.
   it('is 16 lowercase hex chars derived from the key alone', () => {
     expect(identityKeyFingerprint(KEY)).toMatch(/^[0-9a-f]{16}$/);
   });

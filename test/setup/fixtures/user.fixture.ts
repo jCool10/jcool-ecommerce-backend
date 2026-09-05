@@ -38,8 +38,7 @@ export async function createTestUser(app: INestApplication, options: TestUserOpt
   const tokens = app.get(AuthTokensService);
 
   const passwordHash = await hasher.hash(password);
-  // Through the same normalization the register path uses, so a fixture user's id routes to the same
-  // bucket its email does — a test that skipped this would still pass while proving nothing.
+  // Same normalization as the register path, so a fixture user's id routes like a real one's.
   let user = await users.create({ email: normalizeEmail(email), passwordHash, role: options.role });
   if (!user) {
     throw new Error(`Test user could not be created — email already taken: ${email}`);

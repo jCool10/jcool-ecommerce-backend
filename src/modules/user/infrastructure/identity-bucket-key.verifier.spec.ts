@@ -33,8 +33,8 @@ function fakeDb(options: FakeDbOptions = {}) {
   });
   const db = {
     insert: () => ({ values }),
-    // The two reads are told apart by their table, not by call order: a future edit that reorders
-    // them should not silently swap which fake answers which query.
+    // Told apart by table, not call order, so reordering the two checks does not silently swap which
+    // fake answers which query.
     select: () => ({
       from: (table: unknown) =>
         table === identityKeyPin ? { where: pinRow } : { orderBy: () => ({ limit: userRow }) },
@@ -72,16 +72,16 @@ describe('IdentityBucketKeyVerifier', () => {
       await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
     });
 
-    // The failure this whole phase exists for: a restore into an environment holding a different
-    // key, which would misfile every id it mints without any request ever failing.
+    // A restore into an environment holding a different key misfiles every id it mints, with no
+    // request ever failing.
     it('refuses to boot when the pinned fingerprint is a different key', async () => {
       const { db } = fakeDb({ pinRow: () => Promise.resolve([{ fingerprint: identityKeyFingerprint(OTHER_KEY) }]) });
 
       await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not match the key/);
     });
 
-    // Fail-open: the app cannot serve without the database anyway, and no id is minted while it is
-    // down, so refusing to start here would only turn a brief outage into a longer one.
+    // Fail open: no id is minted while the database is down, so refusing to start would only turn a
+    // brief outage into a longer one.
     it('starts when the database cannot be reached', async () => {
       const { db } = fakeDb({ pinInsert: unreachable, userRow: unreachable });
 
@@ -104,8 +104,7 @@ describe('IdentityBucketKeyVerifier', () => {
       await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not route to the bucket/);
     });
 
-    // Reported as a mismatch rather than surfacing the codec's parse error, which at boot reads as a
-    // bug in the codec when the fault is a row that carries no bucket at all.
+    // A mismatch, not the codec's parse error, which at boot reads as a bug in the codec.
     it('refuses to boot on a user id that is not a UUIDv8', async () => {
       const { db } = fakeDb({
         userRow: () => Promise.resolve([{ id: '01920000-0000-7000-8000-000000000001', email: EMAIL }]),
@@ -128,9 +127,8 @@ describe('IdentityBucketKeyVerifier', () => {
     });
   });
 
-  // The pinned fingerprint is what every later boot is held to, so it must never record a key the
-  // rows already disprove. A database that has users but no pin row yet is the ordinary case here,
-  // and pinning before checking would make a wrong key the reference for good.
+  // The pin is what every later boot is held to, so it must never record a key the rows already
+  // disprove. A database with users but no pin row is the ordinary case on the first boot after this.
   it('does not pin a key the newest row has already disproved', async () => {
     const id = idInBucket(bucketForEmail(EMAIL, OTHER_KEY));
     const { db, values } = fakeDb({ userRow: () => Promise.resolve([{ id, email: EMAIL }]) });
@@ -140,8 +138,7 @@ describe('IdentityBucketKeyVerifier', () => {
   });
 
   // A pool that cannot connect rejects by itself; a server that accepts and then goes quiet does
-  // not. Without a bound on the wait, the check meant to fail open becomes the one thing that can
-  // keep the app from ever starting.
+  // not, and would turn a fail-open check into the one thing keeping the app from starting.
   it('starts when the database accepts a query but never answers', async () => {
     vi.useFakeTimers();
     const never = (): Promise<never> => new Promise(() => undefined);

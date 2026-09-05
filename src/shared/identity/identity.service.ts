@@ -4,25 +4,21 @@ import { bucketOf } from './uuid-v8.codec';
 import type { UuidV8Generator } from './uuid-v8.generator';
 
 /**
- * Binds the routing-bucket policy to one generator, so every user-context id is minted the same way
- * from one place.
+ * Single minting path for user-context ids.
  *
  * A user's bucket comes from their email — the same normalized bytes the unique index sees, which is
- * what makes local email uniqueness survive a shard split. Everything the user owns copies the
- * bucket out of the user's own id instead of re-deriving it: the email is not in scope at those call
- * sites, and a second derivation is a second chance to drift from the first.
+ * what makes local email uniqueness survive a shard split. Rows the user owns copy the bucket out of
+ * the user's id instead of re-deriving it: a second derivation is a second chance to drift.
  *
- * Framework-free on purpose. The standalone seed scripts are writers too, and they construct this
- * directly rather than booting Nest.
+ * Framework-free so the standalone seed scripts can construct it without booting Nest.
  */
 export class IdentityService {
   constructor(
     private readonly generator: UuidV8Generator,
     private readonly bucketKey: string,
   ) {
-    // Checked here rather than left to env validation, because the standalone scripts construct this
-    // without ever passing through it — and a script that seeds under a key the app would refuse
-    // writes rows whose buckets the app can never reproduce.
+    // Not left to env validation: the seed scripts never pass through it, and a script seeding under
+    // a key the app would refuse writes buckets the app can never reproduce.
     if (bucketKey.length < MIN_BUCKET_KEY_LENGTH) {
       throw new RangeError(`Identity bucket key must be at least ${MIN_BUCKET_KEY_LENGTH} characters`);
     }
@@ -32,7 +28,7 @@ export class IdentityService {
     return this.generator.generate(bucketForEmail(email, this.bucketKey));
   }
 
-  /** Id for a row owned by `userId`, in that user's bucket. Throws on a non-v8 `userId` — such a row predates the routing bucket, and there is no bucket to colocate with. */
+  /** Id for a row owned by `userId`, in that user's bucket. Throws on a non-v8 `userId`: it predates routing and has no bucket to colocate with. */
   mintOwnedBy(userId: string): string {
     return this.generator.generate(bucketOf(userId));
   }

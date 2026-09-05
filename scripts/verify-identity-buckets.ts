@@ -2,15 +2,11 @@
  * Full scan of `users`, checking that every id routes to the bucket its email hashes to:
  *   npm run identity:verify
  *
- * The boot canary samples one row; this reads all of them. It is the tool for the two moments the
- * sample cannot answer — after provisioning a key (does this database agree with it?) and after a
- * suspected drift (how many rows are wrong, and from when?).
+ * The boot canary samples one row; this reads all of them — for the two questions the sample cannot
+ * answer: does this database agree with a freshly provisioned key, and how many rows did a drift hit.
  *
- * Only `users` is scanned. The token tables carry the same version CHECK but no bucket of their own
- * to be right or wrong about: their routing follows the owner's `user_id`, so a misrouted user is
- * already the whole finding.
- *
- * Read-only. Exits non-zero when the database and the key disagree, so it can gate a deploy.
+ * Only `users`: token routing follows the owner's `user_id`, so a misrouted user is the whole finding.
+ * Read-only, and exits non-zero on disagreement so it can gate a deploy.
  */
 import 'dotenv/config';
 import { Pool } from 'pg';
@@ -27,7 +23,7 @@ interface UserRow {
   email: string;
 }
 
-/** Bucket carried by the id, or null when it carries none (any non-v8 id). */
+/** Bucket carried by the id, or null for any non-v8 id. */
 function carriedBucket(id: string): number | null {
   try {
     return bucketOf(id);
@@ -64,13 +60,13 @@ async function main(): Promise<void> {
     let cursor = SCAN_START;
     let scanned = 0;
     let misrouted = 0;
-    // Counted, not collected: the run that matters most is the one under an outright wrong key,
-    // where every row is an offender and holding them all would exhaust the heap before printing.
+    // Counted, not collected: under an outright wrong key every row is an offender, and holding
+    // them all would exhaust the heap before printing.
     const shown: string[] = [];
 
     for (;;) {
-      // Keyset paging on the primary key: OFFSET would re-read every earlier page, and this scan is
-      // meant to stay usable at the row counts that make the question worth asking.
+      // Keyset paging: OFFSET re-reads every earlier page, and this has to stay usable at the row
+      // counts that make the question worth asking.
       const { rows } = await pool.query<UserRow>(`SELECT id, email FROM users WHERE id > $1 ORDER BY id LIMIT $2`, [
         cursor,
         BATCH,
@@ -80,7 +76,7 @@ async function main(): Promise<void> {
       for (const row of rows) {
         if (carriedBucket(row.id) !== bucketForEmail(normalizeEmail(row.email), bucketKey)) {
           misrouted++;
-          // Ids only: this output is pasted into tickets, and the emails are the accounts themselves.
+          // Ids only: this output gets pasted into tickets.
           if (shown.length < OFFENDERS_SHOWN) shown.push(row.id);
         }
       }

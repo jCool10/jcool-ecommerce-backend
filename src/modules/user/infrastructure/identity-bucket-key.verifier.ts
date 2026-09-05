@@ -8,12 +8,8 @@ import { identityKeyPin, users } from './schema/user.schema';
 
 const PIN_ROW_ID = 1;
 
-/**
- * How long either check waits on the database before giving up on it. A pool that cannot connect
- * rejects on its own, but one whose server accepts and then stops answering would otherwise hang
- * `onApplicationBootstrap` forever — turning a check that is meant to fail open into the hard boot
- * dependency the app does not otherwise have.
- */
+// A pool that cannot connect rejects on its own; a server that accepts and then goes quiet would
+// hang `onApplicationBootstrap` forever, turning a fail-open check into a hard boot dependency.
 const DB_CHECK_TIMEOUT_MS = 5_000;
 
 function reason(error: unknown): string {
@@ -23,24 +19,19 @@ function reason(error: unknown): string {
 /**
  * Refuses to boot when the running `IDENTITY_BUCKET_KEY` is not the one this database was built
  * with. A wrong key mints ids into buckets their emails do not hash to, and since nothing reads a
- * bucket until a shard split, the damage would surface years after the key that caused it was lost.
+ * bucket until a shard split, the damage surfaces years after the key that caused it was lost.
  *
- * Two checks, in order of what they can prove:
+ * Two checks. The row canary compares one real id against the bucket its email hashes to now; it
+ * cannot see a key that was wrong from row 1, since both sides then use the same key. The pin
+ * compares against a fingerprint stored in the database, so it holds with zero rows and survives a
+ * restore into an environment carrying a different key.
  *
- * - The **row canary** compares one real id against the bucket its email hashes to now. It cannot
- *   see a key that was wrong from the very first row — both sides of that comparison use the current
- *   key, so they agree by construction — which is why it is the secondary check, not the primary.
- * - The **pin** compares the key against a fingerprint stored in the database itself, so it holds
- *   with zero rows and survives a restore into an environment carrying a different key.
+ * Canary first, even though the pin is stronger, because the pin *writes*: on a database with rows
+ * but no pin row, pinning first would record a wrong key as the reference every later boot is held
+ * to. Corroborate, then record.
  *
- * The canary runs first even though the pin is the stronger check, because the pin *writes*: on a
- * database that has rows but no pin row yet, pinning first would record the running key as correct
- * a moment before the canary could prove it is not, and the recorded fingerprint is what every later
- * boot is held to. Corroborate against real data first, then record.
- *
- * Both fail **open** when the database cannot be reached: the app already cannot serve without it,
- * no id is minted while it is down, and the next clean boot re-checks. They fail **closed** only on
- * a disagreement actually read back — that is evidence, not a symptom of an outage.
+ * Both fail open on an unreachable database — no id is minted while it is down, and the next clean
+ * boot re-checks. They fail closed only on a disagreement actually read back.
  */
 @Injectable()
 export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
@@ -80,7 +71,7 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
 
     try {
       // Concurrent first boots race here rather than in a read-then-write gap; the loser falls
-      // through to the comparison below and is held to the winner's fingerprint.
+      // through to the comparison below.
       const [persisted] = await this.withinTimeout(
         this.db
           .insert(identityKeyPin)
@@ -123,11 +114,9 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
     let sample: { id: string; email: string } | undefined;
 
     try {
-      // Newest rather than oldest: an old row only proves the key was right at some point, while the
-      // most recent one is what a writer that has started misfiling would have produced. Ordered by
-      // id, not `createdAt`: the id leads with a big-endian millisecond timestamp and Postgres
-      // compares uuids bytewise, so this walks the primary key instead of sorting the whole table —
-      // and it reads mint time rather than transaction-start time.
+      // Newest row: an old one only proves the key was right at some point. Ordered by id, not
+      // `createdAt` — the id leads with a big-endian ms timestamp and Postgres compares uuids
+      // bytewise, so this walks the primary key instead of sorting the table.
       [sample] = await this.withinTimeout(
         this.db.select({ id: users.id, email: users.email }).from(users).orderBy(desc(users.id)).limit(1),
       );
@@ -138,19 +127,19 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
 
     if (!sample) return;
 
-    // Outside the catch above by design: from here on, every failure is a disagreement read back
-    // from a reachable database, and must refuse the boot rather than be logged and stepped over.
+    // Outside the catch above: from here on every failure is a disagreement read back from a
+    // reachable database, and must refuse the boot rather than be logged and stepped over.
     const expected = bucketForEmail(normalizeEmail(sample.email), key);
     let actual: number | null = null;
     try {
       actual = bucketOf(sample.id);
     } catch {
-      // A non-v8 id carries no bucket at all. Reported below as a mismatch, because the codec's
-      // parse error reads like a bug in the codec when the real fault is the row.
+      // A non-v8 id carries no bucket. Reported below as a mismatch, because the codec's parse error
+      // reads like a bug in the codec when the fault is the row.
     }
 
     if (actual !== expected) {
-      // Named by id, never by email: this message reaches the log pipeline and the error tracker.
+      // Named by id, never by email: this reaches the log pipeline and the error tracker.
       throw new Error(
         `User ${sample.id} does not route to the bucket its email hashes to under the current ` +
           `IDENTITY_BUCKET_KEY (expected ${expected}, id carries ${actual ?? 'no routing bucket'}). ` +

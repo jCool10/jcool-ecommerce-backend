@@ -11,9 +11,9 @@ const START_MS = 1_756_000_000_000;
 const EXHAUSTION_NODES = process.env.CI ? 64 : NODE_COUNT;
 const ORDERING_SAMPLES = process.env.CI ? 20_000 : 100_000;
 const THROUGHPUT_SAMPLES = process.env.CI ? 50_000 : 500_000;
-// A hard rate gates the local run only. Across heterogeneous CI runners any number is either
-// meaningless or flaky, so CI asserts a structural floor instead — three orders of magnitude below
-// the design rate, which an accidentally async or O(n) generate() would still miss.
+// A hard rate gates the local run only; on heterogeneous CI runners any number is flaky, so CI
+// asserts a floor three orders of magnitude lower — which an accidentally async or O(n) generate()
+// would still miss.
 const RATE_FLOOR_PER_SECOND = process.env.CI ? 50_000 : 500_000;
 
 interface FakeClock {
@@ -22,11 +22,7 @@ interface FakeClock {
   advance(ms: number): void;
   /** Only the wall clock moves — an NTP step, or a suspended host resuming. */
   stepWallBy(ms: number): void;
-  /**
-   * Move both clocks forward on the Nth elapsed-time read. Only `spinPast` reads elapsed time, so
-   * this releases a spin from inside the loop without depending on how many times `now()` happens
-   * to read the clock — a coupling that would let a refactor of `now()` silently skip the spin.
-   */
+  /** Move both clocks forward on the Nth elapsed-time read — `spinPast` is their only caller, so this releases a spin from inside the loop without coupling to how often `now()` reads the clock. */
   releaseAfterSpinReads(reads: number, byMs: number): void;
   /** Elapsed-time reads served. `spinPast` is their only caller, so a rise proves the spin ran. */
   spinReadCount(): number;
@@ -116,10 +112,9 @@ describe('uuid-v8 generator', () => {
     expect(() => UuidV8Generator.create({ nodeId: 1.5 })).toThrow(RangeError);
   });
 
-  // Exhausts the (node, sequence) space of a single millisecond. Indexed by the fields read back
-  // out of each id rather than by the loop variables, so a generator that ignored its inputs and
-  // emitted a counter could not pass. This proves the codec is injective and that one process
-  // sequences correctly — not that node ids are unique, which the test itself supplies.
+  // Exhausts the (node, sequence) space of one millisecond, indexed by the fields read back out of
+  // each id rather than by the loop variables — so a generator that ignored its inputs and emitted a
+  // counter could not pass.
   it('mints every (node, sequence) combination exactly once within one millisecond', () => {
     const clock = fakeClock().clock;
     const combinations = EXHAUSTION_NODES * SEQUENCE_COUNT;
@@ -179,8 +174,8 @@ describe('uuid-v8 generator clock', () => {
     const afterStepForward = decode(generator.generate(BUCKET)).tsMs;
     timestamps.push(afterStepForward);
 
-    // The correcting step back is the half that breaks `max(wall, monotonic)`: it would adopt the
-    // stepped-forward value and then drop an hour on the way back.
+    // The step back is what breaks `max(wall, monotonic)`: it adopts the forward step, then drops
+    // the whole hour on the way back.
     fake.stepWallBy(-3_600_000);
     for (let i = 0; i < 50; i++) {
       fake.advance(1);
@@ -220,9 +215,8 @@ describe('uuid-v8 generator clock', () => {
     expect(backwards).toBe(0);
   });
 
-  // No healthy host can do this, and the seam is the only way to stage it. It is worth staging:
-  // the failure would not be a visible fault but a silent one — a reset sequence re-minting ids
-  // that were already handed out.
+  // No healthy host regresses like this, but the failure would be silent — a reset sequence
+  // re-minting ids already handed out — so the seam stages it.
   it('holds the last millisecond rather than re-minting when a clock regresses', () => {
     const fake = fakeClock();
     const generator = UuidV8Generator.createWithClock({ nodeId: 0, clock: fake.clock });
@@ -251,15 +245,13 @@ describe('uuid-v8 generator clock', () => {
     expect(fields.tsMs).toBe(START_MS + 1);
     expect(fields.sequence).toBe(0);
     expect(generator.stallCount).toBe(0);
-    // The three assertions above are also satisfied by a generator that never spins and simply
-    // returns `lastMs + 1`. Only `spinPast` reads elapsed time, so this is what separates them.
+    // The assertions above also pass for a generator that never spins and returns `lastMs + 1`.
+    // Only `spinPast` reads elapsed time, so this separates them.
     expect(fake.spinReadCount()).toBeGreaterThan(0);
   });
 
-  // The production clock answers both readings from one `hrtime`, so the only way real time can
-  // outrun the deadline while the clock is healthy is a deschedule — a GC pause or a stolen CPU
-  // slice — landing between the two reads. Refusing there would 503 a registration that was one
-  // read away from succeeding.
+  // Both readings come from one `hrtime`, so on a healthy host only a deschedule (GC pause, stolen
+  // CPU slice) between them can blow the deadline. Refusing there would 503 a mint about to succeed.
   it('mints rather than refusing when the deadline is blown but the clock has moved on', () => {
     const fake = fakeClock();
     const generator = UuidV8Generator.createWithClock({ nodeId: 0, clock: fake.clock });
@@ -297,8 +289,8 @@ describe('uuid-v8 generator clock', () => {
     const secondSpin = fake.spinReadCount() - firstSpin;
 
     expect(generator.stallCount).toBe(2);
-    // Spinning the full cap on every request is what keeps a stalled host too busy to answer its
-    // own health checks, so the repeat has to cost a clock read rather than the whole loop.
+    // Spinning the full cap per request would keep a stalled host too busy to fail its own health
+    // checks, so the repeat costs one clock read.
     expect(secondSpin * 100).toBeLessThan(firstSpin);
 
     // The shortcut is not a latch that wedges the generator: a clock that comes back mints again.
@@ -315,8 +307,8 @@ describe('uuid-v8 generator clock', () => {
 });
 
 describe('uuid-v8 generator uniqueness under a duplicated node id', () => {
-  // The uniqueness invariant is "no two writers share a node id". This is what breaking it costs:
-  // the ordered prefix collides completely and only the random tail still separates the ids.
+  // What breaking "no two writers share a node id" costs: the ordered prefix collides completely
+  // and only the random tail still separates the ids.
   it('collides on every (timestamp, node, sequence) yet still emits distinct ids', () => {
     const first = UuidV8Generator.createWithClock({ nodeId: 42, clock: fakeClock().clock });
     const second = UuidV8Generator.createWithClock({ nodeId: 42, clock: fakeClock().clock });
