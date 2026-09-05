@@ -69,6 +69,17 @@ module.exports = {
       to: { pathNot: '^src/shared/kernel/' },
     },
     {
+      name: 'shared-no-module-internals',
+      severity: 'error',
+      comment:
+        'shared/ is the leaf layer every context imports; importing a context back turns it into a hidden context. All of src/modules is off limits, including a context`s own *.module.ts, which drags its providers, controllers and schema along. Exempt: the two composition roots — shared/messaging wires context handlers into DI, and the schema barrel collects every context table for the migrator (ADR 0007).',
+      from: {
+        path: '^src/shared/',
+        pathNot: '^src/shared/(messaging|infrastructure/database/schema)/',
+      },
+      to: { path: '^src/modules/' },
+    },
+    {
       name: 'no-orphans',
       severity: 'warn',
       comment: 'Dead file — nothing imports it and it imports nothing (excludes entry points, specs, barrels, published facades).',

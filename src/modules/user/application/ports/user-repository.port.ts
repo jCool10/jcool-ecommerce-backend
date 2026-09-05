@@ -1,3 +1,4 @@
+import type { NormalizedEmail } from '@shared/kernel';
 import type { Role } from '@shared/rbac';
 import type { User } from '../../domain/entities/user.entity';
 
@@ -6,7 +7,8 @@ import type { User } from '../../domain/entities/user.entity';
 export const USER_REPOSITORY = Symbol('USER_REPOSITORY');
 
 export interface CreateUserInput {
-  email: string;
+  /** Branded: these exact bytes are both stored under the unique index and hashed into the row's routing bucket, so a raw `string` here is a compile error rather than a misrouted row. */
+  email: NormalizedEmail;
   passwordHash: string;
   /** Omit to accept the DB default (CUSTOMER). */
   role?: Role;

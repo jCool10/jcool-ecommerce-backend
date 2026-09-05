@@ -1,16 +1,15 @@
-import { index, integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { sql } from 'drizzle-orm';
+import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 // User/Auth schema (users + refresh-token sessions). Infrastructure, never
-// imported by domain. Same conventions as catalog.schema.ts (UUID v7 ids, tz stamps).
+// imported by domain. Same conventions as catalog.schema.ts (tz stamps).
 
 // Matches the Role union (src/shared/rbac/role.enum.ts).
 export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: every id here carries a routing bucket only the writer can compute, so a fallback
+// would mint unroutable rows. Without one, each insert site supplies an id or fails to compile.
+const id = () => uuid('id').primaryKey();
 
 // Timezone-aware audit stamps; `updatedAt` bumped app-side on every UPDATE.
 const stamps = {
@@ -82,4 +81,20 @@ export const refreshTokens = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('idx_refresh_tokens_user').on(t.userId), index('idx_refresh_tokens_family').on(t.familyId)],
+);
+
+/**
+ * Fingerprint of the HMAC key the ids above were minted under — written on the first boot against a
+ * database, compared on every boot after. Stored here rather than in the environment so it travels
+ * with a backup: a restore into an environment holding a different key refuses to boot.
+ */
+export const identityKeyPin = pgTable(
+  'identity_key_pin',
+  {
+    id: smallint('id').primaryKey(),
+    fingerprint: text('fingerprint').notNull(),
+    pinnedAt: timestamp('pinned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // One database was built under one key; a second row would mean two answers to which one.
+  (t) => [check('ck_identity_key_pin_singleton', sql`${t.id} = 1`)],
 );

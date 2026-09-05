@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, gt, isNull } from 'drizzle-orm';
+import { IdentityService } from '@shared/identity';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { emailVerificationTokens } from './schema/user.schema';
 import type {
@@ -11,10 +12,14 @@ import type {
 // Drizzle adapter for EmailVerificationTokenRepositoryPort (only tokenHash is stored, never the raw token).
 @Injectable()
 export class DrizzleEmailVerificationTokenRepository implements EmailVerificationTokenRepositoryPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    private readonly identity: IdentityService,
+  ) {}
 
   async create(input: CreateEmailVerificationTokenInput): Promise<void> {
     await this.db.insert(emailVerificationTokens).values({
+      id: this.identity.mintOwnedBy(input.userId),
       userId: input.userId,
       tokenHash: input.tokenHash,
       expiresAt: input.expiresAt,

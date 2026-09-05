@@ -1,0 +1,59 @@
+# Alerts for the host clock the id generator mints from. Neither failure shows up on the RED
+# dashboard as itself: a stall answers 503, which burns the error budget without saying why, and
+# drift is invisible there entirely — the requests succeed, and the ids they write simply carry the
+# wrong time. Triage steps in docs/observability-runbook.md §12.
+#
+# Blind spot to know about: drift measures catch-up *since the process started*. A host whose clock
+# was already wrong when the process booted reports drift 0 forever, because the generator anchored
+# to that wrong reading. Nothing here catches that; the only symptom is user ids whose timestamps sit
+# in the future.
+groups:
+  - name: identity
+    rules:
+      # The generator absorbs forward wall-clock steps one way and never gives them back, so this is
+      # cumulative and only ever rises. NTP's routine correction is milliseconds, which is why the
+      # threshold sits hours away from it: an hour of one-way catch-up on a running service is a
+      # suspended host or a clock that was wrong, and both mean every id minted afterwards carries a
+      # jumped timestamp. A ticket, not a page — the ids stay unique and ordered, they just stop
+      # meaning what their timestamp says.
+      # Scaled to seconds in the expression rather than compared at 3600000: the threshold then reads
+      # as the hour it is, and `humanizeDuration` — which assumes seconds — renders the value instead
+      # of turning two hours of drift into "83 days".
+      - alert: IdentityClockDrifted
+        expr: max(id_clock_drift_ms) / 1000 > 3600
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Id generator has absorbed over an hour of clock drift'
+          description: 'Ids minted from here on carry a timestamp that jumped by {{ $value | humanizeDuration }}. The offset never unwinds, so a corrected clock does not fix the ids already written — check the host clock, then decide whether the affected rows matter. The gauge only resets at process start, so this stays firing until you restart deliberately; it is not evidence the clock is still wrong.'
+
+      # Every stall is a request answered 503, so any of them is already user-visible. Counted over a
+      # window rather than rated-and-held: a stalled clock produces a burst of refusals and then
+      # silence, and a `rate` held `for` several minutes would evaluate after the burst had left the
+      # window — alerting on the recovery instead of the incident.
+      - alert: IdentityClockStalled
+        expr: sum(increase(id_clock_stall_total[10m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: 'Id generator is refusing to mint — the host clock has stopped'
+          description: 'The clock did not advance while the generator waited for the next millisecond, so it refused rather than reuse a timestamp/node/sequence triple. Anything that writes a user, a session or a token is answering 503 until the host clock moves.'
+
+      # Absent, not zero: the gauge withdraws itself when no generator is bound, which is what a
+      # wiring regression looks like from outside. Deliberately paired with a stall series that is
+      # present, so this fires on "the id path lost its metrics" and not on "the app is down" —
+      # a dead app takes both series with it and the RED alerts own that case.
+      #
+      # The stall side is counted, and joined `on()`, because the two sides carry different labels:
+      # `absent()` invents a series with none, while a scraped series keeps its `job` and `instance`.
+      # A bare `and` between them matches on the full label set and therefore never matches at all —
+      # the rule looks right, passes an unlabelled rule test, and is silent in production.
+      - alert: IdentityClockUnmeasured
+        expr: absent(id_clock_drift_ms) and on() (count(present_over_time(id_clock_stall_total[10m])) > 0)
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Id generator drift is no longer being measured'
+          description: 'The drift gauge stopped reporting while the app kept serving, so the only detector for a poisoned clock is dark. Check that the identity module is still wired into the app that owns the metrics registry.'

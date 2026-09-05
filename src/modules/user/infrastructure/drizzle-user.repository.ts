@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
+import { IdentityService } from '@shared/identity';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { users } from './schema/user.schema';
 import { User } from '../domain/entities/user.entity';
@@ -23,9 +24,15 @@ function toDomain(row: UserRow): User {
 // Drizzle adapter for UserRepositoryPort. The unique email index is the sole
 // uniqueness guarantee: create() inserts ON CONFLICT DO NOTHING so concurrent
 // signups serialize on the index — the losing writer gets a null row, not a 23505.
+//
+// Ids are minted here, not upstream: the bucket the id carries is what a sharded findByEmail/findById
+// will route on, so write-routing belongs beside read-routing.
 @Injectable()
 export class DrizzleUserRepository implements UserRepositoryPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    private readonly identity: IdentityService,
+  ) {}
 
   async findByEmail(email: string): Promise<User | null> {
     const rows = await this.db.select().from(users).where(eq(users.email, email)).limit(1);
@@ -41,6 +48,8 @@ export class DrizzleUserRepository implements UserRepositoryPort {
     const [row] = await this.db
       .insert(users)
       .values({
+        // A writer that loses the ON CONFLICT race just discards this id.
+        id: this.identity.mintUserId(input.email),
         email: input.email,
         passwordHash: input.passwordHash,
         // Omit `role` when unset so the column default (CUSTOMER) applies.

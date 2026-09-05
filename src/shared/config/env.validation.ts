@@ -12,6 +12,7 @@ import {
   MinLength,
   validateSync,
 } from 'class-validator';
+import { MIN_BUCKET_KEY_LENGTH } from '@shared/identity/email-bucket';
 
 // Enum so an unexpected NODE_ENV fails validation instead of enabling wrong behavior.
 export enum NodeEnv {
@@ -41,7 +42,7 @@ export enum PaymentProvider {
   Sepay = 'sepay',
 }
 
-/** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET; optional vars fall back to defaults applied in configuration.ts. */
+/** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, IDENTITY_BUCKET_KEY; optional vars fall back to defaults applied in configuration.ts. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
   NODE_ENV!: NodeEnv;
@@ -482,6 +483,15 @@ export class EnvironmentVariables {
   @IsString()
   @MinLength(32)
   JWT_ACCESS_SECRET!: string;
+
+  // HMAC key behind the routing bucket in every user-context id. PERMANENT — rotating it routes
+  // every existing account to a shard that does not hold its rows, and old buckets are not
+  // recomputable. Back it up with the same rank as the database.
+  // MinLength gates length, not entropy: a long passphrase is brute-forceable from a few
+  // self-registered (email, bucket) pairs. Generate with `openssl rand -base64 48`.
+  @IsString()
+  @MinLength(MIN_BUCKET_KEY_LENGTH)
+  IDENTITY_BUCKET_KEY!: string;
 
   // TTLs in "15m"/"7d" string form; defaults applied in configuration.ts.
   @IsOptional()

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { IdentityService } from '@shared/identity';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { refreshTokens, users } from './schema/user.schema';
 import type {
@@ -13,10 +14,14 @@ import type {
 // Drizzle adapter for RefreshTokenRepositoryPort (only tokenHash is stored, never the raw token).
 @Injectable()
 export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    private readonly identity: IdentityService,
+  ) {}
 
   async create(input: CreateRefreshTokenInput): Promise<void> {
     await this.db.insert(refreshTokens).values({
+      id: this.identity.mintOwnedBy(input.userId),
       userId: input.userId,
       tokenHash: input.tokenHash,
       familyId: input.familyId,
@@ -66,6 +71,8 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
       const [successor] = await tx
         .insert(refreshTokens)
         .values({
+          // The owner is known only from the locked row, so the successor can only be minted here.
+          id: this.identity.mintOwnedBy(record.userId),
           userId: record.userId,
           tokenHash: input.newTokenHash,
           familyId: record.familyId,

@@ -36,17 +36,28 @@ import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/catalog/infrastructure
 import { cartItems, carts } from '../src/modules/cart/infrastructure/schema/cart.schema';
 import { stockLevels } from '../src/modules/inventory/infrastructure/schema/inventory.schema';
 import { users } from '../src/modules/user/infrastructure/schema/user.schema';
+import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '../src/shared/identity';
+import { normalizeEmail } from '../src/shared/kernel/normalize-email';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';
 const SKU_PREFIX = 'PERF-';
-const PERF_USER_EMAIL = 'perf@loadtest.jcool.local';
+// Normalized here so the insert, the lookups, the cleanup and the bucket derivation share bytes.
+const PERF_USER_EMAIL = normalizeEmail('perf@loadtest.jcool.local');
 
 // Unlike the bulk user seeder's rows, this account is meant to authenticate over HTTP, so the
 // credential is overridable rather than fixed in a committed file. The default is a throwaway for
 // a local throwaway database and nothing else.
 function perfUserPassword(): string {
   return process.env.PERF_USER_PASSWORD ?? 'perf-load-not-a-real-secret';
+}
+
+// Must be the app's own key: seeding under another writes an account whose id routes to a bucket its
+// email does not, which nothing notices until a shard split. Refuse rather than invent a default.
+function identity(): IdentityService {
+  const bucketKey = process.env.IDENTITY_BUCKET_KEY;
+  if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to mint the perf user id');
+  return new IdentityService(UuidV8Generator.create({ nodeId: SCRIPTS_NODE_ID }), bucketKey);
 }
 
 const CATEGORY_COUNT = 20;
@@ -196,7 +207,12 @@ async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: st
     const passwordHash = await argon2.hash(perfUserPassword(), { type: argon2.argon2id });
     await db
       .insert(users)
-      .values({ email: PERF_USER_EMAIL, passwordHash, emailVerifiedAt: new Date() })
+      .values({
+        id: identity().mintUserId(PERF_USER_EMAIL),
+        email: PERF_USER_EMAIL,
+        passwordHash,
+        emailVerifiedAt: new Date(),
+      })
       .onConflictDoNothing();
     [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
   }

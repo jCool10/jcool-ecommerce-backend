@@ -1,0 +1,96 @@
+# Rule unit tests for identity.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+#
+# `promtool check rules` only parses; it cannot tell an alert that never fires from one that never
+# clears. Each test below pins one of those two ends for a rule.
+#
+# Series carry the `job`/`instance` a real scrape attaches. Without them an expression that joins an
+# `absent()` (no labels) against a scraped series (labels) matches by accident here and never matches
+# in production — which is exactly how the unmeasured rule below shipped inert once already.
+rule_files:
+  - ../rules/identity.yml
+
+evaluation_interval: 15s
+
+tests:
+  # A resumed host: the generator absorbs the whole suspended gap at once and holds it. The alert
+  # must stay quiet under an NTP-scale correction and fire on the suspend-scale one.
+  - interval: 1m
+    input_series:
+      - series: 'id_clock_drift_ms{job="jcool-api", instance="app:3000"}'
+        values: '0+0x10 40000+0x10 7200000+0x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: IdentityClockDrifted
+        exp_alerts: []
+      # 40s of catch-up is a real suspend and still not worth a ticket.
+      - eval_time: 15m
+        alertname: IdentityClockDrifted
+        exp_alerts: []
+      # Over threshold but inside the hold — an alert that fired here would page on a single scrape.
+      - eval_time: 25m
+        alertname: IdentityClockDrifted
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: IdentityClockDrifted
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Id generator has absorbed over an hour of clock drift'
+              description: 'Ids minted from here on carry a timestamp that jumped by 2h 0m 0s. The offset never unwinds, so a corrected clock does not fix the ids already written — check the host clock, then decide whether the affected rows matter. The gauge only resets at process start, so this stays firing until you restart deliberately; it is not evidence the clock is still wrong.'
+
+  # A stall burst followed by recovery: the counter jumps once and then flattens. The alert has to
+  # fire on the burst and clear on its own afterwards, which is what a windowed `increase` buys over
+  # a rate held `for` — the burst would otherwise have left the window before the hold elapsed.
+  - interval: 1m
+    input_series:
+      - series: 'id_clock_stall_total{job="jcool-api", instance="app:3000"}'
+        values: '0+0x5 12+0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: IdentityClockStalled
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: IdentityClockStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'Id generator is refusing to mint — the host clock has stopped'
+              description: 'The clock did not advance while the generator waited for the next millisecond, so it refused rather than reuse a timestamp/node/sequence triple. Anything that writes a user, a session or a token is answering 503 until the host clock moves.'
+      - eval_time: 25m
+        alertname: IdentityClockStalled
+        exp_alerts: []
+
+  # The wiring regression: the app is still up (stalls keep reporting) but drift went absent.
+  - interval: 1m
+    input_series:
+      - series: 'id_clock_drift_ms{job="jcool-api", instance="app:3000"}'
+        values: '0+0x10 _x40'
+      - series: 'id_clock_stall_total{job="jcool-api", instance="app:3000"}'
+        values: '0+0x50'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: IdentityClockUnmeasured
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: IdentityClockUnmeasured
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Id generator drift is no longer being measured'
+              description: 'The drift gauge stopped reporting while the app kept serving, so the only detector for a poisoned clock is dark. Check that the identity module is still wired into the app that owns the metrics registry.'
+
+  # The app is simply down: both series stop. RED alerts own that case, so this one must stay quiet
+  # rather than add a second page for the same outage.
+  - interval: 1m
+    input_series:
+      - series: 'id_clock_drift_ms{job="jcool-api", instance="app:3000"}'
+        values: '0+0x10 _x40'
+      - series: 'id_clock_stall_total{job="jcool-api", instance="app:3000"}'
+        values: '0+0x10 _x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: IdentityClockUnmeasured
+        exp_alerts: []

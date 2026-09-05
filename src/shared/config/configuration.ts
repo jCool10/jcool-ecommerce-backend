@@ -144,6 +144,10 @@ export default () => ({
     // When true, an unverified account cannot log in (403 after correct creds). Off by default.
     requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
   },
+  identity: {
+    // No default, like jwtAccessSecret: the env schema requires it, so a boot reaching here has it.
+    bucketKey: process.env.IDENTITY_BUCKET_KEY,
+  },
   argon2: {
     // OWASP-minimum argon2id params (m=19 MiB, t=2, p=1); override via env to tune.
     memoryCost: parseInt(process.env.ARGON2_MEMORY_COST ?? '19456', 10),

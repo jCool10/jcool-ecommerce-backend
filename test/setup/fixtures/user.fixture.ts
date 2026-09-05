@@ -9,6 +9,7 @@ import {
 } from '../../../src/modules/user/application/ports/user-repository.port';
 import { AuthTokensService } from '../../../src/modules/user/application/services/auth-tokens.service';
 import type { User } from '../../../src/modules/user/domain/entities/user.entity';
+import { normalizeEmail } from '../../../src/shared/kernel/normalize-email';
 import type { Role } from '../../../src/shared/rbac/role.enum';
 
 let seq = 0; // keeps generated emails unique within a run
@@ -37,7 +38,8 @@ export async function createTestUser(app: INestApplication, options: TestUserOpt
   const tokens = app.get(AuthTokensService);
 
   const passwordHash = await hasher.hash(password);
-  let user = await users.create({ email, passwordHash, role: options.role });
+  // Same normalization as the register path, so a fixture user's id routes like a real one's.
+  let user = await users.create({ email: normalizeEmail(email), passwordHash, role: options.role });
   if (!user) {
     throw new Error(`Test user could not be created — email already taken: ${email}`);
   }

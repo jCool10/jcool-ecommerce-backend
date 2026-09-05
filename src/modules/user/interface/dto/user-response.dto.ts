@@ -4,7 +4,10 @@ import { ROLES } from '@shared/rbac';
 
 /** Public view of a user — the safe subset only, always built via `fromEntity` so `passwordHash` (and any future internal field) can never leak. */
 export class UserResponseDto {
-  @ApiProperty({ example: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f', description: 'User id (UUID v7).' })
+  @ApiProperty({
+    example: '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f',
+    description: 'User id (UUID v8 — carries the routing bucket).',
+  })
   id!: string;
 
   @ApiProperty({ example: 'user@example.com', format: 'email' })

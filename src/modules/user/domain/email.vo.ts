@@ -1,8 +1,7 @@
-import { ValueObject, DomainError } from '@shared/kernel';
-import { normalizeEmail } from './normalize-email';
+import { ValueObject, DomainError, type NormalizedEmail, normalizeEmail } from '@shared/kernel';
 
 interface EmailProps {
-  value: string;
+  value: NormalizedEmail;
 }
 
 /** A user's email as a domain value — the single place that canonicalizes (trim + lowercase via `normalizeEmail`) and shape-validates; the DTO's `@IsEmail` stays the primary HTTP gate (400), this is the deliberately loose domain backstop. */
@@ -21,7 +20,7 @@ export class Email extends ValueObject<EmailProps> {
     return new Email({ value });
   }
 
-  get value(): string {
+  get value(): NormalizedEmail {
     return this.props.value;
   }
 }
