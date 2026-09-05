@@ -40,6 +40,7 @@ import {
 } from './infrastructure';
 import { AuthController } from './interface/auth.controller';
 import { JwtAuthGuard } from './interface/guards/jwt-auth.guard';
+import { IdentityModule } from '@shared/identity/identity.module';
 import { RolesGuard } from '@shared/rbac';
 import { AuthCookieService, CsrfGuard, CsrfTokenService } from './interface/security';
 import { JwtStrategy } from './interface/strategies/jwt.strategy';
@@ -49,6 +50,9 @@ import { UserModule } from './user.module';
 @Module({
   imports: [
     UserModule,
+    // The three token repositories are provided here, not in UserModule, and each mints its own row
+    // ids — so this import is load-bearing even though UserModule already has one.
+    IdentityModule,
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],

@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import * as argon2 from 'argon2';
 import { Pool } from 'pg';
-import { v7 as uuidv7 } from 'uuid';
+import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '../src/shared/identity';
+import { normalizeEmail, type NormalizedEmail } from '../src/shared/kernel/normalize-email';
 
 // Bulk throwaway-user seeder for the register-uniqueness benchmark harness.
 // Grows the `users` table + its unique-email index to a target row count WITHOUT
@@ -13,7 +14,11 @@ import { v7 as uuidv7 } from 'uuid';
 // enough for the smoke/≤1M scales actually run under the <100M target. For the
 // gated 10M–100M decisive runs, swap `insertBatch` for `COPY users (...) FROM
 // STDIN` (add pg-copy-streams) — the tuple generator already emits COPY-ready
-// rows. See plans/260817-1035-email-uniqueness-at-scale/phase-03-*.md.
+// rows.
+//
+// It writes `users.id` itself over raw SQL, so nothing in the type system ties these rows to the
+// app's minting path — the ids have to be derived here the same way, or the version-nibble CHECK on
+// `users.id` rejects the batch.
 
 const EMAIL_PREFIX = 'loadtest+';
 const EMAIL_DOMAIN = 'loadtest.jcool.local';
@@ -21,9 +26,18 @@ const EMAIL_DOMAIN = 'loadtest.jcool.local';
 // column should hold a real-length value so table/index size measurements are honest.
 const SEED_PASSWORD = 'loadtest-throwaway-not-a-real-secret';
 
-/** Normalized (already lowercase/trimmed) synthetic email for row `i`. */
-function emailFor(i: number): string {
-  return `${EMAIL_PREFIX}${i}@${EMAIL_DOMAIN}`;
+// Normalized at the source so the row's id, the unique index and `--clean` all see the same bytes.
+function emailFor(i: number): NormalizedEmail {
+  return normalizeEmail(`${EMAIL_PREFIX}${i}@${EMAIL_DOMAIN}`);
+}
+
+// Node 1023 keeps a seed run from colliding with a live app on the (timestamp, node, sequence)
+// triple. The key must be the app's own: seeding under a different one writes ids that route to
+// buckets their emails do not hash to, which no query notices until a shard split.
+function identity(): IdentityService {
+  const bucketKey = process.env.IDENTITY_BUCKET_KEY;
+  if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to mint user ids');
+  return new IdentityService(UuidV8Generator.create({ nodeId: SCRIPTS_NODE_ID }), bucketKey);
 }
 
 function intArg(name: string, fallback: number): number {
@@ -34,13 +48,14 @@ function intArg(name: string, fallback: number): number {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
-async function insertBatch(pool: Pool, hash: string, start: number, size: number): Promise<void> {
+async function insertBatch(pool: Pool, ids: IdentityService, hash: string, start: number, size: number): Promise<void> {
   const values: string[] = [];
   const params: unknown[] = [];
   for (let r = 0; r < size; r++) {
     const base = r * 3;
     values.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
-    params.push(uuidv7(), emailFor(start + r), hash);
+    const email = emailFor(start + r);
+    params.push(ids.mintUserId(email), email, hash);
   }
   // ON CONFLICT makes a re-run idempotent (resumes/top-ups rather than erroring).
   await pool.query(
@@ -73,12 +88,14 @@ async function main(): Promise<void> {
     const count = intArg('count', 200_000);
     const batch = Math.max(1, Math.min(intArg('batch', 2_000), 20_000)); // clamp 1..20000; ×3 params < pg's 65535 cap
     const hash = await argon2.hash(SEED_PASSWORD);
+    // One generator for the whole run: a second would repeat this node's sequence values.
+    const ids = identity();
 
     const startedAt = Date.now();
     let inserted = 0;
     for (let start = 0; start < count; start += batch) {
       const size = Math.min(batch, count - start);
-      await insertBatch(pool, hash, start, size);
+      await insertBatch(pool, ids, hash, start, size);
       inserted += size;
       if (inserted % (batch * 20) === 0 || inserted === count) {
         const secs = (Date.now() - startedAt) / 1000;

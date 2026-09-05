@@ -1,5 +1,6 @@
 import type { Provider } from '@nestjs/common';
 import { makeCounterProvider, makeGaugeProvider, makeHistogramProvider } from '@willsoto/nestjs-prometheus';
+import { IDENTITY_CLOCK_PROVIDERS } from './identity-clock.collector';
 import { OUTBOX_BACKLOG_PROVIDERS } from './outbox-backlog.collector';
 
 // Metric names in one place so the providers, the @InjectMetric() consumers, and the tests
@@ -190,4 +191,5 @@ export const METRIC_PROVIDERS: Provider[] = [
     labelNames: ['tier', 'route'],
   }),
   ...OUTBOX_BACKLOG_PROVIDERS,
+  ...IDENTITY_CLOCK_PROVIDERS,
 ];

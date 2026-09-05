@@ -7,6 +7,13 @@ const KEY_FINGERPRINT_SENTINEL = 'identity-key-fingerprint-v1';
 const KEY_FINGERPRINT_HEX_CHARS = 16;
 
 /**
+ * Shortest key accepted anywhere the bucket is derived. Length is not entropy — the key must be
+ * CSPRNG-drawn, which no check can prove — but a short key is offline-brute-forceable from a handful
+ * of self-registered (email, bucket) pairs, which reopens the oracle the HMAC exists to close.
+ */
+export const MIN_BUCKET_KEY_LENGTH = 32;
+
+/**
  * Routing bucket for a user, keyed by HMAC rather than a plain hash: `users.id` is returned by the
  * public `POST /auth/register` and `/auth/me`, so an unkeyed digest would publish 12 authenticated
  * bits of `H(email)` per id — an offline email-confirmation oracle. The key is a parameter, not read

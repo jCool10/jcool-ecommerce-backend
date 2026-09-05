@@ -4,6 +4,9 @@ import * as Sentry from '@sentry/nestjs';
 import type { Request, Response } from 'express';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
+// The error module, never the generator: mapping a status must not pull the id generator and its
+// clock state into this filter's import graph.
+import { ClockStalledError } from '@shared/identity/identity.errors';
 import {
   REQUEST_ID_HEADER,
   formatDevRequestLine,
@@ -13,8 +16,9 @@ import {
   getRequestDurationMs,
 } from '@shared/observability';
 
-// Plain number so comparisons don't mix enum/number (no-unsafe-enum-comparison).
+// Plain numbers so comparisons don't mix enum/number (no-unsafe-enum-comparison).
 const SERVER_ERROR_MIN: number = HttpStatus.INTERNAL_SERVER_ERROR;
+const SERVICE_UNAVAILABLE: number = HttpStatus.SERVICE_UNAVAILABLE;
 
 // pino `context` label; passed per-call because the base PinoLogger is a shared singleton.
 const LOG_CONTEXT = 'HttpExceptionFilter';
@@ -37,7 +41,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const status = exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+    const status = this.resolveStatus(exception);
     const requestId = getCorrelationId(this.cls);
 
     // Terminus payload IS the HealthCheckResult — return as-is; Terminus already logged it.
@@ -122,10 +126,22 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
   }
 
+  private resolveStatus(exception: unknown): number {
+    if (exception instanceof HttpException) {
+      return exception.getStatus();
+    }
+    // A stalled clock is a transient host fault, not a bad request or a bug in the handler — the
+    // caller may retry. Mapped here rather than at the call site so every mint path answers alike.
+    if (exception instanceof ClockStalledError) {
+      return SERVICE_UNAVAILABLE;
+    }
+    return SERVER_ERROR_MIN;
+  }
+
   private resolveMessage(exception: unknown, status: number): unknown {
-    // Never leak internals: any >= 500 is genericized.
+    // Never leak internals: any >= 500 is genericized, but "retry later" is worth saying out loud.
     if (status >= SERVER_ERROR_MIN) {
-      return 'Internal server error';
+      return status === SERVICE_UNAVAILABLE ? 'Service unavailable' : 'Internal server error';
     }
 
     if (exception instanceof HttpException) {

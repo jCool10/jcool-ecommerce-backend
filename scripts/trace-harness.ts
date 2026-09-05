@@ -29,9 +29,9 @@ async function main(): Promise<void> {
   const traceIds: { server?: string; producer?: string; consumer?: string } = {};
 
   // PROCESS A — inbound HTTP request that produces an "order.placed" message.
-  await tracer.startActiveSpan('SERVER POST /orders', { kind: SpanKind.SERVER }, async (server) => {
+  tracer.startActiveSpan('SERVER POST /orders', { kind: SpanKind.SERVER }, (server) => {
     traceIds.server = server.spanContext().traceId;
-    await tracer.startActiveSpan('PRODUCER order.placed', { kind: SpanKind.PRODUCER }, async (producer) => {
+    tracer.startActiveSpan('PRODUCER order.placed', { kind: SpanKind.PRODUCER }, (producer) => {
       traceIds.producer = producer.spanContext().traceId;
       // The join step: serialise the active trace context into the message headers.
       if (!broken) injectTraceContext(carrier);
@@ -43,8 +43,8 @@ async function main(): Promise<void> {
   // PROCESS B — worker consumes the message, rebuilding the parent context from the carrier.
   // With no traceparent (--break) it starts a brand-new, disconnected trace.
   const parentContext = extractTraceContext(carrier);
-  await context.with(parentContext, async () => {
-    await tracer.startActiveSpan('CONSUMER order.placed', { kind: SpanKind.CONSUMER }, async (consumer) => {
+  context.with(parentContext, () => {
+    tracer.startActiveSpan('CONSUMER order.placed', { kind: SpanKind.CONSUMER }, (consumer) => {
       traceIds.consumer = consumer.spanContext().traceId;
       consumer.end();
     });

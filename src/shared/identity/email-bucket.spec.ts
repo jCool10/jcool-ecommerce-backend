@@ -5,7 +5,7 @@ import { BUCKET_COUNT, bucketOf, encode } from './uuid-v8.codec';
 const KEY = 'test-identity-bucket-key-not-a-real-secret-000';
 const OTHER_KEY = 'test-identity-bucket-key-not-a-real-secret-001';
 
-// Full N locally and nightly; reduced on CI. The chi-square verdict holds at either size — the
+// Full N locally; reduced on CI. The chi-square verdict holds at either size — the
 // threshold is on p, not on the sample count.
 const DISTRIBUTION_SAMPLES = process.env.CI ? 100_000 : 1_000_000;
 const ROUND_TRIP_SAMPLES = process.env.CI ? 20_000 : 100_000;

@@ -13,8 +13,8 @@ import {
   type UuidV8Fields,
 } from './uuid-v8.codec';
 
-// Statistical/exhaustive volumes: full N locally and in the nightly job, reduced on CI so the
-// deterministic correctness stays gated without the multi-minute cost on shared runners.
+// Statistical/exhaustive volumes: full N locally, reduced on CI so the deterministic correctness
+// stays gated without the multi-minute cost on shared runners.
 const STAMP_SAMPLES = process.env.CI ? 100_000 : 1_000_000;
 const ROUND_TRIP_SAMPLES = process.env.CI ? 20_000 : 100_000;
 

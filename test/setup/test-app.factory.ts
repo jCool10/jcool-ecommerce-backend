@@ -10,6 +10,7 @@ import { expect, inject } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { CSRF_HEADER } from '../../src/modules/user/interface/security/auth-cookie.constants';
 import { RedisService } from '../../src/shared/infrastructure/redis';
+import { E2E_IDENTITY_BUCKET_KEY } from './identity.helper';
 import { waitForRedisReady } from './redis-ready';
 
 /** Swap one DI token for this app only — e.g. a scriptable gateway at the external-system boundary. */
@@ -50,7 +51,7 @@ export async function createTestApp(
   // that file happens to say — making the suite's behaviour depend on an untracked local file.
   // Assigned unconditionally for the same reason, and one more: two apps in a run that bucket under
   // different keys would put a user's id and its token ids in different buckets.
-  process.env.IDENTITY_BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secret-000';
+  process.env.IDENTITY_BUCKET_KEY = E2E_IDENTITY_BUCKET_KEY;
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
@@ -99,18 +100,30 @@ export async function createTestApp(
     });
     app.use(cookieParser()); // so auth routes can read the refresh + CSRF cookies
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
-    // HttpExceptionFilter is wired via APP_FILTER in AppModule (needs CLS injection).
-    await app.init();
-    // Bind a real port once, for every suite. supertest ephemeral-listens a non-listening server per
-    // request and tears that listener down again when the request ends; firing a herd of concurrent
-    // requests at it races those binds and surfaces as `read ECONNRESET`. A listening server is just
-    // connected to, so the concurrency under test stays where it belongs — the DB, the cache, the
-    // lock — instead of the socket.
-    await app.listen(0);
-    // The shared client connects lazily and rejects commands until its socket is writable, so an
-    // assertion made in the first instants of a suite would measure the Redis-down fall-through.
-    await waitForRedisReady(app.get(RedisService).getClient());
-    return app;
+    try {
+      // HttpExceptionFilter is wired via APP_FILTER in AppModule (needs CLS injection).
+      await app.init();
+      // Bind a real port once, for every suite. supertest ephemeral-listens a non-listening server per
+      // request and tears that listener down again when the request ends; firing a herd of concurrent
+      // requests at it races those binds and surfaces as `read ECONNRESET`. A listening server is just
+      // connected to, so the concurrency under test stays where it belongs — the DB, the cache, the
+      // lock — instead of the socket.
+      await app.listen(0);
+      // The shared client connects lazily and rejects commands until its socket is writable, so an
+      // assertion made in the first instants of a suite would measure the Redis-down fall-through.
+      await waitForRedisReady(app.get(RedisService).getClient());
+      return app;
+    } catch (error) {
+      // Providers are already constructed by the time init can fail, so the pool and the Redis
+      // socket are open and the caller never receives a handle to close them. A suite that asserts a
+      // boot guard refuses would leak one set per assertion and hold the run open at the end.
+      // Reported, not swallowed: the init failure is the one worth throwing, but a close that also
+      // failed means handles are still open and the run may hang long after this line.
+      await app.close().catch((closeError) => {
+        console.error('createTestApp: closing a partially initialised app failed', closeError);
+      });
+      throw error;
+    }
   } finally {
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];

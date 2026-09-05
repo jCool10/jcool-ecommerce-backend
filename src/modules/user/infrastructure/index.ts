@@ -6,5 +6,6 @@ export * from './drizzle-password-reset-token.repository';
 export * from './drizzle-refresh-token.repository';
 export * from './drizzle-session-epoch.repository';
 export * from './drizzle-user.repository';
+export * from './identity-bucket-key.verifier';
 export * from './log-mailer';
 export * from './redis-token-denylist';

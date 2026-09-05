@@ -108,6 +108,7 @@ Currently implemented:
   - **Transactional outbox** (`src/shared/messaging/`, [`adr/0019`](./docs/adr/0019-messaging-outbox-shared-infrastructure.md)): every order event (`order.placed` from checkout, `order.paid` / `order.failed` / `order.expired` from finalization) is written by the same transaction as the change it describes — never a second write that could be lost after a commit or orphaned by a rollback. The W3C `traceparent` is captured on each row so a consumer can continue the producer's trace across the queue boundary.
   - **Relay → queue → idempotent consumer**: a scheduler polls `published_at IS NULL` with `FOR UPDATE SKIP LOCKED`, publishes to BullMQ and marks the row published **in one transaction** — at-least-once, safe on every replica without leader election. The worker then claims `message_id = outbox.id` in an `inbox` table (unique on `(consumer, message_id)`) and runs the handler **in that same transaction**, which turns at-least-once delivery into an **exactly-once effect**: a redelivery loses the claim and does nothing, and a handler that fails takes its claim with it so the redelivery does the work. Handlers are audit-only by design — the emitting transaction already applied the effect, so reacting again would apply it twice.
 - **Platform**
+  - **Sharding-ready user ids** ([`adr/0024`](./docs/adr/0024-uuidv8-user-identity-and-routing-bucket.md)): every user-context id is a **UUIDv8** (RFC 9562 §5.8) carrying a 12-bit routing bucket derived by **HMAC** from the same normalized email the `UNIQUE(email)` index sees — a future `users` shard split routes from the id alone, with no lookup table, and email uniqueness survives the split. HMAC rather than a plain hash because `users.id` is public: an unkeyed digest would turn every published id into an offline email-confirmation oracle. Token rows copy the bucket out of their owner's id, so a user and everything they own land on the same shard. `IDENTITY_BUCKET_KEY` keys the HMAC and is **permanent — never rotate it**; its fingerprint is auto-pinned in the database on first boot and a later boot under a different key is refused. A `CHECK` on the version+variant nibbles of the four user-context primary keys rejects a non-v8 id from **any** writer, raw SQL included. The generator is **single-writer** — see the replica gate under [Docker](#docker).
   - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
   - **Liveness / readiness** health checks (Terminus) probing Postgres and Redis.
@@ -229,7 +230,20 @@ openssl rand -base64 48
 - `IDENTITY_BUCKET_KEY` is left **unset** in the template, so boot fails until you set it. It is
   also **permanent**: it keys the routing bucket carried inside every user id, so changing it later
   orphans every existing account from the shard holding its rows. Store it in the secret manager
-  and back it up alongside the database.
+  and back it up alongside the database. Provisioning it is a routine, not a copy-paste — the
+  database pins whatever key boots first and holds every later boot to that fingerprint, so a wrong
+  key on day one is caught by process, not by code:
+
+  1. generate it with the CSPRNG above. The `≥ 32` check gates length, not entropy: a memorable
+     passphrase passes it and is still brute-forceable from a handful of self-registered accounts.
+  2. store it in that environment's secret manager — never in the repo, never baked into the image.
+  3. boot once against an empty database.
+  4. match the startup line `Pinned identity bucket key …` against the fingerprint you expect, and
+     keep it with the key. That line prints only on the boot that *writes* the pin — a boot against
+     an already-pinned database is silent — so do this on the first one. Every later boot **against
+     a reachable database** is then refused unless the key still produces that fingerprint; if the
+     database cannot be reached the check is logged and skipped, which costs nothing because no id
+     is minted while it is down.
 - `JWT_ACCESS_SECRET` ships a **git-public dev placeholder** that is long enough to pass validation,
   so nothing will stop a deploy that still uses it — anyone who can read this repo could then mint a
   valid access token for any user. Replace it by hand for any shared or production environment.
@@ -282,7 +296,7 @@ Validated at startup — an invalid or missing **required** var crashes the proc
 | `DB_POOL_IDLE_TIMEOUT_MS` | No  | `10000`          | Reap an idle pooled connection after this long |
 | `REDIS_URL`          |   Yes    | —                | Redis connection string                     |
 | `JWT_ACCESS_SECRET`  |   Yes    | —                | HS256 secret, **min 32 chars** (no default) |
-| `IDENTITY_BUCKET_KEY` |  Yes    | —                | HMAC key for the routing bucket in every user id, **min 32 chars**, CSPRNG-generated. **Permanent — never rotate** (rotating orphans every existing account from its shard); back it up with the database |
+| `IDENTITY_BUCKET_KEY` |  Yes    | —                | HMAC key for the routing bucket in every user id, **min 32 chars**, CSPRNG-generated ([`adr/0024`](./docs/adr/0024-uuidv8-user-identity-and-routing-bucket.md)). **Permanent — never rotate** (rotating orphans every existing account from its shard); back it up with the database. Its fingerprint is pinned in the DB on first boot — no operator var, and a mismatched key refuses boot (a DB that cannot be reached is logged and skipped) |
 | `JWT_ACCESS_TTL`     |    No    | `5m`             | Access-token lifetime                       |
 | `REFRESH_TOKEN_TTL`  |    No    | `7d`             | Refresh-token lifetime                      |
 | `ARGON2_MEMORY_COST` |    No    | `19456`          | Argon2id memory cost (KiB)                  |
@@ -453,6 +467,7 @@ is the separate type-check gate.
 | `npm run arch:check` | Enforce architecture boundaries (dependency-cruiser) |
 | `npm test`           | Run tests                                            |
 | `npm run db:migrate` | Apply database migrations                            |
+| `npm run identity:verify` | Scan every user row for an id that does not route to its email's bucket |
 
 ## Docker
 
@@ -472,6 +487,14 @@ docker compose down -v
 
 Inside the Compose network the app reaches services by name (`postgres:5432`,
 `redis:6379`); from the host, use the mapped ports (`5433`, `6380`).
+
+> **Replica gate — run exactly one app instance.** The id generator holds a fixed node id for the
+> whole fleet, so two replicas mint the same `(timestamp, node, sequence)` triples. Ids stay unique
+> (40 random bits see to that) but stop being an ordered per-writer sequence, and **nothing detects
+> it** — no error, no metric, no failed insert. Scaling replicas waits on the node-id lease
+> ([`adr/0024`](./docs/adr/0024-uuidv8-user-identity-and-routing-bucket.md)). The standalone seed and
+> perf scripts mint under a different node id, so one of them may run alongside the app — but only
+> one at a time, since two of them collide with each other for the same reason.
 
 ## Observability
 

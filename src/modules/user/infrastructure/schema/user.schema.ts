@@ -1,16 +1,16 @@
-import { index, integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { sql } from 'drizzle-orm';
+import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 // User/Auth schema (users + refresh-token sessions). Infrastructure, never
-// imported by domain. Same conventions as catalog.schema.ts (UUID v7 ids, tz stamps).
+// imported by domain. Same conventions as catalog.schema.ts (tz stamps).
 
 // Matches the Role union (src/shared/rbac/role.enum.ts).
 export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: every id in this context carries a routing bucket only the writer can compute, so a
+// generated fallback would silently mint an unroutable row. Leaving it out makes each Drizzle insert
+// site supply an id or fail to compile.
+const id = () => uuid('id').primaryKey();
 
 // Timezone-aware audit stamps; `updatedAt` bumped app-side on every UPDATE.
 const stamps = {
@@ -82,4 +82,22 @@ export const refreshTokens = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('idx_refresh_tokens_user').on(t.userId), index('idx_refresh_tokens_family').on(t.familyId)],
+);
+
+/**
+ * Fingerprint of the HMAC key the ids above were minted under — one row, written the first time a
+ * key boots against a database and compared on every boot after.
+ *
+ * In the database rather than the environment so that it travels with a backup: a restore carries
+ * the fingerprint of the key that built the data, and a boot under any other key refuses.
+ */
+export const identityKeyPin = pgTable(
+  'identity_key_pin',
+  {
+    id: smallint('id').primaryKey(),
+    fingerprint: text('fingerprint').notNull(),
+    pinnedAt: timestamp('pinned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // One database was built under one key; a second row would mean two answers to which one.
+  (t) => [check('ck_identity_key_pin_singleton', sql`${t.id} = 1`)],
 );
