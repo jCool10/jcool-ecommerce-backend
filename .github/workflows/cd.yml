@@ -1,0 +1,106 @@
+name: CD
+
+# Deploy is chained off CI rather than off `push` so that a direct push to main — which no branch
+# protection rule can gate — still cannot reach Railway with red code. Railway's own autodeploy must
+# stay OFF for this service, or every push deploys twice.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+# Never cancel a deploy in flight: a half-applied rollout is worse than a queued one.
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Railway
+    # `workflow_run` hands this job the repository's secrets, so the trigger is narrowed to a push
+    # that landed on main in this repo. A pull_request-triggered CI run reports the fork's branch
+    # and is excluded here.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+      RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT || 'production' }}
+      APP_PUBLIC_URL: ${{ vars.APP_PUBLIC_URL }}
+    steps:
+      - name: Check deploy configuration
+        run: |
+          missing=()
+          [ -n "$RAILWAY_TOKEN" ] || missing+=("secrets.RAILWAY_TOKEN")
+          [ -n "$RAILWAY_SERVICE" ] || missing+=("vars.RAILWAY_SERVICE")
+          [ -n "$APP_PUBLIC_URL" ] || missing+=("vars.APP_PUBLIC_URL")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::not configured: ${missing[*]}"
+            exit 1
+          fi
+
+      # workflow_run checks out the default branch by default; pin the commit CI actually verified.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # Pinned: an unattended deploy should not pick up CLI behaviour changes on its own.
+      - run: npm install -g @railway/cli@5.49.2
+
+      # `--ci` returns once the image is built. The pre-deploy migration and the /health/ready gate
+      # both run after that, so a green step here is not yet a live deploy — the next step is.
+      - name: Upload and build
+        run: railway up --ci --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+
+      - name: Wait for the rollout to finish
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 900 ))
+          while :; do
+            raw=$(railway deployment list --json --limit 1 \
+              --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT")
+            status=$(printf '%s' "$raw" \
+              | jq -r '(if type == "array" then .[0] else (.deployments // .data // [])[0] end) | .status // empty')
+
+            # An unreadable payload must fail loudly: treating "no status" as "not yet" would let a
+            # CLI output change turn every deploy green on a 15-minute timeout instead.
+            if [ -z "$status" ]; then
+              echo "::error::cannot read deployment status from the CLI response"
+              printf '%s\n' "$raw"
+              exit 1
+            fi
+
+            case "$status" in
+              SUCCESS)
+                echo "deployment is live"
+                exit 0
+                ;;
+              FAILED|CRASHED|REMOVED|SKIPPED)
+                echo "::error::deployment ended as $status — traffic stays on the previous version"
+                echo "logs: railway logs --deployment --service $RAILWAY_SERVICE"
+                exit 1
+                ;;
+            esac
+
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::timed out after 15m, last status was $status"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      # Railway already gated the traffic switch on /health/ready from inside its network. This hits
+      # the same probe from outside, so it covers what that gate cannot see: domain, TLS, and edge
+      # routing. A failure here means the new version is live but unreachable — roll back by hand
+      # (Deployments tab), because redeploying the same commit would reproduce it.
+      - name: Smoke the public URL
+        run: |
+          curl --fail --silent --show-error --location \
+            --retry 10 --retry-delay 6 --retry-all-errors --max-time 20 \
+            "${APP_PUBLIC_URL%/}/health/ready"

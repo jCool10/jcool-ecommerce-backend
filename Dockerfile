@@ -28,4 +28,8 @@ COPY --from=builder /app/src/shared/infrastructure/database/migrations ./migrati
 ENV MIGRATIONS_DIR=/app/migrations
 EXPOSE 3000
 USER node
-CMD ["node", "dist/main.js", "./dist/instrumentation.js"]
+# `--import`, not a trailing argument: Node would take the second path as argv[2] and never load it,
+# leaving Sentry silently uninitialised. Both exporters are gated at runtime — OTel is a no-op unless
+# OTEL_ENABLED=true (no Collector is deployed, ADR 0017) and Sentry unless SENTRY_DSN is set — so a
+# hosted deployment gets error tracking without the local observability stack coming with it.
+CMD ["node", "--import", "./dist/instrumentation.js", "dist/main.js"]
