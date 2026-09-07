@@ -5,14 +5,14 @@ import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
 import { ExpirePaymentSessionUseCase } from '../../application/use-cases';
 
 /**
- * The money half of a TTL expiry — an order the reservation sweep gave up on, not one anybody
- * cancelled (that is `OrderCancelledHandler`). Order publishes what it decided and never tells
- * Payment to expire anything, so the reaction lives here. Via the outbox rather than a direct call
- * because the gateway is exactly what is unreachable when these events pile up, and the queue's
- * retry path is what carries the attempt until it answers.
+ * The money half of a cancel: Order announces that a buyer or an admin called the order off, Payment
+ * closes the session that could still charge for it. Separate from `OrderExpiredHandler`, which calls
+ * the same use case, because the trigger is what the refund log line reports — and a cancel is a
+ * button pressed while a checkout page may be open, so "the session just took the money" is everyday
+ * here rather than rare.
  */
 @Injectable()
-export class OrderExpiredHandler {
+export class OrderCancelledHandler {
   constructor(private readonly expireSession: ExpirePaymentSessionUseCase) {}
 
   async close(job: DomainEventJob, tx: DrizzleTx): Promise<void> {
@@ -20,9 +20,9 @@ export class OrderExpiredHandler {
     // Permanent: the payload will be identical on every redelivery, and a guessed orderId would
     // expire the wrong buyer's session.
     if (typeof orderId !== 'string') {
-      throw new PermanentError(`Unusable order expiry event "${job.eventType}"`);
+      throw new PermanentError(`Unusable order cancellation event "${job.eventType}"`);
     }
 
-    await this.expireSession.execute(orderId, tx, 'ttl');
+    await this.expireSession.execute(orderId, tx, 'cancel');
   }
 }

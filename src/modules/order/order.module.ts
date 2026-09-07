@@ -3,6 +3,7 @@ import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
 import {
+  CancelOrderUseCase,
   CheckoutOrderUseCase,
   FinalizeOrderUseCase,
   SweepExpiredReservationsUseCase,
@@ -21,6 +22,7 @@ import { CartSnapshotAdapter } from './infrastructure/cart-snapshot.adapter';
 import { CatalogQueryAdapter } from './infrastructure/catalog-query.adapter';
 import { InventoryReservationAdapter } from './infrastructure/inventory-reservation.adapter';
 import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempotency-key.repository';
+import { AdminOrderController } from './interface/admin-order.controller';
 import { OrderController } from './interface/order.controller';
 import { IdempotencyInterceptor } from './interface/idempotency.interceptor';
 import { PaymentEventsHandler } from './interface/queue/payment-events.handler';
@@ -38,9 +40,10 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
  */
 @Module({
   imports: [CartModule, CatalogModule, InventoryModule],
-  controllers: [OrderController],
+  controllers: [OrderController, AdminOrderController],
   providers: [
     CheckoutOrderUseCase,
+    CancelOrderUseCase,
     FinalizeOrderUseCase,
     SweepExpiredReservationsUseCase,
     // Registers itself with the shared retention registry on init; nothing here drives it.

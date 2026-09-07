@@ -114,6 +114,19 @@ describe('StripeGatewayAdapter', () => {
       expect(options).toEqual({ idempotencyKey: 'idem-1' });
     });
 
+    // Anything this service fails to close stays payable until the gateway's own clock runs out, so
+    // that clock is set to the shortest Stripe accepts rather than its 24h default.
+    it('caps the session lifetime at 30 minutes rather than taking the provider default', async () => {
+      const create = vi.fn().mockResolvedValue({ id: 'cs_test_ttl', url: null });
+      const before = Math.floor(Date.now() / 1000);
+
+      await liveAdapter(create).createSession({ orderId: 'o', amountMinor: 1, currency: 'USD' });
+
+      const [params] = create.mock.calls[0] as [Stripe.Checkout.SessionCreateParams];
+      expect(params.expires_at).toBeGreaterThanOrEqual(before + 30 * 60);
+      expect(params.expires_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 30 * 60);
+    });
+
     it('maps a null hosted url to an undefined redirectUrl', async () => {
       const create = vi.fn().mockResolvedValue({ id: 'cs_test_x', url: null });
       const session = await liveAdapter(create).createSession({ orderId: 'o', amountMinor: 1, currency: 'USD' });
@@ -219,26 +232,74 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
 
   describe('expireSession', () => {
     it('is a no-op offline, where no session was ever payable', async () => {
-      await expect(adapter().expireSession('cs_test_anything')).resolves.toBeUndefined();
+      await expect(adapter().expireSession('cs_test_anything')).resolves.toBe('expired');
     });
 
     it('closes the session at Stripe', async () => {
       const expire = vi.fn().mockResolvedValue({ id: 'cs_live_1', status: 'expired' });
 
-      await expect(statusAdapter({ expire }).expireSession('cs_live_1')).resolves.toBeUndefined();
+      await expect(statusAdapter({ expire }).expireSession('cs_live_1')).resolves.toBe('expired');
       expect(expire).toHaveBeenCalledWith('cs_live_1');
     });
 
-    it('accepts an unrecognised handle as already unpayable', async () => {
+    it('accepts an unrecognised handle as already unpayable, without reading it back', async () => {
       const expire = vi.fn().mockRejectedValue(stripeError(404));
+      const retrieve = vi.fn();
 
-      await expect(statusAdapter({ expire }).expireSession('cs_gone')).resolves.toBeUndefined();
+      await expect(statusAdapter({ expire, retrieve }).expireSession('cs_gone')).resolves.toBe('already_closed');
+      expect(retrieve).not.toHaveBeenCalled();
     });
 
-    it('throws when Stripe refuses, because the page may still take money', async () => {
+    // Stripe answers a completed session and a lapsed one with the same 400, and the two mean a
+    // refund and a no-op. The read-back is the only thing that tells them apart.
+    it.each([
+      ['complete', 'already_completed'],
+      ['expired', 'already_closed'],
+    ] as const)('reads a refused session back and reports %s as %s', async (status, expected) => {
       const expire = vi.fn().mockRejectedValue(stripeError(400));
+      const retrieve = vi.fn().mockResolvedValue({ id: 'cs_live_1', status });
 
-      await expect(statusAdapter({ expire }).expireSession('cs_live_1')).rejects.toBeInstanceOf(PaymentGatewayError);
+      await expect(statusAdapter({ expire, retrieve }).expireSession('cs_live_1')).resolves.toBe(expected);
+      // Bounded, because this runs inside the consumer's transaction.
+      expect(retrieve).toHaveBeenCalledWith('cs_live_1', undefined, { timeout: 5_000, maxNetworkRetries: 0 });
+    });
+
+    // Refused while still payable is a reason we do not model. Swallowing it would leave a live page
+    // in front of stock that has been released.
+    it('throws when a refused session reads back as still open', async () => {
+      const expire = vi.fn().mockRejectedValue(stripeError(400));
+      const retrieve = vi.fn().mockResolvedValue({ id: 'cs_live_1', status: 'open' });
+
+      await expect(statusAdapter({ expire, retrieve }).expireSession('cs_live_1')).rejects.toBeInstanceOf(
+        PaymentGatewayError,
+      );
+    });
+
+    it('treats a refused session that has since vanished as already unpayable', async () => {
+      const expire = vi.fn().mockRejectedValue(stripeError(400));
+      const retrieve = vi.fn().mockRejectedValue(stripeError(404));
+
+      await expect(statusAdapter({ expire, retrieve }).expireSession('cs_live_1')).resolves.toBe('already_closed');
+    });
+
+    it('throws when the read-back itself fails, so an outage is never read as "already closed"', async () => {
+      const expire = vi.fn().mockRejectedValue(stripeError(400));
+      const retrieve = vi.fn().mockRejectedValue(stripeError(503, 'api_error'));
+
+      await expect(statusAdapter({ expire, retrieve }).expireSession('cs_live_1')).rejects.toBeInstanceOf(
+        PaymentGatewayError,
+      );
+    });
+
+    // Not a refusal at all: a 5xx says nothing about the session, so it must not be classified.
+    it('throws on a provider outage without reading the session back', async () => {
+      const expire = vi.fn().mockRejectedValue(stripeError(503, 'api_error'));
+      const retrieve = vi.fn();
+
+      await expect(statusAdapter({ expire, retrieve }).expireSession('cs_live_1')).rejects.toBeInstanceOf(
+        PaymentGatewayError,
+      );
+      expect(retrieve).not.toHaveBeenCalled();
     });
   });
 });

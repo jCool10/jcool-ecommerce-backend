@@ -12,6 +12,7 @@ import type {
   DeadLetterReason,
   MetricsPort,
   PublishResult,
+  RefundOwedSource,
   SagaStep,
 } from './metrics.port';
 import {
@@ -28,6 +29,7 @@ import {
   MESSAGING_PUBLISH_TOTAL,
   ORDERS_CREATED_TOTAL,
   ORDER_VALUE_MINOR,
+  PAYMENT_REFUND_OWED_TOTAL,
   RATE_LIMIT_REJECTIONS_TOTAL,
   RESERVATION_EXPIRY_TOTAL,
   RETENTION_ROWS_DELETED_TOTAL,
@@ -62,6 +64,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(SAGA_STEP_TOTAL) private readonly sagaSteps: Counter<string>,
     @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
     @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
+    @InjectMetric(PAYMENT_REFUND_OWED_TOTAL) private readonly refundsOwed: Counter<string>,
     @InjectMetric(RETENTION_ROWS_DELETED_TOTAL) private readonly retentionRowsDeleted: Counter<string>,
     @InjectMetric(RETENTION_SWEEP_DURATION_SECONDS) private readonly retentionSweepDuration: Histogram<string>,
     @InjectMetric(RETENTION_SWEEP_FAILURES_TOTAL) private readonly retentionSweepFailures: Counter<string>,
@@ -119,6 +122,10 @@ export class BusinessMetrics implements MetricsPort {
 
   recordReservationExpiry(): void {
     this.safely('reservation_expiry', () => this.reservationExpiries.inc());
+  }
+
+  recordRefundOwed(source: RefundOwedSource): void {
+    this.safely('payment_refund_owed', () => this.refundsOwed.inc({ source }));
   }
 
   recordRetentionSweep(sweep: string, rows: number): void {

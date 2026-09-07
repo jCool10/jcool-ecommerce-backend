@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { mapPaymentToOrderOutcome } from '../mappers/map-payment-to-order-outcome';
 import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';
@@ -19,6 +20,7 @@ export class HandlePaymentWebhookUseCase {
   constructor(
     private readonly processEvent: ProcessWebhookEventUseCase,
     private readonly finalizeOrder: FinalizeOrderUseCase,
+    @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -28,6 +30,7 @@ export class HandlePaymentWebhookUseCase {
     if (result.outcome !== 'processed') {
       if (result.outcome === 'skipped' && result.conflict?.to === PaymentStatus.SUCCEEDED) {
         // Money moved on a payment we had already closed. A refund decision, not a retry.
+        this.metrics.recordRefundOwed('webhook_direct');
         this.logger.error(
           { context: LOG_CONTEXT, ...result.conflict },
           'gateway reported a success on an already-settled payment — funds may be captured with no matching order',
@@ -64,8 +67,9 @@ export class HandlePaymentWebhookUseCase {
       });
       if (finalize.status === 'not_found' || finalize.status === 'ignored') {
         // Not something a sweep will pick up: reconcile's queue is orders still PENDING, and this
-        // order is either gone or already terminal. The durable settlement event re-runs the same
-        // finalize and lands here too, so a paid order that never moved is a refund decision.
+        // one is either gone or already terminal. The durable settlement event re-runs the same
+        // finalize and counts it again — which is why the metric counts observations, not refunds.
+        if (outcome === 'PAID') this.metrics.recordRefundOwed('webhook_direct');
         const level = outcome === 'PAID' ? 'error' : 'warn';
         this.logger[level](
           { context: LOG_CONTEXT, orderId: result.orderId, outcome, finalize: finalize.status },

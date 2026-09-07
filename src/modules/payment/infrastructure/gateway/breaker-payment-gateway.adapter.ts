@@ -2,6 +2,7 @@ import { DownstreamUnavailableError, type OutboundCall } from '@shared/resilienc
 import {
   PaymentGatewayError,
   type CreateSessionInput,
+  type ExpireSessionOutcome,
   type GatewayPaymentStatus,
   type GatewaySession,
   type PaymentGatewayPort,
@@ -47,7 +48,7 @@ export class BreakerPaymentGateway implements PaymentGatewayPort {
     return this.guard('report a payment status', () => this.inner.getPaymentStatus(ref));
   }
 
-  expireSession(ref: string): Promise<void> {
+  expireSession(ref: string): Promise<ExpireSessionOutcome> {
     return this.guard('expire a session', () => this.inner.expireSession(ref));
   }
 

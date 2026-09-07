@@ -49,6 +49,9 @@ export type SagaStep = 'reserve' | 'payment_session' | 'finalize';
 /** Why an order handed its stock back instead of committing it. */
 export type CompensationTrigger = 'payment_failed' | 'ttl_expired' | 'cancelled';
 
+/** WHICH PATH noticed money on an order that will never ship — the observer, not the cause. */
+export type RefundOwedSource = 'expire_session' | 'webhook_direct' | 'settlement_event';
+
 /**
  * Business events worth counting. Callers pass only bounded, low-cardinality values —
  * never an id/email/sku (those belong on logs/spans, not Prometheus labels).
@@ -86,6 +89,8 @@ export interface MetricsPort {
   recordSagaStep(step: SagaStep, outcome: 'success' | 'failed'): void;
   /** An order released its stock hold instead of committing it — the saga's rollback, counted by what triggered it. */
   recordCompensation(trigger: CompensationTrigger): void;
+  /** A path noticed money on an order that cannot be fulfilled. Observations, not refunds: one order can raise several. */
+  recordRefundOwed(source: RefundOwedSource): void;
   /** The reservation sweep expired one order whose hold had lapsed. */
   recordReservationExpiry(): void;
   /** One retention sweep finished and reclaimed `rows`. `sweep` is a fixed `context:table` name, never a per-row value. */

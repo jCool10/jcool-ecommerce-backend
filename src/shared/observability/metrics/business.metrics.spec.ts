@@ -17,6 +17,7 @@ function build() {
   const sagaStepInc = vi.fn();
   const compensationInc = vi.fn();
   const reservationExpiryInc = vi.fn();
+  const refundOwedInc = vi.fn();
   const retentionRowsInc = vi.fn();
   const retentionDurationObserve = vi.fn();
   const retentionFailureInc = vi.fn();
@@ -40,6 +41,7 @@ function build() {
     { inc: sagaStepInc } as unknown as Counter<string>,
     { inc: compensationInc } as unknown as Counter<string>,
     { inc: reservationExpiryInc } as unknown as Counter<string>,
+    { inc: refundOwedInc } as unknown as Counter<string>,
     { inc: retentionRowsInc } as unknown as Counter<string>,
     { observe: retentionDurationObserve } as unknown as Histogram<string>,
     { inc: retentionFailureInc } as unknown as Counter<string>,
@@ -64,6 +66,7 @@ function build() {
     sagaStepInc,
     compensationInc,
     reservationExpiryInc,
+    refundOwedInc,
     retentionRowsInc,
     retentionDurationObserve,
     retentionFailureInc,
@@ -148,6 +151,17 @@ describe('BusinessMetrics', () => {
     metrics.recordReservationExpiry();
     expect(reservationExpiryInc).toHaveBeenCalledWith();
   });
+
+  // Labelled by source because one stranded payment is normally seen by two of them, so an alert on
+  // the unlabelled total would read a single refund as two.
+  it.each(['expire_session', 'webhook_direct', 'settlement_event'] as const)(
+    'counts a refund owed observed by %s',
+    (source) => {
+      const { metrics, refundOwedInc } = build();
+      metrics.recordRefundOwed(source);
+      expect(refundOwedInc).toHaveBeenCalledWith({ source });
+    },
+  );
 
   it('observes a cache rebuild in seconds', () => {
     const { metrics, rebuildObserve } = build();

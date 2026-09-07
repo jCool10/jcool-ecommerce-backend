@@ -1,8 +1,9 @@
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { Order } from '../../domain/order.entity';
+import type { OrderStatus } from '../../domain/order-status';
 
 // Order persistence port; the Drizzle adapter implements it in infrastructure/. Reads split into
-// user-scoped (`findForUser`/`findAllForUser`) and unscoped, which cross-context callers authorize.
+// user-scoped (`findForUser`/`findPageForUser`) and unscoped, which cross-context callers authorize.
 export const ORDER_REPOSITORY = Symbol('ORDER_REPOSITORY');
 
 export interface CheckoutPersistResult {
@@ -14,6 +15,24 @@ export interface CheckoutPersistResult {
 export interface StalePendingOrder {
   id: string;
   placedAt: Date;
+}
+
+export interface OrderPageQuery {
+  /** 1-based. */
+  page: number;
+  pageSize: number;
+}
+
+/** Both filters optional and independent; the unfiltered call reads the whole table, bounded by the page. */
+export interface AdminOrderPageQuery extends OrderPageQuery {
+  status?: OrderStatus;
+  userId?: string;
+}
+
+export interface OrderPage {
+  items: Order[];
+  /** Rows matching the filter, not rows on this page — the client needs it to know there are more. */
+  total: number;
 }
 
 export interface OrderRepositoryPort {
@@ -53,7 +72,14 @@ export interface OrderRepositoryPort {
   /** Not user-scoped — for cross-context callers that authorize ownership themselves. */
   findById(orderId: string): Promise<Order | null>;
 
-  findAllForUser(userId: string): Promise<Order[]>;
+  /** One page of a user's orders, newest first, with the total behind it. */
+  findPageForUser(userId: string, query: OrderPageQuery): Promise<OrderPage>;
+
+  /**
+   * The same page unscoped, for the admin queue. Filtering by status has no index to use
+   * (`idx_orders_pending_placed_at` is partial on PENDING), so it is a scan the page size bounds.
+   */
+  findPage(query: AdminOrderPageQuery): Promise<OrderPage>;
 
   /**
    * The reconciliation sweep's work queue, read `FOR UPDATE SKIP LOCKED` so it never queues behind a

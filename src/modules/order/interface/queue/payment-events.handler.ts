@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { FinalizeOrderUseCase, type FinalizeOutcome } from '../../application/use-cases';
 
 const LOG_CONTEXT = 'PaymentEventsHandler';
@@ -29,6 +30,7 @@ const OUTCOME_BY_EVENT: Readonly<Record<string, FinalizeOutcome>> = {
 export class PaymentEventsHandler {
   constructor(
     private readonly finalizeOrder: FinalizeOrderUseCase,
+    @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {}
 
@@ -52,14 +54,15 @@ export class PaymentEventsHandler {
     // terminal one, and the money has already moved.
     if (result.status === 'not_found') {
       // Loud, because a settled payment with no order to settle is a refund decision.
+      if (outcome === 'PAID') this.metrics.recordRefundOwed('settlement_event');
       this.logger.error(
         { context: LOG_CONTEXT, orderId, eventType: job.eventType, messageId: job.outboxId },
         'payment settled for an order that does not exist',
       );
     } else if (result.status === 'ignored') {
-      // The order settled some other way first — the TTL sweep expiring it is the realistic path.
-      // A successful payment onto that is the same refund decision as above; a failed one is the
-      // benign tail, where two paths agreed the order was not going to be paid.
+      // The order settled some other way first — the sweep expiring it, or a buyer cancelling it. A
+      // successful payment onto that is the same refund decision; a failed one is the benign tail.
+      if (outcome === 'PAID') this.metrics.recordRefundOwed('settlement_event');
       const level = outcome === 'PAID' ? 'error' : 'info';
       this.logger[level](
         { context: LOG_CONTEXT, orderId, eventType: job.eventType, status: result.order?.status },

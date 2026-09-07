@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PaymentGatewayError } from '../../application/ports/payment-gateway.port';
 import { FakeSignerGatewayAdapter } from './fake-signer-gateway.adapter';
 
 const SECRET = 'whsec_test_secret_value_0000';
@@ -51,5 +52,38 @@ describe('FakeSignerGatewayAdapter', () => {
     });
     expect(session.providerSessionId).toMatch(/^cs_fake_[0-9a-f]+$/);
     expect(session.redirectUrl).toContain(session.providerSessionId);
+  });
+
+  describe('expireSession', () => {
+    it('closes an open session and records it as no longer payable', async () => {
+      const gateway = new FakeSignerGatewayAdapter(SECRET);
+
+      await expect(gateway.expireSession('cs_open')).resolves.toBe('expired');
+      expect(gateway.wasExpired('cs_open')).toBe(true);
+    });
+
+    // The redelivery after a consume that expired the session and then rolled back. A double that
+    // answered `expired` twice would let a caller mistake the second attempt for the first.
+    it('reports a second close as a no-op rather than another success', async () => {
+      const gateway = new FakeSignerGatewayAdapter(SECRET);
+      await gateway.expireSession('cs_open');
+
+      await expect(gateway.expireSession('cs_open')).resolves.toBe('already_closed');
+    });
+
+    it('reports a paid session as already completed, leaving it payable-in-fact', async () => {
+      const gateway = new FakeSignerGatewayAdapter(SECRET);
+      gateway.setPaymentStatus('cs_paid', 'PAID');
+
+      await expect(gateway.expireSession('cs_paid')).resolves.toBe('already_completed');
+      expect(gateway.wasExpired('cs_paid')).toBe(false);
+    });
+
+    it('throws for a staged outage, as the real adapter does', async () => {
+      const gateway = new FakeSignerGatewayAdapter(SECRET);
+      gateway.failExpireSession('cs_stuck');
+
+      await expect(gateway.expireSession('cs_stuck')).rejects.toBeInstanceOf(PaymentGatewayError);
+    });
   });
 });

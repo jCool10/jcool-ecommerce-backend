@@ -37,6 +37,18 @@ export interface GatewayPaymentStatus {
   intentId?: string | null;
 }
 
+/** What closing a session turned out to mean. The adapter resolves it, so no caller has to guess. */
+export type ExpireSessionOutcome =
+  /** This call closed it. */
+  | 'expired'
+  /** Already unpayable — expired, or never issued. Nothing happened and nothing is owed. */
+  | 'already_closed'
+  /**
+   * The buyer has already checked out through it. Payment may still be clearing (an async method
+   * leaves a completed session unpaid for a while), but the decision is the same either way.
+   */
+  | 'already_completed';
+
 export interface PaymentGatewayPort {
   // Recorded on Payment.provider from the adapter, not config, so the two can never drift.
   readonly provider: string;
@@ -49,11 +61,12 @@ export interface PaymentGatewayPort {
    */
   getPaymentStatus(ref: string): Promise<GatewayPaymentStatus>;
   /**
-   * Resolves only once the session is guaranteed unpayable; anything else throws — including the
-   * gateway refusing because the session has just been paid. The hosted page outlives our TTL, so
-   * expiring an order before this resolves would charge a buyer for an order that no longer exists.
+   * Resolves only once the session is guaranteed to take no further money; anything else throws,
+   * because the hosted page outlives the order and settling early would charge a buyer for an order
+   * that no longer exists. `already_completed` resolves — retrying cannot change it — but owes a
+   * human a look.
    */
-  expireSession(ref: string): Promise<void>;
+  expireSession(ref: string): Promise<ExpireSessionOutcome>;
 }
 
 // An upstream provider fault (→ 502), kept distinct from the domain 4xx a bad request raises.

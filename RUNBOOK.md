@@ -18,6 +18,7 @@ Conventions used below:
 - [Rebuild the search index](#rebuild-the-search-index)
 - [Replay the dead-letter queue](#replay-the-dead-letter-queue)
 - [Retention sweeps](#retention-sweeps)
+- [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Standing exceptions](#standing-exceptions)
 
@@ -307,6 +308,70 @@ has also been revoked and the index hands the planner a match list that is almos
 
 When a sweep is actively working off a backlog the planner correctly prefers a seq scan instead: it
 finds 500 matching rows within the first few pages and stops. Both shapes are healthy.
+
+---
+
+## A refund is owed
+
+`payment_refund_owed_total` rising means money reached a buyer's payment for an order that will not
+be fulfilled. **This service does not refund anything automatically** — automatic refunds are out of
+scope — so every increment is a person's job, and nothing retries it away.
+
+How it happens: an order dies unpaid (a cancel, or the TTL sweep) while the buyer still has the
+hosted checkout page open, and they pay on it. Stock has already been released and possibly resold;
+the money has not been.
+
+The counter counts **observations, not refunds.** One stranded payment is normally seen twice —
+usually `expire_session` first, then `webhook_direct` — so do not read the unlabelled total as a
+count of buyers. The label names the path that noticed, not a separate incident.
+
+| `source` | Who saw it |
+| -------- | ---------- |
+| `expire_session` | Closing the checkout session failed because it had already taken money (`ExpirePaymentSession`) |
+| `webhook_direct` | The gateway's webhook settled a payment and found the order already terminal (`HandlePaymentWebhook`) |
+| `settlement_event` | The durable half of the same webhook, re-run through the queue (`PaymentEventsHandler`) |
+
+To act on one, find the order: every source logs at `error` with `orderId` and, for the first two,
+`paymentId`. Then read the money and the order side back —
+
+```sql
+SELECT o.id, o.status, o.finalize_reason, o.total_amount,
+       p.id AS payment_id, p.status AS payment_status, p.provider_session_id, p.provider_intent_id
+FROM orders o JOIN payments p ON p.order_id = o.id
+WHERE o.id = '<orderId>';
+```
+
+An order in `CANCELLED` / `EXPIRED` / `FAILED` carrying a `SUCCEEDED` payment is owed a refund.
+Refund `provider_intent_id` in the gateway's own dashboard; the order and the stock are already
+correct and must not be edited to match. If the order reads `PAID`, nothing is owed — the settlement
+won the race after all, and the alarm was a second observation of an order that resolved itself.
+
+**`payment_status = PENDING` does not mean nothing is owed.** The `expire_session` path deliberately
+leaves the row `PENDING`: it learned about the money from the gateway refusing to close the session,
+not from a settlement, and it must not fabricate one. If the webhook is late or lost, `PENDING` is
+all the database will ever say. For that source the authority is the session itself — read
+`provider_session_id` in the gateway dashboard:
+
+- `payment_status = paid` → the money landed. **Refund owed**, from the session's payment intent.
+- `status = complete`, `payment_status = unpaid` → an asynchronous method is still clearing. Nothing
+  is owed *yet*; re-check later, or wait for `async_payment_failed`, which means nothing was ever
+  taken.
+- `status = expired` → the close did land after all. Nothing owed.
+
+To find every candidate rather than chase one log line — orders that died holding money that was
+never resolved:
+
+```sql
+SELECT o.id, o.status, o.finalize_reason, p.status AS payment_status,
+       p.provider_session_id, p.provider_intent_id, o.updated_at
+FROM payments p JOIN orders o ON o.id = p.order_id
+WHERE o.status IN ('CANCELLED', 'EXPIRED', 'FAILED')
+  AND p.status IN ('PENDING', 'SUCCEEDED')
+ORDER BY o.updated_at DESC;
+```
+
+`SUCCEEDED` rows there are owed refunds outright. `PENDING` rows need the session check above; most
+are the ordinary case of a buyer who simply never paid, and their sessions read `expired`.
 
 ---
 

@@ -1,11 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lt, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Order } from '../domain/order.entity';
 import { OrderStatus } from '../domain/order-status';
 import { OrderItem } from '../domain/order-item.entity';
 import type {
+  AdminOrderPageQuery,
   CheckoutPersistResult,
+  OrderPage,
+  OrderPageQuery,
   OrderRepositoryPort,
   StalePendingOrder,
 } from '../application/ports/order-repository.port';
@@ -149,31 +152,60 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     return toDomainOrder(row, itemRows);
   }
 
-  async findAllForUser(userId: string): Promise<Order[]> {
-    const orderRows = await this.db
-      .select()
-      .from(orders)
-      .where(eq(orders.userId, userId))
-      .orderBy(desc(orders.createdAt), desc(orders.id));
-    if (orderRows.length === 0) {
-      return [];
+  findPageForUser(userId: string, query: OrderPageQuery): Promise<OrderPage> {
+    return this.readPage(eq(orders.userId, userId), query);
+  }
+
+  findPage({ status, userId, ...query }: AdminOrderPageQuery): Promise<OrderPage> {
+    const filters: SQL[] = [];
+    if (status !== undefined) {
+      filters.push(eq(orders.status, status));
     }
-
-    const ids = orderRows.map((row) => row.id);
-    const itemRows = await this.db
-      .select()
-      .from(orderItems)
-      .where(inArray(orderItems.orderId, ids))
-      .orderBy(orderItems.createdAt, orderItems.id);
-
-    const itemsByOrder = new Map<string, OrderItemRow[]>();
-    for (const item of itemRows) {
-      const bucket = itemsByOrder.get(item.orderId) ?? [];
-      bucket.push(item);
-      itemsByOrder.set(item.orderId, bucket);
+    if (userId !== undefined) {
+      filters.push(eq(orders.userId, userId));
     }
+    return this.readPage(filters.length > 0 ? and(...filters) : undefined, query);
+  }
 
-    return orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? []));
+  // Page and total read in one repeatable-read snapshot, so a checkout committing between them
+  // cannot produce a total that disagrees with the page the client is looking at.
+  private readPage(where: SQL | undefined, { page, pageSize }: OrderPageQuery): Promise<OrderPage> {
+    return this.db.transaction(
+      async (tx) => {
+        const [counted] = await tx.select({ value: count() }).from(orders).where(where);
+        const total = counted?.value ?? 0;
+
+        const orderRows = await tx
+          .select()
+          .from(orders)
+          .where(where)
+          // The id breaks ties: two orders placed in the same millisecond would otherwise be free to
+          // swap places between pages, showing one twice and the other never.
+          .orderBy(desc(orders.createdAt), desc(orders.id))
+          .limit(pageSize)
+          .offset((page - 1) * pageSize);
+        if (orderRows.length === 0) {
+          return { items: [], total };
+        }
+
+        const ids = orderRows.map((row) => row.id);
+        const itemRows = await tx
+          .select()
+          .from(orderItems)
+          .where(inArray(orderItems.orderId, ids))
+          .orderBy(orderItems.createdAt, orderItems.id);
+
+        const itemsByOrder = new Map<string, OrderItemRow[]>();
+        for (const item of itemRows) {
+          const bucket = itemsByOrder.get(item.orderId) ?? [];
+          bucket.push(item);
+          itemsByOrder.set(item.orderId, bucket);
+        }
+
+        return { items: orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? [])), total };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
   }
 
   async findStalePending({ placedBefore, limit }: { placedBefore: Date; limit: number }): Promise<StalePendingOrder[]> {

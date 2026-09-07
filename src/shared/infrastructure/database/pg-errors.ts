@@ -17,3 +17,23 @@ export function isUniqueViolation(error: unknown, indexName?: string): boolean {
   // driver that leaves it unset.
   return indexName === undefined || e.constraint === undefined || e.constraint === indexName;
 }
+
+/**
+ * SQLSTATE 23514 = check_violation, matched by constraint name because a table's several checks mean
+ * different things. Walks the `cause` chain, unlike the unique helper above: Drizzle wraps the driver
+ * error for the statement builders these writes use, so the SQLSTATE is not on the object thrown.
+ */
+export function isCheckViolation(error: unknown, constraintName: string): boolean {
+  for (let current: unknown = error, depth = 0; current != null && depth < 5; depth++) {
+    if (typeof current === 'object') {
+      const e = current as { code?: unknown; constraint?: unknown; cause?: unknown };
+      if (e.code === '23514' && e.constraint === constraintName) {
+        return true;
+      }
+      current = e.cause;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}

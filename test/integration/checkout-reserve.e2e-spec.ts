@@ -129,7 +129,7 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
 
     // No order persisted at all — the insert rolled back with the failed hold (atomic checkout).
     const list = await request(server()).get('/orders').set(authHeader(token));
-    expect(list.body).toEqual([]);
+    expect(list.body.items).toEqual([]);
 
     // No stock held on EITHER SKU — the first line's hold rolled back with the failed one.
     expect(await stockOf(a.variantId)).toEqual({ onHand: 5, reserved: 0 });

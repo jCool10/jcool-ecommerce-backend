@@ -1,6 +1,7 @@
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
+import type { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import type { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { UnhandledEventError } from '../errors';
@@ -26,16 +27,19 @@ function build() {
   const info = vi.fn();
   const settle = vi.fn().mockResolvedValue(undefined);
   const close = vi.fn().mockResolvedValue(undefined);
+  const closeCancelled = vi.fn().mockResolvedValue(undefined);
   const handler = new OrderEventsHandler({ info } as unknown as PinoLogger);
   return {
     dispatcher: new DomainEventDispatcher(
       handler,
       { settle } as unknown as PaymentEventsHandler,
       { close } as unknown as OrderExpiredHandler,
+      { close: closeCancelled } as unknown as OrderCancelledHandler,
     ),
     info,
     settle,
     close,
+    closeCancelled,
   };
 }
 
@@ -69,6 +73,28 @@ describe('DomainEventDispatcher', () => {
     close.mockRejectedValue(new Error('gateway unreachable'));
 
     await expect(dispatcher.dispatch(job('order.expired'), tx)).rejects.toThrow('gateway unreachable');
+  });
+
+  // A cancel owes the same closed session as an expiry, but through its own handler — routing both
+  // to one would lose which death the order actually had.
+  it('routes order.cancelled to its own payment session close, on the consumer tx', async () => {
+    const { dispatcher, info, close, closeCancelled } = build();
+
+    await dispatcher.dispatch(job('order.cancelled'), tx);
+
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'order.cancelled' }),
+      'order event consumed',
+    );
+    expect(closeCancelled).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.cancelled' }), tx);
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('fails the whole cancel when the session cannot be closed, so the redelivery retries it', async () => {
+    const { dispatcher, closeCancelled } = build();
+    closeCancelled.mockRejectedValue(new Error('gateway unreachable'));
+
+    await expect(dispatcher.dispatch(job('order.cancelled'), tx)).rejects.toThrow('gateway unreachable');
   });
 
   // Routes with an effect of their own get the consumer's transaction — the handler settles the

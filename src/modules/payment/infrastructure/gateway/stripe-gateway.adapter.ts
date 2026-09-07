@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 import {
   PaymentGatewayError,
   type CreateSessionInput,
+  type ExpireSessionOutcome,
   type GatewaySession,
   type GatewayPaymentStatus,
   type GatewayStatus,
@@ -11,6 +12,11 @@ import {
   type VerifiedEvent,
 } from '../../application/ports/payment-gateway.port';
 import { verifyAndParseStripeEvent } from './hmac-signature';
+import { isSessionNotOpen } from './stripe-fault-classification';
+
+// Stripe's minimum, against a 24h default. The backstop for every session no path here manages to
+// close; it clears the 15-minute stock hold and the reconcile threshold with room to spare.
+const SESSION_LIFETIME_SEC = 30 * 60;
 
 export interface StripeGatewayOptions {
   webhookSecret?: string;
@@ -105,6 +111,7 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
           cancel_url: this.cancelUrl,
           client_reference_id: input.orderId,
           metadata: { order_id: input.orderId },
+          expires_at: Math.floor(Date.now() / 1000) + SESSION_LIFETIME_SEC,
         },
         input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
       );
@@ -143,22 +150,55 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
     }
   }
 
-  async expireSession(ref: string): Promise<void> {
+  async expireSession(ref: string): Promise<ExpireSessionOutcome> {
     // Offline coded path: the fabricated handle was never payable in the first place.
     if (!this.stripe) {
-      return;
+      return 'expired';
     }
 
     try {
       await this.stripe.checkout.sessions.expire(ref);
+      return 'expired';
     } catch (error) {
-      // A handle Stripe never issued cannot be paid — the guarantee the caller needs. Anything else,
-      // including a refusal because the session just completed, means the page may still take money.
       if (isUnknownHandle(error)) {
-        return;
+        return 'already_closed';
       }
-      throw new PaymentGatewayError(`Stripe checkout session expire failed (${describe(error)})`, error);
+      if (!isSessionNotOpen(error)) {
+        throw new PaymentGatewayError(`Stripe checkout session expire failed (${describe(error)})`, error);
+      }
+      // Stripe gives the same refusal whether the session took money or simply lapsed — a refund and
+      // a no-op. Reading it back is the only way to tell them apart.
+      return this.classifyRefusal(ref, error);
     }
+  }
+
+  private async classifyRefusal(ref: string, refusal: unknown): Promise<ExpireSessionOutcome> {
+    let status: Stripe.Checkout.Session['status'];
+    try {
+      // Tighter than the client default (20s × 2 retries): this runs inside the consumer's
+      // transaction, so this bound is how long that transaction is held.
+      const session = await this.stripe!.checkout.sessions.retrieve(ref, undefined, {
+        timeout: 5_000,
+        maxNetworkRetries: 0,
+      });
+      status = session.status;
+    } catch (error) {
+      if (isUnknownHandle(error)) {
+        return 'already_closed';
+      }
+      throw new PaymentGatewayError(`Stripe checkout session retrieve failed (${describe(error)})`, error);
+    }
+
+    // `complete` is the money signal, NOT `payment_status`: an async method leaves a completed
+    // session `unpaid` while it clears, and calling that closed loses the refund alarm.
+    if (status === 'complete') {
+      return 'already_completed';
+    }
+    if (status === 'expired') {
+      return 'already_closed';
+    }
+    // Refused while still open — a reason we do not model. Retrying is the honest response.
+    throw new PaymentGatewayError(`Stripe refused to expire an open checkout session (${describe(refusal)})`, refusal);
   }
 }
 
