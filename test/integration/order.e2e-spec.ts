@@ -178,7 +178,8 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const res = await request(server()).get('/orders').set(authHeader(token));
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveLength(1);
+      expect(res.body).toMatchObject({ total: 1, page: 1, pageSize: 20, totalPages: 1 });
+      expect(res.body.items).toHaveLength(1);
     });
 
     it('returns 404 for an unknown order id', async () => {
@@ -224,7 +225,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const listB = await request(server()).get('/orders').set(authHeader(tokenB));
 
       expect(getByB.status).toBe(404);
-      expect(listB.body).toEqual([]);
+      expect(listB.body.items).toEqual([]);
     });
   });
 });

@@ -5,6 +5,7 @@ import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { PermanentError, UnhandledEventError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
+import type { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import type { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
 import type { OrderEventsHandler } from '../handlers/order-events.handler';
 import { DeadLetterRouter } from './dead-letter';
@@ -51,6 +52,7 @@ function build({
     { record: vi.fn() } as unknown as OrderEventsHandler,
     { settle: vi.fn() } as unknown as PaymentEventsHandler,
     { close: vi.fn() } as unknown as OrderExpiredHandler,
+    { close: vi.fn() } as unknown as OrderCancelledHandler,
   );
 
   const router = new DeadLetterRouter(

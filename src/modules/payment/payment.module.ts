@@ -28,6 +28,7 @@ import {
 import { PaymentController } from './interface/payment.controller';
 import { WebhookController } from './interface/webhook.controller';
 import { ReconciliationScheduler } from './interface/reconciliation.scheduler';
+import { OrderCancelledHandler } from './interface/queue/order-cancelled.handler';
 import { OrderExpiredHandler } from './interface/queue/order-expired.handler';
 
 // Changing gateways is a DI + env change, never a caller change: every caller depends on
@@ -74,9 +75,10 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     // Registers itself with the shared retention registry on init; nothing here drives it.
     SweepWebhookEventsUseCase,
     OrderExpiredHandler,
+    OrderCancelledHandler,
   ],
-  // OrderExpiredHandler is exported so the shared event consumer can route Order's expiry back here;
-  // the gateway session it closes is Payment's to close, and only Payment can reach it.
-  exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY, OrderExpiredHandler],
+  // Both queue handlers are exported so the shared event consumer can route Order's two unpaid
+  // endings back here — only Payment can reach the session each one closes.
+  exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY, OrderExpiredHandler, OrderCancelledHandler],
 })
 export class PaymentModule {}

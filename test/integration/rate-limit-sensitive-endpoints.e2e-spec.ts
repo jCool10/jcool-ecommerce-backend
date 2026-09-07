@@ -14,6 +14,8 @@ import { createTestApp } from '../setup/test-app.factory';
 const METRICS_TOKEN = 'e2e-rate-limit-token-abcdef';
 // Read from the shipped config, so retuning the limit retunes the suite instead of breaking it.
 const USER_LIMIT = ORDER_THROTTLE[USER_THROTTLER].limit;
+// Syntactically valid so the route's ParseUUIDPipe passes it through to a real 404.
+const ABSENT_ORDER_ID = '00000000-0000-4000-8000-000000000000';
 
 // Rate limiting is off in the default harness (the shared loopback IP would make every suite
 // flaky), so this suite opts in explicitly and boots its own app with THROTTLE_ENABLED='true'.
@@ -76,6 +78,23 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
     expect(bystander.status).not.toBe(429);
 
     expect(await readRejections('user', '/orders')).toBe(rejectionsBefore + 1);
+  });
+
+  // Every consumed cancellation ends in an outbound call to close the checkout session. The limiter
+  // runs before the handler, so a non-existent id still costs a slot — hence no real orders here.
+  it('caps one account at the cancel endpoint', async () => {
+    const dave = await createTestUser(app);
+    const cancel = (): request.Test =>
+      request(app.getHttpServer())
+        .post(`/orders/${ABSENT_ORDER_ID}/cancel`)
+        .set(authHeader(dave.accessToken))
+        .send();
+
+    for (let attempt = 0; attempt < USER_LIMIT; attempt++) {
+      expect((await cancel()).status).toBe(404);
+    }
+
+    expect((await cancel()).status).toBe(429);
   });
 
   it('enforces nothing while the kill-switch is off', async () => {

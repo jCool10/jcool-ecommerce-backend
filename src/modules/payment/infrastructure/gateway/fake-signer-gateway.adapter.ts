@@ -2,6 +2,7 @@ import { v7 as uuidv7 } from 'uuid';
 import {
   PaymentGatewayError,
   type CreateSessionInput,
+  type ExpireSessionOutcome,
   type GatewaySession,
   type GatewayPaymentStatus,
   type GatewayStatus,
@@ -83,17 +84,22 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
     return Promise.resolve({ status: this.statuses.get(ref) ?? 'UNKNOWN', intentId: this.intents.get(ref) ?? null });
   }
 
-  expireSession(ref: string): Promise<void> {
+  expireSession(ref: string): Promise<ExpireSessionOutcome> {
     if (this.unexpirable.has(ref)) {
       return Promise.reject(new PaymentGatewayError(`fake gateway refused to expire ${ref}`));
     }
-    // The refusal a real gateway gives once the money has moved — the reason the sweep must not
-    // expire the order behind it.
+    // Money moved. Reported directly rather than re-enacting the real adapter's refuse-then-read-back
+    // round-trips: the point of the double is to put the caller in the same position.
     if (this.statuses.get(ref) === 'PAID') {
-      return Promise.reject(new PaymentGatewayError(`fake gateway cannot expire a paid session ${ref}`));
+      return Promise.resolve('already_completed');
+    }
+    // Re-expiring is routine (the consumer's transaction can roll back after this call landed), and
+    // a double answering `expired` twice would hide the difference.
+    if (this.expired.has(ref)) {
+      return Promise.resolve('already_closed');
     }
     this.expired.add(ref);
     this.statuses.set(ref, 'FAILED');
-    return Promise.resolve();
+    return Promise.resolve('expired');
   }
 }

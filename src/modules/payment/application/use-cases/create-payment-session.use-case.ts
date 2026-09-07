@@ -119,6 +119,8 @@ export class CreatePaymentSessionUseCase {
       throw error;
     }
 
+    await this.abortIfOrderDiedMeanwhile(orderId, saved);
+
     this.metrics.recordSagaStep('payment_session', 'success');
     return {
       paymentId: saved.id as string,
@@ -126,5 +128,37 @@ export class CreatePaymentSessionUseCase {
       redirectUrl: session.redirectUrl,
       clientSecret: session.clientSecret,
     };
+  }
+
+  /**
+   * Reading the order again AFTER the payment row commits turns the PENDING check at the top of
+   * `execute` into an act-then-check, which needs no lock: either the cancel commits before this read
+   * — and this closes the session it just opened — or it commits after the payment row, and the
+   * `order.cancelled` consumer finds that row and closes the session itself. Neither can miss.
+   *
+   * Without it a cancel landing inside the gateway round-trip finds no payment, acks, and leaves a
+   * payable session behind an order nothing revisits.
+   */
+  private async abortIfOrderDiedMeanwhile(orderId: string, payment: Payment): Promise<void> {
+    const current = await this.orders.findForPayment(orderId);
+    if (current !== null && current.status === ORDER_STATUS_PENDING) return;
+
+    const status = current?.status ?? 'DELETED';
+    try {
+      await this.gateway.expireSession(payment.providerSessionId);
+    } catch (error) {
+      // Left PENDING deliberately — marking it EXPIRED would claim a session was closed that is
+      // still live. Nothing retries this, so the gateway's own expiry is the backstop.
+      this.logger.error(
+        `order ${orderId} settled as ${status} while its checkout session was being opened, and the ` +
+          `session could not be closed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new ConflictException(`Order is not payable in status ${status}`);
+    }
+
+    await this.payments.updateStatus(payment.id as string, PaymentStatus.EXPIRED, {
+      expectedStatus: PaymentStatus.PENDING,
+    });
+    throw new ConflictException(`Order is not payable in status ${status}`);
   }
 }

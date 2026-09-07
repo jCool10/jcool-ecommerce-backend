@@ -1,6 +1,7 @@
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database';
+import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { Payment } from '../../domain/payment.entity';
 import type { PaymentGatewayPort } from '../ports/payment-gateway.port';
@@ -28,15 +29,17 @@ function payment(status: PaymentStatus = PaymentStatus.PENDING): Payment {
 function build(found: Payment | null = payment()) {
   const findByOrderId = vi.fn().mockResolvedValue(found);
   const updateStatus = vi.fn().mockResolvedValue(payment(PaymentStatus.EXPIRED));
-  const expireSession = vi.fn().mockResolvedValue(undefined);
+  const expireSession = vi.fn().mockResolvedValue('expired');
+  const recordRefundOwed = vi.fn();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
   const useCase = new ExpirePaymentSessionUseCase(
     { findByOrderId, updateStatus } as unknown as PaymentRepositoryPort,
     { expireSession } as unknown as PaymentGatewayPort,
+    { recordRefundOwed } as unknown as MetricsPort,
     logger as unknown as PinoLogger,
   );
-  return { useCase, findByOrderId, updateStatus, expireSession, logger };
+  return { useCase, findByOrderId, updateStatus, expireSession, recordRefundOwed, logger };
 }
 
 describe('ExpirePaymentSessionUseCase', () => {
@@ -73,33 +76,71 @@ describe('ExpirePaymentSessionUseCase', () => {
   it.each([PaymentStatus.FAILED, PaymentStatus.EXPIRED] as const)(
     'leaves an already-%s payment alone, without touching the gateway',
     async (status) => {
-      const { useCase, expireSession, logger } = build(payment(status));
+      const { useCase, expireSession, recordRefundOwed, logger } = build(payment(status));
 
       expect(await useCase.execute(ORDER_ID, TX)).toBe('already_settled');
       expect(expireSession).not.toHaveBeenCalled();
+      expect(recordRefundOwed).not.toHaveBeenCalled();
       expect(logger.error).not.toHaveBeenCalled();
     },
   );
 
-  it('raises the refund decision when the order expired on top of a payment that had succeeded', async () => {
-    const { useCase, expireSession, logger } = build(payment(PaymentStatus.SUCCEEDED));
+  it('raises the refund decision when the order died on top of a payment that had succeeded', async () => {
+    const { useCase, expireSession, recordRefundOwed, logger } = build(payment(PaymentStatus.SUCCEEDED));
 
-    expect(await useCase.execute(ORDER_ID, TX)).toBe('already_settled');
+    expect(await useCase.execute(ORDER_ID, TX)).toBe('refund_owed');
     // Nothing to expire — the session was consumed — and no retry recovers stock already resold.
     expect(expireSession).not.toHaveBeenCalled();
+    expect(recordRefundOwed).toHaveBeenCalledExactlyOnceWith('expire_session');
     expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ orderId: ORDER_ID }),
       expect.stringContaining('already succeeded'),
     );
   });
 
-  // A gateway that refuses (including because the session was just paid) must take the whole
-  // consume down: the transaction rolls back with the inbox claim and the queue redelivers.
-  it('propagates a gateway refusal without writing the payment', async () => {
-    const { useCase, expireSession, updateStatus } = build();
-    expireSession.mockRejectedValue(new Error('session already completed'));
+  it('raises the refund decision, once, when the gateway reports the session already paid', async () => {
+    const { useCase, expireSession, updateStatus, recordRefundOwed, logger } = build();
+    expireSession.mockResolvedValue('already_completed');
 
-    await expect(useCase.execute(ORDER_ID, TX)).rejects.toThrow('session already completed');
+    expect(await useCase.execute(ORDER_ID, TX)).toBe('refund_owed');
+
+    // Acknowledged rather than retried: no redelivery un-pays a session. Writing EXPIRED here would
+    // additionally record a settlement that never happened.
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(recordRefundOwed).toHaveBeenCalledExactlyOnceWith('expire_session');
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ orderId: ORDER_ID }),
+      expect.stringContaining('refund owed'),
+    );
+  });
+
+  it('carries the trigger so the refund line says which path killed the order', async () => {
+    const { useCase, expireSession, logger } = build();
+    expireSession.mockResolvedValue('already_completed');
+
+    await useCase.execute(ORDER_ID, TX, 'cancel');
+
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ trigger: 'cancel' }), expect.any(String));
+  });
+
+  // The redelivery after a consume that expired the session and then rolled back. Nothing is owed
+  // and nothing is wrong: it finishes the write the first attempt lost.
+  it('finishes normally when the session was already closed by an earlier attempt', async () => {
+    const { useCase, expireSession, updateStatus, recordRefundOwed } = build();
+    expireSession.mockResolvedValue('already_closed');
+
+    expect(await useCase.execute(ORDER_ID, TX)).toBe('expired');
+    expect(updateStatus).toHaveBeenCalledOnce();
+    expect(recordRefundOwed).not.toHaveBeenCalled();
+  });
+
+  // An unreachable gateway must take the whole consume down: the transaction rolls back with the
+  // inbox claim and the queue redelivers.
+  it('propagates a gateway failure without writing the payment', async () => {
+    const { useCase, expireSession, updateStatus } = build();
+    expireSession.mockRejectedValue(new Error('gateway could not expire a session'));
+
+    await expect(useCase.execute(ORDER_ID, TX)).rejects.toThrow('gateway could not expire a session');
     expect(updateStatus).not.toHaveBeenCalled();
   });
 

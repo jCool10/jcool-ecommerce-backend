@@ -32,13 +32,18 @@ function persistedPayment(status: PaymentStatus): Payment {
 function build(
   opts: {
     order?: OrderView | null;
+    /** What the post-write re-read sees, when it differs from the order the request started on. */
+    orderAfter?: OrderView | null;
     existing?: Payment | null;
     session?: GatewaySession;
     createError?: Error;
     sessionError?: Error;
+    expireError?: Error;
   } = {},
 ) {
-  const findForPayment = vi.fn().mockResolvedValue(opts.order === undefined ? orderView() : opts.order);
+  const order = opts.order === undefined ? orderView() : opts.order;
+  const findForPayment = vi.fn().mockResolvedValue(order);
+  if (opts.orderAfter !== undefined) findForPayment.mockResolvedValueOnce(order).mockResolvedValue(opts.orderAfter);
   const findByOrderId = vi.fn().mockResolvedValue(opts.existing ?? null);
   const create = opts.createError
     ? vi.fn().mockRejectedValue(opts.createError)
@@ -65,16 +70,26 @@ function build(
         },
       );
 
+  const updateStatus = vi.fn().mockImplementation((_id: string, status: PaymentStatus) => Promise.resolve(status));
+  const expireSession = opts.expireError
+    ? vi.fn().mockRejectedValue(opts.expireError)
+    : vi.fn().mockResolvedValue('expired');
+
   const orders = { findForPayment } as unknown as OrderReadPort;
-  const payments = { findByOrderId, create, updateStatus: vi.fn() } as unknown as PaymentRepositoryPort;
-  const gateway = { provider: 'stripe', createSession, verifyAndParseEvent: vi.fn() } as unknown as PaymentGatewayPort;
+  const payments = { findByOrderId, create, updateStatus } as unknown as PaymentRepositoryPort;
+  const gateway = {
+    provider: 'stripe',
+    createSession,
+    expireSession,
+    verifyAndParseEvent: vi.fn(),
+  } as unknown as PaymentGatewayPort;
 
   const recordSagaStep = vi.fn();
 
   const useCase = new CreatePaymentSessionUseCase(orders, payments, gateway, {
     recordSagaStep,
   } as unknown as MetricsPort);
-  return { useCase, findForPayment, findByOrderId, create, createSession, recordSagaStep };
+  return { useCase, findForPayment, findByOrderId, create, createSession, expireSession, updateStatus, recordSagaStep };
 }
 
 describe('CreatePaymentSessionUseCase', () => {
@@ -173,5 +188,54 @@ describe('CreatePaymentSessionUseCase', () => {
     const { useCase, recordSagaStep } = build(opts);
     await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(Error);
     expect(recordSagaStep).not.toHaveBeenCalled();
+  });
+
+  // The cancel consumer has already looked for a payment row and found none, so if this request
+  // does not close the session it opened, nothing will.
+  describe('when the order settles while the session is being opened', () => {
+    it('closes the session, expires the payment, and 409s', async () => {
+      const { useCase, expireSession, updateStatus, recordSagaStep } = build({
+        orderAfter: orderView({ status: 'CANCELLED' }),
+      });
+
+      await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toThrow(/not payable in status CANCELLED/);
+
+      expect(expireSession).toHaveBeenCalledExactlyOnceWith('cs_test_new');
+      // CAS on PENDING: a webhook that settled this payment inside the same window keeps its outcome.
+      expect(updateStatus).toHaveBeenCalledExactlyOnceWith(
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        PaymentStatus.EXPIRED,
+        {
+          expectedStatus: PaymentStatus.PENDING,
+        },
+      );
+      expect(recordSagaStep).not.toHaveBeenCalled();
+    });
+
+    it('409s on a deleted order too — an id that no longer reads back is not payable', async () => {
+      const { useCase, expireSession } = build({ orderAfter: null });
+      await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toThrow(/not payable in status DELETED/);
+      expect(expireSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the payment PENDING when the session cannot be closed, and still 409s', async () => {
+      const { useCase, updateStatus } = build({
+        orderAfter: orderView({ status: 'EXPIRED' }),
+        expireError: new PaymentGatewayError('stripe unreachable'),
+      });
+
+      await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(ConflictException);
+
+      // Marking it EXPIRED here would claim a session was closed that is still live at the gateway.
+      expect(updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not touch the gateway when the order is still PENDING on the re-read', async () => {
+      const { useCase, expireSession, findForPayment, recordSagaStep } = build();
+      await useCase.execute(ORDER_ID, OWNER);
+      expect(findForPayment).toHaveBeenCalledTimes(2);
+      expect(expireSession).not.toHaveBeenCalled();
+      expect(recordSagaStep).toHaveBeenCalledExactlyOnceWith('payment_session', 'success');
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
+import { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { UnhandledEventError } from '../errors';
@@ -19,15 +20,21 @@ const UNREGISTERED_EVENT_LABEL = 'unregistered';
 export class DomainEventDispatcher {
   private readonly handlers: ReadonlyMap<string, DomainEventHandler>;
 
-  constructor(orderEvents: OrderEventsHandler, paymentEvents: PaymentEventsHandler, orderExpired: OrderExpiredHandler) {
+  constructor(
+    orderEvents: OrderEventsHandler,
+    paymentEvents: PaymentEventsHandler,
+    orderExpired: OrderExpiredHandler,
+    orderCancelled: OrderCancelledHandler,
+  ) {
     this.handlers = new Map<string, DomainEventHandler>([
       ['order.placed', (job) => orderEvents.record(job)],
       // The finalize outcomes. Audit-only for the same reason as order.placed: the finalizing
       // transaction already settled the stock, so re-applying anything here would double it.
       ['order.paid', (job) => orderEvents.record(job)],
       ['order.failed', (job) => orderEvents.record(job)],
-      // The exception: a TTL expiry settles the stock but cannot reach the gateway, so the checkout
-      // session it leaves open is a real effect still owed — and one only Payment can apply.
+      // The two exceptions: an order that dies unpaid settles its stock but cannot reach the gateway,
+      // so the checkout session it leaves open is an effect still owed, and only Payment can apply
+      // it. Two handlers because the logs tell the two deaths apart.
       [
         'order.expired',
         async (job, tx) => {
@@ -35,7 +42,13 @@ export class DomainEventDispatcher {
           await orderExpired.close(job, tx);
         },
       ],
-      ['order.cancelled', (job) => orderEvents.record(job)],
+      [
+        'order.cancelled',
+        async (job, tx) => {
+          await orderEvents.record(job);
+          await orderCancelled.close(job, tx);
+        },
+      ],
       // Payment's settlements, unlike the above, carry an effect this consumer genuinely owns: the
       // producing transaction moved money and nothing else, leaving the order still to settle.
       ['payment.succeeded', (job, tx) => paymentEvents.settle(job, tx)],

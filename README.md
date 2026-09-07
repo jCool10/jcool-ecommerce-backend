@@ -43,6 +43,8 @@
     - [Auth — `/auth`](#auth--auth)
     - [Catalog (public) — `/products`](#catalog-public--products)
     - [Catalog admin — `/admin` (RBAC `ADMIN`)](#catalog-admin--admin-rbac-admin)
+    - [Inventory admin — `/admin/inventory` (RBAC `ADMIN`)](#inventory-admin--admininventory-rbac-admin)
+    - [Order admin — `/admin/orders` (RBAC `ADMIN`)](#order-admin--adminorders-rbac-admin)
     - [Cart — `/cart`](#cart--cart-bearer)
     - [Order — `/orders`](#order--orders-bearer)
     - [Payment — `/orders/:id/pay`, `/webhooks/payment`](#payment--ordersidpay-webhookspayment)
@@ -511,6 +513,33 @@ the `x-csrf-token` header.
 | `DELETE` | `/admin/skus/:id`                 | Delete SKU           |
 | `PUT`    | `/admin/skus/:skuId/price`        | Set SKU price        |
 
+### Inventory admin — `/admin/inventory` (RBAC `ADMIN`)
+
+Inventory's only HTTP surface, and it is operator-facing: customers reach stock through Order, which
+holds it inside the checkout transaction, never through here.
+
+| Method | Path                                | Description                                                                                                    |
+| ------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/admin/inventory/:variantId`       | Read one SKU's level: on-hand, reserved, and derived `available`. `404` if the SKU has no stock row yet         |
+| `PUT`  | `/admin/inventory/:variantId`       | State the on-hand level, creating the row if the SKU never had one. `409` if the new level is below what is already reserved |
+| `POST` | `/admin/inventory/:variantId/adjust` | Move the level by a signed `delta` (non-zero). `404` if the SKU has no stock row — "add 25" against a level nobody set would be inventing that level. `409` if the result would go below zero or below what is reserved |
+
+Both writes answer `409`, not `500`, when the result would break an invariant: the `ck_stock_*`
+check constraints in Postgres are the authority on what a level may become, and a violation is a
+fact about current stock rather than a malformed request.
+
+### Order admin — `/admin/orders` (RBAC `ADMIN`)
+
+The same reads as `/orders` without the per-user scope, plus a force-cancel that runs through the
+identical `CancelOrderUseCase` — so an admin cannot reach an outcome a buyer's own cancel could not.
+Only the audit reason stamped on the order differs (`admin:cancel` vs `user:cancel`).
+
+| Method | Path                        | Description                                                                                                       |
+| ------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/admin/orders`             | List every buyer's orders, newest first. Paginated like `GET /orders`, plus `?status=` and `?userId=` filters      |
+| `GET`  | `/admin/orders/:id`         | View any order (`404` if unknown)                                                                                 |
+| `POST` | `/admin/orders/:id/cancel`  | Force-cancel a `PENDING` order and release its stock. Same `404` / `409` / re-cancel semantics as the buyer's route |
+
 ### Cart — `/cart` (Bearer)
 
 Per-user scratch cart — every endpoint requires a valid access token, and `skuId`
@@ -541,9 +570,10 @@ access token, and orders are **per-user** (another user's order reads as `404`).
 | Method | Path             | Description                                                                                                                     |
 | ------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `POST` | `/orders`        | Checkout the current cart. Requires an `Idempotency-Key` header; retrying with the same value replays the first result instead of creating a second order. `400` empty/unpurchasable cart or missing key, `409` key in progress or insufficient stock, `422` key reused with a different request |
-| `GET`  | `/orders`        | List the current user's orders                                                                                                  |
+| `GET`  | `/orders`        | List the current user's orders, newest first. Paginated: `?page=1&pageSize=20` (max `100`), answering `{ items, total, page, pageSize, totalPages }` |
 | `GET`  | `/orders/:id`    | View one order (`404` if unknown or owned by another user)                                                                      |
 | `POST` | `/orders/:id/pay` | Open a gateway checkout session for the order. `404` if not found/not the caller's, `409` if the order is not `PENDING` or already has an active payment |
+| `POST` | `/orders/:id/cancel` | Cancel a `PENDING` order and release its stock. `404` if unknown or owned by another user, `409` once the order has settled (a `PAID` order is a refund, which this shop does not do). Re-cancelling answers `200` — no `Idempotency-Key` needed. Throttled per user like checkout |
 
 There is no separate "place" call: `POST /orders` goes **DRAFT → PENDING inside one transaction**,
 which is what lets the order, its stock hold, its `order.placed` outbox event and its idempotency
@@ -551,9 +581,13 @@ result commit or roll back together — a stock shortfall leaves no order, no ev
 blocking the retry. Settlement does the same for the status flip, the stock resolution, and the
 matching `order.paid` / `order.failed` / `order.expired` / `order.cancelled` event.
 
-`order.cancelled` is the one of those four with no caller yet: the transition, the domain event and
-the outbox mapping all exist (`finalize-order.use-case.ts:21`), but nothing invokes them because
-there is no cancel route. Cancellation is a route away, not a mechanism away.
+Cancelling runs through that same `FinalizeOrderUseCase` — the ownership check and the settlement
+share one row lock, so the order cannot settle some other way in between. What cancelling
+deliberately does **not** do is call the gateway: that transaction holds an order row lock, and
+Payment closes the checkout session by consuming the `order.cancelled` event instead. Until that
+consume lands, a buyer with the hosted page still open can pay for stock already released; the
+money then has to be refunded by hand, and both the log line and the
+`payment_refund_owed_total` counter say so. **Automatic refunds are out of scope.**
 
 Every edge in the state machine is wired: `DRAFT → PENDING | CANCELLED` and
 `PENDING → PAID | FAILED | EXPIRED | CANCELLED`. `PAID`, `FAILED`, `EXPIRED` and `CANCELLED` are

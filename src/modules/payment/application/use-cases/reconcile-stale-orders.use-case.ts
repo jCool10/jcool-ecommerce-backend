@@ -126,8 +126,18 @@ export class ReconcileStaleOrdersUseCase {
         );
       }
       // The page must stop taking money BEFORE the stock hold is released, or a buyer returning to it
-      // pays for an order that no longer exists. A refusal throws, leaving the order for the next tick.
-      await this.gateway.expireSession(payment.providerSessionId);
+      // pays for an order that no longer exists. A refusal for any reason but a completed session
+      // throws, leaving the order for the next tick.
+      const closed = await this.gateway.expireSession(payment.providerSessionId);
+      if (closed === 'already_completed') {
+        // The buyer paid between the probe above and this call. Expiring now would settle the order
+        // unpaid on top of money that moved; the next tick probes again and reads PAID.
+        this.logger.info(
+          { context: LOG_CONTEXT, orderId: order.id, paymentId: payment.id },
+          'checkout session was paid mid-sweep — leaving the order for the next tick',
+        );
+        return 'raced';
+      }
     }
 
     if (payment && payment.id !== null) {

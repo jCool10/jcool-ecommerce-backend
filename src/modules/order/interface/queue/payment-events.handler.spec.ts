@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { FinalizeOrderUseCase } from '../../application/use-cases';
 import { PaymentEventsHandler } from './payment-events.handler';
 
@@ -25,14 +26,16 @@ function build(status: 'finalized' | 'noop' | 'ignored' | 'not_found' = 'finaliz
   const execute = vi.fn().mockResolvedValue({ status, order: orderStatus ? { status: orderStatus } : undefined });
   const error = vi.fn();
   const info = vi.fn();
+  const recordRefundOwed = vi.fn();
   const handler = new PaymentEventsHandler(
     { execute } as unknown as FinalizeOrderUseCase,
+    { recordRefundOwed } as unknown as MetricsPort,
     {
       error,
       info,
     } as unknown as PinoLogger,
   );
-  return { handler, execute, error, info };
+  return { handler, execute, error, info, recordRefundOwed };
 }
 
 describe('PaymentEventsHandler', () => {

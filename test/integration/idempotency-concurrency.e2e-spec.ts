@@ -66,7 +66,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
 
   async function ordersOf(token: string): Promise<{ id: string }[]> {
     const res = await request(server()).get('/orders').set(authHeader(token));
-    return res.body as { id: string }[];
+    return (res.body as { items: { id: string }[] }).items;
   }
 
   it('N concurrent requests with the SAME key → exactly one order + one hold (rest replay/409, never 5xx)', async () => {

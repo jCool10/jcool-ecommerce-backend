@@ -70,6 +70,9 @@ export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
 // exists to preserve — so once expiries are actually happening, the two rates converging means
 // reconcile has stopped. Both sit at 0 on a healthy quiet shop, where the comparison says nothing.
 export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
+// The one counter here that asks for a human. Observations, not refunds: one stranded payment is
+// routinely seen by two paths. Alert on non-zero, then read the logs for the order ids.
+export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
 
 // --- Retention ---
 // Rows reclaimed per sweep. Read per label rather than in total: a sweep whose counter has been
@@ -180,6 +183,11 @@ export const METRIC_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: RESERVATION_EXPIRY_TOTAL,
     help: 'Orders the reservation sweep expired because their hold had lapsed. Orders, not reservation rows: a multi-line order is one hold to the sweep.',
+  }),
+  makeCounterProvider({
+    name: PAYMENT_REFUND_OWED_TOTAL,
+    help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: expire_session = closing the checkout session found the money instead; webhook_direct and settlement_event = a successful payment landing on an order already cancelled or expired, seen by the in-process finalize and by its durable event. Observations, not refunds — one stranded payment normally raises two of these, so alert on the sum being non-zero and get the count from the database, never by summing this.',
+    labelNames: ['source'],
   }),
   makeCounterProvider({
     name: RETENTION_ROWS_DELETED_TOTAL,

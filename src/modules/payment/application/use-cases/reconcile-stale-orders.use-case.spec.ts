@@ -4,7 +4,7 @@ import type { FinalizeOrderUseCase, FinalizeResult } from '@modules/order/applic
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import type { OrderReadPort, StalePendingOrderView } from '../ports/order-read.port';
-import type { GatewayStatus, PaymentGatewayPort } from '../ports/payment-gateway.port';
+import type { ExpireSessionOutcome, GatewayStatus, PaymentGatewayPort } from '../ports/payment-gateway.port';
 import type { PaymentRepositoryPort } from '../ports/payment-repository.port';
 import { ReconcileStaleOrdersUseCase } from './reconcile-stale-orders.use-case';
 
@@ -53,6 +53,8 @@ interface Scenario {
   gatewayIntents?: Record<string, string>;
   gatewayThrows?: string[];
   expireThrows?: string[];
+  /** Per-session refusal outcome; anything unlisted expires cleanly. */
+  expireReturns?: Record<string, ExpireSessionOutcome>;
   /** null models the compare-and-set losing to a webhook that settled the payment mid-sweep. */
   updateStatusReturns?: Payment | null;
   finalize?: FinalizeResult['status'];
@@ -70,9 +72,10 @@ function build(scenario: Scenario = {}) {
     if (scenario.gatewayThrows?.includes(ref)) return Promise.reject(new Error('gateway unreachable'));
     return Promise.resolve({ status: scenario.gateway?.[ref] ?? 'UNKNOWN', intentId: scenario.gatewayIntents?.[ref] });
   });
-  const expireSession = vi.fn((ref: string) =>
-    scenario.expireThrows?.includes(ref) ? Promise.reject(new Error('session not expirable')) : Promise.resolve(),
-  );
+  const expireSession = vi.fn((ref: string) => {
+    if (scenario.expireThrows?.includes(ref)) return Promise.reject(new Error('session not expirable'));
+    return Promise.resolve(scenario.expireReturns?.[ref] ?? 'expired');
+  });
   const finalizeExec = vi.fn().mockResolvedValue({ status: scenario.finalize ?? 'finalized' });
   const warn = vi.fn();
   const info = vi.fn();
@@ -243,6 +246,47 @@ describe('ReconcileStaleOrdersUseCase', () => {
     expect(spies.updateStatus).not.toHaveBeenCalled();
     expect(spies.finalizeExec).not.toHaveBeenCalled();
     expect(summary).toEqual({ ...EMPTY_SUMMARY, scanned: 1, errors: 1 });
+  });
+
+  // The probe said PENDING, the buyer paid, and only the expire call found out. Backing off is what
+  // makes the sweep converge: the next tick probes again and reads PAID.
+  it('backs off when the buyer pays between the probe and the expire call', async () => {
+    const id = orderId(4);
+    const { useCase, spies } = build({
+      stale: [{ id, placedAt: LAPSED }],
+      payments: { [id]: pendingPayment('p4', id) },
+      gateway: { [`cs_${id}`]: 'PENDING' },
+      expireReturns: { [`cs_${id}`]: 'already_completed' },
+    });
+
+    const summary = await useCase.execute(INPUT);
+
+    expect(spies.updateStatus).not.toHaveBeenCalled();
+    expect(spies.finalizeExec).not.toHaveBeenCalled();
+    expect(summary).toEqual({ ...EMPTY_SUMMARY, scanned: 1, raced: 1 });
+    expect(spies.info).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: id, paymentId: 'p4' }),
+      expect.stringContaining('paid mid-sweep'),
+    );
+  });
+
+  // A session an earlier tick already closed, for exactly the expiry being finished here — nothing
+  // is owed, so the sweep carries on and writes it.
+  it('carries on expiring the order when the session was already closed', async () => {
+    const id = orderId(4);
+    const { useCase, spies } = build({
+      stale: [{ id, placedAt: LAPSED }],
+      payments: { [id]: pendingPayment('p4', id) },
+      gateway: { [`cs_${id}`]: 'PENDING' },
+      expireReturns: { [`cs_${id}`]: 'already_closed' },
+    });
+
+    const summary = await useCase.execute(INPUT);
+
+    expect(spies.updateStatus).toHaveBeenCalledWith('p4', PaymentStatus.EXPIRED, {
+      expectedStatus: PaymentStatus.PENDING,
+    });
+    expect(summary).toEqual({ ...EMPTY_SUMMARY, scanned: 1, finalized: 1 });
   });
 
   it('expires a past-TTL order that never opened a session, without calling the gateway', async () => {

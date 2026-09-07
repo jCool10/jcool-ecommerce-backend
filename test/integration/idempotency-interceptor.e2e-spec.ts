@@ -82,7 +82,7 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
 
     // Exactly one order exists for the user, and the key is frozen COMPLETED (single stored row).
     const list = await request(server()).get('/orders').set(authHeader(token));
-    expect(list.body).toHaveLength(1);
+    expect(list.body.items).toHaveLength(1);
 
     const keyRows = await db
       .select({ status: schema.idempotencyKeys.status })

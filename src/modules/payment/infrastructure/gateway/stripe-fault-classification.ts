@@ -18,3 +18,16 @@ export function isStripeUnavailable(error: unknown): boolean {
   const status = cause.statusCode;
   return status === undefined || status === 429 || status >= 500;
 }
+
+/**
+ * Whether Stripe refused a session operation because of the session's state. Matched on status and
+ * error class only — Stripe publishes no error code for this refusal and commits to no wording, and
+ * the expire call sends no body, so a 400 from it is a state refusal in every case worth naming.
+ *
+ * Says the session is not open. Does NOT say whether money moved: only reading it back tells those
+ * apart.
+ */
+export function isSessionNotOpen(error: unknown): boolean {
+  const cause = error instanceof PaymentGatewayError ? error.cause : error;
+  return cause instanceof Stripe.errors.StripeInvalidRequestError && cause.statusCode === 400;
+}
