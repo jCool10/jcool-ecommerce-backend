@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24 # ships npm 11 (matches committed lockfile); satisfies devDep engines (testcontainers/dependency-cruiser need node >=22)
           cache: npm
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest # GitHub-hosted runner ships a Docker daemon → Testcontainers works
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
