@@ -52,4 +52,21 @@ export interface RefreshTokenRepositoryPort {
 
   /** Revoke one family owned by `userId`; false if unknown or not theirs (so the caller can 404). */
   revokeFamily(userId: string, familyId: string): Promise<boolean>;
+
+  /**
+   * DELETE tokens that expired before `expiredBefore` **and were never revoked**, plus tokens
+   * revoked before `revokedBefore`. At most `limit` rows; returns how many went (retention sweep).
+   *
+   * Two cutoffs because the arms answer to different clocks: expiry is age, revocation is evidence.
+   * A revoked row is what lets {@link rotate} say "this token was retired and has come back" — the
+   * reuse detection the rotation scheme is built on — so it gets a much longer grace, floored at 30
+   * days in `env.validation`.
+   *
+   * The `revoked_at IS NULL` qualifier on the expiry arm is what makes that floor real. Every
+   * rotation revokes its predecessor, so a rotated token carries both an expiry and a revocation,
+   * and {@link rotate} checks revoked/replaced *before* expiry so a retired token still reads as
+   * reuse. Without the qualifier the expiry arm would collect those rows on the short clock and the
+   * 30-day guarantee would be fiction for every token that was ever rotated.
+   */
+  deleteCollectable(expiredBefore: Date, revokedBefore: Date, limit: number): Promise<number>;
 }

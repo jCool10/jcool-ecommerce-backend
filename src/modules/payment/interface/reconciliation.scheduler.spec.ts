@@ -1,5 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
 import type { SchedulerRegistry } from '@nestjs/schedule';
+import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReconcileStaleOrdersUseCase, ReconcileSummary } from '../application/use-cases';
@@ -37,6 +38,8 @@ function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockRe
       { execute } as unknown as ReconcileStaleOrdersUseCase,
       config,
       registry as unknown as SchedulerRegistry,
+      // Pass-through: correlation is asserted in job-context.spec.ts.
+      { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
       logger as unknown as PinoLogger,
     );
   return { make, registry, logger, execute };

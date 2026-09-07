@@ -17,6 +17,7 @@ Conventions used below:
 - [Backup and restore](#backup-and-restore)
 - [Rebuild the search index](#rebuild-the-search-index)
 - [Replay the dead-letter queue](#replay-the-dead-letter-queue)
+- [Retention sweeps](#retention-sweeps)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Standing exceptions](#standing-exceptions)
 
@@ -148,9 +149,45 @@ a shape change to the indexed document needs this run by hand afterwards.
 A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail. **Nothing
 consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
 
-Replay is safe for a message that turned out to have been applied after all: it is re-published
-under the outbox row id, which is the key the inbox dedups on, so the worst case is one collapsed
-duplicate. What replay **cannot** fix is the reason the message failed. Read the printed
+**Replay used to be unconditionally safe. It is not any more, and the tool now says so.** The old
+guarantee was that a message goes back under its outbox row id, the inbox dedups on that id, and a
+needless replay collapses into nothing. [Inbox retention](#retention-sweeps) ends it: once a claim
+has been swept, "no claim" no longer means "never applied", and replaying such a message applies its
+effect a second time.
+
+So the CLI asks the database as well as Redis, and decides per message:
+
+| Inbox claim for the message | Decision |
+| --------------------------- | -------- |
+| Present | **Refused, and `--force` cannot override it.** A replay would be a silent no-op you would read as a fix |
+| Absent, `occurredAt` inside `RETENTION_INBOX_DAYS` | Replayed — the ordinary case |
+| Absent, `occurredAt` older than that | Refused unless `--force`: the claim may simply have been swept |
+
+The second and third rows turn on `occurredAt` — when the outbox row was written — and the choice of
+field is the whole argument. What those rows must establish is not that the message is old but that
+**if it had been applied, its claim would still be here to say so**. A claim is swept only once its
+`processed_at` falls outside the window, and nothing can be processed before it was produced, so a
+message born inside the window cannot have had a claim swept out from under it. Its absence is then
+proof it was never applied.
+
+`failedAt` cannot carry that argument and does not decide anything. It is re-stamped on every
+dead-lettering, so it means "when it last failed" — a message applied a month ago and parked again
+this morning carries a brand-new `failedAt` and a guard keyed on it would wave through exactly the
+message most likely to have been swept. It is still printed in the refusal, because it is the
+diagnosis you need in order to judge a `--force`.
+
+**Before using `--force`**, establish by some other means that the effect never happened — the order
+has no payment, the stock was never decremented, the email was never sent. `--force` is you
+asserting that, not the tool checking it.
+
+**Run it inside the deployed container**, via `queue:replay-dlq:prod`. The horizon comes from the
+`RETENTION_INBOX_DAYS` of whatever environment the CLI process itself starts in, so running it from
+a laptop whose `.env` omits the variable silently draws the window at the 30-day default while the
+server may be keeping claims for seven — re-admitting precisely the replays the third row exists to
+refuse. The window in force is echoed in the header the command prints; check it matches the
+deployment before `--apply`.
+
+What replay **cannot** fix in any case is the reason the message failed. Read the printed
 `failedReason` and deploy the fix first, or the same messages come straight back.
 
 ```bash
@@ -158,6 +195,7 @@ duplicate. What replay **cannot** fix is the reason the message failed. Read the
 npm run queue:replay-dlq
 npm run queue:replay-dlq -- --apply
 npm run queue:replay-dlq -- --apply --limit 20
+npm run queue:replay-dlq -- --apply --force   # past the retention horizon; read above first
 ```
 
 ```bash
@@ -166,10 +204,109 @@ npm run queue:replay-dlq:prod
 npm run queue:replay-dlq:prod -- --apply
 ```
 
-The CLI reads its Redis URL and queue prefix through the app's own config factory rather than
-re-reading the environment, so it cannot report a reassuringly empty queue by looking under a
-different prefix than the app writes to. It boots no Nest context at all — a replay is something
-you want to be able to run while the app itself is the thing that is broken.
+The guard runs on a dry run too, so the listing is what `--apply` would actually do rather than a
+promise it would then refuse.
+
+The CLI reads its Redis URL, queue prefix **and inbox window** through the app's own config factory
+rather than re-reading the environment, so it cannot report a reassuringly empty queue by looking
+under a different prefix than the app writes to, nor draw the horizon in a different place than the
+sweep does. It boots no Nest context at all — a replay is something you want to be able to run while
+the app itself is the thing that is broken. It now needs **Postgres as well as Redis**: the inbox
+check is not optional, so a replay cannot be performed while the database is down.
+
+---
+
+## Retention sweeps
+
+One timer (`RETENTION_INTERVAL_MS`, hourly by default) drives seven independent sweeps, each
+reclaiming one table. Failures, timeouts and the "still running" guard are **per sweep**: one broken
+table cannot cost the other six their tick.
+
+Every window is sized by **what still has to be able to retry against the row**, never by disk.
+Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say
+only during an incident.
+
+| Sweep | Table | Collected when | Never collected | Env var |
+| ----- | ----- | -------------- | --------------- | ------- |
+| `messaging:outbox` | `outbox` | `published_at` older than the window | **Any row with `published_at IS NULL`, at any age** — that is an unsent event, not a stale record | `RETENTION_OUTBOX_DAYS` (30) |
+| `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
+| `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
+| `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
+| `auth-tokens:email-verification` | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:password-reset` | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:refresh` | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
+
+`reservations` is deliberately **not** in this list. Those rows are released by the reservation
+expiry sweep, which is a state machine driving stock back to available — not retention.
+
+### The two horizons that are not preferences
+
+**Inbox.** `RETENTION_INBOX_DAYS` must exceed how long the queue can still redeliver a message:
+
+```
+RETENTION_INBOX_DAYS × 86400  >  REMOVE_ON_FAIL_AGE_SEC   (604800, i.e. 7 days)
+```
+
+A failed job is re-runnable for exactly that long. Sweep its claim first and the re-run is
+indistinguishable from a first delivery — the effect is applied twice, silently. **The app refuses
+to boot** on a value that violates this, with the arithmetic in the error. The dead-letter queue has
+no age limit at all and so no comparable bound, which is why the DLQ side is handled at replay time
+by querying the inbox rather than by a clock.
+
+**Revoked refresh tokens.** Expiry is age; revocation is evidence. A revoked row is what reuse
+detection matches an incoming token against, so collecting it on the expiry clock turns a detected
+replay — the signal that a refresh token leaked — back into a successful refresh. Hence a separate
+grace, an order of magnitude longer, with a 30-day floor in env validation.
+
+The subtle part is that the expiry arm is restricted to rows that were **never** revoked. Every
+rotation revokes its predecessor, so a rotated token carries both timestamps, and `rotate` checks
+revoked-or-replaced *before* it checks expiry precisely so an expired-but-retired token coming back
+still reads as reuse. An expiry arm that ignored `revoked_at` would therefore collect rotated tokens
+on the short clock: at the default 7-day TTL and 7-day expiry grace they would go at about day 14,
+and the 30-day floor above would be fiction for every token that had ever been rotated. If you widen
+`RETENTION_AUTH_TOKEN_GRACE_DAYS`, that arm still only touches tokens that died of old age unused.
+
+### What to watch
+
+| Signal | Means |
+| ------ | ----- |
+| `retention_rows_deleted_total{sweep}` flat | Either nothing to collect **or** the sweep is not running. The failure counter is what tells the two apart |
+| `retention_sweep_failures_total{sweep}` rising | That one table is not being reclaimed. Per label — it says nothing about the other six |
+| `retention sweep filled its batch` (warn) | The batch is a cap, so a full one means there was more to give. Once is a backlog being worked off; every tick forever means rows arrive faster than this reclaims them and the table grows *despite* the sweep. Raise `RETENTION_BATCH_SIZE`, shorten the window, or shorten the interval |
+| `previous retention sweep still running` (warn) | One sweep is exceeding `RETENTION_SWEEP_TIMEOUT_MS`. The timeout ends the *wait*, not the DELETE, so the statement is still holding locks somewhere |
+
+Every log line from a sweep carries a `requestId` and a `job` of `retention:<sweep name>` — one
+correlation id per sweep, not per tick, because a retention question is about one table at a time.
+
+### Query plans
+
+Measured 2026-09-07 on Postgres 16, 200k rows per table, seeded to resemble a table that has been
+running for months. The case that matters is the **steady state** — the backlog worked off, almost
+nothing old enough to collect — because that is what runs on 23 of every 24 ticks, and it is the
+case where `LIMIT` cannot help: the scan has nothing to find early.
+
+| Sweep | Plan | Time |
+| ----- | ---- | ---- |
+| `messaging:outbox` | Index Scan `idx_outbox_published` | 0.04 ms |
+| `messaging:inbox` | Index Scan `idx_inbox_processed` | 0.01 ms |
+| `order:idempotency-keys` | Index Scan `idx_idempotency_expires` | 0.01 ms |
+| `payment:webhook-events` | Index Scan `idx_webhook_events_received` | 0.01 ms |
+| `auth-tokens:email-verification` | BitmapOr of `_expires` + `_consumed` | 0.02 ms |
+| `auth-tokens:password-reset` | BitmapOr of `_expires` + `_consumed` | 0.02 ms |
+| `auth-tokens:refresh` | BitmapOr of `_expires` + `_revoked` | 0.09 ms |
+
+The three disjunctive predicates need **both** arms indexed or neither index is used. Measured with
+only one arm indexed, `email_verification_tokens` fell back to a parallel seq scan at 22 ms and
+`password_reset_tokens` to 15 ms — costs that grow with exactly the thing the sweep exists to bound.
+That is what migration 0018 is for; do not drop half a pair.
+
+An index also has to match its arm's **whole** predicate, not just its column. `idx_refresh_tokens_expires`
+is partial on `revoked_at IS NULL` because that is the arm it serves; as a plain index on `expires_at`
+it measured a 41 ms seq scan on the same 200k rows, since on a mature table nearly every expired row
+has also been revoked and the index hands the planner a match list that is almost all rejects.
+
+When a sweep is actively working off a backlog the planner correctly prefers a seq scan instead: it
+finds 500 matching rows within the first few pages and stops. Both shapes are healthy.
 
 ---
 

@@ -17,6 +17,9 @@ function build() {
   const sagaStepInc = vi.fn();
   const compensationInc = vi.fn();
   const reservationExpiryInc = vi.fn();
+  const retentionRowsInc = vi.fn();
+  const retentionDurationObserve = vi.fn();
+  const retentionFailureInc = vi.fn();
   const rebuildObserve = vi.fn();
   const breakerStateSet = vi.fn();
   const breakerTransitionInc = vi.fn();
@@ -37,6 +40,9 @@ function build() {
     { inc: sagaStepInc } as unknown as Counter<string>,
     { inc: compensationInc } as unknown as Counter<string>,
     { inc: reservationExpiryInc } as unknown as Counter<string>,
+    { inc: retentionRowsInc } as unknown as Counter<string>,
+    { observe: retentionDurationObserve } as unknown as Histogram<string>,
+    { inc: retentionFailureInc } as unknown as Counter<string>,
     { observe: rebuildObserve } as unknown as Histogram<string>,
     { set: breakerStateSet } as unknown as Gauge<string>,
     { inc: breakerTransitionInc } as unknown as Counter<string>,
@@ -58,6 +64,9 @@ function build() {
     sagaStepInc,
     compensationInc,
     reservationExpiryInc,
+    retentionRowsInc,
+    retentionDurationObserve,
+    retentionFailureInc,
     rebuildObserve,
     breakerStateSet,
     breakerTransitionInc,

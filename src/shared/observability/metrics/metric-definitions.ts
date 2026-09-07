@@ -71,6 +71,18 @@ export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
 // reconcile has stopped. Both sit at 0 on a healthy quiet shop, where the comparison says nothing.
 export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
 
+// --- Retention ---
+// Rows reclaimed per sweep. Read per label rather than in total: a sweep whose counter has been
+// flat since a deploy is either a table with nothing to collect or a sweep that stopped running,
+// and only the failure counter below distinguishes them.
+export const RETENTION_ROWS_DELETED_TOTAL = 'retention_rows_deleted_total';
+// How long one sweep took. Its use is comparative — one sweep far above the others is the one that
+// will start timing out and holding its own next tick.
+export const RETENTION_SWEEP_DURATION_SECONDS = 'retention_sweep_duration_seconds';
+// Sweeps that threw or timed out. Separate from the counter above because a sweep that deletes
+// nothing and a sweep that cannot run look identical from the rows counter alone.
+export const RETENTION_SWEEP_FAILURES_TOTAL = 'retention_sweep_failures_total';
+
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
 // across 1–150ms, where every route's p95/p99 sits; the 0.25s boundary is the latency-SLO
@@ -89,6 +101,10 @@ export const ORDER_VALUE_BUCKETS = [
 // (single-digit ms to ~100ms); the 5s tail exists to make a rebuild that outlives the default lock
 // lease visible rather than lumped into +Inf.
 export const CACHE_REBUILD_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5];
+// Retention sweep buckets (seconds). A sweep is one bounded DELETE, so the healthy range is
+// milliseconds; the long tail exists because the interesting reading is a sweep approaching
+// RETENTION_SWEEP_TIMEOUT_MS (default 30s), which is the point it starts skipping its own ticks.
+export const RETENTION_SWEEP_BUCKETS = [0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10, 30];
 
 /**
  * Every metric registered as an eager DI provider, so all appear in `/metrics` (HELP/TYPE)
@@ -164,6 +180,22 @@ export const METRIC_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: RESERVATION_EXPIRY_TOTAL,
     help: 'Orders the reservation sweep expired because their hold had lapsed. Orders, not reservation rows: a multi-line order is one hold to the sweep.',
+  }),
+  makeCounterProvider({
+    name: RETENTION_ROWS_DELETED_TOTAL,
+    help: 'Rows reclaimed by the retention sweeps, by sweep (context:table). A label that stays flat is either a table with nothing to collect or a sweep that is not running — retention_sweep_failures_total is what tells the two apart.',
+    labelNames: ['sweep'],
+  }),
+  makeHistogramProvider({
+    name: RETENTION_SWEEP_DURATION_SECONDS,
+    help: 'Time one retention sweep took, by sweep. Read comparatively: the sweep well above the others is the one that will start exceeding its timeout and skipping its own ticks.',
+    labelNames: ['sweep'],
+    buckets: RETENTION_SWEEP_BUCKETS,
+  }),
+  makeCounterProvider({
+    name: RETENTION_SWEEP_FAILURES_TOTAL,
+    help: 'Retention sweeps that threw or exceeded their timeout, by sweep. Failures are isolated per sweep, so this rising on one label says nothing about the other six.',
+    labelNames: ['sweep'],
   }),
   makeHistogramProvider({
     name: CACHE_REBUILD_DURATION_SECONDS,

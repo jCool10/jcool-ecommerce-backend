@@ -17,4 +17,11 @@ export interface PasswordResetTokenRepositoryPort {
 
   /** Consume every live token for a user — called before issuing a fresh one. */
   invalidateAllForUser(userId: string): Promise<void>;
+
+  /**
+   * DELETE the tokens that can no longer be spent — expired, or already consumed — once they are
+   * older than `cutoff`. At most `limit` rows; returns how many went (retention sweep). Same
+   * reasoning as the email-verification twin.
+   */
+  deleteSpentBefore(cutoff: Date, limit: number): Promise<number>;
 }

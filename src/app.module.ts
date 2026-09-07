@@ -7,6 +7,7 @@ import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import { RedisModule } from '@shared/infrastructure/redis';
 import { MessagingModule } from '@shared/messaging';
+import { RetentionModule } from '@shared/retention';
 import { ThrottlerSecurityModule } from '@shared/infrastructure/throttler';
 import { HealthModule } from '@shared/health';
 import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } from '@shared/observability';
@@ -35,11 +36,12 @@ import { AuthModule } from '@modules/user/auth.module';
     SentryModule.forRoot(),
     DrizzleModule,
     RedisModule,
+    // @Global, so position is readability only. A complete sweep roster is guaranteed by
+    // registration happening in onModuleInit while the scheduler waits for onApplicationBootstrap.
+    RetentionModule,
     MessagingModule,
     ThrottlerSecurityModule,
-    // Timer registry for the outbox relay, the payment reconciliation sweep and the reservation
-    // expiry sweep; each is gated by its own kill-switch. Global, so position here does not affect
-    // resolution.
+    // Timer registry for the outbox relay and every sweep; each is gated by its own kill-switch.
     ScheduleModule.forRoot(),
     HealthModule,
     CatalogModule,

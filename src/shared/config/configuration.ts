@@ -200,6 +200,36 @@ export default () => ({
     // session — always gets there first, and this one only clears what that could not settle.
     graceSec: parseIntOr(process.env.RESERVATION_SWEEP_GRACE_SEC, 900),
   },
+  retention: {
+    // Off for e2e suites, which drive the sweeps directly, and for one-off job containers.
+    enabled: process.env.RETENTION_ENABLED !== 'false',
+    // Hourly. Housekeeping, not correctness — sized to keep load off the hot path rather than to
+    // meet a deadline. A blank env value would parseInt→NaN, so fall back explicitly.
+    intervalMs: parseIntOr(process.env.RETENTION_INTERVAL_MS, 3_600_000),
+    // Rows one sweep may delete per tick — also the bound on how long one DELETE holds row locks.
+    batchSize: parseIntOr(process.env.RETENTION_BATCH_SIZE, 500),
+    // How long the scheduler waits on one sweep before moving on. It ends the wait, not the
+    // statement, so its job is to stop one blocked table from holding the tick.
+    sweepTimeoutMs: parseIntOr(process.env.RETENTION_SWEEP_TIMEOUT_MS, 30_000),
+    // Extra age past an idempotency key's own `expires_at`. Its TTL is already the retry window, so
+    // this is only slack for clock skew between app and database.
+    idempotencyGraceSec: parseIntOr(process.env.RETENTION_IDEMPOTENCY_GRACE_SEC, 3_600),
+    // Grace past expiry/consumption for the two single-use token tables. Short — a spent token has
+    // no further use beyond answering a support question about a link clicked last week.
+    authTokenGraceDays: parseIntOr(process.env.RETENTION_AUTH_TOKEN_GRACE_DAYS, 7),
+    // Grace past REVOCATION for refresh tokens, deliberately much longer: a revoked token that
+    // comes back is the reuse signal, and that detection is a row lookup. Floored at 30 days in
+    // env.validation.
+    refreshTokenGraceDays: parseIntOr(process.env.RETENTION_REFRESH_TOKEN_GRACE_DAYS, 30),
+    // How long a PUBLISHED outbox row is kept. Unpublished rows are never collected at any age.
+    outboxDays: parseIntOr(process.env.RETENTION_OUTBOX_DAYS, 30),
+    // How long an inbox claim is kept — the one retention number that is a correctness bound.
+    // Guarded at boot against the main queue's failed-job horizon (see sweep-inbox.ts).
+    inboxDays: parseIntOr(process.env.RETENTION_INBOX_DAYS, 30),
+    // Must outlast the GATEWAY's redelivery window, not the queue's — this table is the replay
+    // defence at ingress. Stripe retries for ~72h; floored at 14 days in env.validation.
+    webhookEventDays: parseIntOr(process.env.RETENTION_WEBHOOK_EVENT_DAYS, 30),
+  },
   catalog: {
     // How long (s) a cached public product read is served without question. Catalog's own fresh
     // window; the stale window, jitter and lock bounds below are shared. The upper bound on

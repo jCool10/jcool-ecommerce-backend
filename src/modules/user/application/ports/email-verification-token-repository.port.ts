@@ -17,4 +17,13 @@ export interface EmailVerificationTokenRepositoryPort {
 
   /** Consume every live token for a user — called before issuing a fresh one on resend. */
   invalidateAllForUser(userId: string): Promise<void>;
+
+  /**
+   * DELETE the tokens that can no longer be spent — expired, or already consumed — once they are
+   * older than `cutoff`. At most `limit` rows; returns how many went (retention sweep).
+   *
+   * Safe to collect at all because `consume` is a conditional UPDATE guarded by the same two
+   * conditions: a row matching this predicate could not have been consumed by anyone anyway.
+   */
+  deleteSpentBefore(cutoff: Date, limit: number): Promise<number>;
 }

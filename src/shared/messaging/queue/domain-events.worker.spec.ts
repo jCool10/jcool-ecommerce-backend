@@ -1,4 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
+import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { DeadLetterRouter } from './dead-letter';
@@ -27,6 +28,8 @@ function build(overrides: Record<string, unknown> = {}) {
     { process: vi.fn() } as unknown as DomainEventProcessor,
     { route: vi.fn() } as unknown as DeadLetterRouter,
     config,
+    // Pass-through: correlation is asserted in job-context.spec.ts.
+    { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
     logger as unknown as PinoLogger,
   );
   return { worker, logger };

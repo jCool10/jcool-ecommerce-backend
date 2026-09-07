@@ -127,6 +127,13 @@
       "when": 1788578862137,
       "tag": "0017_slow_captain_america",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788757196592,
+      "tag": "0018_slim_wild_pack",
+      "breakpoints": true
     }
   ]
 }

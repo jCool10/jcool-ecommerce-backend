@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
 import { IdentityService } from '@shared/identity';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { refreshTokens, users } from './schema/user.schema';
@@ -139,5 +139,28 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
       )
       .returning({ id: refreshTokens.id });
     return revoked.length > 0;
+  }
+
+  async deleteCollectable(expiredBefore: Date, revokedBefore: Date, limit: number): Promise<number> {
+    // A disjunction over two columns, which is why the schema indexes both. Postgres has no LIMIT
+    // on DELETE, so the batch bound is a subquery. `isNull(revokedAt)` on the first arm is
+    // load-bearing — a rotated token has both timestamps set, and without it the expiry arm would
+    // collect one long before its revocation grace runs out. See the port docs.
+    const doomed = this.db
+      .select({ id: refreshTokens.id })
+      .from(refreshTokens)
+      .where(
+        or(
+          and(lt(refreshTokens.expiresAt, expiredBefore), isNull(refreshTokens.revokedAt)),
+          lt(refreshTokens.revokedAt, revokedBefore),
+        ),
+      )
+      .limit(limit);
+
+    const deleted = await this.db
+      .delete(refreshTokens)
+      .where(inArray(refreshTokens.id, doomed))
+      .returning({ id: refreshTokens.id });
+    return deleted.length;
   }
 }

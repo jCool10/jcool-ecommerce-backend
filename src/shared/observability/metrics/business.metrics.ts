@@ -30,6 +30,9 @@ import {
   ORDER_VALUE_MINOR,
   RATE_LIMIT_REJECTIONS_TOTAL,
   RESERVATION_EXPIRY_TOTAL,
+  RETENTION_ROWS_DELETED_TOTAL,
+  RETENTION_SWEEP_DURATION_SECONDS,
+  RETENTION_SWEEP_FAILURES_TOTAL,
   SAGA_COMPENSATION_TOTAL,
   SAGA_STEP_TOTAL,
 } from './metric-definitions';
@@ -59,6 +62,9 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(SAGA_STEP_TOTAL) private readonly sagaSteps: Counter<string>,
     @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
     @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
+    @InjectMetric(RETENTION_ROWS_DELETED_TOTAL) private readonly retentionRowsDeleted: Counter<string>,
+    @InjectMetric(RETENTION_SWEEP_DURATION_SECONDS) private readonly retentionSweepDuration: Histogram<string>,
+    @InjectMetric(RETENTION_SWEEP_FAILURES_TOTAL) private readonly retentionSweepFailures: Counter<string>,
     @InjectMetric(CACHE_REBUILD_DURATION_SECONDS) private readonly cacheRebuildDuration: Histogram<string>,
     @InjectMetric(CIRCUIT_BREAKER_STATE) private readonly breakerState: Gauge<string>,
     @InjectMetric(CIRCUIT_BREAKER_TRANSITIONS_TOTAL) private readonly breakerTransitions: Counter<string>,
@@ -113,6 +119,20 @@ export class BusinessMetrics implements MetricsPort {
 
   recordReservationExpiry(): void {
     this.safely('reservation_expiry', () => this.reservationExpiries.inc());
+  }
+
+  recordRetentionSweep(sweep: string, rows: number): void {
+    // Recorded even at zero, so the series exists from the first tick: a label that only appears
+    // once something was deleted cannot be alerted on for having stopped.
+    this.safely('retention_rows_deleted', () => this.retentionRowsDeleted.inc({ sweep }, rows));
+  }
+
+  observeRetentionSweepDuration(sweep: string, seconds: number): void {
+    this.safely('retention_sweep_duration', () => this.retentionSweepDuration.observe({ sweep }, seconds));
+  }
+
+  recordRetentionSweepFailure(sweep: string): void {
+    this.safely('retention_sweep_failure', () => this.retentionSweepFailures.inc({ sweep }));
   }
 
   observeCacheRebuild(seconds: number): void {

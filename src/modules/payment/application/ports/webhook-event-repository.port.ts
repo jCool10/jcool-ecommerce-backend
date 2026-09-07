@@ -41,4 +41,14 @@ export interface WebhookEventRepositoryPort {
    * acted on, not lost.
    */
   markSkipped(id: string, tx?: DrizzleTx): Promise<void>;
+
+  /**
+   * DELETE WHERE received_at < cutoff, at most `limit` rows (retention sweep). Returns how many
+   * were reclaimed.
+   *
+   * Age is the only legal condition. Status is not: a RECEIVED row inside the gateway's redelivery
+   * window is what makes a repeated delivery a no-op, and collecting it early would let the same
+   * event be applied a second time.
+   */
+  deleteReceivedBefore(cutoff: Date, limit: number): Promise<number>;
 }

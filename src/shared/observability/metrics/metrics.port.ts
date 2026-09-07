@@ -88,4 +88,10 @@ export interface MetricsPort {
   recordCompensation(trigger: CompensationTrigger): void;
   /** The reservation sweep expired one order whose hold had lapsed. */
   recordReservationExpiry(): void;
+  /** One retention sweep finished and reclaimed `rows`. `sweep` is a fixed `context:table` name, never a per-row value. */
+  recordRetentionSweep(sweep: string, rows: number): void;
+  /** How long one retention sweep took, in seconds. Same cardinality rule on `sweep` as above. */
+  observeRetentionSweepDuration(sweep: string, seconds: number): void;
+  /** One retention sweep threw or timed out. Counted separately because a sweep that reclaims nothing and one that cannot run are indistinguishable from the rows counter alone. */
+  recordRetentionSweepFailure(sweep: string): void;
 }

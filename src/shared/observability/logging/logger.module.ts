@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { isSpanContextValid, trace } from '@opentelemetry/api';
 import { ClsService } from 'nestjs-cls';
 import { LoggerModule, type Params } from 'nestjs-pino';
+import { JOB_NAME_KEY } from '../correlation/job-context';
 import { redactPaths } from './redact-paths';
 
 const REDACT_CENSOR = '[Redacted]';
@@ -30,6 +31,10 @@ export const ObservabilityLoggerModule = LoggerModule.forRootAsync({
           if (cls.isActive()) {
             const requestId = cls.getId();
             if (requestId) fields.requestId = requestId;
+            // Set only by runInJobContext, so its presence is also the answer to "was this line
+            // produced by a request or by a timer" — which the requestId alone cannot tell you.
+            const jobName = cls.get<string>(JOB_NAME_KEY);
+            if (jobName) fields.job = jobName;
           }
           const spanContext = trace.getActiveSpan()?.spanContext();
           if (spanContext && isSpanContextValid(spanContext)) {

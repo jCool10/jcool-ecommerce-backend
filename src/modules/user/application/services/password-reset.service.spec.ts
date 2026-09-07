@@ -22,6 +22,12 @@ const TTL_MS = 60 * 60 * 1000;
 
 class MockTokenRepo implements PasswordResetTokenRepositoryPort {
   created: CreatePasswordResetTokenInput[] = [];
+
+  // Retention is not this service's concern; SweepAuthTokensService owns and tests it.
+  deleteSpentBefore(): Promise<number> {
+    return Promise.resolve(0);
+  }
+
   invalidatedFor: string[] = [];
   consumeResult: ConsumePasswordResetOutcome = { status: 'invalid' };
   consumedHash?: string;

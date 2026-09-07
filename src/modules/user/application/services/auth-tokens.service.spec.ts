@@ -7,6 +7,12 @@ import { AuthTokensService } from './auth-tokens.service';
 
 class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
   last?: CreateRefreshTokenInput;
+
+  // Retention is not this service's concern; SweepAuthTokensService owns and tests it.
+  deleteCollectable(): Promise<number> {
+    return Promise.resolve(0);
+  }
+
   create(input: CreateRefreshTokenInput): Promise<void> {
     this.last = input;
     return Promise.resolve();

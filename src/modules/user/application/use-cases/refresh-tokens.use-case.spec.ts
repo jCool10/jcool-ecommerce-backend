@@ -22,6 +22,12 @@ const SUCCESSOR: IssuedRefreshToken = {
 
 class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
   outcome: RotateOutcome = { status: 'invalid' };
+
+  // Retention is not this use case's concern; SweepAuthTokensService owns and tests it.
+  deleteCollectable(): Promise<number> {
+    return Promise.resolve(0);
+  }
+
   lastRotate?: RotateRefreshTokenInput;
   rotateCalls = 0;
 

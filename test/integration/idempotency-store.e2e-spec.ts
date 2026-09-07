@@ -153,7 +153,7 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
     await repo.tryInsertInProgress(insertInput({ key: 'expired', expiresAt: inDays(-1) }));
     await repo.tryInsertInProgress(insertInput({ key: 'live', expiresAt: inDays(1) }));
 
-    const removed = await repo.deleteExpired(new Date());
+    const removed = await repo.deleteExpired(new Date(), 100);
 
     expect(removed).toBe(1);
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'expired')).toBeNull();

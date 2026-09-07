@@ -18,6 +18,7 @@ import {
   EmailVerificationService,
   PasswordResetService,
   SessionService,
+  SweepAuthTokensService,
 } from './application/services';
 import {
   ChangePasswordUseCase,
@@ -76,6 +77,9 @@ import { UserModule } from './user.module';
     PasswordResetService,
     ForgotPasswordUseCase,
     SessionService,
+    // Provided here rather than in UserModule because the three token repositories are: it registers
+    // three sweeps with the shared retention registry on init, one per table.
+    SweepAuthTokensService,
     ChangePasswordUseCase,
     JwtStrategy,
     AuthCookieService,
