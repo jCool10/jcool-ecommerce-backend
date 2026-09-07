@@ -22,7 +22,7 @@ jobs:
     name: Lint · Typecheck · Arch · Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24 # ships npm 11 (matches committed lockfile); satisfies devDep engines (testcontainers/dependency-cruiser need node >=22)
@@ -49,7 +49,7 @@ jobs:
     name: Test (unit + integration · Testcontainers)
     runs-on: ubuntu-latest # GitHub-hosted runner ships a Docker daemon → Testcontainers works
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
