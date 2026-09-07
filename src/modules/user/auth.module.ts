@@ -36,12 +36,13 @@ import {
   DrizzlePasswordResetTokenRepository,
   DrizzleRefreshTokenRepository,
   DrizzleSessionEpochRepository,
-  LogMailer,
+  MailerAdapter,
   RedisTokenDenylist,
 } from './infrastructure';
 import { AuthController } from './interface/auth.controller';
 import { JwtAuthGuard } from './interface/guards/jwt-auth.guard';
 import { IdentityModule } from '@shared/identity/identity.module';
+import { MailModule } from '@shared/mail';
 import { RolesGuard } from '@shared/rbac';
 import { AuthCookieService, CsrfGuard, CsrfTokenService } from './interface/security';
 import { JwtStrategy } from './interface/strategies/jwt.strategy';
@@ -54,6 +55,7 @@ import { UserModule } from './user.module';
     // Load-bearing despite UserModule's own import: the three token repositories are provided here
     // and each mints its own row ids.
     IdentityModule,
+    MailModule,
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -88,7 +90,7 @@ import { UserModule } from './user.module';
     { provide: REFRESH_TOKEN_REPOSITORY, useClass: DrizzleRefreshTokenRepository },
     { provide: EMAIL_VERIFICATION_TOKEN_REPOSITORY, useClass: DrizzleEmailVerificationTokenRepository },
     { provide: PASSWORD_RESET_TOKEN_REPOSITORY, useClass: DrizzlePasswordResetTokenRepository },
-    { provide: MAILER, useClass: LogMailer }, // log sink; swap for an SMTP adapter in production
+    { provide: MAILER, useClass: MailerAdapter },
     // Access-token denylist (Redis): read by JwtStrategy per request, written by logout.
     { provide: TOKEN_DENYLIST, useClass: RedisTokenDenylist },
     // Per-user session epoch: read by JwtStrategy per request, bumped for global revocation.

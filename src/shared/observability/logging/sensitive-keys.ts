@@ -11,6 +11,9 @@ export const SENSITIVE_KEYS = [
   'newPassword',
   'currentPassword',
   'token',
+  // A link is as redeemable as the token inside it, and neither key name contains "token".
+  'verifyUrl',
+  'resetUrl',
   'refreshToken',
   'accessToken',
   'authorization',

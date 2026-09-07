@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
+import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import type { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import type { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
@@ -84,6 +85,7 @@ function build(rows: OutboxRow[]) {
     { settle: vi.fn() } as unknown as PaymentEventsHandler,
     { close: vi.fn() } as unknown as OrderExpiredHandler,
     { close: vi.fn() } as unknown as OrderCancelledHandler,
+    { prepare: vi.fn() } as unknown as OrderPaidMailHandler,
   );
 
   const relay = new OutboxRelay(

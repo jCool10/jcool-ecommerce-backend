@@ -9,6 +9,11 @@ describe('isSensitiveKey', () => {
     expect(isSensitiveKey('Set-Cookie')).toBe(true);
   });
 
+  it('covers the mail links, which carry a redeemable token under a key that is not named token', () => {
+    expect(isSensitiveKey('verifyUrl')).toBe(true);
+    expect(isSensitiveKey('resetUrl')).toBe(true);
+  });
+
   it('leaves non-sensitive keys alone', () => {
     expect(isSensitiveKey('email')).toBe(false);
     expect(isSensitiveKey('orderId')).toBe(false);

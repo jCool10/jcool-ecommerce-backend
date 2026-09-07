@@ -6,7 +6,7 @@ import { InboxStore } from '../inbox/inbox.store';
 import { PermanentError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import { withConsumeSpan } from './consume-span';
-import { envelopeFields, isWellFormedEnvelope, type DomainEventJob } from './domain-event.job';
+import { envelopeFields, isWellFormedEnvelope, type DomainEventJob, type PostCommitEffect } from './domain-event.job';
 import { DOMAIN_EVENTS_CONSUMER } from './queue.constants';
 
 const LOG_CONTEXT = 'DomainEventProcessor';
@@ -18,7 +18,13 @@ const LOG_CONTEXT = 'DomainEventProcessor';
  * and the queue redelivers a job whose worker died mid-flight. Exactly-once *delivery* is not
  * available in a distributed system, so this collapses the duplicates instead — claim the message in
  * the inbox and run the effect in the SAME transaction, and a redelivery loses the claim and does
- * nothing. At-least-once in, exactly-once effect out.
+ * nothing. At-least-once in, exactly-once effect out — for effects inside the database.
+ *
+ * An effect outside it gets weaker odds, and cannot get better ones: no transaction spans Postgres
+ * and an SMTP server. Such work is returned as a {@link PostCommitEffect} and run once the claim has
+ * committed, which makes it at-most-once — a failure there is not retried, because the redelivery
+ * that would carry it now finds the message already claimed. The alternative, sending inside the
+ * transaction, trades a lost confirmation for duplicates of it plus a held connection per send.
  *
  * Kept separate from the worker that drives it so the behaviour above is testable one delivery at a
  * time, without a running queue — the same split as the relay and its scheduler.
@@ -41,8 +47,9 @@ export class DomainEventProcessor {
       // counter that exists to make failures visible.
       assertEnvelope(job);
 
-      result = await withConsumeSpan(job.eventType, job.traceparent, () =>
-        this.db.transaction(async (tx): Promise<ConsumeResult> => {
+      result = await withConsumeSpan(job.eventType, job.traceparent, async (): Promise<ConsumeResult> => {
+        let effect: PostCommitEffect | void = undefined;
+        const outcome = await this.db.transaction(async (tx): Promise<ConsumeResult> => {
           const claimed = await this.inbox.claim(tx, {
             consumer: DOMAIN_EVENTS_CONSUMER,
             messageId: job.outboxId,
@@ -50,10 +57,16 @@ export class DomainEventProcessor {
           });
           if (!claimed) return 'duplicate';
 
-          await this.dispatcher.dispatch(job, tx);
+          effect = await this.dispatcher.dispatch(job, tx);
           return 'processed';
-        }),
-      );
+        });
+
+        // Still inside the consume span, so what the effect reaches — an SMTP call, its breaker —
+        // hangs off this event's trace rather than starting an orphan one. Outside the transaction,
+        // which is the whole point: the connection is back in the pool before the send begins.
+        if (typeof effect === 'function') await this.runPostCommit(job, effect);
+        return outcome;
+      });
     } catch (error) {
       // Counted before rethrowing: a pipeline where every consume throws would otherwise look
       // exactly like an idle one — the counter simply stops moving. The label falls back to a
@@ -83,6 +96,19 @@ export class DomainEventProcessor {
     }
 
     return result;
+  }
+
+  // The message is applied and committed by now, so nothing here may fail the consume: throwing
+  // would send the job back for a redelivery that can only find its own claim and do nothing.
+  private async runPostCommit(job: DomainEventJob, effect: PostCommitEffect): Promise<void> {
+    try {
+      await effect();
+    } catch (error: unknown) {
+      this.logger.error(
+        { context: LOG_CONTEXT, eventType: job.eventType, messageId: job.outboxId, err: error },
+        'post-commit effect failed and will not be retried',
+      );
+    }
   }
 }
 

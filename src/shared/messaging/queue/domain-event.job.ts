@@ -14,6 +14,13 @@ export interface DomainEventJob {
   traceparent: string | null;
 }
 
+/**
+ * Work a handler wants done only once its transaction has committed — reaching something no
+ * transaction can hold, like an SMTP server. Returned rather than run, so the handler cannot
+ * perform it early by accident.
+ */
+export type PostCommitEffect = () => Promise<void>;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**

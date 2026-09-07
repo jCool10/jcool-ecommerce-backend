@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
-import type { DomainEventJob } from './domain-event.job';
+import type { DomainEventJob, PostCommitEffect } from './domain-event.job';
 import { DomainEventProcessor } from './domain-event.processor';
 import { DOMAIN_EVENTS_CONSUMER } from './queue.constants';
 
@@ -25,14 +25,24 @@ function job(overrides: Partial<DomainEventJob> = {}): DomainEventJob {
  * the effect never runs on a lost claim and that the counter follows the transaction's outcome;
  * that the claim itself is atomic is the database's job, and the e2e suite's.
  */
-function build({ claimed = true, known = true }: { claimed?: boolean; known?: boolean } = {}) {
+function build({
+  claimed = true,
+  known = true,
+  effect,
+  trace = [],
+}: { claimed?: boolean; known?: boolean; effect?: PostCommitEffect; trace?: string[] } = {}) {
   const tx = Symbol('tx');
-  const transaction = vi.fn((run: (t: unknown) => unknown) => Promise.resolve(run(tx)));
+  const transaction = vi.fn(async (run: (t: unknown) => unknown) => {
+    const value = await run(tx);
+    trace.push('commit');
+    return value;
+  });
   const claim = vi.fn().mockResolvedValue(claimed);
-  const dispatch = vi.fn().mockResolvedValue(undefined);
+  const dispatch = vi.fn().mockResolvedValue(effect);
   const label = vi.fn((eventType: string) => (known ? eventType : 'unregistered'));
   const recordEventConsumed = vi.fn();
-  const logger = { debug: vi.fn() } as unknown as PinoLogger;
+  const error = vi.fn();
+  const logger = { debug: vi.fn(), error } as unknown as PinoLogger;
 
   const processor = new DomainEventProcessor(
     { transaction } as unknown as DrizzleDB,
@@ -42,7 +52,7 @@ function build({ claimed = true, known = true }: { claimed?: boolean; known?: bo
     logger,
   );
 
-  return { processor, tx, claim, dispatch, recordEventConsumed };
+  return { processor, tx, claim, dispatch, recordEventConsumed, error };
 }
 
 describe('DomainEventProcessor', () => {
@@ -92,6 +102,42 @@ describe('DomainEventProcessor', () => {
     // A name nobody registered is attacker- or typo-controlled; labelling it verbatim would let one
     // bad producer mint unbounded time series in Prometheus.
     expect(ctx.recordEventConsumed).toHaveBeenCalledWith('unregistered', 'failed');
+  });
+
+  describe('post-commit effects', () => {
+    it('runs the effect only once the transaction has committed', async () => {
+      const trace: string[] = [];
+      const ctx = build({
+        trace,
+        effect: () => {
+          trace.push('effect');
+          return Promise.resolve();
+        },
+      });
+
+      await expect(ctx.processor.process(job())).resolves.toBe('processed');
+
+      // Reversed, the effect would reach a mail server for a message whose claim then rolled back.
+      expect(trace).toEqual(['commit', 'effect']);
+    });
+
+    it('does not fail the consume when the effect throws', async () => {
+      const ctx = build({ effect: () => Promise.reject(new Error('smtp down')) });
+
+      // The message IS applied — the claim committed — so failing here would only buy a redelivery
+      // that the same claim now turns into a no-op.
+      await expect(ctx.processor.process(job())).resolves.toBe('processed');
+      expect(ctx.error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('post-commit'));
+    });
+
+    it('runs no effect for a duplicate delivery', async () => {
+      const effect = vi.fn().mockResolvedValue(undefined);
+      const ctx = build({ claimed: false, effect });
+
+      await expect(ctx.processor.process(job())).resolves.toBe('duplicate');
+
+      expect(effect).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects a malformed envelope before opening a transaction', async () => {

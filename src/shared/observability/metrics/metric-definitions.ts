@@ -74,6 +74,11 @@ export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
 // routinely seen by two paths. Alert on non-zero, then read the logs for the order ids.
 export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
 
+// --- Mail ---
+// Messages that did not go out. Mail is sent after its transaction commits, so nothing retries it:
+// every increment here is one notification the recipient will never receive.
+export const MAIL_SEND_FAILURES_TOTAL = 'mail_send_failures_total';
+
 // --- Retention ---
 // Rows reclaimed per sweep. Read per label rather than in total: a sweep whose counter has been
 // flat since a deploy is either a table with nothing to collect or a sweep that stopped running,
@@ -188,6 +193,11 @@ export const METRIC_PROVIDERS: Provider[] = [
     name: PAYMENT_REFUND_OWED_TOTAL,
     help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: expire_session = closing the checkout session found the money instead; webhook_direct and settlement_event = a successful payment landing on an order already cancelled or expired, seen by the in-process finalize and by its durable event. Observations, not refunds — one stranded payment normally raises two of these, so alert on the sum being non-zero and get the count from the database, never by summing this.',
     labelNames: ['source'],
+  }),
+  makeCounterProvider({
+    name: MAIL_SEND_FAILURES_TOTAL,
+    help: 'Messages the transport refused or could not deliver, by kind. Nothing retries them: the auth kinds are re-triggerable by the user (resend verification, ask for another reset link), order_paid is a confirmation simply lost.',
+    labelNames: ['kind'],
   }),
   makeCounterProvider({
     name: RETENTION_ROWS_DELETED_TOTAL,
