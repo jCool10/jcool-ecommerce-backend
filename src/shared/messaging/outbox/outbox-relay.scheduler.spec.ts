@@ -1,5 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
 import type { SchedulerRegistry } from '@nestjs/schedule';
+import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OutboxRelay, RelayTickSummary } from './outbox-relay';
@@ -23,6 +24,8 @@ function build(overrides: Record<string, unknown> = {}, runOnce = vi.fn().mockRe
       { runOnce } as unknown as OutboxRelay,
       config,
       registry as unknown as SchedulerRegistry,
+      // Pass-through: correlation is asserted in job-context.spec.ts.
+      { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
       logger as unknown as PinoLogger,
     );
   return { make, registry, logger, runOnce };

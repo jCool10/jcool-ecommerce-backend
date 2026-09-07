@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
 import { IdentityService } from '@shared/identity';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { emailVerificationTokens } from './schema/user.schema';
@@ -49,5 +49,21 @@ export class DrizzleEmailVerificationTokenRepository implements EmailVerificatio
       .update(emailVerificationTokens)
       .set({ consumedAt: new Date() })
       .where(and(eq(emailVerificationTokens.userId, userId), isNull(emailVerificationTokens.consumedAt)));
+  }
+
+  async deleteSpentBefore(cutoff: Date, limit: number): Promise<number> {
+    // The negation of `consume`'s guard: a row is collectable exactly when that conditional UPDATE
+    // could no longer match it. Postgres has no LIMIT on DELETE, so the batch bound is a subquery.
+    const doomed = this.db
+      .select({ id: emailVerificationTokens.id })
+      .from(emailVerificationTokens)
+      .where(or(lt(emailVerificationTokens.expiresAt, cutoff), lt(emailVerificationTokens.consumedAt, cutoff)))
+      .limit(limit);
+
+    const deleted = await this.db
+      .delete(emailVerificationTokens)
+      .where(inArray(emailVerificationTokens.id, doomed))
+      .returning({ id: emailVerificationTokens.id });
+    return deleted.length;
   }
 }

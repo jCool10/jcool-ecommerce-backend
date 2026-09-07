@@ -1,7 +1,9 @@
 import { Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
+import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
+import { runInJobContext } from '@shared/observability/correlation/job-context';
 import { OutboxRelay } from './outbox-relay';
 
 const LOG_CONTEXT = 'OutboxRelayScheduler';
@@ -21,6 +23,7 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly relay: OutboxRelay,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
+    private readonly cls: ClsService,
     private readonly logger: PinoLogger,
   ) {
     // A mistyped key reads as undefined, and `setInterval(fn, undefined)` fires every event-loop
@@ -68,11 +71,14 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
 
   private async run(): Promise<void> {
     try {
-      const summary = await this.relay.runOnce(this.batchSize);
-      // An idle backlog is the steady state; logging it would bury the ticks that moved something.
-      if (summary.published > 0 || summary.failed > 0) {
-        this.logger.info({ context: LOG_CONTEXT, ...summary }, 'outbox relay tick completed');
-      }
+      // One correlation id per tick — a timer has no request to inherit one from.
+      await runInJobContext(this.cls, INTERVAL_NAME, async () => {
+        const summary = await this.relay.runOnce(this.batchSize);
+        // An idle backlog is the steady state; logging it would bury the ticks that moved something.
+        if (summary.published > 0 || summary.failed > 0) {
+          this.logger.info({ context: LOG_CONTEXT, ...summary }, 'outbox relay tick completed');
+        }
+      });
     } catch (error) {
       // The poll itself broke (the per-row failures are handled inside). Swallow it: an unhandled
       // rejection in a timer kills the process.

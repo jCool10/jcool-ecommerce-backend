@@ -20,6 +20,12 @@ const TTL_MS = 24 * 60 * 60 * 1000;
 
 class MockTokenRepo implements EmailVerificationTokenRepositoryPort {
   created: CreateEmailVerificationTokenInput[] = [];
+
+  // Retention is not this service's concern; SweepAuthTokensService owns and tests it.
+  deleteSpentBefore(): Promise<number> {
+    return Promise.resolve(0);
+  }
+
   invalidatedFor: string[] = [];
   consumeResult: ConsumeEmailVerificationOutcome = { status: 'invalid' };
   consumedHash?: string;

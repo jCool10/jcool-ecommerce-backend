@@ -4,7 +4,9 @@ import { PaymentModule } from '@modules/payment/payment.module';
 import { DomainEventDispatcher } from './handlers/domain-event.dispatcher';
 import { OrderEventsHandler } from './handlers/order-events.handler';
 import { InboxStore } from './inbox/inbox.store';
+import { SweepInbox } from './inbox/sweep-inbox';
 import { DrizzleOutboxWriter } from './outbox/drizzle-outbox.writer';
+import { SweepPublishedOutbox } from './outbox/sweep-published-outbox';
 import { OutboxRelay } from './outbox/outbox-relay';
 import { OutboxRelayScheduler } from './outbox/outbox-relay.scheduler';
 import { OUTBOX_WRITER } from './outbox/outbox-writer.port';
@@ -34,6 +36,10 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
     OutboxRelay,
     OutboxRelayScheduler,
     InboxStore,
+    // The two tables this package owns, each reclaiming itself. They register into the shared
+    // retention registry on init; nothing here drives them.
+    SweepPublishedOutbox,
+    SweepInbox,
     OrderEventsHandler,
     DomainEventDispatcher,
     DomainEventProcessor,

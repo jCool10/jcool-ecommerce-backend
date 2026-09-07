@@ -13,6 +13,7 @@ import {
   HandlePaymentWebhookUseCase,
   ProcessWebhookEventUseCase,
   ReconcileStaleOrdersUseCase,
+  SweepWebhookEventsUseCase,
 } from './application/use-cases';
 import { DrizzlePaymentRepository } from './infrastructure/payment.repository';
 import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.repository';
@@ -70,6 +71,8 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     ReconcileStaleOrdersUseCase,
     ReconciliationScheduler,
     ExpirePaymentSessionUseCase,
+    // Registers itself with the shared retention registry on init; nothing here drives it.
+    SweepWebhookEventsUseCase,
     OrderExpiredHandler,
   ],
   // OrderExpiredHandler is exported so the shared event consumer can route Order's expiry back here;

@@ -71,5 +71,10 @@ export const webhookEvents = pgTable(
     receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
     processedAt: timestamp('processed_at', { withTimezone: true }),
   },
-  (t) => [uniqueIndex('uq_webhook_provider_event').on(t.provider, t.providerEventId)],
+  (t) => [
+    uniqueIndex('uq_webhook_provider_event').on(t.provider, t.providerEventId),
+    // The retention sweep's predicate. The unique index above is on the identity pair, which says
+    // nothing about age, so without this the sweep would scan every event ever received.
+    index('idx_webhook_events_received').on(t.receivedAt),
+  ],
 );

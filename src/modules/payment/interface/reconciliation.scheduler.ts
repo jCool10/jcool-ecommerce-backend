@@ -1,7 +1,9 @@
 import { Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
+import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
+import { runInJobContext } from '@shared/observability/correlation/job-context';
 import { withSpan } from '@shared/observability/tracing/tracer';
 import { ReconcileStaleOrdersUseCase, type ReconcileInput } from '../application/use-cases';
 
@@ -27,6 +29,7 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly reconcile: ReconcileStaleOrdersUseCase,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
+    private readonly cls: ClsService,
     private readonly logger: PinoLogger,
   ) {
     // A mistyped key reads as undefined, and `setInterval(fn, undefined)` fires every event-loop
@@ -64,16 +67,18 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
     }
     this.running = true;
     try {
-      // A timer has no request and no inbound trace, so nothing would tie this tick's lines to the
-      // orders it settled — the span is what puts a trace id on both, including the gateway probe
-      // auto-instrumentation hangs underneath it.
-      await withSpan('payment.reconcile', async () => {
-        const summary = await this.reconcile.execute(this.sweep);
-        // Idle sweeps are the common case; logging them buries the ticks that did something.
-        if (summary.scanned > 0) {
-          this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reconciliation sweep completed');
-        }
-      });
+      // A timer has no request and no inbound trace: the span puts a trace id on this tick's lines
+      // (including the gateway probe auto-instrumentation hangs underneath), the job context puts a
+      // correlation id there for readers with no tracing backend.
+      await runInJobContext(this.cls, INTERVAL_NAME, () =>
+        withSpan('payment.reconcile', async () => {
+          const summary = await this.reconcile.execute(this.sweep);
+          // Idle sweeps are the common case; logging them buries the ticks that did something.
+          if (summary.scanned > 0) {
+            this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reconciliation sweep completed');
+          }
+        }),
+      );
     } catch (error) {
       // Per-order failures are already isolated, so this is the sweep itself breaking. Swallow it:
       // an unhandled rejection in a timer kills the process.

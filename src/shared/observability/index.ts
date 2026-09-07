@@ -1,6 +1,7 @@
 // Barrel: correlation (CLS) + structured logging + route resolver. Metrics stays out of this
 // barrel (it pulls prom-client); app code imports the pure metrics/metrics.port seam instead.
 export * from './correlation/cls.setup';
+export * from './correlation/job-context';
 export * from './logging/logger.module';
 export * from './logging/redact-paths';
 export * from './logging/db-query-counter';

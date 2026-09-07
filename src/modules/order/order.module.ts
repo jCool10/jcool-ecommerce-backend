@@ -2,7 +2,12 @@ import { Module } from '@nestjs/common';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
-import { CheckoutOrderUseCase, FinalizeOrderUseCase, SweepExpiredReservationsUseCase } from './application/use-cases';
+import {
+  CheckoutOrderUseCase,
+  FinalizeOrderUseCase,
+  SweepExpiredReservationsUseCase,
+  SweepIdempotencyKeysUseCase,
+} from './application/use-cases';
 import { OrderQueryService } from './application/order-query.service';
 import { ORDER_PAYMENT_VIEW } from './application/public/order-payment-view.port';
 import { OrderPaymentViewService } from './application/public/order-payment-view.service';
@@ -38,6 +43,8 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
     CheckoutOrderUseCase,
     FinalizeOrderUseCase,
     SweepExpiredReservationsUseCase,
+    // Registers itself with the shared retention registry on init; nothing here drives it.
+    SweepIdempotencyKeysUseCase,
     OrderQueryService,
     { provide: ORDER_REPOSITORY, useClass: DrizzleOrderRepository },
     { provide: CART_SNAPSHOT_READER, useClass: CartSnapshotAdapter },

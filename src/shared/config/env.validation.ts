@@ -13,6 +13,7 @@ import {
   validateSync,
 } from 'class-validator';
 import { MIN_BUCKET_KEY_LENGTH } from '@shared/identity/email-bucket';
+import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
 
 // Enum so an unexpected NODE_ENV fails validation instead of enabling wrong behavior.
 export enum NodeEnv {
@@ -306,6 +307,86 @@ export class EnvironmentVariables {
   @IsInt()
   @Min(0)
   RESERVATION_SWEEP_GRACE_SEC?: number;
+
+  // --- Retention sweeps ---------------------------------------------------------------------
+  // Off for e2e, which drives the sweeps directly.
+  @IsOptional()
+  @IsBooleanString()
+  RETENTION_ENABLED?: string;
+
+  // Sweep period (ms); default 3600000 (configuration.ts). Min 1000 so a typo can't turn hourly
+  // housekeeping into a loop issuing DELETEs as fast as the pool allows.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  RETENTION_INTERVAL_MS?: number;
+
+  // Rows one sweep deletes per tick; default 500 (configuration.ts). Capped because a larger batch
+  // holds row locks on a table the request path is writing to for proportionally longer.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10_000)
+  RETENTION_BATCH_SIZE?: number;
+
+  // How long the scheduler waits on one sweep before giving the tick back; default 30000.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  RETENTION_SWEEP_TIMEOUT_MS?: number;
+
+  // Extra age (s) past an idempotency key's own expiry before collection; default 3600. 0 is legal
+  // — the key's TTL is already the retry window, so this is only slack for clock skew.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  RETENTION_IDEMPOTENCY_GRACE_SEC?: number;
+
+  // Grace (days) past expiry/consumption for the single-use token tables; default 7.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  RETENTION_AUTH_TOKEN_GRACE_DAYS?: number;
+
+  // Grace (days) past REVOCATION for refresh tokens; default 30. The floor is not a preference — a
+  // revoked token that reappears is the reuse signal, and detecting it is a row lookup. It is only
+  // real because the sweep's expiry arm excludes revoked rows; without that exclusion the much
+  // shorter RETENTION_AUTH_TOKEN_GRACE_DAYS would collect rotated tokens first.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(30)
+  RETENTION_REFRESH_TOKEN_GRACE_DAYS?: number;
+
+  // How long a PUBLISHED outbox row is kept (days); default 30. Unpublished rows are never
+  // collected at any age, so this bounds the audit trail, not the relay's work queue.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  RETENTION_OUTBOX_DAYS?: number;
+
+  // How long an inbox claim is kept (days); default 30. A correctness bound: while the queue can
+  // still redeliver a message, its claim is the only thing stopping the effect being applied twice.
+  // The floor is DERIVED from the queue's failed-job horizon so the pair cannot drift.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(MIN_INBOX_RETENTION_DAYS)
+  RETENTION_INBOX_DAYS?: number;
+
+  // How long a received webhook is kept (days); default 30. The floor tracks the GATEWAY's
+  // redelivery window (Stripe retries for ~72h), not the queue's.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(14)
+  RETENTION_WEBHOOK_EVENT_DAYS?: number;
 
   // Catalog's fresh window (s); default 60 (configuration.ts). Total staleness is this plus
   // CACHE_STALE_WINDOW_SEC plus CACHE_TTL_JITTER_SEC. Min 1 — a 0 would make every entry stale the

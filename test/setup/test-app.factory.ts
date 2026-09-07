@@ -40,11 +40,12 @@ export async function createTestApp(
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
-  // The four background drivers, forced off so nothing runs behind a test's back: suites call
+  // The five background drivers, forced off so nothing runs behind a test's back: suites call
   // ReconcileStaleOrdersUseCase / OutboxRelay.runOnce / DomainEventProcessor.process /
-  // SweepExpiredReservationsUseCase themselves, and a tick firing mid-assertion would settle an
-  // order, publish a row, or drain a job the test is still setting up. A suite that wants one of
-  // them passes it in `envOverrides`, which is applied below and wins.
+  // SweepExpiredReservationsUseCase / RetentionScheduler.tick themselves, and a tick firing
+  // mid-assertion would settle an order, publish a row, drain a job, or DELETE the row the test is
+  // still asserting on. A suite that wants one of them passes it in `envOverrides`, which is
+  // applied below and wins.
   //
   // Assigned unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's
   // .env into process.env, so from the second app onwards `??=` would silently inherit whatever
@@ -56,6 +57,7 @@ export async function createTestApp(
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
   process.env.RESERVATION_SWEEP_ENABLED = 'false';
+  process.env.RETENTION_ENABLED = 'false';
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
   // a file that leaves jobs waiting hands them to the next file that boots a worker — which then
   // applies events its own test never published. Same value for every app in a file, because a

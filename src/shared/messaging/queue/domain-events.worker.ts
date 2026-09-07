@@ -2,7 +2,9 @@ import { Injectable, type BeforeApplicationShutdown, type OnModuleInit } from '@
 import { ConfigService } from '@nestjs/config';
 import { Worker } from 'bullmq';
 import type { Redis } from 'ioredis';
+import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
+import { runInJobContext } from '@shared/observability/correlation/job-context';
 import type { ConsumeResult } from '@shared/observability/metrics/metrics.port';
 import { DeadLetterRouter } from './dead-letter';
 import type { DomainEventJob } from './domain-event.job';
@@ -39,6 +41,7 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     private readonly processor: DomainEventProcessor,
     private readonly deadLetter: DeadLetterRouter,
     config: ConfigService,
+    private readonly cls: ClsService,
     private readonly logger: PinoLogger,
   ) {
     this.enabled = config.get<boolean>('queue.workerEnabled') === true;
@@ -57,9 +60,11 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     // a blocking read for the whole poll, so sharing the producer's client would stall every publish
     // behind it, and timing that wait out would be cutting off the design rather than a hang.
     this.connection = createQueueConnection(this.redisUrl);
+    // One correlation context per delivery, not per worker: at concurrency > 1 several jobs are in
+    // flight and without a scope each their lines interleave.
     this.worker = new Worker<DomainEventJob, ConsumeResult>(
       QUEUE_DOMAIN_EVENTS,
-      (job) => this.processor.process(job.data),
+      (job) => runInJobContext(this.cls, `${QUEUE_DOMAIN_EVENTS}:${job.name}`, () => this.processor.process(job.data)),
       { connection: this.connection, prefix: this.prefix, concurrency: this.concurrency },
     );
 

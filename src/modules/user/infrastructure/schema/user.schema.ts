@@ -46,7 +46,17 @@ export const emailVerificationTokens = pgTable(
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('idx_email_verification_tokens_user').on(t.userId)],
+  (t) => [
+    index('idx_email_verification_tokens_user').on(t.userId),
+    // The sweep's predicate is a disjunction — expired OR already spent — and BOTH arms must be
+    // indexed or neither is used. Measured on 200k rows: one index alone gave a 22ms parallel seq
+    // scan, both give a BitmapOr at ~0.03ms.
+    index('idx_email_verification_tokens_expires').on(t.expiresAt),
+    // Partial: an unspent token has no consumption date, so those rows can never match this arm.
+    index('idx_email_verification_tokens_consumed')
+      .on(t.consumedAt)
+      .where(sql`${t.consumedAt} is not null`),
+  ],
 );
 
 /** Single-use password-reset tokens — same shape as email-verification tokens (only the hash is stored). */
@@ -62,7 +72,14 @@ export const passwordResetTokens = pgTable(
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('idx_password_reset_tokens_user').on(t.userId)],
+  (t) => [
+    index('idx_password_reset_tokens_user').on(t.userId),
+    // Same pair, same reason as the email-verification twin.
+    index('idx_password_reset_tokens_expires').on(t.expiresAt),
+    index('idx_password_reset_tokens_consumed')
+      .on(t.consumedAt)
+      .where(sql`${t.consumedAt} is not null`),
+  ],
 );
 
 /** Stateful refresh tokens, one row per issued token (immediate revoke + rotation lineage) — `tokenHash` = SHA-256, `familyId` groups a login session (a detected reuse revokes the family), `replacedByTokenId` points at the successor. */
@@ -80,7 +97,25 @@ export const refreshTokens = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('idx_refresh_tokens_user').on(t.userId), index('idx_refresh_tokens_family').on(t.familyId)],
+  (t) => [
+    index('idx_refresh_tokens_user').on(t.userId),
+    index('idx_refresh_tokens_family').on(t.familyId),
+    // Two indexes for one sweep, whose predicate is a disjunction: expired WITHOUT ever being
+    // revoked, OR revoked long enough ago to stop being a reuse signal. Both partial, each mirroring
+    // its own arm exactly. `revoked_at IS NULL` is not just a size trick — rotation revokes every
+    // predecessor, so on a mature table a plain `expires_at` index hands the planner a match list
+    // that is almost entirely rejects. Measured on 200k rows: plain was a 41ms seq scan, partial is
+    // a BitmapOr at 0.09ms with a 152kB index. `listActiveSessions` filters the same way, so it
+    // stays usable there.
+    index('idx_refresh_tokens_expires')
+      .on(t.expiresAt)
+      .where(sql`${t.revokedAt} is null`),
+    // Mirror image: a live token has no revocation date, so the second arm can only match rows
+    // that have one.
+    index('idx_refresh_tokens_revoked')
+      .on(t.revokedAt)
+      .where(sql`${t.revokedAt} is not null`),
+  ],
 );
 
 /**

@@ -5,6 +5,11 @@ import { LogoutUserUseCase } from './logout-user.use-case';
 class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
   revokeCalls: Array<{ userId: string; tokenHash: string }> = [];
 
+  // Retention is not this use case's concern; SweepAuthTokensService owns and tests it.
+  deleteCollectable(): Promise<number> {
+    return Promise.resolve(0);
+  }
+
   create(): Promise<void> {
     return Promise.reject(new Error('unused'));
   }

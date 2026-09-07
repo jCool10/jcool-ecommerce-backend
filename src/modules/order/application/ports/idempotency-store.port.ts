@@ -73,6 +73,13 @@ export interface IdempotencyStorePort {
    */
   deleteExpiredInProgress(scope: string, key: string, now: Date): Promise<number>;
 
-  /** DELETE WHERE expires_at < now (TTL sweep). Returns how many rows were reclaimed. */
-  deleteExpired(now: Date): Promise<number>;
+  /**
+   * DELETE WHERE expires_at < now, at most `limit` rows (TTL sweep). Returns how many were
+   * reclaimed.
+   *
+   * `expires_at` is the ONLY legal condition here. Adding `status = 'COMPLETED'`, or excluding it,
+   * would break the retry guarantee: a COMPLETED row inside its TTL is the frozen response a
+   * legitimate retry replays, and removing it early lets that retry create a second order.
+   */
+  deleteExpired(now: Date, limit: number): Promise<number>;
 }

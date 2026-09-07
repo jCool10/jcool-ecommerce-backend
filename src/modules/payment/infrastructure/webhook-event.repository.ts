@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { WebhookEvent } from '../domain/webhook-event.entity';
 import { WebhookEventStatus } from '../domain/webhook-event-status';
@@ -68,6 +68,21 @@ export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort
   async markSkipped(id: string, tx?: DrizzleTx): Promise<void> {
     const executor = tx ?? this.db;
     await executor.update(webhookEvents).set({ status: WebhookEventStatus.SKIPPED }).where(eq(webhookEvents.id, id));
+  }
+
+  async deleteReceivedBefore(cutoff: Date, limit: number): Promise<number> {
+    // Postgres has no LIMIT on DELETE, so the batch bound comes from a subquery.
+    const doomed = this.db
+      .select({ id: webhookEvents.id })
+      .from(webhookEvents)
+      .where(lt(webhookEvents.receivedAt, cutoff))
+      .limit(limit);
+
+    const deleted = await this.db
+      .delete(webhookEvents)
+      .where(inArray(webhookEvents.id, doomed))
+      .returning({ id: webhookEvents.id });
+    return deleted.length;
   }
 }
 

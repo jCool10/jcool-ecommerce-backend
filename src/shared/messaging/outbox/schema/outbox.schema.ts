@@ -40,5 +40,10 @@ export const outbox = pgTable(
     index('idx_outbox_unpublished')
       .on(t.createdAt)
       .where(sql`${t.publishedAt} is null`),
+    // The exact complement of the index above: the relay reads rows still to publish, the sweep
+    // reads the ones already published, and neither index can serve the other's predicate.
+    index('idx_outbox_published')
+      .on(t.publishedAt)
+      .where(sql`${t.publishedAt} is not null`),
   ],
 );

@@ -122,6 +122,7 @@ Currently implemented:
   - **Sharding-ready user ids** (see [Design notes](#design-notes)): every user-context id is a **UUIDv8** (RFC 9562 §5.8) carrying a 12-bit routing bucket derived by **HMAC** from the same normalized email the `UNIQUE(email)` index sees — a future `users` shard split routes from the id alone, with no lookup table, and email uniqueness survives the split. HMAC rather than a plain hash because `users.id` is public: an unkeyed digest would turn every published id into an offline email-confirmation oracle. Token rows copy the bucket out of their owner's id, so a user and everything they own land on the same shard. `IDENTITY_BUCKET_KEY` keys the HMAC and is **permanent — never rotate it**; its fingerprint is auto-pinned in the database on first boot and a later boot under a different key is refused. A `CHECK` on the version+variant nibbles of the four user-context primary keys rejects a non-v8 id from **any** writer, raw SQL included. The generator is **single-writer** — see the replica gate under [Docker](#docker).
   - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
+  - **Retention sweeps** on one hourly timer, one per table, isolated per sweep so a broken table cannot cost the other six their tick. Every window is sized by what still has to be able to **retry** against the row: an unpublished outbox row is never collected at any age, a `COMPLETED` idempotency key survives until its TTL because it is the response a retry replays, an inbox claim must outlive the queue's redelivery horizon (**boot fails** if it does not, since a swept claim turns a retry into a second effect), and a revoked refresh token outlives an expired one because it is what reuse detection matches against. `reservations` is deliberately excluded — that is the reservation sweep's state machine, not retention. Consequently `queue:replay-dlq` now asks the `inbox` before replaying, and refuses a message it cannot prove was never applied.
   - **Liveness / readiness** health checks (Terminus) probing Postgres and Redis.
   - **Fail-fast config**: the environment schema is validated at boot; a missing or invalid var crashes the process immediately.
   - Global validation pipe (whitelist + reject unknown fields) and a unified HTTP exception filter.
@@ -396,6 +397,29 @@ declares has a row here — the tables are grouped by the config namespace each 
 | `RESERVATION_SWEEP_INTERVAL_MS` |    No    | `60000` | Sweep period (min 1000)                                                                                          |
 | `RESERVATION_SWEEP_BATCH_SIZE`  |    No    | `50`    | Reservation rows per tick (1–500) — each distinct order costs a finalize transaction                              |
 | `RESERVATION_SWEEP_GRACE_SEC`   |    No    | `900`   | Extra age past a hold's expiry before this sweep claims it, so the gateway-driven reconcile always gets there first |
+
+**`retention`** — one hourly timer driving seven independent table sweeps. Every window is sized by
+what still has to be able to **retry** against the row, never by disk; shortening one loses a
+guarantee, not history. Two are enforced floors rather than preferences: `RETENTION_INBOX_DAYS` must
+outlive the queue's 7-day failed-job retention or a redelivery applies its effect twice (**the app
+refuses to boot** below it), and a revoked refresh token is kept far longer than an expired one
+because it is what reuse detection matches against. `reservations` is deliberately **not** swept —
+those rows are released by the reservation-expiry sweep above, which is a state machine, not
+retention. See [RUNBOOK — Retention sweeps](./RUNBOOK.md#retention-sweeps) for the full rule table,
+the horizon arithmetic, and the measured query plans.
+
+| Variable                            | Required | Default   | Description                                                                                            |
+| ----------------------------------- | :------: | --------- | ------------------------------------------------------------------------------------------------------ |
+| `RETENTION_ENABLED`                 |    No    | `true`    | Kill-switch for all seven sweeps (off for e2e, which drives them directly)                             |
+| `RETENTION_INTERVAL_MS`             |    No    | `3600000` | Tick period (min 1000) — this reclaims a backlog, it does not keep up with a request                    |
+| `RETENTION_BATCH_SIZE`              |    No    | `500`     | Rows DELETEd per sweep per tick (1–10000); a sweep that fills its batch every tick warns                |
+| `RETENTION_SWEEP_TIMEOUT_MS`        |    No    | `30000`   | How long the scheduler waits for one sweep (min 100). Ends the wait, not the DELETE                     |
+| `RETENTION_IDEMPOTENCY_GRACE_SEC`   |    No    | `3600`    | Slack past a key's own `expires_at` (clock skew only — the TTL is already the retry window)             |
+| `RETENTION_AUTH_TOKEN_GRACE_DAYS`   |    No    | `7`       | Days past expiry/consumption before a verification or reset token is collected                          |
+| `RETENTION_REFRESH_TOKEN_GRACE_DAYS`|    No    | `30`      | Days a **revoked** refresh token is kept (min 30) — the reuse-detection window                          |
+| `RETENTION_OUTBOX_DAYS`             |    No    | `30`      | Days a **published** outbox row is kept (min 1). Unpublished rows are never collected, at any age       |
+| `RETENTION_INBOX_DAYS`              |    No    | `30`      | Days an inbox claim is kept (min 7, and must exceed the queue's redelivery horizon)                     |
+| `RETENTION_WEBHOOK_EVENT_DAYS`      |    No    | `30`      | Days a webhook event is kept (min 14) — sized by the **gateway's** redelivery window, not the queue's   |
 
 **`catalog` · `cache` · `search`**
 

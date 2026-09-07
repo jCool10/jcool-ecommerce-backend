@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
 // Inbox — the consumer half of the messaging infrastructure, and like the outbox deliberately not
@@ -31,5 +31,7 @@ export const inbox = pgTable(
     // is what makes it harmless, and it is held by the database rather than by application logic —
     // the same last line of defence as the idempotency-key store.
     uniqueIndex('uq_inbox_consumer_message').on(t.consumer, t.messageId),
+    // The retention sweep reads by age; the unique index above is on identity and cannot serve it.
+    index('idx_inbox_processed').on(t.processedAt),
   ],
 );

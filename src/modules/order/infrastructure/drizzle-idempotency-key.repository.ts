@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import type {
   IdempotencyRecord,
@@ -83,10 +83,19 @@ export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
     return deleted.length;
   }
 
-  async deleteExpired(now: Date): Promise<number> {
+  async deleteExpired(now: Date, limit: number): Promise<number> {
+    // Postgres has no LIMIT on DELETE, so the batch bound comes from a subquery. Bounded because
+    // this table is on the checkout write path: an unbounded DELETE would hold row locks there for
+    // as long as the backlog takes.
+    const doomed = this.db
+      .select({ id: idempotencyKeys.id })
+      .from(idempotencyKeys)
+      .where(lt(idempotencyKeys.expiresAt, now))
+      .limit(limit);
+
     const deleted = await this.db
       .delete(idempotencyKeys)
-      .where(lt(idempotencyKeys.expiresAt, now))
+      .where(inArray(idempotencyKeys.id, doomed))
       .returning({ id: idempotencyKeys.id });
     return deleted.length;
   }
