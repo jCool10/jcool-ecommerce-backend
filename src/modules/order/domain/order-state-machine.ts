@@ -3,9 +3,11 @@ import { OrderStatus } from './order-status';
 
 /**
  * The single source of truth for which status changes are legal — every transition goes through
- * `assertTransition`, so no use case carries its own if/else. Unwired edges are declared for
- * documentation and rejected at runtime, so enabling one is a flag flip, never a restructure.
- * See docs/engineering-notes.md (Order).
+ * `assertTransition`, so no use case carries its own if/else.
+ *
+ * Every edge is currently wired. The `wired` flag stays because it is the cheap way to land a
+ * transition ahead of the code that drives it: declaring an edge documents the intended shape while
+ * still rejecting it at runtime, so enabling it later is a flag flip rather than a restructure.
  */
 
 interface Transition {

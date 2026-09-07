@@ -1,8 +1,10 @@
 /**
  * Drain the domain-events dead-letter queue back onto the main queue:
- *   npx tsx scripts/replay-dlq.ts                 # list what would be replayed, change nothing
- *   npx tsx scripts/replay-dlq.ts --apply         # actually replay
- *   npx tsx scripts/replay-dlq.ts --apply --limit 20
+ *   npm run queue:replay-dlq                       # list what would be replayed, change nothing
+ *   npm run queue:replay-dlq -- --apply            # actually replay
+ *   npm run queue:replay-dlq -- --apply --limit 20
+ * In a deployed container (no devDependencies, so no `tsx`), the compiled twin:
+ *   npm run queue:replay-dlq:prod -- --apply
  *
  * Replaying is safe for a message that turned out to have been applied after all: it goes back
  * under the outbox row id, which is the key the inbox dedups on, so the worst case is one collapsed
@@ -11,13 +13,17 @@
  *
  * Runs standalone rather than booting Nest: it only needs Redis, and a replay is something you want
  * to be able to do while the app itself is the thing that is broken.
+ *
+ * Lives under `src/` — not `scripts/` — because `scripts/` is excluded from the build and `tsx` is a
+ * devDependency, so a `scripts/` entrypoint cannot run in the image where an operator needs it most.
+ * Same reason `migrate-cli.ts` and `reindex.ts` sit here.
  */
 import 'dotenv/config';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
-import configuration from '../src/shared/config/configuration';
-import { replayDeadLetters } from '../src/shared/messaging/queue/dead-letter.replay';
-import { QUEUE_DOMAIN_EVENTS, QUEUE_DOMAIN_EVENTS_DLQ } from '../src/shared/messaging/queue/queue.constants';
+import configuration from '@shared/config/configuration';
+import { replayDeadLetters } from './dead-letter.replay';
+import { QUEUE_DOMAIN_EVENTS, QUEUE_DOMAIN_EVENTS_DLQ } from './queue.constants';
 
 const apply = process.argv.includes('--apply');
 const limitArg = process.argv.indexOf('--limit');

@@ -1,0 +1,39 @@
+version: 2
+
+updates:
+  # npm — the dependency surface that actually ships. Weekly rather than daily so a run of patch
+  # bumps arrives as one review, not as background noise that trains us to merge without reading.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Asia/Ho_Chi_Minh
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Patch/minor across the tree in one PR: individually they are noise, together they are one
+      # green-or-red signal from the same CI run.
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Node major upgrades are a deploy decision (engines, .nvmrc, CI matrix, Dockerfile base image
+      # all move together), not something to accept from a bot PR.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
+
+  # The workflows themselves. An action pinned to a tag that silently moves is the supply-chain risk
+  # CI is otherwise there to catch, so it gets the same weekly review.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Asia/Ho_Chi_Minh
+    commit-message:
+      prefix: chore
+      include: scope

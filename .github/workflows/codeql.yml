@@ -1,0 +1,46 @@
+name: CodeQL
+
+# Runs on the same events as CI so a finding lands on the PR that introduced it, plus a weekly
+# scan: the query packs improve over time, so code that was clean last month can be flagged this
+# month without a single line changing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'
+
+# Keyed on the event as well as the ref: without it a push to main cancels the weekly scan running
+# on that same ref, and the weekly scan is the one that catches findings from new query packs.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      # CodeQL uploads its SARIF to the security tab; that write is the whole point of the job.
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # security-extended adds the lower-precision security queries. Worth the extra noise here:
+          # this repo handles tokens, HMAC verification and raw webhook bytes, where the queries in
+          # the default pack alone leave real classes of finding unasked.
+          queries: security-extended
+
+      # No build step: the JS/TS extractor reads source directly, and a `nest build` would only add
+      # a way for the scan to fail for reasons that have nothing to do with security.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript

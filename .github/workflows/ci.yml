@@ -32,6 +32,10 @@ jobs:
       - run: npm run lint:check # eslint, no --fix (CI must report, not mutate)
       - run: npm run typecheck # tsc --noEmit (SWC build emits without checking types)
       - run: npm run arch:check # dependency-cruiser: layer/context boundaries
+      # Runtime dependencies only: a devDependency CVE cannot be reached by the deployed process,
+      # and letting one turn the build red teaches everyone to ignore the gate. `high` rather than
+      # `moderate` for the same reason — a floor that fires constantly is a floor nobody reads.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       # Pinned to the deployed Prometheus so a rule that parses here cannot fail to load there.
       - name: Install promtool
@@ -51,7 +55,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm test # unit (Vitest) — fast, hermetic, no Docker
+      # Coverage, not a bare `npm test`: same unit run, plus the floor on domain/application
+      # declared in vitest.config.mts. Running both would just run the suite twice.
+      - run: npm run test:cov # unit (Vitest) — fast, hermetic, no Docker; fails under the coverage floor
       - run: npm run test:e2e # integration — Testcontainers spins real Postgres/Redis + programmatic migrate
         env:
           # Job is ephemeral (fresh runner, torn down after), so skip Ryuk's reaper

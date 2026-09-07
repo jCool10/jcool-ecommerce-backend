@@ -1,6 +1,6 @@
 {
   "name": "jcool-ecommerce-backend-v2",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Single-store e-commerce backend (NestJS modular monolith) — interview deep-dive playground",
   "author": "",
   "private": true,
@@ -35,7 +35,8 @@
     "seed:users:bulk": "tsx scripts/seed-users-bulk.ts",
     "db:metrics:users": "tsx scripts/capture-db-metrics.ts",
     "identity:verify": "tsx scripts/verify-identity-buckets.ts",
-    "queue:replay-dlq": "tsx scripts/replay-dlq.ts",
+    "queue:replay-dlq": "tsx src/shared/messaging/queue/replay-dlq.cli.ts",
+    "queue:replay-dlq:prod": "node dist/shared/messaging/queue/replay-dlq.cli.js",
     "search:reindex": "tsx src/modules/catalog/infrastructure/search/reindex.ts",
     "load:baseline": "k6 run k6/baseline.js",
     "load:register:write": "k6 run test/load/register-uniqueness/write-mix.js",

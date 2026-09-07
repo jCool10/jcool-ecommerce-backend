@@ -159,7 +159,10 @@ export default () => ({
     enabled: process.env.THROTTLE_ENABLED !== 'false',
   },
   payment: {
-    // Gateway adapter chosen by the DI factory in payment.module.ts. Default 'stripe' (coded path).
+    // Declared but not dispatched on: payment.module.ts constructs Stripe unconditionally, because
+    // Stripe is the only adapter. The value survives as a boot-time assertion — env.validation
+    // rejects anything but 'stripe', so a deploy that thinks it configured another gateway fails
+    // loudly instead of silently getting Stripe. A second adapter turns this back into a switch.
     provider: process.env.PAYMENT_PROVIDER ?? 'stripe',
     // Webhook HMAC secret; undefined → the Stripe adapter refuses to construct (fail-fast).
     webhookSecret: process.env.PAYMENT_WEBHOOK_SECRET,

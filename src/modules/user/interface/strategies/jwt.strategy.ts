@@ -4,7 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { AccessTokenClaims } from '../../application';
 import { SESSION_EPOCH, type SessionEpochPort, TOKEN_DENYLIST, type TokenDenylistPort } from '../../application/ports';
-import type { AuthenticatedUser } from '../decorators';
+import type { AuthenticatedUser } from '@shared/rbac';
 
 // Verified payload: our custom claims plus the registered iat/exp.
 interface AccessTokenPayload extends AccessTokenClaims {
