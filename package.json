@@ -103,7 +103,7 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.0.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.0",
     "chokidar": "^5.0.0",
     "dependency-cruiser": "^18.2.0",
     "drizzle-kit": "^0.31.10",
@@ -125,6 +125,6 @@
     "typescript-eslint": "^8.69.0",
     "unplugin-swc": "^1.5.11",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   }
 }
