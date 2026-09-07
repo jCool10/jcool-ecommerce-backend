@@ -11,6 +11,19 @@ export const REQUEST_ID_KEY = 'requestId';
 /** CLS key holding the request-start timestamp (`process.hrtime.bigint()`) for durationMs. */
 export const REQUEST_START_KEY = 'requestStart';
 
+/** CLS key holding the authenticated actor, once a guard has resolved one. */
+export const ACTOR_KEY = 'actor';
+
+/**
+ * Who the active request is acting as. Id and role only: `userId` is a UUIDv8 (ADR-0024), not an
+ * email — the auth audit trail (ADR-0013) stays the single place that holds a direct identifier,
+ * so putting the actor on every log line narrows the PII surface rather than widening it.
+ */
+export interface LogActor {
+  userId: string;
+  role: string;
+}
+
 // Trust a caller-supplied x-request-id (lets a proxy stitch hops); otherwise mint a UUID.
 function resolveRequestId(req: Request): string {
   const header = req.headers[REQUEST_ID_HEADER];
@@ -44,6 +57,22 @@ export const clsModuleOptions: ClsModuleOptions = {
  */
 export function getCorrelationId(cls: ClsService): string | undefined {
   return cls.isActive() ? cls.getId() : undefined;
+}
+
+/**
+ * Record the authenticated actor for the rest of the request, so the pino mixin can stamp it on
+ * every line. A no-op outside a request: a background caller has no actor, and throwing here would
+ * turn a logging concern into a failed request.
+ */
+export function setLogActor(cls: ClsService, actor: LogActor): void {
+  if (cls.isActive()) {
+    cls.set(ACTOR_KEY, actor);
+  }
+}
+
+/** The actor for the active request, or undefined on an anonymous route / outside a request. */
+export function getLogActor(cls: ClsService): LogActor | undefined {
+  return cls.isActive() ? cls.get<LogActor>(ACTOR_KEY) : undefined;
 }
 
 /** Milliseconds since the request-start stamp (3-decimal), or undefined outside a request. */

@@ -13,6 +13,10 @@ import { formatDevRequestLine } from './dev-request-line.format';
 // Skip high-frequency probes (health, metrics scrape) — a canonical line each is pure noise.
 const SKIP_ROUTE_PREFIXES = ['/health', '/metrics'];
 
+// Mirrors configuration.ts; used only if the key is missing, so a partial ConfigService in a test
+// cannot silently make every request slow (a 0 threshold would).
+const DEFAULT_SLOW_REQUEST_MS = 1000;
+
 /**
  * Emits one canonical "request completed" line per successful HTTP request: method, route
  * template, status, durationMs, db.queries. Errors are logged by HttpExceptionFilter instead,
@@ -21,6 +25,7 @@ const SKIP_ROUTE_PREFIXES = ['/health', '/metrics'];
 @Injectable()
 export class CanonicalLogInterceptor implements NestInterceptor {
   private readonly devPretty: boolean;
+  private readonly slowRequestMs: number;
 
   constructor(
     private readonly logger: PinoLogger,
@@ -29,6 +34,7 @@ export class CanonicalLogInterceptor implements NestInterceptor {
     config: ConfigService,
   ) {
     this.devPretty = config.get<string>('app.env') === 'development';
+    this.slowRequestMs = config.get<number>('log.slowRequestMs') ?? DEFAULT_SLOW_REQUEST_MS;
   }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
@@ -65,17 +71,22 @@ export class CanonicalLogInterceptor implements NestInterceptor {
           return;
         }
 
-        this.logger.info(
-          {
-            context: CanonicalLogInterceptor.name,
-            method: request.method,
-            route,
-            statusCode,
-            durationMs,
-            'db.queries': dbQueries,
-          },
-          'request completed',
-        );
+        // A slow success is invisible at `info` — it looks exactly like a fast one. Raising the
+        // level makes the single alert rule teams already have (`level:warn`) cover latency too,
+        // and `slow` is emitted only when true: a `false` on every line is bytes carrying no news.
+        const slow = durationMs !== undefined && durationMs > this.slowRequestMs;
+        const fields = {
+          context: CanonicalLogInterceptor.name,
+          method: request.method,
+          route,
+          statusCode,
+          durationMs,
+          'db.queries': dbQueries,
+          ...(slow ? { slow } : {}),
+        };
+
+        if (slow) this.logger.warn(fields, 'request completed');
+        else this.logger.info(fields, 'request completed');
       }),
     );
   }

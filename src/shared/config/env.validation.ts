@@ -173,6 +173,31 @@ export class EnvironmentVariables {
   @IsEnum(LogLevel)
   LOG_LEVEL?: LogLevel;
 
+  // `service` on every log line; falls back to OTEL_SERVICE_NAME then 'jcool-api'
+  // (configuration.ts). @IsNotEmpty so a blank value fails at boot instead of shipping "" as the
+  // service label on every line.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  LOG_SERVICE_NAME?: string;
+
+  // `version` on every log line — the deploy identifier. Falls back to the platform-supplied
+  // RAILWAY_GIT_COMMIT_SHA, then 'dev' (configuration.ts). RAILWAY_* is not validated here: the
+  // platform owns it, it is not part of this app's env contract.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  APP_VERSION?: string;
+
+  // Duration (ms) above which the canonical request line is emitted at `warn` with `slow: true`;
+  // default 1000 (configuration.ts). Min 1 because a 0 would mark every request slow, which turns
+  // the warn level — the thing alerts are built on — into the default for all traffic.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  LOG_SLOW_REQUEST_MS?: number;
+
   // Bearer token for GET /metrics (ADR-0018); optional in dev, MinLength keeps it non-trivial.
   @IsOptional()
   @IsString()

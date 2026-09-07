@@ -1,6 +1,13 @@
 import type { ConfigService } from '@nestjs/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { flushLogsSync } from '@shared/observability';
 import { ShutdownService } from './shutdown.service';
+
+// The real flush writes to fd 1; the assertion here is that the hook calls it at all.
+vi.mock('@shared/observability', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@shared/observability')>()),
+  flushLogsSync: vi.fn(),
+}));
 
 const configWithGrace = (ms: number | undefined): ConfigService => ({ get: () => ms }) as unknown as ConfigService;
 
@@ -34,5 +41,14 @@ describe('ShutdownService', () => {
 
     await vi.advanceTimersByTimeAsync(5000);
     await expect(pending).resolves.toBeUndefined();
+  });
+
+  // Production batches log writes, so the lines describing the shutdown sit in a buffer until
+  // something pushes them out. This hook is the last one Nest runs — the last chance to.
+  it('flushes buffered logs as the final shutdown step', () => {
+    const service = new ShutdownService(configWithGrace(0));
+
+    expect(() => service.onApplicationShutdown()).not.toThrow();
+    expect(flushLogsSync).toHaveBeenCalled();
   });
 });

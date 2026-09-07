@@ -1,12 +1,13 @@
-import { BeforeApplicationShutdown, Injectable, Logger } from '@nestjs/common';
+import { BeforeApplicationShutdown, Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { flushLogsSync } from '@shared/observability';
 
 // Tracks whether the process has begun a graceful shutdown so /health/ready can report
 // 503 the moment SIGTERM/SIGINT arrives — a load balancer then stops routing to this
 // instance BEFORE the HTTP server actually closes, so no new request hits a half-drained
 // process. Liveness stays untouched: the process is still alive while it drains.
 @Injectable()
-export class ShutdownService implements BeforeApplicationShutdown {
+export class ShutdownService implements BeforeApplicationShutdown, OnApplicationShutdown {
   private readonly logger = new Logger(ShutdownService.name);
   private shuttingDown = false;
   private readonly gracePeriodMs: number;
@@ -31,5 +32,12 @@ export class ShutdownService implements BeforeApplicationShutdown {
     if (this.gracePeriodMs > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, this.gracePeriodMs));
     }
+  }
+
+  // Last thing in the Nest lifecycle, so every other hook has already logged whatever it logs on
+  // the way out. Production batches log writes (log-destination.ts); without this flush the last
+  // lines of a rolling deploy — exactly the ones describing the shutdown — die in the buffer.
+  onApplicationShutdown(): void {
+    flushLogsSync();
   }
 }

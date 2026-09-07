@@ -23,6 +23,34 @@ const SERVICE_UNAVAILABLE: number = HttpStatus.SERVICE_UNAVAILABLE;
 // pino `context` label; passed per-call because the base PinoLogger is a shared singleton.
 const LOG_CONTEXT = 'HttpExceptionFilter';
 
+/**
+ * The query-free identity of the route. Express fills `req.route` once the router matches, giving
+ * the template (`/products/:idOrSlug`) — low-cardinality and groupable. `req.url` is never used: it
+ * carries the query string, and `/auth/verify-email?token=…` therefore carries a live secret.
+ *
+ * A catch-all template is discarded. Express 5 matches unmatched requests against its own wildcard
+ * route, so `req.route` is set even on a 404 and reports `/{*path}` — which is the same string for
+ * every 404 and answers nothing. The concrete `req.path` is the useful identity there, and it has
+ * the query string stripped, so dropping the template costs no safety.
+ *
+ * `ExceptionFilter` receives an `ArgumentsHost`, which has no `getClass()`/`getHandler()`, so the
+ * reflector-based `resolveRouteTemplate` used by the canonical interceptor is not reachable here.
+ */
+function resolveRoute(request: Request): string {
+  const template = (request.route as { path?: string } | undefined)?.path;
+  if (!template || template.includes('*')) {
+    return request.path;
+  }
+  return `${request.baseUrl ?? ''}${template}`;
+}
+
+// Node and several drivers put their machine-readable reason on `.code`; anything else is ignored
+// so a caller-controlled value can never widen the field's shape.
+function resolveErrorCode(exception: unknown): string | undefined {
+  const code = (exception as { code?: unknown } | null | undefined)?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
 /** Unified error envelope: <500 keep their payload, >=500 are masked to a generic message (real error logged); Terminus health results pass through. Every response carries the correlation requestId; the exception is logged once (4xx warn, 5xx error). See docs/engineering-notes.md and ADR-0013. */
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -52,11 +80,19 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     const method = request.method;
-    const route = request.url;
+    // The route TEMPLATE, never `request.url`. `/auth/verify-email?token=…` and
+    // `/auth/reset-password?token=…` carry single-use credentials on the query string, and the 4xx
+    // paths on those routes (expired token, already-used token) are precisely the ones that log —
+    // so the raw url wrote a live secret into the log platform on the most common failure. A redact
+    // path cannot reach it: the secret is a substring of a value, not a key. Dropping the id also
+    // collapses the cardinality of this field from per-request to per-route.
+    const route = resolveRoute(request);
     const durationMs = getRequestDurationMs(this.cls);
     const dbQueries = getDbQueryCount(this.cls);
     const isServerError = status >= SERVER_ERROR_MIN;
     const err = isServerError ? (exception instanceof Error ? exception : new Error(String(exception))) : undefined;
+    const errorName = exception instanceof Error ? exception.constructor.name : undefined;
+    const errorCode = resolveErrorCode(exception);
 
     if (this.devPretty) {
       const line = formatDevRequestLine({
@@ -78,6 +114,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
         route,
         durationMs,
         'db.queries': dbQueries,
+        // Flat and queryable: the class name (BadRequestException, ClockStalledError) and the
+        // infra code when the error carries one — ECONNREFUSED when Postgres dies, EOPENBREAKER
+        // when a circuit opens. The serialized `err` holds the class as a nested `type` and does
+        // not carry `code` at all, so neither is reachable by a flat filter without these.
+        ...(errorName ? { errorName } : {}),
+        ...(errorCode ? { errorCode } : {}),
       };
       if (isServerError) this.logger.error({ ...logFields, err }, 'request failed');
       else this.logger.warn(logFields, 'request rejected');
@@ -94,13 +136,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
       // Fire-and-forget: reporting must never break the error response. captureException is
       // contractually non-throwing (no-op without a DSN), but guard the masking path regardless.
       try {
-        const routeTemplate = (request.route as { path?: string } | undefined)?.path;
         Sentry.captureException(err, {
           tags: {
             request_id: requestId,
             trace_id: traceId,
-            // Route template (low-cardinality, no query PII); falls back to the pathname.
-            route: `${method} ${routeTemplate ?? request.path}`,
+            // Same query-free route as the log line — one resolver so the two cannot drift.
+            route: `${method} ${route}`,
           },
         });
       } catch {

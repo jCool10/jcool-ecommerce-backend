@@ -63,6 +63,19 @@ export default () => ({
   log: {
     // pino level: verbose in dev, lean in prod; LOG_LEVEL overrides either way.
     level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+    // Stamped on every log line so one log platform can hold several services. Mirrors
+    // OTEL_SERVICE_NAME by default, so a log and a span carry the same label.
+    service: process.env.LOG_SERVICE_NAME || process.env.OTEL_SERVICE_NAME || 'jcool-api',
+    // Which build emitted the line. package.json's version is not bumped per deploy, so the
+    // platform-supplied commit SHA is the useful answer to "which deploy is running"; APP_VERSION
+    // is the explicit escape hatch anywhere that is not Railway.
+    // `||`, not `??`: an env var present but empty is "unset" here, and a blank `version` on every
+    // line is worse than an honest 'dev'.
+    version: process.env.APP_VERSION || process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) || 'dev',
+    // Above this, the canonical request line goes to `warn` and carries `slow: true`, so one
+    // query (`level:warn AND slow:true`) returns every slow request without a dashboard. Tunable
+    // by env because the right threshold is a property of the deploy, not of the code.
+    slowRequestMs: intEnv(process.env.LOG_SLOW_REQUEST_MS, 1000),
   },
   metrics: {
     // Bearer token for GET /metrics. Undefined → open in dev, hidden in prod (MetricsTokenGuard).

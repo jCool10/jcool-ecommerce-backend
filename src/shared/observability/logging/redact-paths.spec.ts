@@ -37,6 +37,31 @@ describe('redactPaths', () => {
     expect(line).not.toContain('"password":"pw"');
   });
 
+  // A `*.key` wildcard starts one level in, so a credential logged as a bare field — the shape a
+  // call site reaches for first — used to go out verbatim.
+  it('redacts a sensitive key at the top level', () => {
+    const line = serialize({ token: 'raw-token', refreshToken: 'raw-refresh', accessToken: 'raw-access' });
+
+    expect(line).not.toContain('raw-token');
+    expect(line).not.toContain('raw-refresh');
+    expect(line).not.toContain('raw-access');
+    expect(line).toContain('"token":"[Redacted]"');
+  });
+
+  it('still redacts the same key one level in', () => {
+    const line = serialize({ user: { token: 'nested-token' } });
+
+    expect(line).not.toContain('nested-token');
+    expect(line).toContain('[Redacted]');
+  });
+
+  // pino rejects a bare hyphenated path segment; set-cookie is covered by its explicit bracket path.
+  it('derives no bare path for the hyphenated set-cookie key', () => {
+    expect(redactPaths).not.toContain('set-cookie');
+    expect(redactPaths).not.toContain('*.set-cookie');
+    expect(redactPaths).toContain('res.headers["set-cookie"]');
+  });
+
   it('leaves non-sensitive fields intact', () => {
     const line = serialize({ orderId: 'ord-42', route: '/orders/:id' });
     expect(line).toContain('ord-42');

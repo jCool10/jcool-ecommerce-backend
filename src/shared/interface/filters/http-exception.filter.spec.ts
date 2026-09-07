@@ -19,14 +19,27 @@ const cls = { isActive: () => true, getId: () => 'req-1', get: () => undefined }
 const config = { get: () => 'test' } as unknown as ConfigService; // app.env !== 'development' → JSON branch
 const logger = { error: vi.fn(), warn: vi.fn() } as unknown as PinoLogger;
 
-function makeHost(method = 'GET', url = '/debug/boom') {
+/**
+ * An Express-shaped request: `url` keeps the query string, `path` never does, and `route` is
+ * present only once the router matched (pass `null` for the 404 / pre-match case). `baseUrl` is
+ * the mount prefix the template is relative to.
+ */
+function makeHost(method = 'GET', url = '/debug/boom', route?: { path: string } | null, baseUrl = '') {
   const response = {
     setHeader: vi.fn(),
     getHeader: vi.fn(() => undefined),
     status: vi.fn(() => response),
     json: vi.fn(),
   };
-  const request = { method, url, path: url, route: { path: url }, headers: {} };
+  const path = url.split('?')[0];
+  const request = {
+    method,
+    url,
+    path,
+    baseUrl,
+    route: route === null ? undefined : (route ?? { path }),
+    headers: {},
+  };
   const host = {
     switchToHttp: () => ({ getResponse: () => response, getRequest: () => request }),
   } as unknown as ArgumentsHost;
@@ -89,5 +102,90 @@ describe('HttpExceptionFilter — status mapping', () => {
 
     expect(response.status).toHaveBeenCalledWith(400);
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, message: 'bad' }));
+  });
+});
+
+describe('HttpExceptionFilter — log line', () => {
+  const error = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
+  const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
+  const filter = new HttpExceptionFilter({ error, warn } as unknown as PinoLogger, cls, config);
+
+  beforeEach(() => {
+    error.mockClear();
+    warn.mockClear();
+  });
+
+  /**
+   * The leak this phase exists to close. `/auth/verify-email` and `/auth/reset-password` carry a
+   * single-use credential on the query string, and their 4xx paths (expired, already used) are the
+   * ones that actually log — so the raw url wrote a live secret into the log platform on the most
+   * common failure. Asserted over the serialized call, not one field: a leak that moves to another
+   * field is still a leak.
+   */
+  it('never writes a query string — and so never a token — into any log field', () => {
+    const token = 'a-single-use-token-value';
+    const { host } = makeHost('GET', `/auth/verify-email?token=${token}`, { path: '/verify-email' }, '/auth');
+
+    filter.catch(new BadRequestException('Token expired'), host);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warn.mock.calls[0])).not.toContain(token);
+    expect(warn.mock.calls[0][0]).toMatchObject({ route: '/auth/verify-email' });
+  });
+
+  it('logs the route template, not the concrete path, so the field stays low-cardinality', () => {
+    const { host } = makeHost('GET', '/products/abc-123', { path: '/:idOrSlug' }, '/products');
+
+    filter.catch(new BadRequestException('bad id'), host);
+
+    expect(warn.mock.calls[0][0]).toMatchObject({ route: '/products/:idOrSlug' });
+  });
+
+  // 404s and guard rejections fire before the router matches, so there is no template to use.
+  it('falls back to the query-free pathname when the router never matched', () => {
+    const { host } = makeHost('GET', '/nope?token=secret-value', null);
+
+    filter.catch(new BadRequestException('nope'), host);
+
+    expect(warn.mock.calls[0][0]).toMatchObject({ route: '/nope' });
+    expect(JSON.stringify(warn.mock.calls[0])).not.toContain('secret-value');
+  });
+
+  // Express 5 matches an unmatched request against its own wildcard route, so `req.route` is set
+  // even on a 404 and reports `/{*path}` — the same string for every 404, which answers nothing.
+  it('discards a catch-all template in favour of the concrete path', () => {
+    const { host } = makeHost('GET', '/typo/endpoint?token=secret-value', { path: '/{*path}' });
+
+    filter.catch(new BadRequestException('nope'), host);
+
+    expect(warn.mock.calls[0][0]).toMatchObject({ route: '/typo/endpoint' });
+    expect(JSON.stringify(warn.mock.calls[0])).not.toContain('secret-value');
+  });
+
+  it('carries the error class as a flat field', () => {
+    const { host } = makeHost('POST', '/auth/register');
+
+    filter.catch(new BadRequestException('bad'), host);
+
+    expect(warn.mock.calls[0][0]).toMatchObject({ errorName: 'BadRequestException' });
+  });
+
+  // The values worth alerting on without knowing them in advance: ECONNREFUSED when Postgres dies,
+  // EOPENBREAKER when a circuit opens.
+  it('carries an infra error code when the error has one', () => {
+    const { host } = makeHost('GET', '/products');
+    const broken = Object.assign(new Error('circuit open'), { code: 'EOPENBREAKER' });
+
+    filter.catch(broken, host);
+
+    expect(error.mock.calls[0][0]).toMatchObject({ errorCode: 'EOPENBREAKER', errorName: 'Error' });
+  });
+
+  it('omits errorCode entirely when the error carries none', () => {
+    const { host } = makeHost('POST', '/auth/register');
+
+    filter.catch(new BadRequestException('bad'), host);
+
+    expect(warn.mock.calls[0][0]).not.toHaveProperty('errorCode');
   });
 });

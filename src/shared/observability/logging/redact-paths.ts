@@ -1,9 +1,17 @@
 import { SENSITIVE_KEYS } from './sensitive-keys';
 
-// One-level `*.key` catch-alls for ad-hoc objects, derived from the shared SENSITIVE_KEYS list so
-// the logger and the Sentry scrub can't disagree on what is sensitive. Skips the hyphenated
-// `set-cookie` (covered by its explicit transport path — a `*` wildcard can't express it).
-const wildcardPaths: string[] = SENSITIVE_KEYS.filter((key) => !key.includes('-')).map((key) => `*.${key}`);
+// Sensitive keys usable as bare pino paths, derived from the shared SENSITIVE_KEYS list so the
+// logger and the Sentry scrub can't disagree on what is sensitive. Skips the hyphenated
+// `set-cookie`: pino rejects a bare hyphenated segment, and a `*` wildcard can't express it either
+// (its explicit bracket path below covers it).
+const plainKeys: string[] = SENSITIVE_KEYS.filter((key) => !key.includes('-'));
+
+// Top level: `logger.info({ token })` — a `*.key` wildcard starts one level in, so without these
+// a credential logged as a bare field goes out verbatim.
+const topLevelPaths: string[] = plainKeys;
+
+// One level in, for ad-hoc objects: `logger.info({ user: { token } })`.
+const wildcardPaths: string[] = plainKeys.map((key) => `*.${key}`);
 
 /**
  * Secret/credential paths scrubbed at the logger layer (pino `redact`), so protection doesn't
@@ -13,6 +21,7 @@ const wildcardPaths: string[] = SENSITIVE_KEYS.filter((key) => !key.includes('-'
  * audit trail records it; the external Sentry sink scrubs it separately — ADR-0016). See ADR-0013.
  */
 export const redactPaths: string[] = [
+  ...topLevelPaths,
   ...wildcardPaths,
   // Transport-level credentials (full paths — a one-level `*` can't reach req.headers.*).
   'req.headers.authorization',
