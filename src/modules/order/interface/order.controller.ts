@@ -14,7 +14,7 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { ORDER_THROTTLE, UserThrottlerGuard } from '@shared/infrastructure/throttler';
-import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
+import { CurrentUser, type AuthenticatedUser } from '@shared/rbac';
 import { CheckoutOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
 import { OrderResponseDto } from './dto/order-response.dto';

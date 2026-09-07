@@ -19,7 +19,6 @@ import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.re
 import { DrizzleTransactionRunner } from './infrastructure/drizzle-transaction-runner';
 import { OrderReadAdapter } from './infrastructure/order-read.adapter';
 import { StripeGatewayAdapter } from './infrastructure/gateway/stripe-gateway.adapter';
-import { SepayGatewayAdapter } from './infrastructure/gateway/sepay-gateway.adapter';
 import { isStripeUnavailable } from './infrastructure/gateway/stripe-fault-classification';
 import {
   BreakerPaymentGateway,
@@ -30,24 +29,22 @@ import { WebhookController } from './interface/webhook.controller';
 import { ReconciliationScheduler } from './interface/reconciliation.scheduler';
 import { OrderExpiredHandler } from './interface/queue/order-expired.handler';
 
-// Provider selected by env; changing gateways is an env + inject change, never a caller change.
-// Stripe is the coded path (see StripeGatewayAdapter); SePay is an interface-only seam.
-// Whichever is chosen is fronted by a circuit breaker: the gateway is the one dependency here that
-// lives on someone else's network, so it is the one whose slowness can exhaust our request slots.
+// Changing gateways is a DI + env change, never a caller change: every caller depends on
+// PAYMENT_GATEWAY, so the concrete adapter is chosen here and nowhere else.
+// The gateway is fronted by a circuit breaker because it is the one dependency here that lives on
+// someone else's network, so it is the one whose slowness can exhaust our request slots.
 function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFactory): PaymentGatewayPort {
-  const sepay = config.get<string>('payment.provider') === 'sepay';
-  const gateway = sepay
-    ? new SepayGatewayAdapter()
-    : new StripeGatewayAdapter({
-        webhookSecret: config.get<string>('payment.webhookSecret'),
-        toleranceSec: config.get<number>('payment.webhookToleranceSec') ?? 300,
-        secretKey: config.get<string>('payment.secretKey'),
-        successUrl: config.get<string>('payment.successUrl'),
-        cancelUrl: config.get<string>('payment.cancelUrl'),
-      });
-  // Only the coded path can tell a provider fault from a rejected request; the seam has no errors of
-  // its own to classify yet, so every failure there counts.
-  const breaker = breakers.create(PAYMENT_GATEWAY_BREAKER, sepay ? {} : { isDownstreamFault: isStripeUnavailable });
+  const gateway = new StripeGatewayAdapter({
+    webhookSecret: config.get<string>('payment.webhookSecret'),
+    toleranceSec: config.get<number>('payment.webhookToleranceSec') ?? 300,
+    secretKey: config.get<string>('payment.secretKey'),
+    successUrl: config.get<string>('payment.successUrl'),
+    cancelUrl: config.get<string>('payment.cancelUrl'),
+  });
+  // A rejected request (card declined, bad amount) is our fault, not the provider's — counting it
+  // as a failure would trip the breaker on perfectly healthy traffic. Only Stripe's own
+  // unavailability signals open the circuit.
+  const breaker = breakers.create(PAYMENT_GATEWAY_BREAKER, { isDownstreamFault: isStripeUnavailable });
   return new BreakerPaymentGateway(gateway, breaker);
 }
 

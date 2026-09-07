@@ -7,7 +7,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
+import { CurrentUser, type AuthenticatedUser } from '@shared/rbac';
 import { CartService } from '../application/cart.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { CartResponseDto } from './dto/cart-response.dto';

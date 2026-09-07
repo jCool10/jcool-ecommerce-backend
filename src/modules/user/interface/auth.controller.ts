@@ -47,8 +47,8 @@ import {
   RegisterUserUseCase,
   ResendVerificationUseCase,
 } from '../application/use-cases';
-import { Public } from '@shared/rbac';
-import { CurrentUser, type AuthenticatedUser, RefreshTokenCookie } from './decorators';
+import { CurrentUser, Public, type AuthenticatedUser } from '@shared/rbac';
+import { RefreshTokenCookie } from './decorators';
 import {
   AuthTokensResponseDto,
   ChangePasswordDto,

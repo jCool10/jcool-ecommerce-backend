@@ -10,7 +10,7 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { PAYMENT_SESSION_THROTTLE, UserThrottlerGuard } from '@shared/infrastructure/throttler';
-import { CurrentUser, type AuthenticatedUser } from '@modules/user/interface/decorators/current-user.decorator';
+import { CurrentUser, type AuthenticatedUser } from '@shared/rbac';
 import { CreatePaymentSessionUseCase } from '../application/use-cases';
 import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
 

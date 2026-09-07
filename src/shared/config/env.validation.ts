@@ -36,10 +36,10 @@ export enum InventoryLockStrategy {
   Optimistic = 'optimistic',
 }
 
-// Payment gateway selected at boot; Stripe is the coded path, SePay an interface-only seam.
+// Payment gateway selected at boot. One member today: the enum still earns its place by rejecting
+// any other value at startup instead of letting a typo pick a gateway that does not exist.
 export enum PaymentProvider {
   Stripe = 'stripe',
-  Sepay = 'sepay',
 }
 
 /** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, IDENTITY_BUCKET_KEY; optional vars fall back to defaults applied in configuration.ts. */

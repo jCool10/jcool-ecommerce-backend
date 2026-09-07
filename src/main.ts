@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Logger as NestLogger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -8,6 +10,26 @@ import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { CSRF_HEADER } from '@modules/user/interface/security';
+
+/**
+ * The documented API version, read from package.json rather than restated here — a second copy is a
+ * copy that drifts, and this one already had (Swagger said 0.4.0 while the package said 0.0.1).
+ *
+ * Read off disk, not `import pkg from '../package.json'`: the SWC builder has `sourceRoot: "src"`,
+ * so importing a file above it pulls package.json into the compilation and shifts the output to
+ * `dist/src/main.js`, breaking `start:prod` (`node dist/main`). Typecheck stays green throughout,
+ * so the failure would only surface at deploy.
+ */
+function readApiVersion(): string {
+  try {
+    const pkg: unknown = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
+    const version = (pkg as { version?: unknown }).version;
+    return typeof version === 'string' ? version : '0.0.0';
+  } catch {
+    // Docs are not worth refusing to boot over; npm exports the same value when it started us.
+    return process.env.npm_package_version ?? '0.0.0';
+  }
+}
 
 async function bootstrap(): Promise<void> {
   // Buffer bootstrap logs until the pino logger is installed, then replay them through it
@@ -59,9 +81,18 @@ async function bootstrap(): Promise<void> {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('JCool E-commerce API')
       .setDescription(
-        'Catalog read paths + admin CRUD write paths (RBAC) + Auth (register/login, JWT-protected routes, refresh rotation + logout)',
+        [
+          'Single-store e-commerce backend — six bounded contexts in one deployable process.',
+          '',
+          '- **User** — register/login, email verification, password reset, JWT + refresh rotation, sessions, RBAC.',
+          '- **Catalog** — public product/SKU reads and search; admin CRUD behind `ADMIN`.',
+          '- **Cart** — per-user cart lines, priced from the catalog at read time.',
+          '- **Order** — checkout: the order, not the cart, is the source of truth for a transaction.',
+          '- **Payment** — gateway sessions and the webhook sink; one purchase intent, one charge.',
+          '- **Inventory** — stock reservations that hold the "never oversell" invariant under contention.',
+        ].join('\n'),
       )
-      .setVersion('0.4.0')
+      .setVersion(readApiVersion())
       .addBearerAuth()
       .build();
     const document = SwaggerModule.createDocument(app, swaggerConfig);

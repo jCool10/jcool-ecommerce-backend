@@ -19,7 +19,7 @@ import type {
   ResendVerificationUseCase,
 } from '../application/use-cases';
 import { AuthController } from './auth.controller';
-import type { AuthenticatedUser } from './decorators';
+import type { AuthenticatedUser } from '@shared/rbac';
 import type { AuthCookieService } from './security';
 
 // Verifies the controller emits the right audit event at each auth boundary —

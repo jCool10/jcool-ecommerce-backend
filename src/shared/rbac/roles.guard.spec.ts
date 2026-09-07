@@ -8,7 +8,7 @@ import { RolesGuard } from './roles.guard';
  * `request.user.role`. The metadata read (getAllAndOverride over handler+class)
  * and the request are both faked, matching jwt-auth.guard.spec's style. The
  * guard reads only a minimal `{ role }` shape, so the test user is that shape
- * (no dependency on the User context's AuthenticatedUser).
+ * rather than a full AuthenticatedUser — the extra fields would assert nothing.
  */
 describe('RolesGuard', () => {
   const ADMIN = { role: Role.Admin };

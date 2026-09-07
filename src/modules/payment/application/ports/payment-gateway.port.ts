@@ -1,5 +1,6 @@
-// Swapping the provider is a DI + env change, never a caller change. Stripe is the coded adapter;
-// SePay/VietQR stays interface-only.
+// Swapping the provider is a DI change, never a caller change. The port is not speculative: two
+// adapters already implement it — StripeGatewayAdapter in production and FakeSignerGatewayAdapter
+// in e2e, which is how the webhook path is tested without Stripe's signing key.
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 
 export interface CreateSessionInput {

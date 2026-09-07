@@ -34,7 +34,10 @@ export const payments = pgTable(
   {
     id: id(),
     orderId: uuid('order_id').notNull(),
-    provider: text('provider').notNull(), // 'stripe' | 'sepay' | ...
+    // Text, not an enum: a row records which gateway actually took the money, and old rows must
+    // stay readable after the app stops offering that gateway. A pgEnum would need a migration to
+    // add one and could never drop one without rewriting history.
+    provider: text('provider').notNull(),
     providerSessionId: text('provider_session_id').notNull(), // handle returned when the gateway session is created
     providerIntentId: text('provider_intent_id'), // filled from the webhook / reconcile later
     amountMinor: integer('amount_minor').notNull(),

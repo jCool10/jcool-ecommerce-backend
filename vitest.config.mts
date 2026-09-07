@@ -29,6 +29,23 @@ export default defineConfig({
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.spec.ts', 'src/**/*.module.ts', 'src/main.ts'],
+      // Gated by glob, not globally. `test:cov` runs the unit tier only, and repositories,
+      // adapters and controllers are covered by the e2e tier instead — a global floor would
+      // therefore fail on code that is in fact tested, and the usual fix for that is to lower
+      // the floor until it means nothing. Domain and application are where unit tests actually
+      // live, so that is where the floor is enforced.
+      //
+      // The numbers are the measured values minus two points, not a round 80: a floor picked for
+      // looking tidy either sits far below reality (and catches nothing) or above it (and is
+      // switched off the first time it goes red).
+      thresholds: {
+        'src/**/{domain,application}/**': {
+          statements: 84,
+          branches: 79,
+          functions: 85,
+          lines: 85,
+        },
+      },
     },
   },
   plugins: [
