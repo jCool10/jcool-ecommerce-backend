@@ -34,9 +34,8 @@ export class RegisterUserUseCase {
       throw new ConflictException('Email already registered'); // lost the insert race
     }
 
-    // After the row commits, non-fatal: a slow/throwing mailer must not 500 an
-    // already-persisted signup. Explicit .catch keeps it off the unhandledRejection
-    // path; the user can re-trigger via resend-verification. (Phase 2: outbox.)
+    // Not awaited, so a slow mail server cannot stretch an already-persisted signup. The mailer
+    // itself swallows delivery failures; the .catch is the unhandledRejection guard `void` needs.
     void this.emailVerification.issueAndSend(user).catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Verification email failed for user ${user.id}: ${reason}`);

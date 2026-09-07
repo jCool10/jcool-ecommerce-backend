@@ -68,6 +68,13 @@ export async function createTestApp(
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {
     delete process.env.STRIPE_SECRET_KEY;
   }
+  // Same reason: `.env.example` ships an SMTP_URL, so a developer's copied .env would put every
+  // suite in this file on the real transport, mailing their local Mailpit from tests that have
+  // nothing to do with mail. Dropped unless the suite asks for it.
+  if (!('SMTP_URL' in envOverrides)) {
+    delete process.env.SMTP_URL;
+    delete process.env.MAIL_FROM;
+  }
 
   const savedEnv: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(envOverrides)) {

@@ -272,14 +272,19 @@ openssl rand -base64 48
   so nothing will stop a deploy that still uses it — anyone who can read this repo could then mint a
   valid access token for any user. Replace it by hand for any shared or production environment.
 
-### 3. Start infrastructure (Postgres + Redis)
+### 3. Start infrastructure (Postgres + Redis + Mailpit)
 
 ```bash
-docker compose up -d postgres redis
+docker compose up -d postgres redis mailpit
 ```
 
 Ports are deterministic (`5433` for Postgres, `6380` for Redis) to avoid clashing
 with any host-installed instances.
+
+Mailpit accepts every message and delivers none; read the verification and reset
+links out of its inbox at **http://localhost:8025**. Without it, mail falls back
+to the log sink, which records the envelope but not the body — so the links are
+genuinely unreadable, by design.
 
 ### 4. Run migrations (and optional seed)
 
@@ -437,6 +442,14 @@ the horizon arithmetic, and the measured query plans.
 | `SEARCH_URL`              |    No    | `http://localhost:7700`  | Search engine base URL                                                                                    |
 | `SEARCH_API_KEY`          |    No    | — (keyless)              | Search engine master key (min 16 chars where set)                                                         |
 
+**`mail`**
+
+| Variable          | Required |    Default    | Description                                                                                                                     |
+| ----------------- | :------: | :-----------: | ------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_URL`        | In prod  | — (log sink)  | SMTP connection URL. Its presence is the switch, like `SENTRY_DSN`. Unset, mail is logged (envelope only) — and **production refuses to boot** |
+| `MAIL_FROM`       | With SMTP | —            | Envelope sender. Required whenever `SMTP_URL` is set; missing it fails the boot                                                 |
+| `MAIL_TIMEOUT_MS` |    No    |    `10000`    | Timeout for one send (100–25000). Separate from `BREAKER_TIMEOUT_MS` — a mail server's healthy latency is nothing like a gateway's. Capped below BullMQ's 30s job lock, which the order-confirmation send runs inside |
+
 **`resilience.breaker` · `inventory`**
 
 | Variable                           | Required | Default       | Description                                                                                             |
@@ -453,7 +466,8 @@ the horizon arithmetic, and the measured query plans.
 | `INVENTORY_OPTIMISTIC_BACKOFF_MS`  |    No    | `20`          | Base backoff between optimistic retries; grows `2^attempt` with jitter                                   |
 
 Docker Compose additionally reads `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-`POSTGRES_DB`, `POSTGRES_HOST_PORT`, and `REDIS_HOST_PORT` from `.env`; the
+`POSTGRES_DB`, `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `MAIL_SMTP_HOST_PORT`,
+and `MAIL_UI_HOST_PORT` from `.env`; the
 `observability` profile (see [Observability](#observability)) also reads
 `GRAFANA_ADMIN_PASSWORD`.
 
@@ -686,7 +700,7 @@ stops the rollout instead of crashlooping the app and taking down the version th
 
 ```bash
 # Infrastructure only (recommended for local dev)
-docker compose up -d postgres redis
+docker compose up -d postgres redis mailpit
 
 # Full stack (app + infra) in-network
 docker compose up -d --build
@@ -696,7 +710,8 @@ docker compose down -v
 ```
 
 Inside the Compose network the app reaches services by name (`postgres:5432`,
-`redis:6379`); from the host, use the mapped ports (`5433`, `6380`).
+`redis:6379`, `mailpit:1025`); from the host, use the mapped ports (`5433`,
+`6380`, and `8025` for Mailpit's web inbox).
 
 > **Replica gate — run exactly one app instance.** The id generator holds a fixed node id for the
 > whole fleet, so two replicas mint the same `(timestamp, node, sequence)` triples. What that costs
@@ -797,6 +812,31 @@ a handler that throws takes its claim down with it, so the redelivery does the w
 
 Inbox rows are never deleted on a schedule: an id absent from that table is the only proof a message
 has not been applied, so removing one silently re-enables a duplicate.
+
+### Two mail paths, and why mail alone is at-most-once
+
+Auth mail — verify, reset — is sent **synchronously**, outside the outbox, because it carries a raw
+redeemable token. The token tables store only hashes; putting the token itself into an outbox payload
+would write it to Postgres in plaintext and break the invariant those tables exist to hold. A failed
+send is counted and swallowed rather than thrown: `forgot-password` and `resend-verification` answer
+`202` whether or not the address exists, so a dead mail server that 500'd only the existing-account
+branch would hand back exactly the answer those routes refuse to give.
+
+Order confirmation mail carries no secret, so it goes the other way: outbox → queue → inbox claim.
+But the send itself runs **after** that transaction commits, never inside it. Inside, a slow server
+would hold one of ten pool connections per concurrent consume, and — because a breaker timeout
+abandons our wait without cancelling the request already on the wire — a 4s SMTP call under a 3s
+timeout would roll the claim back while the first message was still in flight, then do it again on
+each of the eight retry attempts. Eight confirmations for one order, from a system that believes it
+sent none.
+
+So the confirmation is **at-most-once**: applied exactly once in the database, attempted *at most*
+once outside it — an already-open circuit skips the attempt and counts it as lost, without an SMTP
+connection ever being made — and on failure counted (`mail_send_failures_total{kind}`) not retried; the
+redelivery a retry would trigger can only find its own claim and do nothing. A lost confirmation is
+worse than nothing and better than either alternative. If that tolerance ever changes, the path is a
+separate `mail_outbox` table with its own status and retry, **not** SMTP back inside the transaction:
+the arithmetic above does not improve with a longer timeout.
 
 ### Sharding-ready user ids
 

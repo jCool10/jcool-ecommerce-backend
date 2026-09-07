@@ -12,7 +12,7 @@ export interface PasswordResetMessage {
   token: string;
 }
 
-/** Outbound transactional email; the adapter owns transport (log sink now, SMTP later) and templating. */
+/** Outbound transactional email; the adapter owns transport and templating. Neither method rejects on a delivery failure — see MailerAdapter for why. */
 export interface MailerPort {
   sendEmailVerification(message: EmailVerificationMessage): Promise<void>;
   sendPasswordReset(message: PasswordResetMessage): Promise<void>;

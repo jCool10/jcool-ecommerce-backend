@@ -148,6 +148,16 @@ export default () => ({
     // No default, like jwtAccessSecret: the env schema requires it, so a boot reaching here has it.
     bucketKey: process.env.IDENTITY_BUCKET_KEY,
   },
+  mail: {
+    // Presence is the switch, like SENTRY_DSN: set → real SMTP, unset → the log sink (and a refused
+    // boot in production, where that sink would deliver nothing while looking healthy).
+    smtpUrl: process.env.SMTP_URL,
+    // Envelope sender. Required once SMTP_URL is set — most relays reject a message without one.
+    from: process.env.MAIL_FROM,
+    // Its own timeout, well above the shared breaker default: a mail server taking seconds is
+    // normal, and nobody waits on it — mail is sent after its transaction has already committed.
+    timeoutMs: parseIntOr(process.env.MAIL_TIMEOUT_MS, 10_000),
+  },
   argon2: {
     // OWASP-minimum argon2id params (m=19 MiB, t=2, p=1); override via env to tune.
     memoryCost: parseInt(process.env.ARGON2_MEMORY_COST ?? '19456', 10),

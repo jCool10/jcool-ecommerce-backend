@@ -10,6 +10,7 @@ import type {
   CompensationTrigger,
   ConsumeResult,
   DeadLetterReason,
+  MailKind,
   MetricsPort,
   PublishResult,
   RefundOwedSource,
@@ -23,6 +24,7 @@ import {
   CIRCUIT_BREAKER_CALLS_TOTAL,
   CIRCUIT_BREAKER_STATE,
   CIRCUIT_BREAKER_TRANSITIONS_TOTAL,
+  MAIL_SEND_FAILURES_TOTAL,
   MESSAGING_CONSUME_RETRIES_TOTAL,
   MESSAGING_CONSUME_TOTAL,
   MESSAGING_DLQ_TOTAL,
@@ -65,6 +67,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
     @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
     @InjectMetric(PAYMENT_REFUND_OWED_TOTAL) private readonly refundsOwed: Counter<string>,
+    @InjectMetric(MAIL_SEND_FAILURES_TOTAL) private readonly mailSendFailures: Counter<string>,
     @InjectMetric(RETENTION_ROWS_DELETED_TOTAL) private readonly retentionRowsDeleted: Counter<string>,
     @InjectMetric(RETENTION_SWEEP_DURATION_SECONDS) private readonly retentionSweepDuration: Histogram<string>,
     @InjectMetric(RETENTION_SWEEP_FAILURES_TOTAL) private readonly retentionSweepFailures: Counter<string>,
@@ -122,6 +125,10 @@ export class BusinessMetrics implements MetricsPort {
 
   recordReservationExpiry(): void {
     this.safely('reservation_expiry', () => this.reservationExpiries.inc());
+  }
+
+  recordMailSendFailure(kind: MailKind): void {
+    this.safely('mail_send_failure', () => this.mailSendFailures.inc({ kind }));
   }
 
   recordRefundOwed(source: RefundOwedSource): void {

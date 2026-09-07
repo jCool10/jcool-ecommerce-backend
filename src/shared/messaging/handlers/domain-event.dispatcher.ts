@@ -1,17 +1,19 @@
 import { Injectable } from '@nestjs/common';
+import { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { UnhandledEventError } from '../errors';
-import type { DomainEventJob } from '../queue/domain-event.job';
+import type { DomainEventJob, PostCommitEffect } from '../queue/domain-event.job';
 import { OrderEventsHandler } from './order-events.handler';
 
 /**
  * An effect runs inside the consumer's transaction — the same one that holds the inbox claim — so a
- * handler that fails un-marks the event and the redelivery runs it for real.
+ * handler that fails un-marks the event and the redelivery runs it for real. A handler needing to
+ * reach something the transaction cannot hold returns that work instead; see {@link PostCommitEffect}.
  */
-export type DomainEventHandler = (job: DomainEventJob, tx: DrizzleTx) => Promise<void>;
+export type DomainEventHandler = (job: DomainEventJob, tx: DrizzleTx) => Promise<PostCommitEffect | void>;
 
 const UNREGISTERED_EVENT_LABEL = 'unregistered';
 
@@ -25,12 +27,21 @@ export class DomainEventDispatcher {
     paymentEvents: PaymentEventsHandler,
     orderExpired: OrderExpiredHandler,
     orderCancelled: OrderCancelledHandler,
+    orderPaidMail: OrderPaidMailHandler,
   ) {
     this.handlers = new Map<string, DomainEventHandler>([
       ['order.placed', (job) => orderEvents.record(job)],
-      // The finalize outcomes. Audit-only for the same reason as order.placed: the finalizing
-      // transaction already settled the stock, so re-applying anything here would double it.
-      ['order.paid', (job) => orderEvents.record(job)],
+      // The finalize outcomes. No DB effect, for the same reason as order.placed: the finalizing
+      // transaction already settled the stock, so re-applying anything here would double it. What
+      // order.paid does owe is the buyer's confirmation, which is why it hands back an effect
+      // instead of doing the sending here.
+      [
+        'order.paid',
+        async (job) => {
+          await orderEvents.record(job);
+          return orderPaidMail.prepare(job);
+        },
+      ],
       ['order.failed', (job) => orderEvents.record(job)],
       // The two exceptions: an order that dies unpaid settles its stock but cannot reach the gateway,
       // so the checkout session it leaves open is an effect still owed, and only Payment can apply
@@ -65,13 +76,13 @@ export class DomainEventDispatcher {
     return this.handlers.has(eventType) ? eventType : UNREGISTERED_EVENT_LABEL;
   }
 
-  async dispatch(job: DomainEventJob, tx: DrizzleTx): Promise<void> {
+  async dispatch(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect | void> {
     const handler = this.handlers.get(job.eventType);
     // Never ack an event we do not understand. A missing handler means a producer shipped ahead of
     // its consumer; swallowing it would drop the event with nothing but a log line to show for it,
     // whereas failing keeps it in the queue's failure path where it stays visible and replayable.
     if (!handler) throw new UnhandledEventError(job.eventType);
 
-    await handler(job, tx);
+    return handler(job, tx);
   }
 }

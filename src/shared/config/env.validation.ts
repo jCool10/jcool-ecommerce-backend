@@ -610,6 +610,31 @@ export class EnvironmentVariables {
   @IsBooleanString()
   AUTH_REQUIRE_VERIFIED_EMAIL?: string;
 
+  // SMTP connection URL (smtp://user:pass@host:587). Absent → the log sink outside production;
+  // in production MailModule refuses to boot, because that sink delivers nothing.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  SMTP_URL?: string;
+
+  // Envelope sender; MailModule requires it whenever SMTP_URL is set.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  MAIL_FROM?: string;
+
+  // How long one SMTP send may run before the breaker abandons it (ms); default 10000. Min 100 for
+  // the same reason as BREAKER_TIMEOUT_MS: a typo must not time out every send before it can land.
+  // Capped below BullMQ's 30s job lock, which the order-confirmation send runs inside: past that the
+  // queue reclaims the job mid-send, and the original delivery — already applied, already sent —
+  // finishes without its lock and is filed as a dead letter.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(25_000)
+  MAIL_TIMEOUT_MS?: number;
+
   // Argon2id cost overrides; validated here so an out-of-range value fails at boot.
   @IsOptional()
   @Type(() => Number)

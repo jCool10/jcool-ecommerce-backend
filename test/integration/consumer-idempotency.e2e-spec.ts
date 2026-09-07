@@ -13,6 +13,7 @@ import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-ev
 import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { authHeader } from '../setup/auth.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
+import { createTestUser } from '../setup/fixtures/user.fixture';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -130,9 +131,13 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('applies each of the order events the producers emit today', async () => {
+    // Every finalized event carries `userId` (`order-outbox.mapper.ts`), and order.paid's handler
+    // resolves the buyer's address from it — so the payload here has to be the one producers emit.
+    const { user } = await createTestUser(app);
+    const payload = { orderId: ORDER_ID, userId: user.id, totalAmountMinor: 150_000 };
     for (const [index, eventType] of ['order.placed', 'order.paid', 'order.failed', 'order.expired'].entries()) {
       const outboxId = `0198f0d8-0000-7000-8000-00000000000${index + 1}`;
-      await expect(processor.process(job({ outboxId, eventType }))).resolves.toBe('processed');
+      await expect(processor.process(job({ outboxId, eventType, payload }))).resolves.toBe('processed');
     }
 
     expect((await inboxRows()).map((row) => row.eventType).sort()).toEqual([

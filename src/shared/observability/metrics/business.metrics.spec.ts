@@ -18,6 +18,7 @@ function build() {
   const compensationInc = vi.fn();
   const reservationExpiryInc = vi.fn();
   const refundOwedInc = vi.fn();
+  const mailFailureInc = vi.fn();
   const retentionRowsInc = vi.fn();
   const retentionDurationObserve = vi.fn();
   const retentionFailureInc = vi.fn();
@@ -42,6 +43,7 @@ function build() {
     { inc: compensationInc } as unknown as Counter<string>,
     { inc: reservationExpiryInc } as unknown as Counter<string>,
     { inc: refundOwedInc } as unknown as Counter<string>,
+    { inc: mailFailureInc } as unknown as Counter<string>,
     { inc: retentionRowsInc } as unknown as Counter<string>,
     { observe: retentionDurationObserve } as unknown as Histogram<string>,
     { inc: retentionFailureInc } as unknown as Counter<string>,
@@ -67,6 +69,7 @@ function build() {
     compensationInc,
     reservationExpiryInc,
     refundOwedInc,
+    mailFailureInc,
     retentionRowsInc,
     retentionDurationObserve,
     retentionFailureInc,
@@ -162,6 +165,12 @@ describe('BusinessMetrics', () => {
       expect(refundOwedInc).toHaveBeenCalledWith({ source });
     },
   );
+
+  it('counts an undelivered message by kind', () => {
+    const { metrics, mailFailureInc } = build();
+    metrics.recordMailSendFailure('order_paid');
+    expect(mailFailureInc).toHaveBeenCalledWith({ kind: 'order_paid' });
+  });
 
   it('observes a cache rebuild in seconds', () => {
     const { metrics, rebuildObserve } = build();

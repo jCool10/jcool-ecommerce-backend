@@ -1,5 +1,6 @@
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
+import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import type { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import type { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
@@ -28,6 +29,8 @@ function build() {
   const settle = vi.fn().mockResolvedValue(undefined);
   const close = vi.fn().mockResolvedValue(undefined);
   const closeCancelled = vi.fn().mockResolvedValue(undefined);
+  const sendMail = vi.fn().mockResolvedValue(undefined);
+  const prepare = vi.fn().mockResolvedValue(sendMail);
   const handler = new OrderEventsHandler({ info } as unknown as PinoLogger);
   return {
     dispatcher: new DomainEventDispatcher(
@@ -35,11 +38,14 @@ function build() {
       { settle } as unknown as PaymentEventsHandler,
       { close } as unknown as OrderExpiredHandler,
       { close: closeCancelled } as unknown as OrderCancelledHandler,
+      { prepare } as unknown as OrderPaidMailHandler,
     ),
     info,
     settle,
     close,
     closeCancelled,
+    prepare,
+    sendMail,
   };
 }
 
@@ -54,6 +60,26 @@ describe('DomainEventDispatcher', () => {
       await dispatcher.dispatch(job(eventType), tx);
 
       expect(info).toHaveBeenCalledWith(expect.objectContaining({ eventType }), 'order event consumed');
+    },
+  );
+
+  // The confirmation is handed back rather than sent: the caller owns when it runs, and that is
+  // after the transaction this dispatch is inside has committed.
+  it('returns the buyer confirmation from order.paid without sending it', async () => {
+    const { dispatcher, prepare, sendMail } = build();
+
+    const effect = await dispatcher.dispatch(job('order.paid'), tx);
+
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.paid' }));
+    expect(sendMail).not.toHaveBeenCalled();
+    expect(effect).toBe(sendMail);
+  });
+
+  it.each(['order.placed', 'order.failed', 'order.cancelled', 'payment.succeeded'])(
+    'returns nothing for %s, which owes no work outside the transaction',
+    async (eventType) => {
+      const { dispatcher } = build();
+      await expect(dispatcher.dispatch(job(eventType), tx)).resolves.toBeUndefined();
     },
   );
 

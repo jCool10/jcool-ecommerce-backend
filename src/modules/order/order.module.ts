@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
+import { UserModule } from '@modules/user/user.module';
+import { MailModule } from '@shared/mail';
 import {
   CancelOrderUseCase,
   CheckoutOrderUseCase,
@@ -25,6 +27,7 @@ import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempo
 import { AdminOrderController } from './interface/admin-order.controller';
 import { OrderController } from './interface/order.controller';
 import { IdempotencyInterceptor } from './interface/idempotency.interceptor';
+import { OrderPaidMailHandler } from './interface/queue/order-paid-mail.handler';
 import { PaymentEventsHandler } from './interface/queue/payment-events.handler';
 import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.guard';
 import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
@@ -39,7 +42,7 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
  * Persistence sits behind ORDER_REPOSITORY.
  */
 @Module({
-  imports: [CartModule, CatalogModule, InventoryModule],
+  imports: [CartModule, CatalogModule, InventoryModule, UserModule, MailModule],
   controllers: [OrderController, AdminOrderController],
   providers: [
     CheckoutOrderUseCase,
@@ -58,10 +61,11 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
     RequireIdempotencyKeyGuard,
     IdempotencyInterceptor,
     PaymentEventsHandler,
+    OrderPaidMailHandler,
     ReservationTtlScheduler,
   ],
-  // FinalizeOrderUseCase is exported so Payment's webhook and sweep can settle an order, and
-  // PaymentEventsHandler so the shared event consumer can route a settlement back here.
-  exports: [ORDER_PAYMENT_VIEW, FinalizeOrderUseCase, PaymentEventsHandler],
+  // FinalizeOrderUseCase is exported so Payment's webhook and sweep can settle an order, and the two
+  // queue handlers so the shared event consumer can route a settlement and a confirmation back here.
+  exports: [ORDER_PAYMENT_VIEW, FinalizeOrderUseCase, PaymentEventsHandler, OrderPaidMailHandler],
 })
 export class OrderModule {}

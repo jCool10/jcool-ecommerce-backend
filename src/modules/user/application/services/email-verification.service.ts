@@ -45,7 +45,11 @@ export class EmailVerificationService {
       tokenHash: sha256Hex(rawToken),
       expiresAt: new Date(Date.now() + this.ttlMs),
     });
-    await this.mailer.sendEmailVerification({ to: recipient.email, token: rawToken });
+    // Not awaited: this also serves the two enumeration-safe routes, and waiting on a mail server
+    // would make the existing-account branch measurably slower than the unknown-address one — the
+    // same answer, told by the clock. The mailer never rejects (see MailerAdapter); the catch is
+    // only the unhandledRejection guard `void` needs.
+    void this.mailer.sendEmailVerification({ to: recipient.email, token: rawToken }).catch(() => undefined);
 
     this.audit.record({
       event: 'email.verification_sent',

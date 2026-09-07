@@ -35,6 +35,13 @@ export interface BreakerOptions {
    * counted.
    */
   isDownstreamFault?: (error: unknown) => boolean;
+
+  /**
+   * How long a call to THIS downstream may run, overriding the shared default. For a dependency
+   * whose healthy latency is nothing like the rest — a mail server against a payment API — one
+   * shared number can only be too short for one of them or too long for the other.
+   */
+  timeoutMs?: number;
 }
 
 function codeOf(error: unknown): string | undefined {
@@ -138,10 +145,11 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
       return new BreakerOutboundCall(name, existing);
     }
 
-    const { isDownstreamFault } = options;
+    const { isDownstreamFault, timeoutMs } = options;
     const breaker = new CircuitBreaker<[Task], unknown>((task) => task(), {
       ...this.options,
       name,
+      ...(timeoutMs !== undefined && { timeout: timeoutMs }),
       ...(isDownstreamFault && { errorFilter: (error: unknown) => !isDownstreamFault(error) }),
     });
     this.instrument(name, breaker);

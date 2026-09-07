@@ -7,8 +7,8 @@
 # All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here.
 # PREREQUISITE: copy `.env.example` → `.env` first. The `app` service reads it via `env_file`, so a
 # missing `.env` fails `up` fast (clearer than a later env-validation crash inside the container).
-#   Core (dev default):     docker compose up -d                            # postgres + redis + meilisearch + app
-#   Infra only:             docker compose up -d postgres redis meilisearch
+#   Core (dev default):     docker compose up -d                            # postgres + redis + meilisearch + mailpit + app
+#   Infra only:             docker compose up -d postgres redis meilisearch mailpit
 #   + observability stack:  docker compose --profile observability up -d    # + collector/jaeger/prometheus/grafana
 #   Reset everything:       docker compose down -v
 #
@@ -78,6 +78,24 @@ services:
     networks:
       - jcool-net
 
+  # Dev mail server: accepts every message and delivers none, with a web inbox on 8025. The log
+  # sink the app falls back to records only the envelope, so this is how a developer reads a
+  # verification or reset link. Nothing is persisted — a restart empties the inbox.
+  mailpit:
+    image: axllent/mailpit:v1.31.1
+    container_name: jcool-mailpit
+    restart: unless-stopped
+    ports:
+      - "${MAIL_SMTP_HOST_PORT:-1025}:1025"
+      - "${MAIL_UI_HOST_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
   # Convenience: run the whole stack in-network. Not required to be up this week
   # (the app has no DB access until Phase 3); brought up from P3+ once it uses the DB.
   # Inside the compose network the app reaches services by NAME, never localhost.
@@ -101,6 +119,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       REDIS_URL: redis://redis:6379
       SEARCH_URL: http://meilisearch:7700
+      SMTP_URL: smtp://mailpit:1025
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318

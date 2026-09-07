@@ -50,7 +50,10 @@ export class PasswordResetService {
       tokenHash: sha256Hex(rawToken),
       expiresAt: new Date(Date.now() + this.ttlMs),
     });
-    await this.mailer.sendPasswordReset({ to: recipient.email, token: rawToken });
+    // Not awaited, for the reason spelled out in EmailVerificationService: forgot-password answers
+    // 202 for any address, and a mail server's latency on the existing-account branch alone would
+    // hand back that difference. The catch is only the unhandledRejection guard `void` needs.
+    void this.mailer.sendPasswordReset({ to: recipient.email, token: rawToken }).catch(() => undefined);
 
     this.audit.record({
       event: 'password.reset_requested',
