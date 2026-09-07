@@ -46,7 +46,7 @@ jobs:
           fi
 
       # workflow_run checks out the default branch by default; pin the commit CI actually verified.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
