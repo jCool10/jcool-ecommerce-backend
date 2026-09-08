@@ -23,7 +23,6 @@ export class RedisHealthIndicator {
       }
       return indicator.up();
     } catch (error) {
-      // Log the raw error for operators; keep the client body generic.
       this.logger.error(`redis readiness check failed: ${error instanceof Error ? error.message : String(error)}`);
       return indicator.down({ message: 'redis unreachable' });
     }

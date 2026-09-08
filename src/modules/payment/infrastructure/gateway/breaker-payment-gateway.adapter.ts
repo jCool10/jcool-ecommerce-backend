@@ -9,21 +9,15 @@ import {
   type VerifiedEvent,
 } from '../../application/ports/payment-gateway.port';
 
-/** Metric label, so it stays a fixed name rather than anything derived per call. */
 export const PAYMENT_GATEWAY_BREAKER = 'payment_gateway';
 
 /**
- * Fronts the real gateway with a circuit breaker, so a provider outage costs us one fast failure per
- * call instead of one held request slot per call.
- *
- * Only the three methods that cross the network go through it. `verifyAndParseEvent` is local HMAC
- * work: guarding it would let an outage of the gateway's API stop us verifying the webhooks that
+ * Only the three methods that cross the network go through the breaker. `verifyAndParseEvent` is local
+ * HMAC work: guarding it would let an outage of the gateway's API stop us verifying the webhooks that
  * same gateway is still delivering — the one path that still settles orders while it is down.
  *
- * A refusal comes back out as `PaymentGatewayError`, the port's own word for "the provider did not
- * answer", so every caller keeps the handling it already has: checkout answers 502, the reconcile
- * sweep leaves the order for its next tick, and the expiry consumer retries its message. Nothing
- * degrades into a value — a fabricated `UNKNOWN` from `getPaymentStatus` would let the reconcile
+ * A refusal comes back out as `PaymentGatewayError`, so every caller keeps the handling it already has.
+ * Nothing degrades into a value: a fabricated `UNKNOWN` from `getPaymentStatus` would let the reconcile
  * sweep expire an order that had in fact been paid.
  */
 export class BreakerPaymentGateway implements PaymentGatewayPort {

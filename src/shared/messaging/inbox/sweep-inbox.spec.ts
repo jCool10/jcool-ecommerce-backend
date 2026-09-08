@@ -21,11 +21,9 @@ function build(days: unknown) {
   };
 }
 
-/**
- * The predicate is proved against real rows in `retention-sweep.e2e-spec.ts`. What is worth
- * asserting without a database is the boot guard, since the config it rejects fails nowhere else —
- * it produces a correct-looking app that has quietly lost exactly-once delivery.
- */
+// The predicate is proved against real rows in `retention-sweep.e2e-spec.ts`. What is worth
+// asserting without a database is the boot guard: the config it rejects fails nowhere else, leaving
+// a correct-looking app that has quietly lost exactly-once delivery.
 describe('SweepInbox', () => {
   it('registers itself, so a table is never left uncollected by a forgotten wiring line', () => {
     const { make, registry } = build(30);

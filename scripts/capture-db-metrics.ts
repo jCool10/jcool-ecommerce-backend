@@ -1,23 +1,17 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 
-// Postgres-side metric capture for the register-uniqueness benchmark. Prints the
-// exact readings the escalation gates key on: unique-email index size vs
-// shared_buffers (RAM-residency → B-bloom / B-partition gate), buffer cache-hit
-// ratios, and autovacuum activity. Run after a seed and/or a k6 load pass.
-//
-// pg_stat_statements is queried when present but is NOT enabled on the default
-// docker image (it needs `shared_preload_libraries=pg_stat_statements` + a
-// restart). Everything else here reads always-on catalog views.
+// Postgres-side metric capture for the register-uniqueness benchmark; run after a seed and/or a k6
+// load pass. pg_stat_statements is queried when present but is NOT enabled on the default docker
+// image (it needs `shared_preload_libraries=pg_stat_statements` + a restart); everything else here
+// reads always-on catalog views.
 
 function bytesToMb(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-// Parse a SHOW-formatted size like "128MB" / "2GB" to bytes. `SHOW shared_buffers`
-// always suffixes a unit; a bare unit-less integer is treated as bytes. Do NOT feed
-// `pg_settings.setting` here — that reports shared_buffers in 8kB pages, which this
-// would misread as bytes.
+// Takes `SHOW`-formatted sizes only ("128MB", "2GB"), which always carry a unit. Do NOT feed
+// `pg_settings.setting` here — that reports shared_buffers in 8kB pages, misread here as bytes.
 function parseSharedBuffers(raw: string): number {
   const m = raw.trim().match(/^(\d+)\s*([kKmMgGtT]?B)?$/);
   if (!m) return NaN;
@@ -32,7 +26,7 @@ async function scalar<T = string>(pool: Pool, sql: string, params: unknown[] = [
   return Object.values(res.rows[0] ?? {})[0];
 }
 
-// Counters arrive as strings (pg widens bigint rather than lose precision); the two stamps as Dates.
+// Counters arrive as strings: pg widens bigint rather than lose precision.
 interface VacuumRow {
   n_live_tup: string;
   n_dead_tup: string;
@@ -52,7 +46,6 @@ async function main(): Promise<void> {
     const indexesBytes = Number(await scalar<string>(pool, `SELECT pg_indexes_size('users')::text`));
     const totalBytes = Number(await scalar<string>(pool, `SELECT pg_total_relation_size('users')::text`));
 
-    // Per-index size + name of the index backing UNIQUE(email).
     const indexes = await pool.query<{ indexrelname: string; bytes: string }>(
       `SELECT indexrelname, pg_relation_size(indexrelid)::text AS bytes
          FROM pg_stat_user_indexes WHERE relname = 'users' ORDER BY indexrelname`,

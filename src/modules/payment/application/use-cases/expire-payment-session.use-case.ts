@@ -11,9 +11,7 @@ const LOG_CONTEXT = 'ExpirePaymentSession';
 /** Why the order stopped being payable. It changes nothing this does — only what the logs say. */
 export type ExpireSessionTrigger = 'ttl' | 'cancel';
 
-/** Every settled order lands in exactly one bucket. */
 export type ExpireSessionResult =
-  /** No session was ever opened — the common case for an order that timed out in the cart. */
   | 'no_payment'
   /** A webhook or the reconcile sweep got there first; the money row is already terminal. */
   | 'already_settled'
@@ -24,10 +22,9 @@ export type ExpireSessionResult =
   | 'expired';
 
 /**
- * Closes the money side of an order that will not be fulfilled — one the reservation sweep expired,
- * or one a buyer or an admin cancelled. Neither of those touches the gateway (the sweep cannot, the
- * cancel holds an order row lock), so both leave a live checkout session behind a dead order, and
- * the reconcile sweep will not pick it up: its queue is orders still `PENDING`.
+ * Neither the reservation sweep nor a cancel touches the gateway (the sweep cannot, the cancel holds
+ * an order row lock), so both leave a live checkout session behind a dead order that the reconcile
+ * sweep will never pick up: its queue is orders still `PENDING`.
  */
 @Injectable()
 export class ExpirePaymentSessionUseCase {
@@ -51,15 +48,14 @@ export class ExpirePaymentSessionUseCase {
       return 'already_settled';
     }
 
-    // Runs inside the consumer's transaction, which by design holds no payment row: `findByOrderId`
-    // takes no lock, and the write below comes after. What the transaction does hold is this
-    // message's inbox claim, so a gateway that refuses or cannot be reached rolls the claim back and
-    // the queue redelivers — the only way the session still gets closed once the gateway recovers.
+    // Runs inside the consumer's transaction, which by design holds no payment row — what it holds is
+    // this message's inbox claim, so a gateway that refuses or cannot be reached rolls the claim back
+    // and the queue redelivers, which is the only way the session gets closed once it recovers.
     const outcome = await this.gateway.expireSession(payment.providerSessionId);
     if (outcome === 'already_completed') {
-      // Acknowledged, not retried: no redelivery un-pays a session. And this is the only signal
-      // there is if the webhook never arrives — the order left PENDING, so reconcile skips it.
-      // "Submitted", not "paid": an async method can still be clearing behind a `complete` session.
+      // Acknowledged, not retried: no redelivery un-pays a session, and this is the only signal there
+      // is if the webhook never arrives. "Submitted", not "paid": an async method can still be
+      // clearing behind a `complete` session.
       this.refundOwed(orderId, payment.id, trigger, 'its checkout session had already been submitted for payment');
       return 'refund_owed';
     }

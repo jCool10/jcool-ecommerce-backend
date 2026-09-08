@@ -34,13 +34,8 @@ import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto'
 import { IdempotencyInterceptor } from './idempotency.interceptor';
 import { RequireIdempotencyKeyGuard } from './require-idempotency-key.guard';
 
-/**
- * Order endpoints for the authenticated user (global JwtAuthGuard protects the
- * whole controller — no `@Public()`). Thin: read the user, call the use case, map
- * to a DTO. Orders are per-user: the id comes from the token, and every read is
- * user-scoped, so one user can never see or place another's order. `POST /orders`
- * is the atomic checkout — snapshot cart, hold stock, go PENDING in one transaction.
- */
+// The global JwtAuthGuard protects every route here — nothing is marked `@Public()`, and the user
+// id comes from the token, never from the request.
 @ApiTags('orders')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })

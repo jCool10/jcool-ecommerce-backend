@@ -38,13 +38,9 @@ const USER_LIMIT = ORDER_THROTTLE[USER_THROTTLER].limit;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * The three resilience mechanisms running together in one app, with every kill-switch on.
- *
- * Each is already pinned on its own — the herd in catalog-stampede, the limiter tiers in
- * rate-limit-sensitive-endpoints, the breaker FSM in circuit-breaker.factory.spec. What only a
- * shared app can show is that they coexist: the limiter and the single-flight lock share one Redis
- * client and one request path, the breaker fronts the gateway a real checkout calls, and all three
- * report on the same scrape an on-call would read.
+ * Each mechanism is already pinned on its own (catalog-stampede, rate-limit-sensitive-endpoints,
+ * circuit-breaker.factory.spec). What only a shared app can show is that they coexist: limiter and
+ * single-flight lock on one Redis client and one request path, all three on one scrape.
  */
 describe('Resilience acceptance: cache, limiter, and breaker in one app (integration)', () => {
   let app: INestApplication;
@@ -98,10 +94,9 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     return res.text;
   }
 
-  // Label order in the exposition follows the metric's declaration, not the call site, so each label
-  // is matched by lookahead instead of being spelled out in sequence. A missing series answers
-  // `undefined`, never 0 — otherwise a renamed metric or label would satisfy every assertion that
-  // expects a zero rather than failing one.
+  // Label order in the exposition follows the metric's declaration, not the call site, so labels are
+  // matched by lookahead. A missing series answers `undefined`, never 0 — otherwise a renamed metric
+  // or label would satisfy every assertion expecting a zero instead of failing one.
   function sampleOf(text: string, name: string, labels: Record<string, string> = {}): number | undefined {
     const lookaheads = Object.entries(labels)
       .map(([key, value]) => `(?=[^}]*${key}="${value}")`)

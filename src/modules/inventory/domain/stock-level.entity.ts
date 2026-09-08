@@ -2,10 +2,8 @@ import { assertInteger, assertNonEmpty } from '@shared/kernel';
 import { InsufficientStockError } from './errors/insufficient-stock.error';
 
 /**
- * StockLevel aggregate — home of the "never oversell" invariant. Pure: no
- * framework/DB imports. `available = onHand − reserved` is derived, never stored.
- * `reserve()` is the single guarded mutation; the concurrency mechanism that
- * reads-and-writes it safely is the repository's job.
+ * `available = onHand − reserved` is derived, never stored. `reserve()` guards the mutation, but
+ * the concurrency mechanism that reads-and-writes it safely is the repository's job.
  */
 export class StockLevel {
   private constructor(
@@ -15,7 +13,6 @@ export class StockLevel {
     private _version: number,
   ) {}
 
-  /** Reconstruct from a persisted row (repository use only). */
   static rehydrate(props: {
     variantId: string;
     quantityOnHand: number;
@@ -49,7 +46,6 @@ export class StockLevel {
     return Number.isInteger(qty) && qty >= 1 && this.availableQuantity() >= qty;
   }
 
-  /** Hold `qty` units (`quantityReserved += qty`, `version += 1`); throws if it can't. */
   reserve(qty: number): void {
     if (!this.canReserve(qty)) {
       throw new InsufficientStockError(this.variantId, qty, this.availableQuantity());

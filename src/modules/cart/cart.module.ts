@@ -9,14 +9,6 @@ import { CatalogQueryAdapter } from './infrastructure/catalog-query.adapter';
 import { DrizzleCartRepository } from './infrastructure/drizzle-cart.repository';
 import { CartController } from './interface/cart.controller';
 
-/**
- * Cart bounded context: per-user scratch cart. Reads live SKU price/name only
- * through Catalog's published `CATALOG_SKU_QUERY` (imported via CatalogModule),
- * wrapped by a Cart-owned port so the boundary is explicit. Persistence sits
- * behind CART_REPOSITORY — the single swap point (Redis-backed cart later).
- * `CART_SNAPSHOT` is Cart's published language, exported so Order can snapshot
- * the cart into an order.
- */
 @Module({
   imports: [CatalogModule],
   controllers: [CartController],

@@ -7,10 +7,7 @@ export interface MailMessage {
   html?: string;
 }
 
-/**
- * Sends a message; it never composes one. Each context owns the wording, the links and the
- * templating of its own mail — this side knows only how to get bytes to a mail server.
- */
+/** Transport only: each context owns the wording, links and templating of its own mail. */
 export interface MailTransportPort {
   sendMail(message: MailMessage): Promise<void>;
 }

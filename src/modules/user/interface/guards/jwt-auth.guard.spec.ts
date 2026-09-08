@@ -2,12 +2,7 @@ import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
-/**
- * The guard's own logic is the `@Public()` short-circuit; the actual token
- * verification is delegated to passport's AuthGuard('jwt') (covered by live
- * smoke). Here we prove: public → allow without delegating; not public →
- * delegate to the parent guard.
- */
+// Token verification itself belongs to passport's AuthGuard('jwt') and is covered by the live smoke test.
 describe('JwtAuthGuard', () => {
   function makeContext(): ExecutionContext {
     return {
@@ -20,7 +15,6 @@ describe('JwtAuthGuard', () => {
     const reflector = { getAllAndOverride: () => true } as unknown as Reflector;
     const guard = new JwtAuthGuard(reflector);
 
-    // Parent canActivate must NOT run on a public route.
     const parentProto = Object.getPrototypeOf(JwtAuthGuard.prototype) as {
       canActivate: (ctx: ExecutionContext) => unknown;
     };

@@ -2,7 +2,6 @@ import type { DrizzleTx } from '@shared/infrastructure/database';
 import type { PaymentStatus } from '../../domain/payment-status';
 import type { Payment } from '../../domain/payment.entity';
 
-// Payment persistence port; the Drizzle adapter implements it in infrastructure/.
 export const PAYMENT_REPOSITORY = Symbol('PAYMENT_REPOSITORY');
 
 /** The active-payment partial-unique index firing — the DB backstop for "never double-charge". */
@@ -26,10 +25,9 @@ export interface UpdatePaymentStatusOptions {
 export interface PaymentRepositoryPort {
   create(payment: Payment, tx?: DrizzleTx): Promise<Payment>;
 
-  /** The latest payment for an order (newest first); null if it has none. */
+  /** The latest payment for an order (newest first). */
   findByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment | null>;
 
-  /** How the webhook resolves its target payment, from `data.object.id`. */
   findByProviderSessionId(providerSessionId: string, tx?: DrizzleTx): Promise<Payment | null>;
 
   /** Null when the id is unknown or `expectedStatus` no longer matches. The adapter only writes —

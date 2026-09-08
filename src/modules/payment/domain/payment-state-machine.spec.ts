@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { PAYMENT_STATUSES, PaymentStatus } from './payment-status';
 import { assertTransition, canTransition, PaymentTransitionError } from './payment-state-machine';
 
-// The single expectation the exhaustive test checks every (from, to) pair against.
 const WIRED_TRANSITIONS: ReadonlyArray<[PaymentStatus, PaymentStatus]> = [
   [PaymentStatus.PENDING, PaymentStatus.SUCCEEDED],
   [PaymentStatus.PENDING, PaymentStatus.FAILED],

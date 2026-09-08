@@ -1,4 +1,3 @@
-// Barrel: Catalog infrastructure adapters (Drizzle repositories, cache-aside decorators, row mapper).
 export * from './caching-catalog-admin.repository';
 export * from './caching-product.repository';
 export * from './catalog-cache.keys';

@@ -9,9 +9,8 @@ import { DrizzleProductRepository } from '../drizzle-product.repository';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
 import { reindexAll } from './reindex-runner';
 
-// Minimal context for the reindex CLI: config + database + the search adapter only, deliberately
-// NOT the full app — so no queue consumers or scheduled sweeps run for the command's lifetime.
-// ClsService is provided but never active here, so the DB query counter it feeds is a no-op.
+// Deliberately not the full app, so no queue consumers or scheduled sweeps run for the command's
+// lifetime. ClsService is provided but never active here, so the DB query counter it feeds no-ops.
 //
 // Every provider listed here must declare its dependencies with an explicit @Inject (or a factory's
 // `inject` array): tsx compiles with esbuild, which emits no decorator metadata, so a dependency

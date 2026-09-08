@@ -6,13 +6,10 @@ import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@shared/infrastructure/thr
 import { Public } from '@shared/rbac';
 import { DrizzleHealthIndicator, RedisHealthIndicator, ShutdownHealthIndicator } from './indicators';
 
-// Liveness/readiness must answer without a token — orchestrators probe these
-// unauthenticated. `@Public()` opts the whole controller out of the global guard.
-// Probes arrive on a schedule and must never be rate limited: a 429 would pull a healthy
-// instance from service, and every tier that stays active costs a Redis round-trip on a
-// route whose entire job is to answer when Redis is the thing that's broken.
-// Both tiers must be named — bare `@SkipThrottle()` skips only `default`, leaving `account`
-// to call Redis on every probe.
+// Probes are unauthenticated and arrive on a schedule: a 429 would pull a healthy instance from
+// service, and every tier left active costs a Redis round-trip on the route whose whole job is to
+// answer when Redis is what's broken. Both tiers are named — bare `@SkipThrottle()` skips only
+// `default`, leaving `account` to call Redis on every probe.
 @Public()
 @SkipThrottle({ [DEFAULT_THROTTLER]: true, [ACCOUNT_THROTTLER]: true })
 @ApiTags('health')
@@ -25,8 +22,7 @@ export class HealthController {
     private readonly shutdown: ShutdownHealthIndicator,
   ) {}
 
-  // Liveness: process responsive? Checks no dependency — a flaky DB/Redis must
-  // not make an orchestrator kill a healthy process.
+  // Checks no dependency: a flaky DB/Redis must not make an orchestrator kill a healthy process.
   @Get('live')
   @HealthCheck()
   @ApiOkResponse({ description: 'Process is alive (no dependencies checked).' })
@@ -34,9 +30,6 @@ export class HealthController {
     return this.health.check([]);
   }
 
-  // Readiness: can we serve traffic? The shutdown gate is checked first so a draining
-  // process 503s immediately (LB stops routing before we close); then any dependency down
-  // → Terminus 503 naming it.
   @Get('ready')
   @HealthCheck()
   @ApiOkResponse({ description: 'Not shutting down; Postgres and Redis are reachable.' })

@@ -28,8 +28,6 @@ const BACKOFF_MS = '100';
 const messageId = (n: number) => `0198f0d8-2222-7000-8000-00000000000${n}`;
 
 /**
- * What happens after a consume fails, against a real queue.
- *
  * Retry counting and the terminal/transient split are BullMQ's, read back rather than reimplemented,
  * so a fake would only prove that this suite agrees with itself. Everything here runs a genuine
  * Worker against a container and asserts on where the message physically ended up.
@@ -287,8 +285,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
       .expect(200);
 
     // Presence, not value: counters accumulate across the tests in this file, so only a delta would
-    // be meaningful (the registry itself is per-file — vitest isolates each e2e file in its own
-    // process).
+    // be meaningful.
     expect(text).toContain('messaging_consume_retries_total{event_type="order.placed"}');
     expect(text).toContain('messaging_dlq_total{event_type="order.placed",reason="attempts_exhausted"}');
   });

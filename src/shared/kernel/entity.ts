@@ -1,4 +1,3 @@
-/** Base for entities compared by identity — same concrete type and same id, regardless of attribute drift — in contrast to `ValueObject`, compared by structure. */
 export abstract class Entity<TId> {
   readonly id: TId;
 

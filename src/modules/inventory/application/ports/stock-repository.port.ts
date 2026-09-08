@@ -5,7 +5,6 @@ import type { ExpiredHold, ExpiredHoldQuery, StockResolveResult } from '../publi
 
 export type { ExpiredHold, ExpiredHoldQuery, StockResolveResult };
 
-// Stock persistence + reservation port; the Drizzle adapter implements it in infrastructure/.
 export const STOCK_REPOSITORY = Symbol('STOCK_REPOSITORY');
 
 /** At most one line per `variantId` — a duplicate variant is held once, not summed. */
@@ -14,7 +13,7 @@ export interface ReserveLine {
   quantity: number;
 }
 
-/** Read model of a SKU's stock (available is derived, never stored). */
+/** `available` is derived, never stored. */
 export interface StockView {
   onHand: number;
   reserved: number;
@@ -28,7 +27,7 @@ export interface StockRepositoryPort {
   /**
    * Version-CAS with a bounded retry budget; throws `InsufficientStockError` on a real shortfall.
    * Its idempotency check is NOT lock-guarded: two concurrent reserves for one `orderId` can each
-   * raise reserved once, and the surplus hold has no reservation row to release. Callers must
+   * raise reserved once, and the surplus hold has no reservation row to release — callers must
    * dedupe order submission upstream.
    */
   reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void>;
@@ -39,7 +38,7 @@ export interface StockRepositoryPort {
   /** HELD → RELEASED, dropping only `reserved`. Guarded on HELD, so a re-run is a no-op. */
   releaseReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
 
-  /** Current on-hand / reserved / available for a SKU; null if the SKU has no stock row. */
+  /** Null when the SKU has no stock row. */
   getStockView(variantId: string): Promise<StockView | null>;
 
   /** Distinct orders holding HELD stock past `expiredBefore`, oldest expiry first. */

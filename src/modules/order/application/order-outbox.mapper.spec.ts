@@ -11,8 +11,6 @@ const USER_ID = '01a03000-0000-7000-8000-000000000002';
 const AT = new Date('2026-08-24T03:21:00.000Z');
 const ISO = '2026-08-24T03:21:00.000Z';
 
-// The payload is what a consumer sees days after the fact, so its shape is a contract: pin every
-// key, and pin that timestamps serialize as ISO strings rather than Date objects jsonb would mangle.
 describe('order outbox mapper', () => {
   it('maps a placed order to an order.placed record', () => {
     const record = toPlacedOutboxRecord(new OrderPlacedEvent(ORDER_ID, USER_ID, 300_000, 'VND', AT));

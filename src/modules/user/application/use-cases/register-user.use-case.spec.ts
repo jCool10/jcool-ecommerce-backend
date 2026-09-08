@@ -5,7 +5,7 @@ import type { EmailVerificationService, VerificationRecipient } from '../service
 import { RegisterUserUseCase } from './register-user.use-case';
 
 class MockUserRepository implements UserRepositoryPort {
-  // When set, create() returns null — the DB unique-index conflict (email taken).
+  // When set, create() returns null — the unique-index conflict an already-taken email produces.
   emailTaken = false;
   created?: CreateUserInput;
 
@@ -32,7 +32,6 @@ class MockUserRepository implements UserRepositoryPort {
   }
 }
 
-// Captures who a verification token was issued + sent for.
 class MockEmailVerification {
   sentTo: VerificationRecipient[] = [];
   issueAndSend(recipient: VerificationRecipient): Promise<void> {
@@ -64,7 +63,7 @@ describe('RegisterUserUseCase', () => {
     expect(repo.created?.role).toBeUndefined(); // DB default CUSTOMER applies
     expect(user.email).toBe('user@example.com');
     expect(user.role).toBe('CUSTOMER');
-    expect(user.isEmailVerified).toBe(false); // new accounts start unverified
+    expect(user.isEmailVerified).toBe(false);
   });
 
   it('issues + sends a verification token for the new user', async () => {

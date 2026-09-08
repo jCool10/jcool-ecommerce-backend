@@ -1,7 +1,6 @@
 import type { RedisService } from '@shared/infrastructure/redis';
 import { RedisTokenDenylist } from './redis-token-denylist';
 
-// Minimal fake of the ioredis client surface the adapter touches (set/exists).
 class FakeRedisClient {
   setCalls: Array<{ key: string; value: string; mode: string; ttl: number }> = [];
   existsReturn = 0;
@@ -24,7 +23,7 @@ describe('RedisTokenDenylist', () => {
   it('sets a prefixed key with a PX TTL equal to the token’s remaining life', async () => {
     const client = new FakeRedisClient();
     const adapter = makeAdapter(client);
-    const expiresAt = new Date(Date.now() + 60_000); // ~60s ahead
+    const expiresAt = new Date(Date.now() + 60_000);
 
     await adapter.denylist('jti-1', expiresAt);
 

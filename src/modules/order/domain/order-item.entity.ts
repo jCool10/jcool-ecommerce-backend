@@ -1,11 +1,9 @@
 import { assertInteger, assertNonEmpty, assertPositive, DomainError, Money } from '@shared/kernel';
 
 /**
- * One line of an order — a PRICE SNAPSHOT taken when the order is created. Unlike
- * a cart line (which carries only { skuId, quantity } and reads price live), an
- * order line copies `productName` and `unitPriceMinor` at creation time. This is
- * the transactional source of truth: a later Catalog price/name change must NOT
- * alter a placed order. Currency is held once at the order level.
+ * A price SNAPSHOT: unlike a cart line, which carries only { skuId, quantity } and reads price live,
+ * an order line copies `productName` and `unitPriceMinor` at creation time, so a later Catalog
+ * price/name change must not alter a placed order. Currency is held once at the order level.
  */
 export class OrderItem {
   private constructor(
@@ -27,7 +25,6 @@ export class OrderItem {
     return new OrderItem(skuId, productName, unitPriceMinor, quantity);
   }
 
-  /** unit × quantity as Money in the order's currency. */
   lineTotal(currency: string): Money {
     return Money.of(this.unitPriceMinor, currency).multiply(this.quantity);
   }

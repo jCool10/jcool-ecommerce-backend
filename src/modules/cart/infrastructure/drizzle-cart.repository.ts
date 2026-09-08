@@ -5,19 +5,16 @@ import { CartItem } from '../domain/cart-item.entity';
 import type { CartRepositoryPort } from '../application/ports/cart-repository.port';
 import { cartItems, carts } from './schema/cart.schema';
 
-/**
- * Drizzle adapter for CartRepositoryPort. Accumulate-on-add is a single upsert
- * on the (cartId, skuId) unique index — race-safe without a read-modify-write.
- */
+// Accumulate-on-add is a single upsert on the (cartId, skuId) unique index — race-safe without a
+// read-modify-write.
 @Injectable()
 export class DrizzleCartRepository implements CartRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
 
   async ensureCartId(userId: string): Promise<string> {
-    // Read-first get-or-create: the common case (cart already exists) is a single
-    // SELECT with no write, so a plain GET /cart never mutates the DB. Only a
-    // first-time user reaches the INSERT. Still race-safe — a lost insert race
-    // (ON CONFLICT DO NOTHING returns no row) falls through to the re-read.
+    // Read-first so a plain GET /cart never mutates the DB; only a first-time user reaches the
+    // INSERT. Still race-safe — a lost insert race (DO NOTHING returns no row) falls through to
+    // the re-read.
     const found = await this.selectCartId(userId);
     if (found) {
       return found;
@@ -55,8 +52,7 @@ export class DrizzleCartRepository implements CartRepositoryPort {
     await this.db
       .insert(cartItems)
       .values({ cartId, skuId, quantity })
-      // Accumulate onto the existing line. $onUpdate doesn't fire on a conflict
-      // SET, so bump updated_at by hand (parity with catalog price upsert).
+      // $onUpdate doesn't fire on a conflict SET, so bump updated_at by hand.
       .onConflictDoUpdate({
         target: [cartItems.cartId, cartItems.skuId],
         set: { quantity: sql`${cartItems.quantity} + ${quantity}`, updatedAt: new Date() },

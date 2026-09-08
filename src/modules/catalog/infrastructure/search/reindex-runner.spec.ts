@@ -11,7 +11,6 @@ function product(id: string): Product {
   return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], new Date(0));
 }
 
-// Serves `total` products across as many pages as the caller's pageSize implies.
 function repositoryOf(total: number): { repo: ProductRepositoryPort; pagesRead: FindManyActiveCriteria[] } {
   const pagesRead: FindManyActiveCriteria[] = [];
   const all = Array.from({ length: total }, (_, i) => product(`p${i}`));

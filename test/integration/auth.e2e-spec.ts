@@ -22,9 +22,6 @@ import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Black-box HTTP tests for the Auth context (register / login / refresh / guard /
-// RBAC) over real Postgres + Redis. Locks the public contract so the inner layers
-// can be refactored safely. Each `it` reads as one behavioural guarantee.
 describe('Auth (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -137,7 +134,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
 
   describe('POST /auth/resend-verification', () => {
     it('returns the same generic 202 for unknown, unverified, and already-verified addresses', async () => {
-      const { user } = await createTestUser(app); // unverified
+      const { user } = await createTestUser(app);
       const verified = await createTestUser(app, { emailVerified: true });
 
       const unknown = await request(app.getHttpServer())
@@ -183,8 +180,6 @@ describe('Auth (integration, real Postgres + Redis)', () => {
   describe('POST /auth/reset-password', () => {
     const newPassword = 'NewPassword456!';
 
-    // The raw token is emailed, never returned — mint one directly (only its hash
-    // is stored) and present the raw value to the API.
     async function issueResetToken(userId: string, expiresAt = new Date(Date.now() + 3_600_000)): Promise<string> {
       const raw = randomBytes(32).toString('base64url');
       const repo = app.get<PasswordResetTokenRepositoryPort>(PASSWORD_RESET_TOKEN_REPOSITORY);
@@ -282,7 +277,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(res.body.accessToken.split('.')).toHaveLength(3); // header.payload.signature
       expect(res.body.expiresIn).toBeGreaterThan(0);
 
-      // Refresh token is NOT in the body anymore — it's an httpOnly cookie.
+      // The refresh token is not in the body — it travels as an httpOnly cookie.
       expect(res.body).not.toHaveProperty('refreshToken');
       const refreshCookie = setCookieEntry(res, REFRESH_TOKEN_COOKIE);
       expect(refreshCookie).toContain('HttpOnly');
@@ -294,7 +289,6 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(csrfCookie).toBeDefined();
       expect(csrfCookie).not.toContain('HttpOnly');
 
-      // The login-issued access token authenticates a protected route end-to-end.
       const me = await request(app.getHttpServer()).get('/auth/me').set(authHeader(res.body.accessToken));
       expect(me.status).toBe(200);
       expect(me.body.email).toBe(email);
@@ -325,14 +319,12 @@ describe('Auth (integration, real Postgres + Redis)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.accessToken.split('.')).toHaveLength(3);
-      // A fresh refresh cookie is set, different from the one we presented.
       expect(cookieValueOf(res, REFRESH_TOKEN_COOKIE)).not.toBe(first.refreshToken);
     });
 
     it('rejects reuse of a rotated-away refresh cookie with 401', async () => {
       const first = await loginAs(app, { email, password });
 
-      // Rotate once: `first`'s refresh cookie is now superseded.
       await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(200);
 
       // Replaying the old cookie is the stolen-token signature → 401.
@@ -343,7 +335,6 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     it('reuse detection also kills the rotated-out access token (epoch bump, not just the family)', async () => {
       const first = await loginAs(app, { email, password });
 
-      // Rotate once → the successor session's access token, valid right now.
       const rotated = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(200);
       const successorAccess = rotated.body.accessToken as string;
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(200);
@@ -373,7 +364,6 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       const session = await loginAs(app, { email, password });
       const cookie = session.setCookies.map((c) => c.split(';')[0].trim()).join('; ');
 
-      // Cookies sent (incl. csrf_token) but no x-csrf-token header to match it.
       const res = await request(app.getHttpServer()).post('/auth/refresh').set('Cookie', cookie);
       expect(res.status).toBe(403);
     });
@@ -399,7 +389,6 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     it('revokes the access token immediately + clears the refresh cookie', async () => {
       const session = await loginAs(app, { email, password });
 
-      // Sanity: the token works before logout.
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(200);
 
       const out = await request(app.getHttpServer())
@@ -408,7 +397,6 @@ describe('Auth (integration, real Postgres + Redis)', () => {
         .set(sessionHeaders(session))
         .expect(204);
 
-      // The response clears the refresh cookie (expiry in the past).
       expect(setCookieEntry(out, REFRESH_TOKEN_COOKIE)).toContain('Expires=Thu, 01 Jan 1970');
 
       // The reported bug: this used to still return 200 until the token expired.
@@ -464,7 +452,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects an admin route for an authenticated non-admin with 403', async () => {
-      const { accessToken } = await createTestUser(app); // default role CUSTOMER
+      const { accessToken } = await createTestUser(app);
       const res = await request(app.getHttpServer())
         .post('/admin/categories')
         .set(authHeader(accessToken))

@@ -3,7 +3,7 @@ import { Email } from '../../domain';
 import { USER_REPOSITORY, type UserRepositoryPort } from '../ports';
 import { EmailVerificationService } from '../services';
 
-/** Resend the email-verification message, enumeration-safe (always the same generic response); a token is issued only for an existing, still-unverified account. */
+/** Enumeration-safe: the unknown-or-verified branch is a silent no-op, so every caller gets one generic response. */
 @Injectable()
 export class ResendVerificationUseCase {
   constructor(

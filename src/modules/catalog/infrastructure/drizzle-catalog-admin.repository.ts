@@ -35,7 +35,6 @@ function isUniqueViolation(error: unknown): boolean {
   return false;
 }
 
-/** Drizzle adapter for the Catalog admin write paths — create/update returns the persisted row as a flat domain record; update/archive returns `null` when the id matches no row (the service maps that to 404). */
 @Injectable()
 export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort {
   constructor(
@@ -43,7 +42,6 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     @Inject(MEDIA_FACADE) private readonly media: MediaFacade,
   ) {}
 
-  // Translate a unique-constraint hit into a 409; anything else propagates.
   private async guardUnique<T>(op: () => Promise<T>, conflictMessage: string): Promise<T> {
     try {
       return await op();
@@ -54,8 +52,6 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
       throw error;
     }
   }
-
-  // ----- Category -----
 
   async findCategoryById(id: string): Promise<Category | null> {
     const [row] = await this.db.select().from(categories).where(eq(categories.id, id)).limit(1);
@@ -107,8 +103,6 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     return row?.value ?? 0;
   }
 
-  // ----- Product -----
-
   async findProductById(id: string): Promise<AdminProduct | null> {
     const [row] = await this.db.select().from(products).where(eq(products.id, id)).limit(1);
     return row ? toProduct(row) : null;
@@ -154,8 +148,6 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     return row ? toProduct(row) : null;
   }
 
-  // ----- Sku (product variant) -----
-
   async findSkuById(id: string): Promise<Sku | null> {
     const [row] = await this.db.select().from(productVariants).where(eq(productVariants.id, id)).limit(1);
     return row ? toSku(row) : null;
@@ -192,17 +184,13 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     return row ? toSku(row) : null;
   }
 
-  // ----- Product images -----
-
   listImages(productId: string): Promise<ProductImage[]> {
     return this.readImages(this.db, productId);
   }
 
-  /**
-   * The link row and Media's claim on the asset commit together. Row first, then the claim, in every
-   * one of these three: taking `product_images` before `media_assets` everywhere is what keeps two
-   * concurrent edits of the same asset from deadlocking on each other's locks.
-   */
+  // The link row and Media's claim on the asset commit together. Lock order is fixed across all three
+  // image operations — `product_images` before `media_assets` — so two concurrent edits of the same
+  // asset cannot deadlock on each other's locks.
   async attachImage(productId: string, data: AttachImageData): Promise<ProductImage> {
     return this.db.transaction(async (tx) => {
       const position = data.position ?? (await this.nextPosition(tx, productId));
@@ -271,7 +259,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     return rows.map(toProductImage);
   }
 
-  // Append past the current last slot. Gaps are fine — only the relative order is meaningful.
+  // Gaps are fine — only the relative order of positions is meaningful.
   private async nextPosition(tx: DrizzleTx, productId: string): Promise<number> {
     const [row] = await tx
       .select({ value: max(productImages.position) })
@@ -280,13 +268,10 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     return (row?.value ?? -1) + 1;
   }
 
-  // ----- Price -----
-
   async setPrice(variantId: string, data: SetPriceData): Promise<Price> {
-    // Enforce the Money invariant at the write boundary too (integer amount, canonical currency)
-    // so a malformed price can never persist and later 500 the read path — symmetric with the mapper.
+    // Re-check the Money invariant at the write boundary so a malformed price can never persist and
+    // later 500 the read path, which parses the same row back through Money.
     const money = Money.of(data.amountMinor, data.currency);
-    // Upsert on the (variant, currency) unique index → idempotent set/replace.
     const [row] = await this.db
       .insert(prices)
       .values({ variantId, currency: money.currency, amountMinor: money.amountMinor })
@@ -300,8 +285,6 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 }
 
-// Row -> flat domain record mappers. Kept module-private (not exported) since the
-// admin write path is the only consumer.
 function toCategory(row: typeof categories.$inferSelect): Category {
   return {
     id: row.id,

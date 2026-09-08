@@ -3,8 +3,7 @@ import { CacheService } from './cache.service';
 import { SingleFlightLock } from './single-flight.lock';
 import { SwrCacheService } from './swr-cache.service';
 
-// Not @Global: a context opts into caching by importing this, keeping the set of
-// cache-aware modules visible in the wiring. RedisService comes from the global RedisModule.
+// Deliberately not @Global: importing it keeps the set of cache-aware modules visible in the wiring.
 @Module({
   providers: [CacheService, SingleFlightLock, SwrCacheService],
   exports: [CacheService, SingleFlightLock, SwrCacheService],

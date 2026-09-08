@@ -12,22 +12,13 @@ import { DOMAIN_EVENTS_CONSUMER } from './queue.constants';
 const LOG_CONTEXT = 'DomainEventProcessor';
 
 /**
- * Applies one delivered event, exactly once.
+ * The transport gives at-least-once, so duplicates are collapsed rather than prevented: the inbox
+ * claim and the effect share ONE transaction, and a redelivery loses the claim and does nothing.
  *
- * The transport gives at-least-once: the relay can crash between publishing a row and marking it,
- * and the queue redelivers a job whose worker died mid-flight. Exactly-once *delivery* is not
- * available in a distributed system, so this collapses the duplicates instead — claim the message in
- * the inbox and run the effect in the SAME transaction, and a redelivery loses the claim and does
- * nothing. At-least-once in, exactly-once effect out — for effects inside the database.
- *
- * An effect outside it gets weaker odds, and cannot get better ones: no transaction spans Postgres
- * and an SMTP server. Such work is returned as a {@link PostCommitEffect} and run once the claim has
- * committed, which makes it at-most-once — a failure there is not retried, because the redelivery
- * that would carry it now finds the message already claimed. The alternative, sending inside the
- * transaction, trades a lost confirmation for duplicates of it plus a held connection per send.
- *
- * Kept separate from the worker that drives it so the behaviour above is testable one delivery at a
- * time, without a running queue — the same split as the relay and its scheduler.
+ * An effect outside the database cannot get those odds — no transaction spans Postgres and an SMTP
+ * server. Returned as a {@link PostCommitEffect} and run after the claim commits, it is at-most-once:
+ * a failure there is never retried, because the redelivery finds the message already claimed. Sending
+ * inside the transaction instead trades a lost confirmation for duplicates plus a held connection.
  */
 @Injectable()
 export class DomainEventProcessor {
@@ -42,9 +33,8 @@ export class DomainEventProcessor {
   async process(job: DomainEventJob): Promise<ConsumeResult> {
     let result: ConsumeResult;
     try {
-      // Inside the try so a rejected envelope is counted as a failed consume like any other. Left
-      // outside, the one failure that never even reaches a handler would be the one absent from the
-      // counter that exists to make failures visible.
+      // Inside the try so a rejected envelope is counted as a failed consume like any other:
+      // otherwise the one failure that never reaches a handler is the one missing from the counter.
       assertEnvelope(job);
 
       result = await withConsumeSpan(job.eventType, job.traceparent, async (): Promise<ConsumeResult> => {
@@ -61,29 +51,26 @@ export class DomainEventProcessor {
           return 'processed';
         });
 
-        // Still inside the consume span, so what the effect reaches — an SMTP call, its breaker —
-        // hangs off this event's trace rather than starting an orphan one. Outside the transaction,
-        // which is the whole point: the connection is back in the pool before the send begins.
+        // Still inside the consume span so the effect hangs off this event's trace, but outside the
+        // transaction so the connection is back in the pool before the send begins.
         if (typeof effect === 'function') await this.runPostCommit(job, effect);
         return outcome;
       });
     } catch (error) {
       // Counted before rethrowing: a pipeline where every consume throws would otherwise look
-      // exactly like an idle one — the counter simply stops moving. The label falls back to a
-      // constant for an unrecognised name, which is the only value here that is not bounded.
+      // exactly like an idle one — the counter simply stops moving.
       this.metrics.recordEventConsumed(this.dispatcher.label(job.eventType), 'failed');
       throw error;
     }
 
     // Counted after the commit: an effect that rolled back has not been applied, and a metric saying
-    // otherwise would hide exactly the failures this is here to surface. Through `label()` like
-    // every other event_type label — a name off the wire is bounded only by the dispatch table.
+    // otherwise would hide exactly the failures this is here to surface.
     this.metrics.recordEventConsumed(this.dispatcher.label(job.eventType), result);
     if (result === 'duplicate') {
       this.logger.debug(
         // Qualified by `aggregateType` because the id means a different thing per producer — an
-        // orderId for `order.*`, a paymentId for `payment.*` — and an unlabelled id sends whoever
-        // reads this line looking for it in the wrong table.
+        // orderId for `order.*`, a paymentId for `payment.*` — and unlabelled it sends a reader
+        // looking in the wrong table.
         {
           context: LOG_CONTEXT,
           eventType: job.eventType,

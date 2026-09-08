@@ -2,9 +2,6 @@ import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 
-/**
- * Shared ioredis client, opened at startup and closed on shutdown.
- */
 @Injectable()
 export class RedisService implements OnApplicationShutdown {
   private readonly logger = new Logger(RedisService.name);
@@ -12,35 +9,33 @@ export class RedisService implements OnApplicationShutdown {
 
   constructor(config: ConfigService) {
     this.client = new Redis(config.getOrThrow<string>('redis.url'), {
-      // Reject commands while disconnected instead of queueing → readiness fails
-      // fast and future cache reads fall through to Postgres rather than hanging.
+      // Reject commands while disconnected instead of queueing, so readiness fails fast and cache
+      // reads fall through to Postgres rather than hanging.
       enableOfflineQueue: false,
       maxRetriesPerRequest: 1,
     });
 
-    // Without an 'error' listener a lost connection crashes the process. Log and
-    // let ioredis reconnect so boot survives Redis being down.
+    // Without an 'error' listener a lost connection crashes the process; log and let ioredis
+    // reconnect so boot survives Redis being down.
     this.client.on('error', (err: Error) => {
       this.logger.error(`Redis client error: ${err.message}`);
     });
   }
 
-  /** Underlying client for consumers that need raw commands (cache, locks). */
   getClient(): Redis {
     return this.client;
   }
 
-  /** Liveness probe for the readiness health indicator. Resolves 'PONG'. */
   async ping(): Promise<string> {
     return this.client.ping();
   }
 
-  // Close on onApplicationShutdown (after the HTTP server has closed), not onModuleDestroy (before
-  // it): the client stays available through the readiness-drain grace window so in-flight and
-  // just-drained requests still resolve, matching the pg pool's teardown timing.
+  // onApplicationShutdown (after the HTTP server closed), not onModuleDestroy (before it): the
+  // client stays available through the readiness-drain window so in-flight and just-drained
+  // requests still resolve, matching the pg pool's teardown timing.
   async onApplicationShutdown(): Promise<void> {
-    // quit() drains then closes gracefully; if Redis is unreachable it rejects,
-    // so fall back to an immediate teardown to avoid hanging shutdown.
+    // quit() rejects when Redis is unreachable, so fall back to an immediate teardown rather than
+    // hanging shutdown.
     try {
       await this.client.quit();
     } catch {

@@ -180,8 +180,7 @@ describe('CachingProductRepository', () => {
       expect(ctx.cache.writeMs).toHaveBeenCalled();
     });
 
-    // The dangerous drift is the one that still decodes: a snapshot missing only `category`
-    // used to build a Product with an undefined field and 500 later, in the response mapper.
+    // The dangerous drift is the one that still decodes — a Product with an undefined field.
     it('discards a snapshot missing a field the entity never validates', async () => {
       const product = buildProduct();
       const { category: _dropped, ...withoutCategory } = toProductSnapshot(product);

@@ -9,7 +9,6 @@ const csrf = new CsrfTokenService({
   getOrThrow: () => 'test-jwt-access-secret-not-a-real-secret-000',
 } as unknown as ConfigService);
 
-// Minimal ExecutionContext exposing a request with the given cookie + header.
 function contextWith(cookieValue?: string, headerValue?: string): ExecutionContext {
   const request = {
     cookies: cookieValue === undefined ? {} : { [CSRF_TOKEN_COOKIE]: cookieValue },

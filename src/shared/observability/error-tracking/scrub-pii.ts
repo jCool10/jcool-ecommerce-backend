@@ -5,7 +5,6 @@ const REDACTED = '[Redacted]';
 // Sentry events are shallow; a depth bound stops a pathological or cyclic payload from spinning.
 const MAX_DEPTH = 6;
 
-// Replace the value of any sensitive key in place, recursing through plain objects and arrays.
 function scrubDeep(value: unknown, depth: number): void {
   if (value === null || typeof value !== 'object' || depth > MAX_DEPTH) return;
   if (Array.isArray(value)) {
@@ -23,11 +22,8 @@ function scrubDeep(value: unknown, depth: number): void {
 }
 
 /**
- * Sentry `beforeSend` hook: strip credentials (shared {@link isSensitiveKey} list) from the request
- * body / headers / cookies and any custom `extra` before the event leaves the process, drop the raw
- * query string / url query (which `scrubDeep` can't descend into), and drop the customer email from
- * `event.user`. The external error sink must not receive PII that the internal audit log
- * deliberately keeps (ADR-0013 vs ADR-0016). Returns the mutated event.
+ * Sentry `beforeSend` hook. The external error sink must not receive the PII that the internal
+ * audit log deliberately keeps — hence the customer email is dropped here but not from logs.
  */
 export function scrubPii(event: ErrorEvent, _hint: EventHint): ErrorEvent {
   if (event.request) {

@@ -31,7 +31,6 @@ describe('assembleProducts', () => {
         priceCurrency: 'VND',
         priceAmountMinor: 2_490_000,
       }),
-      // same variant, second price → one variant, two prices
       row({
         variantId: 'v1',
         variantSku: 'WH-BLK',
@@ -40,7 +39,6 @@ describe('assembleProducts', () => {
         priceCurrency: 'USD',
         priceAmountMinor: 99,
       }),
-      // second variant, one price
       row({
         variantId: 'v2',
         variantSku: 'WH-WHT',

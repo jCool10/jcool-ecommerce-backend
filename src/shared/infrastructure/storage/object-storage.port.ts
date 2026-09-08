@@ -1,6 +1,6 @@
 /**
- * How this process talks to a bucket. Infrastructure, not a context: there is no lifecycle here to
- * protect — Media owns which objects may exist and for how long, this owns only the wire.
+ * Infrastructure, not a context: Media owns which objects may exist and for how long, this owns only
+ * the wire.
  */
 export const OBJECT_STORAGE = Symbol('OBJECT_STORAGE');
 
@@ -21,7 +21,6 @@ export interface StoredObjectHead {
 }
 
 export interface ObjectStoragePort {
-  /** A URL the client PUTs bytes to directly, so they never pass through this process. */
   presignPut(key: string, contentType: string): Promise<PresignedUpload>;
 
   /** `null` when the object is absent. Any other failure throws. */
@@ -34,7 +33,7 @@ export interface ObjectStoragePort {
   publicUrl(key: string): Promise<string>;
 }
 
-/** Raised by every call when the bucket was never configured, so the cause names itself. */
+/** Raised by every call when the bucket was never configured. */
 export class ObjectStorageNotConfiguredError extends Error {
   constructor() {
     super('Object storage is not configured: set STORAGE_ENDPOINT, STORAGE_BUCKET and the access keys');

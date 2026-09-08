@@ -15,7 +15,6 @@ describe('scrubPii', () => {
     const data = out.request?.data as { token: string; user: { password: string; name: string } };
     expect(data.token).toBe('[Redacted]');
     expect(data.user.password).toBe('[Redacted]');
-    // Non-sensitive fields survive so the event stays useful for debugging.
     expect(data.user.name).toBe('ok');
   });
 
@@ -45,7 +44,7 @@ describe('scrubPii', () => {
     const out = scrubPii(event({ user: { id: 'u1', email: 'a@b.com' } }), HINT);
 
     expect(out.user?.email).toBeUndefined();
-    // The id is still there so the error can be attributed.
+    // The id stays: an error still has to be attributable to an account.
     expect(out.user?.id).toBe('u1');
   });
 

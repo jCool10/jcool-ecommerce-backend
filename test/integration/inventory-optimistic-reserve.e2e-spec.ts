@@ -20,13 +20,9 @@ const SKU_B = '22222222-2222-4222-8222-222222222222';
 const ORDER_1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ORDER_2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-// One-thread behavior of the optimistic (version CAS + retry) reserve over real Postgres.
-// Here the CAS never loses because there is a single caller, so the version-contention
-// retry and its ReservationConflictError exhaustion are exercised by the concurrent race
-// in Phase 5. This spec pins the single-caller contract: a CAS win raises reserved/version
-// and writes a HELD row, a shortfall throws without wasting a retry and rolls back, repeats
-// are idempotent, each successful hold bumps version by one, and a multi-line hold is
-// all-or-nothing.
+// One-thread behavior of the optimistic (version CAS + retry) reserve over real Postgres. The CAS
+// never loses here because there is a single caller, so version contention and its
+// ReservationConflictError exhaustion belong to inventory-optimistic-contention.e2e-spec.ts.
 describe('Inventory optimistic reserve (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -75,7 +71,7 @@ describe('Inventory optimistic reserve (integration, real Postgres)', () => {
 
     const stock = await readStock(SKU_A);
     expect(stock.quantityReserved).toBe(3);
-    expect(stock.quantityOnHand - stock.quantityReserved).toBe(7); // available
+    expect(stock.quantityOnHand - stock.quantityReserved).toBe(7);
     expect(stock.version).toBe(1);
 
     const rows = await reservationsFor(ORDER_1, SKU_A);

@@ -32,10 +32,9 @@ import { InitiateUploadUseCase } from '../application/use-cases/initiate-upload.
 import { InitiateUploadDto, UploadTicketResponseDto } from './dto';
 
 /**
- * Domain failures carry no HTTP status, and the global filter answers 500 for anything that is not
- * an `HttpException` — so the translation happens here, at the one boundary that knows about status
- * codes. A rejected upload and an asset that already moved on are both "the state is not what you
- * assumed", hence 409 for both.
+ * Domain failures carry no HTTP status and the global filter answers 500 for anything that is not an
+ * `HttpException`, so the translation happens here. A rejected upload and an asset that already moved
+ * on are both "the state is not what you assumed", hence 409 for both.
  */
 function asHttp(error: unknown): never {
   if (error instanceof UnsupportedContentTypeError) throw new BadRequestException(error.message);
@@ -47,11 +46,9 @@ function asHttp(error: unknown): never {
 }
 
 /**
- * The upload handshake, in two calls. Between them the client talks to the bucket, not to us — this
- * process never holds a byte of the file, so a large upload costs it no memory and no request slot.
- *
- * Admin-only. Anyone who can ask for a signed URL can write to the bucket for as long as it lasts,
- * which is what bounds the abuse a presigned PUT would otherwise invite.
+ * The upload handshake, in two calls; between them the client talks to the bucket, so this process
+ * never holds a byte of the file. Admin-only because anyone who can ask for a signed URL can write
+ * to the bucket for as long as that URL lasts.
  */
 @ApiTags('admin-media')
 @ApiBearerAuth()
@@ -82,8 +79,6 @@ export class MediaController {
   }
 
   @Post('uploads/:assetId/complete')
-  // Nothing to return: the asset id the caller already holds is the whole result, and the object
-  // itself is not ours to describe.
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiParam({ name: 'assetId', format: 'uuid' })
   @ApiNoContentResponse({ description: 'The upload is confirmed and the asset can now be attached' })

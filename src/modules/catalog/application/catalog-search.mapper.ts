@@ -6,10 +6,8 @@ import type { SearchableProduct } from './ports';
 const DEFAULT_CURRENCY = 'VND';
 
 /**
- * Flatten a Product graph into one denormalized search document. The engine cannot join, so SKU codes
- * and the price range are folded in for matching, filtering and display in a single query. Pure — no
- * SDK, no I/O — which is why it sits in application: both the reindex command (infrastructure) and
- * the admin write path (application) build documents through it.
+ * Pure — no SDK, no I/O — which is why it sits in application: both the reindex command
+ * (infrastructure) and the admin write path build their documents through it.
  */
 export function toSearchableProduct(product: Product): SearchableProduct {
   const amountsMinor = product.variants

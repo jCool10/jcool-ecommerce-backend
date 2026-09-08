@@ -1,4 +1,3 @@
-// Barrel: User (auth) application ports (interfaces + DI tokens).
 export * from './auth-audit.port';
 export * from './email-verification-token-repository.port';
 export * from './mailer.port';

@@ -22,12 +22,10 @@ interface UploadTicket {
 }
 
 /**
- * The two-call upload handshake against a real S3-compatible bucket, because the guarantees under
- * test are the bucket's: what a v4 signature actually covers, and what it cannot.
- *
- * The signature pins the content type, so the bucket itself refuses a mismatched PUT — that is the
- * control. It cannot express a size ceiling (Content-Length is signed as one exact value), so the
- * limit is enforced on the way back, against what the bucket reports.
+ * Run against a real bucket because the guarantees under test are the bucket's. The v4 signature
+ * pins the content type, so the bucket itself refuses a mismatched PUT. It cannot express a size
+ * ceiling (Content-Length is signed as one exact value), so the limit is enforced on the way back,
+ * against what the bucket reports.
  */
 describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', () => {
   let storage: StartedObjectStorage;

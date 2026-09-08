@@ -22,15 +22,9 @@ import { loadOrderView, toView, type OrderView } from '../order-view.mapper';
 import { toPlacedOutboxRecord } from '../order-outbox.mapper';
 
 /**
- * Atomic checkout: snapshot the user's cart into an order and, in ONE transaction, persist it at
- * PENDING, hold stock, append the OrderPlaced event to the outbox, and freeze the idempotency
- * result. The price/name of each line is resolved live from Catalog once, then frozen — a later
- * Catalog price change never moves a placed order's total (transactional truth). Order +
- * reservation + event + idempotency COMPLETED commit together: a stock shortfall rolls the whole
- * thing back (no order, no event, no key), so the client can safely retry.
- *
- * The `{scope, key}` for the idempotency flip rides down over CLS, set by the interceptor on the
- * wired route — no controller plumbing. Cross-context reads go only through the two ports.
+ * Order + reservation + outbox event + idempotency COMPLETED commit in ONE transaction: a stock
+ * shortfall rolls all of it back (no order, no event, no key), so the client can safely retry. Each
+ * line's price is frozen at snapshot time, so a later Catalog price change never moves the total.
  */
 @Injectable()
 export class CheckoutOrderUseCase {
@@ -45,7 +39,6 @@ export class CheckoutOrderUseCase {
     private readonly cls: ClsService,
   ) {}
 
-  /** Empty/unpurchasable cart → 400; stock shortfall → 409. */
   async execute(userId: string): Promise<OrderView> {
     const { currency, items } = await this.snapshotCart(userId);
     const placed = Order.create(userId, currency, items).place(new Date());

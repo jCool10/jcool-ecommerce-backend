@@ -9,9 +9,9 @@ import { FinalizeOrderUseCase, type FinalizeOutcome } from '../../application/us
 const LOG_CONTEXT = 'PaymentEventsHandler';
 
 /**
- * Payment's settlement events read in Order's own vocabulary — the anti-corruption step that keeps
- * Payment from naming order outcomes. An expired session settles the payment as failed, so there is
- * no event here for order EXPIRED: that outcome belongs to the reservation sweep alone.
+ * The anti-corruption step that keeps Payment from naming order outcomes. An expired session settles
+ * the payment as failed, so there is no event here for order EXPIRED: that outcome belongs to the
+ * reservation sweep alone.
  */
 const OUTCOME_BY_EVENT: Readonly<Record<string, FinalizeOutcome>> = {
   'payment.succeeded': 'PAID',
@@ -19,12 +19,10 @@ const OUTCOME_BY_EVENT: Readonly<Record<string, FinalizeOutcome>> = {
 };
 
 /**
- * The order half of the checkout saga: Order reacts to what the money did and settles itself.
- *
- * Order is the saga's coordinator, so the decision lives here rather than in Payment — Payment
- * publishes that a payment settled and stops there. The webhook also finalizes directly, in-process,
- * for latency; this path is the one that is guaranteed to happen, because its event was written in
- * the same transaction as the settlement and the queue keeps redelivering until it lands.
+ * Order coordinates the checkout saga, so the outcome decision lives here — Payment publishes that a
+ * payment settled and stops there. The webhook also finalizes in-process for latency; this path is
+ * the guaranteed one, its event written in the settlement's transaction and redelivered until it
+ * lands.
  */
 @Injectable()
 export class PaymentEventsHandler {

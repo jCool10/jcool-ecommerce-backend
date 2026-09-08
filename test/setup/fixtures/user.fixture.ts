@@ -12,13 +12,12 @@ import type { User } from '../../../src/modules/user/domain/entities/user.entity
 import { normalizeEmail } from '../../../src/shared/kernel/normalize-email';
 import type { Role } from '../../../src/shared/rbac/role.enum';
 
-let seq = 0; // keeps generated emails unique within a run
+let seq = 0;
 
 export interface TestUserOptions {
   email?: string;
   password?: string;
   role?: Role;
-  /** Stamp the account as email-verified after creation (default false). */
   emailVerified?: boolean;
 }
 
@@ -28,7 +27,6 @@ export interface TestUser {
   password: string;
 }
 
-// Persists a user via the real hasher + repository, then mints an access token.
 export async function createTestUser(app: INestApplication, options: TestUserOptions = {}): Promise<TestUser> {
   const password = options.password ?? 'Password123!';
   const email = options.email ?? `user-${Date.now()}-${seq++}@test.local`;
@@ -45,7 +43,7 @@ export async function createTestUser(app: INestApplication, options: TestUserOpt
   }
   if (options.emailVerified) {
     await users.markEmailVerified(user.id);
-    user = (await users.findById(user.id)) ?? user; // reflect the verified stamp
+    user = (await users.findById(user.id)) ?? user;
   }
   const accessToken = await tokens.signAccess(user.id, user.role);
 

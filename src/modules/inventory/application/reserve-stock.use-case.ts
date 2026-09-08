@@ -12,16 +12,12 @@ import {
   type StockResolveResult,
 } from './public/stock-reservation.port';
 
-/** The two concurrency-control strategies, selected by config. */
 export type LockStrategy = 'pessimistic' | 'optimistic';
 
 /**
- * Reserve stock for an order's lines using the configured locking strategy
- * (`INVENTORY_LOCK_STRATEGY`, default pessimistic). One entry point for both
- * mechanisms behind a single port, so the caller is identical either way. Runs
- * inside the caller's `tx` so the hold commits or rolls back atomically. Implements
- * the published `StockReservation`: domain errors are translated to the published
- * `StockReservationError` so cross-context callers never depend on Inventory's domain.
+ * Strategy comes from `INVENTORY_LOCK_STRATEGY` (default pessimistic). Runs inside the caller's
+ * `tx` so the hold commits or rolls back atomically, and translates Inventory's domain errors into
+ * the published `StockReservationError` so cross-context callers never depend on that domain.
  */
 @Injectable()
 export class ReserveStockUseCase implements StockReservation {

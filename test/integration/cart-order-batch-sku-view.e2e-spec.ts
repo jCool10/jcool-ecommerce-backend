@@ -18,11 +18,10 @@ import { createTestApp } from '../setup/test-app.factory';
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
 /**
- * Cart and Order price a whole cart through Catalog's published port in ONE read instead of one per
- * line. Two things have to hold and neither is visible from a response body alone: the read really
- * does collapse to a single query, and every per-line semantic survives the fold — including the
- * ones that used to ride on array position (which line sets the cart's currency) and on a missing
- * entry (a SKU that left Catalog).
+ * Cart and Order price a whole cart through Catalog's published port in ONE read. Neither claim is
+ * visible from a response body alone: that the read really collapses to a single query, and that
+ * every per-line semantic survives the fold — including the ones that used to ride on array position
+ * (which line sets the cart's currency) and on a missing entry (a SKU that left Catalog).
  */
 describe('Batch SKU view (integration, real Postgres + Redis)', () => {
   let app: INestApplication;

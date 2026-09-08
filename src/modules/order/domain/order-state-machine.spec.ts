@@ -38,7 +38,7 @@ describe('order state machine', () => {
 
   it('rejects reverse and otherwise-illegal transitions', () => {
     expect(canTransition(OrderStatus.PENDING, OrderStatus.DRAFT)).toBe(false);
-    expect(canTransition(OrderStatus.DRAFT, OrderStatus.PAID)).toBe(false); // must be PENDING first
+    expect(canTransition(OrderStatus.DRAFT, OrderStatus.PAID)).toBe(false);
     expect(canTransition(OrderStatus.CANCELLED, OrderStatus.DRAFT)).toBe(false);
   });
 

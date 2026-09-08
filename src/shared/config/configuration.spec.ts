@@ -42,8 +42,6 @@ describe('configuration — database pool bounds', () => {
     expect(database.idleTimeoutMs).toBe(30000);
   });
 
-  // Blank/whitespace must fall back to the bounded default, never NaN — a NaN timeout
-  // is falsy to pg and silently reverts to wait-forever, defeating the bound.
   it.each(['', '   '])('falls back to defaults for blank env (%j), never NaN', (blank) => {
     process.env.DB_POOL_MAX = blank;
     process.env.DB_POOL_CONNECTION_TIMEOUT_MS = blank;

@@ -1,10 +1,9 @@
-// Read + write access to the derived search index. Kept engine-agnostic (no SDK type in any
-// signature) so the application/domain never bind a concrete engine: only the infrastructure adapter
-// knows the engine, and swapping it is a new adapter behind this token — nothing above the port moves.
+// Engine-agnostic by design (no SDK type in any signature): only the infrastructure adapter knows the
+// engine, so swapping it is a new adapter behind this token and nothing above the port moves.
 export const CATALOG_SEARCH = Symbol('CATALOG_SEARCH');
 
-// One denormalized product per search document. SKU codes and the price range are flattened in so a
-// single query can match and rank on them without a join the engine cannot do.
+// SKU codes and the price range are flattened in so a single query can match and rank on them
+// without a join the engine cannot do.
 export interface SearchableProduct {
   id: string;
   name: string;
@@ -44,16 +43,16 @@ export interface SearchResult {
 }
 
 export interface CatalogSearchPort {
-  // Create the index and apply its settings; idempotent so a reindex or a restart may call it freely.
+  // Idempotent, so a reindex or a restart may call it freely.
   ensureIndex(): Promise<void>;
-  // Drop every document (keeping the index and its settings) so a full reindex can rebuild from the
-  // source of truth without leaving behind docs whose product has since left the indexed set.
+  // Drops every document but keeps the index and its settings, so a full reindex cannot leave behind
+  // docs whose product has since left the indexed set.
   resetIndex(): Promise<void>;
   bulkIndex(docs: SearchableProduct[]): Promise<void>;
   indexProduct(doc: SearchableProduct): Promise<void>;
   deleteProduct(id: string): Promise<void>;
   // Best-effort read: an engine failure resolves to an empty result rather than throwing, because
-  // search is an optional path over Postgres and must never fail the request wholesale. Writes, by
-  // contrast, surface their error so the caller decides whether a lagging index fails its mutation.
+  // search is an optional path over Postgres. Writes, by contrast, surface their error so the caller
+  // decides whether a lagging index fails its mutation.
   search(criteria: SearchCriteria): Promise<SearchResult>;
 }

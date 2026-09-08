@@ -32,13 +32,10 @@ const WINDOWS = {
 };
 
 /**
- * What each rule DELETES is the easy half, and not where a bug hides. Every test below inserts a row
- * on each side of the boundary and asserts on the SURVIVOR, because each of these tables exists to
- * make some retry safe — over-collecting any of them produces a correct-looking app that fails only
- * under retry.
- *
- * The sweeps are driven directly, not through the timer: `RETENTION_ENABLED` is off for every e2e
- * app, and a tick firing mid-assertion would delete the row a test is still looking at.
+ * Every test inserts a row on each side of the boundary and asserts on the SURVIVOR: each of these
+ * tables exists to make some retry safe, so over-collecting produces a correct-looking app that
+ * fails only under retry. Sweeps are driven directly, not through the timer — `RETENTION_ENABLED`
+ * is off for every e2e app, and a tick firing mid-assertion would delete the row under test.
  */
 describe('Retention sweeps (integration, real Postgres)', () => {
   let app: INestApplication;
@@ -134,7 +131,6 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
       expect(deleted).toBe(1);
       const [survivor] = await db.select().from(schema.outbox);
-      // Collecting it by age would lose a message nobody has received.
       expect(survivor).toMatchObject({ eventType: 'order.placed', publishedAt: null });
     });
 
@@ -272,10 +268,10 @@ describe('Retention sweeps (integration, real Postgres)', () => {
         row('expired', daysAgo(1)),
         // Revoked but still inside the 30-day reuse-detection horizon, and NOT yet expired.
         row('revoked-recently', hoursFromNow(1), daysAgo(10)),
-        // The shape rotation actually produces, and the one easiest to get wrong: revoked AND long
-        // since expired. `rotate` checks revoked/replaced before expiry, so this row still answers
-        // "that token came back" and must outlive its expiry by the REVOCATION grace. An expiry arm
-        // without `revoked_at IS NULL` collects it here.
+        // Revoked AND long since expired — the shape rotation actually produces. `rotate` checks
+        // revoked/replaced before expiry, so this row still answers "that token came back" and must
+        // outlive its expiry by the REVOCATION grace; an expiry arm without `revoked_at IS NULL`
+        // collects it here.
         row('revoked-and-expired', daysAgo(8), daysAgo(10)),
         row('revoked-long-ago', hoursFromNow(1), daysAgo(40)),
       ]);

@@ -12,12 +12,6 @@ import { webhookEvents } from './schema/payment.schema';
 
 type WebhookEventRow = typeof webhookEvents.$inferSelect;
 
-/**
- * Drizzle adapter for WebhookEventRepositoryPort. `insertIfNew` relies on the unique
- * (provider, provider_event_id) index as the final idempotency backstop: the INSERT uses
- * ON CONFLICT DO NOTHING, and a suppressed insert (empty returning) means a prior delivery
- * already logged the event — read it back so the caller no-ops instead of double-applying.
- */
 @Injectable()
 export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -46,10 +40,9 @@ export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort
       .where(and(eq(webhookEvents.provider, input.provider), eq(webhookEvents.providerEventId, input.providerEventId)))
       .limit(1);
     if (!existing) {
-      // The unique conflict suppressed the INSERT, yet the conflicting row is invisible to
-      // this executor — only reachable under a snapshot that predates the concurrent commit
-      // (REPEATABLE READ / SERIALIZABLE) or a concurrent delete. Fail loud instead of feeding
-      // undefined into rehydrate as an opaque TypeError.
+      // The unique conflict suppressed the INSERT, yet the conflicting row is invisible to this
+      // executor — only reachable under a snapshot predating the concurrent commit (REPEATABLE READ /
+      // SERIALIZABLE) or a concurrent delete. Fail loud instead of rehydrating undefined.
       throw new Error(
         `webhook_events conflict on (${input.provider}, ${input.providerEventId}) but the existing row was not readable`,
       );

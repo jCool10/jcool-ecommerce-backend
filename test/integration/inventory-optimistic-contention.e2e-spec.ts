@@ -15,15 +15,10 @@ import { countHeldReservations, seedStock } from '../setup/fixtures/inventory.fi
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// The two optimistic branches a single-thread test can't reach — they only fire when a CAS
-// actually loses a version race. We force that race deterministically (no flaky sleeps deciding
-// the winner): writer A holds its stock UPDATE in an open transaction (row lock held, version
-// bumped but uncommitted); writer B reads the stale version and its UPDATE blocks on A's lock;
-// when A commits, B's `WHERE version = <stale>` matches nothing — a guaranteed CAS miss with
-// stock still ample (so the miss is contention, never a shortfall). Retry budget then decides:
-// with retries B re-CASes and wins; with none B gives up as a ReservationConflictError. Stock is
-// seeded well above demand so a miss can never be mistaken for out-of-stock. The shortfall branch
-// (real out-of-stock → no retry) is the single-thread case in inventory-optimistic-reserve.e2e-spec.ts.
+// The two optimistic branches a single-thread test can't reach: they only fire when a CAS actually
+// loses a version race, which `forceCasMiss` below makes deterministic. Stock is seeded well above
+// demand so a miss can never be mistaken for out-of-stock; the shortfall branch (real out-of-stock
+// → no retry) is the single-thread case in inventory-optimistic-reserve.e2e-spec.ts.
 const SKU = '33333333-3333-4333-8333-333333333333';
 const ORDER_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ORDER_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -36,10 +31,9 @@ interface Contenders {
   repo: StockRepositoryPort;
 }
 
-// Block until a backend is parked on a row lock — i.e. B has already done its stale-version read
-// and its CAS UPDATE is now waiting on A's lock. This is the happens-before that makes the race
-// deterministic (no timing guess): we only let A commit once B is provably committed to the stale
-// version. A itself is idle-in-transaction (not "active"), so a single active Lock-waiter is B.
+// A is idle-in-transaction, not "active", so a single active Lock-waiter is B — parked on A's row
+// lock, which means B has already read the stale version. That happens-before replaces a timing
+// guess: A only commits once B is provably committed to the stale version.
 async function waitUntilBlockedOnLock(pool: Pool, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -53,12 +47,10 @@ async function waitUntilBlockedOnLock(pool: Pool, timeoutMs = 5_000): Promise<vo
 }
 
 /**
- * Run A and B so B is guaranteed to lose one version CAS to A, and return B's settled outcome.
- * A reserves then holds its tx open (row lock + uncommitted version bump). B reserves against the
- * still-committed (stale) version and its UPDATE parks on A's row lock — we wait until it provably
- * has (waitUntilBlockedOnLock) before committing A, so B's `WHERE version = stale` is guaranteed to
- * match nothing once A's new version lands. No sleep decides the winner. `line` is what each writer
- * holds (kept small; stock is ample). B is settled inside so no rejected promise is left unobserved.
+ * A reserves then holds its tx open (row lock + uncommitted version bump); B reserves against the
+ * still-committed stale version and parks on A's row lock. A commits only once B provably has, so
+ * B's `WHERE version = stale` is guaranteed to match nothing. B is settled inside, so no rejected
+ * promise is left unobserved.
  */
 async function forceCasMiss({ db, pool, repo }: Contenders, line: ReserveLine): Promise<PromiseSettledResult<void>> {
   let releaseA!: () => void;
@@ -68,17 +60,16 @@ async function forceCasMiss({ db, pool, repo }: Contenders, line: ReserveLine): 
 
   const a = db.transaction(async (tx) => {
     await repo.reserveOptimistic(tx, ORDER_A, [line]);
-    aReserved(); // A has bumped version (uncommitted); its row lock is held
+    aReserved();
     await aMayCommit; // hold the tx open so B contends against the stale version
   });
   await aHasReserved;
 
-  // B reads the stale (still-committed) version, then its UPDATE parks on A's row lock.
   const b = db.transaction(async (tx) => {
     await repo.reserveOptimistic(tx, ORDER_B, [line]);
   });
 
-  await waitUntilBlockedOnLock(pool); // B is now committed to the stale version and waiting on A
+  await waitUntilBlockedOnLock(pool);
   releaseA();
   await a; // A commits: version moves, so B's `WHERE version = stale` will match nothing
 
@@ -116,15 +107,14 @@ describe('Inventory optimistic reserve under version contention (integration, re
     it('a writer that loses the CAS retries against the new version and still holds', async () => {
       await seedStock(app, SKU, 10); // ample: the miss is pure contention, never a shortfall
 
-      // forceCasMiss guarantees B lost a CAS (it blocked on A's lock at the stale version); the
-      // no-retry sibling below is the canary — if forcing ever failed to force, that one goes red.
-      // So reaching the reserved=2 end-state here means B recovered via retry, not that it never contended.
+      // The no-retry sibling below is the canary: if forcing ever failed to force, that one goes
+      // red. So reaching reserved=2 here means B recovered via retry, not that it never contended.
       const result = await forceCasMiss({ db, pool, repo }, { variantId: SKU, quantity: 1 });
-      expect(result.status).toBe('fulfilled'); // B re-read the new version, re-CASed, and won
+      expect(result.status).toBe('fulfilled');
 
       const stock = await readStock(db, SKU);
-      expect(stock.quantityReserved).toBe(2); // both holds landed
-      expect(stock.version).toBe(2); // one bump per winning CAS (A then B's retry)
+      expect(stock.quantityReserved).toBe(2);
+      expect(stock.version).toBe(2); // one bump per winning CAS (A, then B's retry)
       expect(stock.quantityOnHand - stock.quantityReserved).toBe(8);
       expect(await countHeldReservations(app, SKU)).toBe(2);
     });

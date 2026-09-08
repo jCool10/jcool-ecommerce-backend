@@ -48,7 +48,6 @@ import { AuthCookieService, CsrfGuard, CsrfTokenService } from './interface/secu
 import { JwtStrategy } from './interface/strategies/jwt.strategy';
 import { UserModule } from './user.module';
 
-/** Auth surface for the User context — register/login, token issuance + rotation, and the two global guards (JwtAuthGuard then RolesGuard); imports UserModule for its ports and configures JwtModule (HS256). */
 @Module({
   imports: [
     UserModule,
@@ -61,7 +60,7 @@ import { UserModule } from './user.module';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.getOrThrow<string>('auth.jwtAccessSecret'),
-        // expiresIn as numeric seconds (via durationToMs) to keep TTL parsing uniform.
+        // Numeric seconds, so every TTL in the app is parsed by the same duration helper.
         signOptions: { expiresIn: Math.floor(durationToMs(config.getOrThrow<string>('auth.jwtAccessTtl')) / 1000) },
       }),
     }),
@@ -91,12 +90,10 @@ import { UserModule } from './user.module';
     { provide: EMAIL_VERIFICATION_TOKEN_REPOSITORY, useClass: DrizzleEmailVerificationTokenRepository },
     { provide: PASSWORD_RESET_TOKEN_REPOSITORY, useClass: DrizzlePasswordResetTokenRepository },
     { provide: MAILER, useClass: MailerAdapter },
-    // Access-token denylist (Redis): read by JwtStrategy per request, written by logout.
     { provide: TOKEN_DENYLIST, useClass: RedisTokenDenylist },
-    // Per-user session epoch: read by JwtStrategy per request, bumped for global revocation.
     { provide: SESSION_EPOCH, useClass: DrizzleSessionEpochRepository },
     { provide: AUTH_AUDIT, useClass: AuthAuditLogger },
-    // Two global guards in order: authenticate (JwtAuthGuard) then authorize (RolesGuard).
+    // Order matters: authenticate (JwtAuthGuard) before authorize (RolesGuard).
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

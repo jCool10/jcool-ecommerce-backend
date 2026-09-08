@@ -11,18 +11,9 @@ import { MEDIA_SWEEPING_PROVIDERS } from './infrastructure/media-sweeping.collec
 import { MediaController } from './interface/media.controller';
 
 /**
- * Media bounded context: the lifecycle of an uploaded object, from a signed URL to the sweep that
- * takes the bytes back. It owns `media_assets`; the bucket itself is infrastructure, reached only
- * through `StorageModule`.
- *
- * `MEDIA_FACADE` is the published language and the only export — Catalog attaches an image through
- * it, inside Catalog's own transaction, the same way Order holds stock through `STOCK_RESERVATION`.
- * The upload use cases are not exported: minting an upload URL is an operator action, not something
- * another context does on anyone's behalf.
- *
- * The sweep registers itself with the shared `RetentionScheduler` rather than starting a timer, so
- * `RETENTION_ENABLED` governs it along with every other table's reclamation and this context adds
- * no background driver of its own.
+ * `MEDIA_FACADE` is the published language and the only export — another context reaches a stored
+ * object through it and never sees a storage key, a status, or a bucket. The upload use cases stay
+ * unexported: minting an upload URL is an operator action, not one another context takes on request.
  */
 @Module({
   imports: [StorageModule],

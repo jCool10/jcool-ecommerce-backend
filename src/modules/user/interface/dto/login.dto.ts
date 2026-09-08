@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 
-/** Body for POST /auth/login — shape only (the use case decides correctness with a generic 401); `MaxLength(72)` mirrors RegisterDto to reject oversized input before argon2 runs. */
+/** `MaxLength(72)` mirrors RegisterDto, rejecting oversized input before argon2 ever runs on it. */
 export class LoginDto {
   @ApiProperty({ example: 'user@example.com', format: 'email' })
   @IsEmail()

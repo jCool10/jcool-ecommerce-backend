@@ -19,21 +19,15 @@ export interface StartedObjectStorage {
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
-  /** Object keys currently in the bucket. */
   listKeys(prefix?: string): Promise<string[]>;
   exists(key: string): Promise<boolean>;
-  /** Write an object directly, bypassing the presigned URL — for arranging state a test needs. */
+  /** Writes directly, bypassing the presigned URL — for arranging state a test needs. */
   put(key: string, body: string | Uint8Array, contentType: string): Promise<void>;
-  /** Remove every object, so one spec's bucket contents cannot be another's orphans. */
+  /** One spec's bucket contents must not become another's orphans. */
   clear(): Promise<void>;
   stop(): Promise<void>;
 }
 
-/**
- * Boot an S3-compatible bucket for one spec file. Started here rather than in globalSetup because
- * only the media suites need one, and every other e2e file would otherwise wait on a container it
- * never uses.
- */
 export async function startObjectStorage(): Promise<StartedObjectStorage> {
   const container: StartedMinioContainer = await new MinioContainer(STORAGE_IMAGE)
     .withUsername(ACCESS_KEY)

@@ -9,8 +9,6 @@ import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics
 const LOG_CONTEXT = 'OrderPaidMailHandler';
 
 /**
- * The buyer's confirmation that their payment landed.
- *
  * Composed inside the consumer's transaction but sent after it commits: an SMTP call held inside
  * would keep a pool connection for its whole round-trip, and a breaker timeout cannot cancel a
  * message already on the wire — the redelivery would send it again while the first is still flying.

@@ -11,7 +11,6 @@ interface CookieCall {
   options: CookieOptions;
 }
 
-// Config answering only the two keys the service reads.
 function config(cookieSecure: boolean, refreshTtl = '7d'): ConfigService {
   return {
     get: (key: string) => (key === 'app.cookieSecure' ? cookieSecure : undefined),
@@ -24,7 +23,6 @@ function config(cookieSecure: boolean, refreshTtl = '7d'): ConfigService {
 
 const csrf = { issue: () => 'issued-csrf-token' } as unknown as CsrfTokenService;
 
-// Response stub that records cookie()/clearCookie() calls.
 function responseSpy() {
   const set: CookieCall[] = [];
   const cleared: Array<{ name: string; options: CookieOptions }> = [];

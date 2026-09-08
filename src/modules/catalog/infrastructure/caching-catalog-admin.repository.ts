@@ -16,13 +16,10 @@ import { CATALOG_CACHE_VERSION_KEY } from './catalog-cache.keys';
 import { DrizzleCatalogAdminRepository } from './drizzle-catalog-admin.repository';
 
 /**
- * Write-side half of the catalog cache-aside: every mutation bumps the generation counter that
- * `CachingProductRepository` mixes into its keys, so the next public read misses and refills.
- *
  * Invalidation lives here rather than in `CatalogAdminService` so the application layer keeps no
- * cache knowledge, and it runs after the adapter's transaction has committed — a bump for a write
- * that then rolled back would only cost a needless miss, but a bump before commit could refill the
- * cache from the pre-commit state and go stale until the TTL.
+ * cache knowledge, and the generation bump runs after the adapter's transaction has committed — a
+ * bump for a write that then rolled back only costs a needless miss, but a bump before commit could
+ * refill the cache from the pre-commit state and stay stale until the TTL.
  */
 @Injectable()
 export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort {
@@ -30,8 +27,6 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
     private readonly source: DrizzleCatalogAdminRepository,
     private readonly cache: CacheService,
   ) {}
-
-  // ----- Category -----
 
   findCategoryById(id: string): Promise<Category | null> {
     return this.source.findCategoryById(id);
@@ -53,8 +48,6 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
     return this.source.countActiveProductsInCategory(categoryId);
   }
 
-  // ----- Product -----
-
   findProductById(id: string): Promise<AdminProduct | null> {
     return this.source.findProductById(id);
   }
@@ -70,8 +63,6 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
   archiveProduct(id: string): Promise<AdminProduct | null> {
     return this.invalidatingWrite(() => this.source.archiveProduct(id));
   }
-
-  // ----- Sku (product variant) -----
 
   findSkuById(id: string): Promise<Sku | null> {
     return this.source.findSkuById(id);
@@ -89,8 +80,6 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
     return this.invalidatingWrite(() => this.source.archiveSku(id));
   }
 
-  // ----- Product images -----
-
   listImages(productId: string): Promise<ProductImage[]> {
     return this.source.listImages(productId);
   }
@@ -106,8 +95,6 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
   reorderImages(productId: string, imageIds: string[]): Promise<ProductImage[] | null> {
     return this.invalidatingWrite(() => this.source.reorderImages(productId, imageIds));
   }
-
-  // ----- Price -----
 
   setPrice(variantId: string, data: SetPriceData): Promise<Price> {
     return this.invalidatingWrite(() => this.source.setPrice(variantId, data));

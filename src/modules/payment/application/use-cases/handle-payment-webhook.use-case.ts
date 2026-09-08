@@ -9,11 +9,9 @@ import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process
 const LOG_CONTEXT = 'HandlePaymentWebhook';
 
 /**
- * Settles the payment, then the order, in two SEPARATE transactions — Payment and Order are
- * independent state machines. The finalize here is a latency optimization, not the guarantee: the
- * payment transaction also emitted a settlement event, and the consumer behind it settles the same
- * order idempotently. So the window this leaves open is closed by the queue within a relay tick,
- * with the reconciliation sweep behind that, and the gateway only ever sees a 2xx.
+ * Payment and order settle in two SEPARATE transactions. The finalize here is a latency optimization,
+ * not the guarantee: the payment transaction also emitted a settlement event whose consumer settles
+ * the same order idempotently, so the window left open closes within a relay tick.
  */
 @Injectable()
 export class HandlePaymentWebhookUseCase {

@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 
-/** A SKU is a ProductVariant — `sku` is globally unique (a duplicate anywhere, not just within the product, is a 409); just code + display name. */
+/** A SKU is a ProductVariant; a duplicate `sku` anywhere, not just within the product, is a 409. */
 export class CreateSkuDto {
   @ApiProperty({ example: 'WH-BLK', description: 'Globally-unique SKU code' })
   @IsString()

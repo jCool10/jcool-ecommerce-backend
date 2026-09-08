@@ -7,11 +7,8 @@ import {
 import type { CartSkuView, CatalogQueryPort } from '../application/ports/catalog-query.port';
 
 /**
- * Anti-corruption adapter: implements Cart's `CatalogQueryPort` by delegating to
- * Catalog's published `CATALOG_SKU_QUERY`. This is the ONLY place Cart touches
- * Catalog, and it imports only Catalog's `application/public` surface (allowed
- * cross-context) — never its domain/infrastructure/schema. The mapping is where
- * the two contracts are kept independent.
+ * The only place Cart touches Catalog, and it may import only Catalog's `application/public`
+ * surface (allowed cross-context) — never its domain/infrastructure/schema.
  */
 @Injectable()
 export class CatalogQueryAdapter implements CatalogQueryPort {

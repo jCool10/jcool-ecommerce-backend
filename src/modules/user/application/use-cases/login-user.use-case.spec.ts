@@ -11,7 +11,6 @@ function makeUser(passwordHash: string, emailVerifiedAt: Date | null = null): Us
   return new User('u1', 'user@example.com', passwordHash, 'CUSTOMER', new Date(), new Date(), emailVerifiedAt);
 }
 
-// Config stub exposing only `auth.requireVerifiedEmail` (the gate flag).
 function makeConfig(requireVerifiedEmail: boolean): ConfigService {
   return { get: () => requireVerifiedEmail } as unknown as ConfigService;
 }
@@ -38,8 +37,7 @@ class MockUserRepository implements UserRepositoryPort {
   }
 }
 
-// Counter-based mock (matches the repo's class-mock convention) — a stored hash
-// is `hashed:<plain>`, so verify is an equality check.
+// A stored hash is `hashed:<plain>`, so verify is an equality check.
 class MockPasswordHasher implements PasswordHasherPort {
   hashCalls = 0;
   verifyCalls = 0;
@@ -105,7 +103,7 @@ describe('LoginUserUseCase', () => {
     await expect(useCase.execute({ email: 'nobody@example.com', password: 'whatever' })).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
-    // A dummy hash was produced and verified so timing matches the real path.
+    // A dummy hash was produced and verified, so timing matches the real path.
     expect(hasher.hashCalls).toBe(1);
     expect(hasher.verifyCalls).toBe(1);
     expect(authTokens.issuedFor).toHaveLength(0);
@@ -148,8 +146,8 @@ describe('LoginUserUseCase', () => {
     it('still returns the generic 401 (not 403) on a wrong password', async () => {
       repo.user = makeUser('hashed:correct-password', null);
 
-      // The gate only applies after credentials pass — a bad password must not
-      // leak that the account merely needs verification.
+      // The gate only applies after credentials pass: a bad password must not leak that the account
+      // merely needs verification.
       await expect(gatedUseCase().execute({ email: 'user@example.com', password: 'wrong' })).rejects.toBeInstanceOf(
         UnauthorizedException,
       );

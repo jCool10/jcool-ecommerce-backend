@@ -16,26 +16,23 @@ export interface CapturedMail {
 
 export interface StartedMailServer {
   smtpUrl: string;
-  /** Every message the server currently holds, newest first. */
+  /** Newest first. */
   messages(): Promise<CapturedMail[]>;
-  /** Poll until at least `count` messages have arrived for `address`, or fail. */
   waitForMail(address: string, count?: number, timeoutMs?: number): Promise<CapturedMail[]>;
-  /** The plain-text body of one message. */
   body(id: string): Promise<string>;
   clear(): Promise<void>;
   stop(): Promise<void>;
 }
 
 /**
- * Boot a mail server for one spec file. Started here rather than in globalSetup because only the
- * mail suites need one, and every other e2e file would otherwise wait on a container it never uses.
+ * Started per spec file rather than in globalSetup: only the mail suites need one, and every other
+ * e2e file would otherwise wait on a container it never uses. Same for the search/storage helpers.
  */
 export async function startMailServer(): Promise<StartedMailServer> {
   const container: StartedTestContainer = await new GenericContainer(MAIL_IMAGE)
     .withExposedPorts(SMTP_PORT, API_PORT)
-    // Both ports, not just the HTTP probe: `/readyz` is served by the web server, so it can answer
-    // while the SMTP listener is still binding — and the first send would then be the one that
-    // waits for it.
+    // Both ports, not just the HTTP probe: `/readyz` is served by the web server, so it answers
+    // while the SMTP listener is still binding — and the first send would be the one that waits.
     .withWaitStrategy(Wait.forAll([Wait.forListeningPorts(), Wait.forHttp('/readyz', API_PORT)]))
     .start();
 

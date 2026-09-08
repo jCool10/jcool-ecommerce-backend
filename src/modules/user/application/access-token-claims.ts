@@ -1,13 +1,12 @@
 import type { Role } from '@shared/rbac';
 
-/** Custom access-token claims — the shared contract for signing (AuthTokensService) and verifying (JwtStrategy). */
+/** Shared contract between signing (AuthTokensService) and verifying (JwtStrategy). */
 export interface AccessTokenClaims {
-  /** Subject: the user id. */
   sub: string;
-  /** Authorization role, mirrored from the user at issue time. */
+  /** Mirrored from the user at issue time, so it goes stale until the next refresh. */
   role: Role;
-  /** Unique token id (uuid v7) — the handle a logout denylists. */
+  /** uuid v7 — the handle a logout denylists. */
   jti: string;
-  /** Session epoch at issue time; JwtStrategy rejects the token once the user's stored epoch moves past it. */
+  /** JwtStrategy rejects the token once the user's stored epoch moves past this. */
   epoch: number;
 }

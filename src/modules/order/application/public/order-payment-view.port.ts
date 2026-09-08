@@ -21,7 +21,6 @@ export interface StalePendingOrderSnapshot {
 }
 
 export interface OrderPaymentView {
-  /** One order by id (not user-scoped — Payment does its own ownership check); null if absent. */
   findForPayment(orderId: string): Promise<OrderPaymentSnapshot | null>;
 
   /** The work queue for Payment's sweep; orders a finalize currently holds are skipped, not queued. */

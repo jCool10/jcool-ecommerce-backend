@@ -3,9 +3,8 @@ import { ORDER_PAYMENT_VIEW, type OrderPaymentView } from '@modules/order/applic
 import type { OrderReadPort, OrderView, StalePendingOrderView } from '../application/ports/order-read.port';
 
 /**
- * Anti-corruption adapter: implements Payment's `OrderReadPort` by delegating to Order's published
- * `ORDER_PAYMENT_VIEW`. Imports only Order's `application/public` surface (allowed cross-context) —
- * never its domain/schema. Maps Order's `totalAmountMinor` to Payment's `amountMinor` vocabulary.
+ * Anti-corruption adapter: it may import Order's `application/public` surface (allowed cross-context),
+ * never its domain or schema, and it translates Order's vocabulary into Payment's.
  */
 @Injectable()
 export class OrderReadAdapter implements OrderReadPort {

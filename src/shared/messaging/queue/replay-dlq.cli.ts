@@ -3,13 +3,10 @@
  *   npm run queue:replay-dlq                       # list what would be replayed, change nothing
  *   npm run queue:replay-dlq -- --apply            # actually replay
  *   npm run queue:replay-dlq -- --apply --limit 20
- *   npm run queue:replay-dlq -- --apply --force    # past the retention horizon (read below first)
+ *   npm run queue:replay-dlq -- --apply --force    # past the retention horizon; it can never
+ *                                                 # override a claim that is actually there
  * In a deployed container (no devDependencies, so no `tsx`), the compiled twin:
  *   npm run queue:replay-dlq:prod -- --apply
- *
- * Every candidate is checked against the inbox first: once a claim has been swept, "no claim" no
- * longer means "never applied", so a message whose claim may have aged out is refused unless
- * `--force`. `--force` cannot override a claim that is actually there. See `dead-letter.replay.ts`.
  *
  * A replay cannot fix the reason the message failed — read the printed `failedReason` and deploy the
  * fix first, or the same messages come straight back.
@@ -41,16 +38,14 @@ async function main(): Promise<void> {
     throw new Error(`--limit must be a positive integer, got "${process.argv[limitArg + 1]}"`);
   }
 
-  // The app's own config factory, so prefix and defaults match what the app writes under. It still
-  // reads THIS process's environment though: a wrong prefix fails safe (empty queue), a wrong
-  // retention window does not — hence it is echoed in the header below.
+  // The app's own config factory, but read from THIS process's environment: a wrong prefix fails
+  // safe (empty queue), a wrong retention window does not — hence it is echoed in the header below.
   const { redis, queue, database, retention } = configuration();
   if (!redis.url) throw new Error('REDIS_URL is not set');
   if (!database.url) throw new Error('DATABASE_URL is not set — the inbox check cannot be skipped');
   const prefix = queue.prefix;
 
-  // maxRetriesPerRequest: null is BullMQ's requirement, not a preference — it refuses to build on a
-  // connection with a finite budget.
+  // maxRetriesPerRequest: null is BullMQ's requirement — it refuses a finite budget, not a preference.
   const connection = new Redis(redis.url, { maxRetriesPerRequest: null });
   const domainEvents = new Queue(QUEUE_DOMAIN_EVENTS, { connection, prefix });
   const dlq = new Queue(QUEUE_DOMAIN_EVENTS_DLQ, { connection, prefix });
@@ -77,7 +72,7 @@ async function main(): Promise<void> {
       force,
     });
 
-    // The window is printed because the guard is only as good as it matching the deployment whose
+    // The window is printed because the guard is only as good as its match with the deployment whose
     // inbox is being swept, and nothing here can detect a mismatch.
     console.log(
       `\n--- dead-letter replay (${apply ? 'APPLY' : 'dry run'}, limit ${limit}, ` +

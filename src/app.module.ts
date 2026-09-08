@@ -23,11 +23,9 @@ import { PaymentModule } from '@modules/payment/payment.module';
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/user/auth.module';
 
-// Root module: global infrastructure (config, correlation, logging, database, redis) +
-// feature modules. ClsModule precedes ObservabilityLoggerModule so its correlation
-// middleware mounts before pino; ThrottlerSecurityModule precedes AuthModule so its
-// rate-limit guard runs before the auth guards. SentryModule adds a route-name interceptor for
-// error grouping; Sentry itself is initialized in instrumentation.ts (no-op without SENTRY_DSN).
+// ClsModule precedes ObservabilityLoggerModule so its correlation middleware mounts before pino;
+// ThrottlerSecurityModule precedes AuthModule so its rate-limit guard runs before the auth guards.
+// SentryModule only adds a route-name interceptor — Sentry itself is initialized in instrumentation.ts.
 @Module({
   imports: [
     ConfigModule,
@@ -37,19 +35,17 @@ import { AuthModule } from '@modules/user/auth.module';
     SentryModule.forRoot(),
     DrizzleModule,
     RedisModule,
-    // @Global, so position is readability only. A complete sweep roster is guaranteed by
+    // @Global, so position is readability only: a complete sweep roster is guaranteed by
     // registration happening in onModuleInit while the scheduler waits for onApplicationBootstrap.
     RetentionModule,
     MessagingModule,
     ThrottlerSecurityModule,
-    // Timer registry for the outbox relay and every sweep; each is gated by its own kill-switch.
     ScheduleModule.forRoot(),
     HealthModule,
     CatalogModule,
     CartModule,
     InventoryModule,
-    // Before CatalogModule reads it below only in the import list's order; the DI graph is what
-    // matters, and Catalog reaches Media through MEDIA_FACADE.
+    // Position carries no meaning here: Catalog reaches Media through MEDIA_FACADE in the DI graph.
     MediaModule,
     OrderModule,
     PaymentModule,
@@ -58,9 +54,8 @@ import { AuthModule } from '@modules/user/auth.module';
   ],
   controllers: [DebugController],
   providers: [
-    // One canonical "request completed" line per successful request (db.queries et al.).
     { provide: APP_INTERCEPTOR, useClass: CanonicalLogInterceptor },
-    // Global error envelope + correlation-aware logging; registered via DI so it can read CLS.
+    // Registered via DI, not useGlobalFilters, so the filter can inject CLS.
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
   ],
 })

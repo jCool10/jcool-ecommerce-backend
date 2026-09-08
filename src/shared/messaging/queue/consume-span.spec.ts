@@ -9,11 +9,7 @@ const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const PUBLISH_SPAN_ID = '00f067aa0ba902b7';
 const TRACEPARENT = `00-${TRACE_ID}-${PUBLISH_SPAN_ID}-01`;
 
-/**
- * The queue is where a trace normally breaks — no auto-instrumentation follows an async hop, so
- * without this the consumer's work looks causeless. Asserted against a real SDK, since a no-op
- * tracer would pass every one of these vacuously.
- */
+// Asserted against a real SDK: a no-op tracer would pass every one of these vacuously.
 describe('withConsumeSpan', () => {
   const contextManager = new AsyncLocalStorageContextManager();
   const exporter = new InMemorySpanExporter();

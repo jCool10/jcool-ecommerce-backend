@@ -4,25 +4,20 @@ import { Pool } from 'pg';
 import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '../src/shared/identity';
 import { normalizeEmail, type NormalizedEmail } from '../src/shared/kernel/normalize-email';
 
-// Bulk throwaway-user seeder for the register-uniqueness benchmark harness.
-// Grows the `users` table + its unique-email index to a target row count WITHOUT
-// going through the API, so the benchmark can read index size / cache residency /
-// autovacuum behavior at scale. Every row shares one email prefix so `--clean`
-// can delete only synthetic rows and never a real account.
+// Grows `users` and its unique-email index to a target row count WITHOUT going through the API, so
+// the benchmark can read index size / cache residency / autovacuum behavior at scale. Every row
+// shares one email prefix, so `--clean` can delete only synthetic rows and never a real account.
 //
-// Bulk path = batched multi-row INSERT (no pg-copy-streams dependency). Fast
-// enough for the smoke/≤1M scales actually run under the <100M target. For the
-// gated 10M–100M decisive runs, swap `insertBatch` for `COPY users (...) FROM
-// STDIN` (add pg-copy-streams) — the tuple generator already emits COPY-ready
-// rows.
+// Batched multi-row INSERT rather than COPY, to avoid a pg-copy-streams dependency; fast enough at
+// the scales actually run. The tuple generator already emits COPY-ready rows if that changes.
 //
 // Ids are written over raw SQL, so nothing in the type system ties these rows to the app's minting
 // path — derive them the same way or the version-nibble CHECK on `users.id` rejects the batch.
 
 const EMAIL_PREFIX = 'loadtest+';
 const EMAIL_DOMAIN = 'loadtest.jcool.local';
-// One shared, realistic-width argon2id hash: throwaway rows never log in, but the
-// column should hold a real-length value so table/index size measurements are honest.
+// One shared hash: throwaway rows never log in, but the column must hold a real-length value or
+// table/index size measurements are dishonest.
 const SEED_PASSWORD = 'loadtest-throwaway-not-a-real-secret';
 
 // Normalized at the source so the row's id, the unique index and `--clean` all see the same bytes.
@@ -55,7 +50,6 @@ async function insertBatch(pool: Pool, ids: IdentityService, hash: string, start
     const email = emailFor(start + r);
     params.push(ids.mintUserId(email), email, hash);
   }
-  // ON CONFLICT makes a re-run idempotent (resumes/top-ups rather than erroring).
   await pool.query(
     `INSERT INTO users (id, email, password_hash) VALUES ${values.join(',')} ON CONFLICT (email) DO NOTHING`,
     params,
@@ -84,7 +78,7 @@ async function main(): Promise<void> {
     }
 
     const count = intArg('count', 200_000);
-    const batch = Math.max(1, Math.min(intArg('batch', 2_000), 20_000)); // clamp 1..20000; ×3 params < pg's 65535 cap
+    const batch = Math.max(1, Math.min(intArg('batch', 2_000), 20_000)); // ×3 params stays under pg's 65535 cap
     const hash = await argon2.hash(SEED_PASSWORD);
     // One generator for the whole run: a second would repeat this node's sequence values.
     const ids = identity();

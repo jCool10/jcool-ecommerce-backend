@@ -8,10 +8,7 @@ import { redactPaths } from './redact-paths';
 const REDACT_CENSOR = '[Redacted]';
 
 /**
- * App-wide structured logging (pino): one JSON line per log to stdout, pino-pretty only in
- * dev. A mixin stamps each line with the CLS requestId (and traceId/spanId when tracing is
- * on). autoLogging is OFF — {@link CanonicalLogInterceptor} owns the single completion line.
- * See ADR-0013.
+ * autoLogging is OFF on purpose — {@link CanonicalLogInterceptor} owns the single completion line.
  */
 export const ObservabilityLoggerModule = LoggerModule.forRootAsync({
   inject: [ConfigService, ClsService],
@@ -25,14 +22,13 @@ export const ObservabilityLoggerModule = LoggerModule.forRootAsync({
         level,
         autoLogging: false,
         redact: { paths: redactPaths, censor: REDACT_CENSOR },
-        // Adds requestId (and traceId/spanId when a span is active) to every log line.
         mixin(): Record<string, string> {
           const fields: Record<string, string> = {};
           if (cls.isActive()) {
             const requestId = cls.getId();
             if (requestId) fields.requestId = requestId;
-            // Set only by runInJobContext, so its presence is also the answer to "was this line
-            // produced by a request or by a timer" — which the requestId alone cannot tell you.
+            // Set only by runInJobContext, so its presence answers "request or timer?" — something
+            // the requestId alone cannot tell you.
             const jobName = cls.get<string>(JOB_NAME_KEY);
             if (jobName) fields.job = jobName;
           }

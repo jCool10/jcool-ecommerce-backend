@@ -7,7 +7,6 @@ class SampleEvent implements DomainEvent {
   constructor(readonly aggregateId: string) {}
 }
 
-// Concrete subclass exposing the protected recorder for the test.
 class SampleAggregate extends AggregateRoot<string> {
   constructor(id: string) {
     super(id);
@@ -28,7 +27,6 @@ describe('AggregateRoot', () => {
     expect(first[0].eventName).toBe('sample.happened');
     expect(first[0].aggregateId).toBe('agg-1');
 
-    // Second pull is empty — flush is idempotent.
     expect(agg.pullDomainEvents()).toHaveLength(0);
   });
 

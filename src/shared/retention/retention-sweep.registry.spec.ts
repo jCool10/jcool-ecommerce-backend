@@ -41,7 +41,6 @@ describe('RetentionSweepRegistry', () => {
     expect(registry.all()).toEqual([outbox]);
   });
 
-  // Why this is a provider and not a module-level array: e2e boots one app after another.
   it('keeps each instance separate, so one app never inherits the sweeps of another', () => {
     const first = new RetentionSweepRegistry();
     const second = new RetentionSweepRegistry();

@@ -17,13 +17,6 @@ import { orderItems, orders } from './schema/order.schema';
 type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
 
-/**
- * Drizzle adapter for OrderRepositoryPort. `createCheckout` runs the whole checkout in ONE
- * transaction — insert the placed order + items, then the caller's `reserve` (stock hold),
- * `appendEvent` (outbox), and `complete` (idempotency COMPLETED) — so order, reservation, event,
- * and key commit or roll back as a unit. A pre-check on the unique `orders.idempotency_key`
- * returns an already-placed order instead of inserting a duplicate (crash-reclaim exit-defense).
- */
 @Injectable()
 export class DrizzleOrderRepository implements OrderRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -74,11 +67,9 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
         })),
       );
 
-      // Hold stock, emit the event, then freeze the idempotency result — same tx. Reserve throws on
-      // a shortfall, rolling back the order, event, and key too; complete is the last write so any
-      // earlier failure aborts before the key is marked COMPLETED. The event insert sharing this
-      // transaction is what makes it impossible to have a placed order without its event, or an
-      // event for an order that never committed.
+      // Same tx as the insert above, so there can be no placed order without its event and no event
+      // for an order that never committed. `complete` is last: any earlier failure aborts before the
+      // idempotency key is marked COMPLETED.
       await reserve(tx, orderId);
       await appendEvent(tx, orderId);
       await complete(tx, orderId);
@@ -122,7 +113,6 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
   }
 
   async findForUser(orderId: string, userId: string): Promise<Order | null> {
-    // User-scoped by design: another user's order id simply returns null (→ 404).
     const [row] = await this.db
       .select()
       .from(orders)
@@ -209,7 +199,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
   }
 
   async findStalePending({ placedBefore, limit }: { placedBefore: Date; limit: number }): Promise<StalePendingOrder[]> {
-    // A projection, not the aggregate. `placed_at < :t` also drops NULLs, so the cast below is safe.
+    // `placed_at < :t` also drops NULLs, so the cast below is safe.
     const rows = await this.db
       .select({ id: orders.id, placedAt: orders.placedAt })
       .from(orders)
@@ -221,8 +211,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
   }
 }
 
-// Row → domain aggregate. Items are already the frozen snapshot, so rehydration
-// never touches Catalog.
+// Items are already the frozen snapshot, so rehydration never touches Catalog.
 function toDomainOrder(row: OrderRow, itemRows: OrderItemRow[]): Order {
   return Order.rehydrate({
     id: row.id,

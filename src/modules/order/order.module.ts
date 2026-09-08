@@ -33,13 +33,9 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
 import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
 
 /**
- * Order bounded context: the transactional source of truth. Creating an order
- * snapshots the cart — raw lines via Cart's published CART_SNAPSHOT (through
- * CartModule), price/name resolved live via Catalog's CATALOG_SKU_QUERY (through
- * CatalogModule), then frozen. Both cross-context reads go through Order-owned
- * anti-corruption adapters. Placing an order holds stock via Inventory's published
- * STOCK_RESERVATION (through InventoryModule), again behind an Order-owned adapter.
- * Persistence sits behind ORDER_REPOSITORY.
+ * Every cross-context read or write — Cart's CART_SNAPSHOT, Catalog's CATALOG_SKU_QUERY, Inventory's
+ * STOCK_RESERVATION — goes through an Order-owned anti-corruption adapter bound to an Order port, so
+ * nothing in this module imports another context's domain or infrastructure.
  */
 @Module({
   imports: [CartModule, CatalogModule, InventoryModule, UserModule, MailModule],

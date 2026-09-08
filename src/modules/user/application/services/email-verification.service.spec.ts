@@ -92,17 +92,15 @@ describe('EmailVerificationService', () => {
       const before = Date.now();
       await service.issueAndSend({ id: 'u1', email: 'user@test.local' });
 
-      expect(tokens.invalidatedFor).toEqual(['u1']); // prior tokens superseded
+      expect(tokens.invalidatedFor).toEqual(['u1']);
       expect(tokens.created).toHaveLength(1);
       expect(mailer.sent).toHaveLength(1);
 
       const emailed = mailer.sent[0];
       expect(emailed.to).toBe('user@test.local');
-      // The stored value is the SHA-256 of the emailed raw token — raw never persisted.
       expect(tokens.created[0].tokenHash).toBe(sha256Hex(emailed.token));
       expect(tokens.created[0].userId).toBe('u1');
 
-      // Expiry ≈ now + TTL.
       const expiresAt = tokens.created[0].expiresAt.getTime();
       expect(expiresAt).toBeGreaterThanOrEqual(before + TTL_MS);
       expect(expiresAt).toBeLessThanOrEqual(Date.now() + TTL_MS);
@@ -117,7 +115,6 @@ describe('EmailVerificationService', () => {
       await service.issueAndSend({ id: 'u1', email: 'user@test.local' });
 
       expect(tokens.invalidatedFor).toEqual(['u1', 'u1']);
-      // Two distinct raw tokens minted across the two sends.
       expect(mailer.sent[0].token).not.toBe(mailer.sent[1].token);
     });
   });
@@ -128,7 +125,7 @@ describe('EmailVerificationService', () => {
 
       const result = await service.verify('raw-token');
 
-      expect(tokens.consumedHash).toBe(sha256Hex('raw-token')); // looked up by hash
+      expect(tokens.consumedHash).toBe(sha256Hex('raw-token'));
       expect(users.verified).toEqual(['u7']);
       expect(result).toEqual({ userId: 'u7' });
     });

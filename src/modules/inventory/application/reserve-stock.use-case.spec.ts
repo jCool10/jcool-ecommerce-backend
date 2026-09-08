@@ -3,7 +3,6 @@ import type { ConfigService } from '@nestjs/config';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { ReserveStockUseCase } from './reserve-stock.use-case';
 
-// Pure dispatch: config strategy → which port method runs.
 const TX = {} as unknown as DrizzleTx;
 const LINES = [{ variantId: 'sku-a', quantity: 1 }];
 

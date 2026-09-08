@@ -21,18 +21,13 @@ import {
 import type { IdempotentRequest } from './require-idempotency-key.guard';
 
 // How long an IN_PROGRESS row is trusted before it counts as abandoned (owner crashed mid-flight)
-// and may be reclaimed. Fixed for now; a config knob can follow once the checkout latency budget
-// is measured.
+// and may be reclaimed.
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Wraps a retry-safe endpoint so a repeated Idempotency-Key returns the first result instead of
- * re-executing. The unique (scope, key) index — not an application read-then-write — is the race
- * backstop: `tryInsertInProgress` wins or loses the INSERT atomically. A winner runs the handler,
- * whose checkout transaction freezes the result (writes COMPLETED) atomically with the order; a
- * loser branches on the stored row (replay COMPLETED / 409 in-flight / 422 body mismatch / reclaim
- * an expired holder). Any thrown result drops the IN_PROGRESS row so the client can safely retry —
- * only a committed success (COMPLETED by the handler's tx) is cached.
+ * The unique (scope, key) index — not an application read-then-write — is the race backstop:
+ * `tryInsertInProgress` wins or loses the INSERT atomically. Only a committed success is cached;
+ * any thrown result drops the IN_PROGRESS row so the client can safely retry.
  */
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
@@ -106,9 +101,8 @@ export class IdempotencyInterceptor implements NestInterceptor {
   }
 
   private runHandler(scope: string, key: string, next: CallHandler): Observable<unknown> {
-    // Hand {scope, key} to the handler over CLS: the checkout transaction flips this row to
-    // COMPLETED inside the same unit of work as the order + reservation. On success this interceptor
-    // does nothing more — the row is already COMPLETED (or a fresh order was healed to it).
+    // Handed over CLS because the checkout transaction flips this row to COMPLETED inside the same
+    // unit of work as the order + reservation; on success this interceptor does nothing more.
     setIdempotencyContext(this.cls, { scope, key });
 
     return next.handle().pipe(

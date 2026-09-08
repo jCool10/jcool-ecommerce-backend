@@ -2,7 +2,7 @@ import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import type { User } from '../../domain/entities/user.entity';
 import { USER_REPOSITORY, type UserRepositoryPort } from '../ports';
 
-/** Load the full profile for an authenticated user id (GET /auth/me needs it because JwtStrategy is stateless); a valid token whose user no longer exists is a 401, not a 404. */
+/** A valid token whose user no longer exists is a 401, not a 404. */
 @Injectable()
 export class GetProfileUseCase {
   constructor(@Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort) {}

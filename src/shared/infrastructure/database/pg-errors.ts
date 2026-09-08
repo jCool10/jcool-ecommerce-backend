@@ -1,10 +1,8 @@
 /**
- * Postgres error helpers. Duck-typed on the SQLSTATE `code` rather than `instanceof DatabaseError`
- * so it survives driver re-wraps/bundling. Lets an adapter translate a DB constraint race into a
- * typed domain error instead of leaking a raw 500.
+ * Duck-typed on the SQLSTATE `code` rather than `instanceof DatabaseError` so these survive driver
+ * re-wraps and bundling.
  */
 
-/** SQLSTATE 23505 = unique_violation. */
 export function isUniqueViolation(error: unknown, indexName?: string): boolean {
   if (typeof error !== 'object' || error === null) {
     return false;
@@ -19,9 +17,9 @@ export function isUniqueViolation(error: unknown, indexName?: string): boolean {
 }
 
 /**
- * SQLSTATE 23514 = check_violation, matched by constraint name because a table's several checks mean
- * different things. Walks the `cause` chain, unlike the unique helper above: Drizzle wraps the driver
- * error for the statement builders these writes use, so the SQLSTATE is not on the object thrown.
+ * Matched by constraint name because a table's several checks mean different things. Walks the
+ * `cause` chain, unlike the unique helper above: Drizzle wraps the driver error for the statement
+ * builders these writes use, so the SQLSTATE is not on the object thrown.
  */
 export function isCheckViolation(error: unknown, constraintName: string): boolean {
   for (let current: unknown = error, depth = 0; current != null && depth < 5; depth++) {

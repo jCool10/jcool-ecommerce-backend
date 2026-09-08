@@ -9,7 +9,6 @@ import type {
   PasswordResetTokenRepositoryPort,
 } from '../application/ports';
 
-// Drizzle adapter for PasswordResetTokenRepositoryPort (only tokenHash is stored, never the raw token).
 @Injectable()
 export class DrizzlePasswordResetTokenRepository implements PasswordResetTokenRepositoryPort {
   constructor(
@@ -26,7 +25,7 @@ export class DrizzlePasswordResetTokenRepository implements PasswordResetTokenRe
     });
   }
 
-  /** Spend the token in one conditional UPDATE (the WHERE is the guard): only a still-live row consumes, so concurrent submits can't both win. */
+  /** The WHERE is the guard: only a still-live row consumes, so concurrent submits can't both win. */
   async consume(tokenHash: string): Promise<ConsumePasswordResetOutcome> {
     const now = new Date();
     const [row] = await this.db

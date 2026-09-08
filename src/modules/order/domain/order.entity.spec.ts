@@ -27,7 +27,7 @@ describe('Order entity', () => {
     const order = Order.create('user-1', 'vnd', [line(100_000, 2)]);
 
     expect(order.status).toBe(OrderStatus.DRAFT);
-    expect(order.currency).toBe('VND'); // Money normalizes the code
+    expect(order.currency).toBe('VND');
     expect(order.id).toBeNull();
     expect(order.placedAt).toBeNull();
   });
@@ -50,7 +50,7 @@ describe('Order entity', () => {
 
     expect(placed.status).toBe(OrderStatus.PENDING);
     expect(placed.placedAt).toBe(now);
-    expect(draft.status).toBe(OrderStatus.DRAFT); // original unchanged
+    expect(draft.status).toBe(OrderStatus.DRAFT);
     expect(draft.placedAt).toBeNull();
   });
 
@@ -70,7 +70,7 @@ describe('Order entity', () => {
       expect(paid.finalizedAt).toBe(now);
       expect(paid.finalizeReason).toBe('webhook:paid');
       expect(paid.paymentRef).toBe('pay_123');
-      expect(pending.status).toBe(OrderStatus.PENDING); // immutable — original unchanged
+      expect(pending.status).toBe(OrderStatus.PENDING);
       expect(pending.finalizedAt).toBeNull();
     });
 

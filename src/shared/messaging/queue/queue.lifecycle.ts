@@ -4,8 +4,8 @@ import type { Redis } from 'ioredis';
 import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from './queue.constants';
 
 /**
- * Tears the producer down at shutdown. BullMQ closes only connections it opened itself — a client
- * handed to it is treated as shared and left running — so owning the client means owning its exit.
+ * BullMQ closes only connections it opened itself — a client handed to it is treated as shared and
+ * left running — so owning the client means owning its exit.
  */
 @Injectable()
 export class QueueLifecycle implements OnApplicationShutdown {

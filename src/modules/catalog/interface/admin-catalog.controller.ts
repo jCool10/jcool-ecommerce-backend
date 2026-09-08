@@ -42,7 +42,7 @@ import {
   UpdateSkuDto,
 } from './dto';
 
-/** Catalog admin write paths — class-level `@Roles(Role.Admin)` (global guards authenticate 401 then authorize 403), thin (validate, call the service, map to a DTO); DELETE is a soft-delete that echoes the archived resource (200, not 204). */
+/** DELETE here is a soft-delete that echoes the archived resource (200, not 204). */
 @ApiTags('admin-catalog')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
@@ -52,8 +52,6 @@ import {
 @Controller('admin')
 export class AdminCatalogController {
   constructor(private readonly admin: CatalogAdminService) {}
-
-  // ----- Categories -----
 
   @Post('categories')
   @ApiCreatedResponse({ type: AdminCategoryResponseDto })
@@ -82,8 +80,6 @@ export class AdminCatalogController {
     return AdminCategoryResponseDto.fromEntity(await this.admin.archiveCategory(id));
   }
 
-  // ----- Products -----
-
   @Post('products')
   @ApiCreatedResponse({ type: AdminProductResponseDto })
   @ApiNotFoundResponse({ description: 'Category not found' })
@@ -111,8 +107,6 @@ export class AdminCatalogController {
     return AdminProductResponseDto.fromEntity(await this.admin.archiveProduct(id));
   }
 
-  // ----- SKUs (product variants) -----
-
   @Post('products/:productId/skus')
   @ApiCreatedResponse({ type: AdminSkuResponseDto })
   @ApiNotFoundResponse({ description: 'Product not found' })
@@ -139,8 +133,6 @@ export class AdminCatalogController {
   async deleteSku(@Param('id', ParseUUIDPipe) id: string): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.archiveSku(id));
   }
-
-  // ----- Product images -----
 
   @Get('products/:productId/images')
   @ApiOkResponse({ type: [AdminProductImageResponseDto] })
@@ -187,8 +179,6 @@ export class AdminCatalogController {
     const images = await this.admin.reorderProductImages(productId, dto.imageIds);
     return images.map((image) => AdminProductImageResponseDto.fromEntity(image));
   }
-
-  // ----- Price -----
 
   @Put('skus/:skuId/price')
   @ApiOkResponse({ type: AdminPriceResponseDto, description: 'Price set or replaced (upsert per currency)' })

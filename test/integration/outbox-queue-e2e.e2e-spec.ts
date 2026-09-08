@@ -33,10 +33,8 @@ const seedRow = (index: number, overrides: Record<string, unknown> = {}) => ({
 });
 
 /**
- * The pipeline as one piece: what the operator sees while an event is in flight.
- *
  * The hops themselves have their own suites (outbox-append, outbox-relay, consumer-idempotency,
- * dead-letter). This one is about the telemetry that has to be true at each hop — a backlog gauge
+ * dead-letter). This one is about the telemetry that has to be true at each hop: a backlog gauge
  * that reads the table rather than a constant, a publish counter that moves before the backlog
  * does, and one trace id from the producer through Redis to the effect.
  */
@@ -57,10 +55,9 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
     return text;
   };
 
-  // Vitest isolates every e2e file in its own process, so the prom-client registry belongs to this
-  // file alone — but counters still accumulate across the tests inside it, and a series that an
-  // earlier test created would make a presence check pass with the counter call deleted. Gauges are
-  // absolute (this suite owns the outbox table between resets); counters are asserted as deltas.
+  // The prom-client registry is per file, but counters still accumulate across the tests inside it,
+  // and a series an earlier test created would make a presence check pass with the counter call
+  // deleted. Gauges are absolute (this suite owns the outbox table); counters are asserted as deltas.
   const gauge = (text: string, name: string): number => {
     const line = text.split('\n').find((entry) => entry.startsWith(`${name} `));
     if (line === undefined) throw new Error(`gauge ${name} is not exposed on /metrics`);

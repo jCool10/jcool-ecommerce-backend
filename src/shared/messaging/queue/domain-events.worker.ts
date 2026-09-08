@@ -17,11 +17,8 @@ const LOG_CONTEXT = 'DomainEventsWorker';
 const CLOSE_TIMEOUT_MS = 10_000;
 
 /**
- * Drives the processor from the queue and owns the BullMQ machinery around it: the consumer's own
- * Redis connection, the concurrency budget, and a shutdown that lets in-flight work finish.
- *
- * Holding no logic of its own is the point — everything worth asserting lives in the processor,
- * which a test can drive one delivery at a time.
+ * Holds no logic of its own on purpose: everything worth asserting lives in the processor, which a
+ * test can drive one delivery at a time without a running queue.
  */
 @Injectable()
 export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdown {
@@ -56,9 +53,8 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
       return;
     }
 
-    // Its own connection, and deliberately without the producer's command timeout: a worker parks on
-    // a blocking read for the whole poll, so sharing the producer's client would stall every publish
-    // behind it, and timing that wait out would be cutting off the design rather than a hang.
+    // Its own connection, deliberately without the producer's command timeout: a worker parks on a
+    // blocking read for the whole poll, so timing that wait out would cut off the design, not a hang.
     this.connection = createQueueConnection(this.redisUrl);
     // One correlation context per delivery, not per worker: at concurrency > 1 several jobs are in
     // flight and without a scope each their lines interleave.
@@ -73,9 +69,8 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
       this.logger.error({ context: LOG_CONTEXT, err: error }, `domain events worker error: ${error.message}`);
     });
 
-    // Retry-or-dead-letter, decided by the router. The listener signature is synchronous, so the
-    // route is started rather than awaited; the .catch() is there so a bug inside it can never
-    // surface as an unhandled rejection that kills the process.
+    // The listener signature is synchronous, so the route is started rather than awaited; the
+    // .catch() keeps a bug inside it from surfacing as an unhandled rejection that kills the process.
     this.worker.on('failed', (job, error: Error) => {
       if (!job) {
         // No job means BullMQ could not load it — nothing to route, and nothing to identify it by.
@@ -96,13 +91,11 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
 
   // beforeApplicationShutdown, NOT onApplicationShutdown: the pg pool drains in the latter, and Nest
   // orders same-phase hooks by module registration — so sharing that phase would make "the worker
-  // stops before the pool closes" a property of two import lines in app.module.ts rather than of
-  // this class. An earlier phase makes the ordering unconditional.
+  // stops before the pool closes" a property of import order in app.module.ts rather than of this class.
   async beforeApplicationShutdown(): Promise<void> {
-    // Stops fetching and waits for in-flight jobs, so a claim never commits into a pool that has
-    // already closed underneath it. A job still waiting is simply picked up by the next process.
-    // Bounded, because a Redis that is gone would otherwise hang shutdown indefinitely — losing an
-    // in-flight consume costs nothing, since an unapplied event has an unclaimed inbox row.
+    // Waits for in-flight jobs so a claim never commits into a pool that has already closed. Bounded,
+    // because a Redis that is gone would hang shutdown — and losing an in-flight consume costs
+    // nothing, since an unapplied event leaves an unclaimed inbox row.
     try {
       await Promise.race([this.worker?.close() ?? Promise.resolve(), timeout(CLOSE_TIMEOUT_MS)]);
     } catch (error: unknown) {
@@ -112,14 +105,12 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
       );
     }
 
-    // After the close, because the last job to fail raises 'failed' during it. Inside the same
-    // bound: a clean SIGTERM that returned here early would close the dead-letter queue out from
-    // under a move still in flight, losing it exactly as a crash would.
+    // After the close, because the last job to fail raises 'failed' during it. Returning early here
+    // would close the dead-letter queue out from under a move still in flight.
     await Promise.race([Promise.allSettled(this.pendingRoutes), timeout(CLOSE_TIMEOUT_MS)]);
 
     if (!this.connection) return;
-    // quit() drains then closes, but rejects outright when Redis is already gone — fall back to an
-    // unconditional teardown rather than hanging shutdown on an unreachable server.
+    // quit() rejects outright when Redis is already gone, hence the unconditional fallback.
     try {
       await this.connection.quit();
     } catch {

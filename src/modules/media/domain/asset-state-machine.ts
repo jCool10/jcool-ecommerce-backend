@@ -1,12 +1,6 @@
 import { DomainError } from '@shared/kernel';
 import { AssetStatus } from './asset-status';
 
-/**
- * The single source of truth for which status changes are legal — the same shape as
- * `order-state-machine.ts`, because it is the same problem: an at-least-once caller and an effect
- * that must happen once.
- */
-
 interface Transition {
   from: AssetStatus;
   to: AssetStatus;
@@ -24,7 +18,7 @@ const TRANSITIONS: readonly Transition[] = [
 /**
  * Nothing leaves SWEEPING. That is what makes the sweep safe without holding a row lock across a
  * network call: the claim is committed before the object is deleted, so an attach racing the delete
- * meets a status it cannot transition out of and is refused.
+ * meets a status it cannot transition out of.
  */
 const TERMINAL_STATUSES: ReadonlySet<AssetStatus> = new Set([AssetStatus.SWEEPING]);
 
@@ -46,7 +40,6 @@ export class AssetTransitionError extends DomainError {
   }
 }
 
-/** Throws `AssetTransitionError` unless the transition is allowed. Pure — no I/O. */
 export function assertTransition(from: AssetStatus, to: AssetStatus): void {
   if (!canTransition(from, to)) {
     throw new AssetTransitionError(from, to);

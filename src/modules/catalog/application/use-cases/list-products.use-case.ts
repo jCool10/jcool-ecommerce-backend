@@ -18,8 +18,6 @@ export interface ListProductsResult {
   imageUrls: Map<string, string>;
 }
 
-// List ACTIVE products (paginated + filtered). Owns the pagination math; the
-// repository owns data access behind the port.
 @Injectable()
 export class ListProductsUseCase {
   constructor(

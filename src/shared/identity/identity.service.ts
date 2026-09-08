@@ -4,13 +4,10 @@ import { bucketOf } from './uuid-v8.codec';
 import type { UuidV8Generator } from './uuid-v8.generator';
 
 /**
- * Single minting path for user-context ids.
- *
  * A user's bucket comes from their email — the same normalized bytes the unique index sees, which is
  * what makes local email uniqueness survive a shard split. Rows the user owns copy the bucket out of
  * the user's id instead of re-deriving it: a second derivation is a second chance to drift.
- *
- * Framework-free so the standalone seed scripts can construct it without booting Nest.
+ * Framework-free, so the standalone seed scripts can construct it without booting Nest.
  */
 export class IdentityService {
   constructor(
@@ -28,7 +25,7 @@ export class IdentityService {
     return this.generator.generate(bucketForEmail(email, this.bucketKey));
   }
 
-  /** Id for a row owned by `userId`, in that user's bucket. Throws on a non-v8 `userId`: it predates routing and has no bucket to colocate with. */
+  /** Throws on a non-v8 `userId`: it predates routing and has no bucket to colocate with. */
   mintOwnedBy(userId: string): string {
     return this.generator.generate(bucketOf(userId));
   }

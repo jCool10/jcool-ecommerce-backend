@@ -13,10 +13,6 @@ import { type AuthTokens, AuthTokensService } from '../services';
 // One generic message for every failure branch so a caller can't probe validity.
 const INVALID_REFRESH_TOKEN = 'Invalid refresh token';
 
-/**
- * Rotate a refresh token with reuse detection: the atomic decision is the repository's
- * `rotate`; this maps the outcome to HTTP (invalid/reuse → 401, rotated → new pair).
- */
 @Injectable()
 export class RefreshTokensUseCase {
   private readonly logger = new Logger(RefreshTokensUseCase.name);
@@ -40,7 +36,7 @@ export class RefreshTokensUseCase {
       // Family already revoked in the transaction; the client always gets a generic 401.
       const context = `userId=${outcome.userId}, familyId=${outcome.familyId}`;
       if (outcome.replaced) {
-        // Superseded token replayed — the classic stolen-token signature; audit it.
+        // A superseded token replayed is the classic stolen-token signature.
         this.audit.record({
           event: 'token.reuse_detected',
           outcome: 'failure',
@@ -49,11 +45,11 @@ export class RefreshTokensUseCase {
           metadata: { familyId: outcome.familyId },
         });
         this.logger.warn(`Refresh token reuse detected — session revoked (${context})`);
-        // Also bump the epoch so the access token the thief already rotated out is
-        // rejected now, not left alive until its TTL — rotate only revoked refresh rows.
+        // `rotate` only revoked refresh rows, so bump the epoch too: otherwise the access token the
+        // thief already rotated out stays alive until its TTL.
         await this.sessionEpoch.bump(outcome.userId);
       } else {
-        // Merely-revoked token replayed (post-logout) — benign, diagnostic only.
+        // A merely-revoked token replayed (post-logout) is benign — diagnostic only.
         this.logger.debug(`Revoked refresh token replayed — session already ended (${context})`);
       }
       throw new UnauthorizedException(INVALID_REFRESH_TOKEN);

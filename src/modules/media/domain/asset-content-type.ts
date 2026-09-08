@@ -1,8 +1,6 @@
 import { DomainError } from '@shared/kernel';
 
 /**
- * What may be stored, and the extension each one gets.
- *
  * An allowlist rather than a denylist, and raster formats only. `image/svg+xml` is excluded on
  * purpose: SVG is executable XML, and served from an origin it can run script. Nothing here sniffs
  * bytes, so there would be no second line of defence. Every `text/*` is out for the same reason.
@@ -34,9 +32,8 @@ export function assertAllowedContentType(value: string): AllowedContentType {
 }
 
 /**
- * The extension comes from this table, never from the name the client sent. A client filename is
- * user data; putting it in a storage key invites path traversal and a mismatched type into a place
- * that needs neither.
+ * The extension comes from this table, never from the name the client sent: a client filename is
+ * user data, and putting it in a storage key invites path traversal and a mismatched type.
  */
 export function extensionFor(contentType: AllowedContentType): string {
   return ALLOWED_CONTENT_TYPES[contentType];

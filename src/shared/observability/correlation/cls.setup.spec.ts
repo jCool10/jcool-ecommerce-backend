@@ -6,7 +6,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withSpan } from '../tracing/tracer';
 import { getCorrelationId } from './cls.setup';
 
-// Only isActive()/getId() are exercised by getCorrelationId.
 function fakeCls(opts: { active: boolean; id?: string }): ClsService {
   return { isActive: () => opts.active, getId: () => opts.id } as unknown as ClsService;
 }
@@ -31,8 +30,7 @@ describe('getCorrelationId', () => {
   it('returns the CLS request id even when a span is active (requestId stays the client id)', async () => {
     const cls = fakeCls({ active: true, id: 'req-uuid' });
 
-    // With tracing on there IS an active span, but requestId must NOT become the traceId —
-    // that split (traceId lives in a separate field) is the whole point of the contract.
+    // A span is active here, and requestId must still NOT become the traceId.
     await withSpan('active', (span) => {
       expect(span.spanContext().traceId).toHaveLength(32);
       expect(getCorrelationId(cls)).toBe('req-uuid');

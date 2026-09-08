@@ -1,5 +1,4 @@
-// Shared kernel barrel: pure DDD building blocks reused by ≥2 bounded contexts, zero
-// framework/DB imports (importable from any layer) and no context-specific business rules.
+// Nothing here may import a framework or the DB, and no context-specific business rules belong here.
 export * from './domain-error';
 export * from './duration-to-ms';
 export * from './normalize-email';

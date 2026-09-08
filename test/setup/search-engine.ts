@@ -2,7 +2,6 @@ import type { INestApplication } from '@nestjs/common';
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../src/modules/catalog/application/ports';
 
-// Same image the local stack runs, so a suite proves the engine that ships rather than a nearby one.
 const SEARCH_IMAGE = 'getmeili/meilisearch:v1.53.1';
 const SEARCH_PORT = 7700;
 
@@ -16,9 +15,6 @@ export interface StartedSearchEngine {
 }
 
 /**
- * Boot a search engine for one spec file. Started here rather than in globalSetup because only the
- * search suites need one, and every other e2e file would otherwise wait on a container it never uses.
- *
  * There is no `@testcontainers/meilisearch`, so this is a GenericContainer whose readiness is the
  * engine's own `/health` — returning before that leaves the first request racing the boot.
  */
@@ -39,10 +35,9 @@ export async function startSearchEngine(): Promise<StartedSearchEngine> {
 }
 
 /**
- * Drop every indexed document between tests. Postgres is truncated per test but the engine is not,
- * so without this a document outlives the row it was derived from and the next test searches a
- * catalog that no longer exists. Resolves only once the engine has applied it — every adapter write
- * awaits its task — so no assertion has to poll.
+ * Postgres is truncated per test but the engine is not, so without this a document outlives the row
+ * it came from and the next test searches a catalog that no longer exists. Resolves only once the
+ * engine has applied it — every adapter write awaits its task — so no assertion has to poll.
  */
 export async function resetSearchIndex(app: INestApplication): Promise<void> {
   await app.get<CatalogSearchPort>(CATALOG_SEARCH).resetIndex();

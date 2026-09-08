@@ -2,8 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import type { OrderPageView } from '../../application/order-query.service';
 import { OrderResponseDto } from './order-response.dto';
 
-// Paginated envelope for the order lists. Kept concrete rather than generic, the same way
-// Catalog's is, so Swagger emits a full schema without @ApiExtraModels.
+// Concrete rather than generic so Swagger emits a full schema without @ApiExtraModels.
 export class PaginatedOrdersResponseDto {
   @ApiProperty({ type: [OrderResponseDto] })
   items!: OrderResponseDto[];

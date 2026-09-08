@@ -1,19 +1,15 @@
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../application/ports';
 
-// Long enough for an engine that is merely slow to start, short enough that an unreachable one never
-// holds a deploy open.
+// Long enough for a merely slow engine, short enough that an unreachable one never holds a deploy open.
 const PROVISION_TIMEOUT_MS = 5_000;
 
 /**
- * Apply the index settings at boot so the engine is never left holding an index it auto-created on
- * the first write. Such an index has no `filterableAttributes`, so the read filter is rejected, and
- * because a failed search degrades to an empty result the whole catalog reads as "matches nothing" —
- * with the rejection visible only as a log line.
- *
- * Best-effort and time-boxed: compose deliberately does not make the app depend on the engine, and
- * booting is not the moment to start. A failed or slow attempt leaves the settings to the next
- * restart or to `search:reindex`, which applies them too.
+ * Applies the index settings at boot so the engine is never left holding an index it auto-created on
+ * the first write: such an index has no `filterableAttributes`, the read filter is rejected, and
+ * because a failed search degrades to an empty result the whole catalog reads as "matches nothing",
+ * with the rejection visible only as a log line. Best-effort and time-boxed on purpose — a failed or
+ * slow attempt leaves the settings to the next restart or to `search:reindex`, which applies them too.
  */
 @Injectable()
 export class SearchIndexBootstrap implements OnModuleInit {

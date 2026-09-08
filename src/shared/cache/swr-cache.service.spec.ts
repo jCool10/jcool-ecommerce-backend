@@ -41,7 +41,6 @@ function build() {
   return { swr, cache, lock, metrics, logger };
 }
 
-/** Cache ops recorded so far, in order — the label sequence is the behaviour under test. */
 function opsOf(metrics: { recordCatalogCacheOperation: ReturnType<typeof vi.fn> }): string[] {
   return metrics.recordCatalogCacheOperation.mock.calls.map(([result]) => result as string);
 }
@@ -311,8 +310,7 @@ describe('SwrCacheService', () => {
   });
 });
 
-// The source read is the only part of a lookup nothing else times: the pg span underneath has no
-// idea it is serving a rebuild, and a background refresh has no request to hang off at all.
+// A background refresh has no request to hang its work off, so the rebuild span is all there is.
 describe('SwrCacheService tracing', () => {
   const exporter = new InMemorySpanExporter();
   let provider: BasicTracerProvider;
@@ -364,8 +362,6 @@ describe('SwrCacheService tracing', () => {
     await ctx.swr.readThroughSwr('k', () => Promise.resolve({ id: 'p1-new' }), { policy: POLICY });
     await flushBackgroundWork();
 
-    // Stale rebuilds cost nobody latency; a miss does. Folding them together hides the difference
-    // between a cache refreshing itself and a cache that is not absorbing load at all.
     const spans = exporter.getFinishedSpans().filter((span) => span.name === 'cache.rebuild');
     expect(spans).toHaveLength(1);
     expect(spans[0].attributes).toMatchObject({ 'cache.result': 'hit_stale' });

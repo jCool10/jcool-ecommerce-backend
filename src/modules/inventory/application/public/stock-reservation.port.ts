@@ -6,7 +6,6 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 // The ONLY way another context holds stock; bound to ReserveStockUseCase, whose strategy is config.
 export const STOCK_RESERVATION = Symbol('STOCK_RESERVATION');
 
-/** One SKU + quantity to hold (Inventory's published reservation language). */
 export interface ReservationLine {
   variantId: string;
   quantity: number;
@@ -34,7 +33,6 @@ export interface StockResolveResult {
   count: number;
 }
 
-/** One order still holding stock past the moment that hold was meant to lapse. */
 export interface ExpiredHold {
   orderId: string;
   expiresAt: Date;
@@ -57,8 +55,8 @@ export interface StockReservation {
   release(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
 
   /**
-   * Orders whose hold has lapsed, oldest first — the work queue for whoever owns expiry. Inventory
-   * reports the lapse and nothing more: only the order's own context may decide it is over.
+   * Orders whose hold has lapsed, oldest first. Inventory reports the lapse and nothing more: only
+   * the order's own context may decide it is over.
    */
   findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]>;
 }

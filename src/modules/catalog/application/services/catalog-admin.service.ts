@@ -22,7 +22,10 @@ import {
 
 const DEFAULT_CURRENCY = 'VND';
 
-/** Catalog admin write orchestration — one service (not ~10 near-identical use-case classes) since the operations share the same ref-existence checks (404) and archive guard (409); it owns those business decisions, the adapter owns the atomic writes. See docs/engineering-notes.md (Catalog — Admin write path). */
+/**
+ * One service rather than ~10 near-identical use-case classes: the operations share the same
+ * ref-existence checks (404) and archive guard (409).
+ */
 @Injectable()
 export class CatalogAdminService {
   private readonly logger = new Logger(CatalogAdminService.name);
@@ -36,11 +39,8 @@ export class CatalogAdminService {
     private readonly search: CatalogSearchPort,
   ) {}
 
-  // ----- Category -----
-
   createCategory(data: CreateCategoryData): Promise<Category> {
-    // Slug shape normalized/validated in the domain (Slug VO); uniqueness is
-    // enforced by the DB and the adapter maps 23505 -> 409.
+    // Uniqueness is enforced by the DB; the adapter maps 23505 -> 409.
     return this.repo.createCategory({ ...data, slug: Slug.of(data.slug).value });
   }
 
@@ -58,7 +58,6 @@ export class CatalogAdminService {
     return updated;
   }
 
-  /** Soft-delete a category, refusing (409) while it still has live products. */
   async archiveCategory(id: string): Promise<Category> {
     const activeProducts = await this.repo.countActiveProductsInCategory(id);
     if (activeProducts > 0) {
@@ -72,8 +71,6 @@ export class CatalogAdminService {
     // nothing indexed can be affected.
     return archived;
   }
-
-  // ----- Product -----
 
   async createProduct(data: CreateProductData): Promise<AdminProduct> {
     await this.assertCategoryUsable(data.categoryId);
@@ -104,8 +101,6 @@ export class CatalogAdminService {
     return archived;
   }
 
-  // ----- Sku (product variant) -----
-
   async createSku(productId: string, data: CreateSkuData): Promise<Sku> {
     await this.assertProductExists(productId);
     const created = await this.repo.createSku(productId, data);
@@ -131,8 +126,6 @@ export class CatalogAdminService {
     return archived;
   }
 
-  // ----- Product images -----
-
   /**
    * Images are not indexed, so none of these syncs the search document: a search hit renders from
    * the document's own fields, and adding an image to one would make every attach a reindex.
@@ -147,8 +140,7 @@ export class CatalogAdminService {
     try {
       return await this.repo.attachImage(productId, data);
     } catch (error) {
-      // The asset is missing, still uploading, or already attached elsewhere — a client mistake
-      // about state, not about this request's shape.
+      // Missing, still uploading, or already attached elsewhere — a state conflict, not a bad request.
       if (error instanceof MediaAssetUnavailableError) {
         throw new ConflictException(`Image asset is not available to attach: ${error.assetId}`);
       }
@@ -175,8 +167,6 @@ export class CatalogAdminService {
     return reordered;
   }
 
-  // ----- Price -----
-
   async setPrice(skuId: string, data: { amountMinor: number; currency?: string }): Promise<Price> {
     const sku = await this.repo.findSkuById(skuId);
     if (!sku) {
@@ -189,16 +179,14 @@ export class CatalogAdminService {
     return price;
   }
 
-  // ----- helpers -----
-
-  // A product may only reference a live category; this can't catch a status-only PATCH
-  // or archive/publish race, so the public read filters archived categories independently.
   private async assertProductExists(productId: string): Promise<void> {
     if (!(await this.repo.findProductById(productId))) {
       throw new NotFoundException(`Product not found: ${productId}`);
     }
   }
 
+  // A product may only reference a live category; this cannot catch a status-only PATCH or an
+  // archive/publish race, so the public read filters archived categories independently.
   private async assertCategoryUsable(categoryId: string): Promise<void> {
     const category = await this.repo.findCategoryById(categoryId);
     if (!category || category.archivedAt !== null) {
@@ -207,16 +195,10 @@ export class CatalogAdminService {
   }
 
   /**
-   * Re-derive one product's search document, after its write has committed. Re-reading the public
-   * ACTIVE projection is what decides index-vs-delete, so a draft, an archived product and one whose
-   * category was archived all leave the index without a second copy of that visibility rule.
-   *
-   * Best-effort on purpose: the index is a replica of Postgres, so a search engine that is down must
-   * cost freshness, never the admin write. That makes this a dual-write — a crash between the commit
-   * and this call leaves the index behind, exactly as a failure here does — and `search:reindex` is
-   * the backstop that converges both. Closing the gap properly means emitting the change to the
-   * transactional outbox inside the mutation's transaction, which the admin write port does not
-   * currently expose one for.
+   * Re-reading the public ACTIVE projection is what decides index-vs-delete, so a draft, an archived
+   * product and one under an archived category all leave the index without restating that rule.
+   * Best-effort dual-write: a crash between the commit and this call leaves the index behind and
+   * `search:reindex` is the backstop; the proper fix is an outbox emit inside the mutation's transaction.
    */
   private async syncSearchDocument(productId: string): Promise<void> {
     try {

@@ -61,8 +61,6 @@ describe('CartService.view', () => {
     expect(view.subtotalMinor).toBe(200_000);
   });
 
-  // The one behaviour the batch fold could silently change: reading the anchor off the batch result
-  // would make the cart's currency depend on Catalog's row order rather than on the cart's own.
   it('anchors the cart currency on the first priced line in cart order, not in batch order', async () => {
     const { service } = build({
       items: [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 1)],

@@ -2,7 +2,6 @@ import { ApiProperty } from '@nestjs/swagger';
 import { ORDER_STATUSES, OrderStatus } from '../../domain/order-status';
 import type { OrderView } from '../../application/order-view.mapper';
 
-/** One order line — a PRICE SNAPSHOT frozen at creation (not a live Catalog price). */
 export class OrderItemResponseDto {
   @ApiProperty({ format: 'uuid', description: 'Product-variant id (SKU)' })
   skuId!: string;
@@ -20,7 +19,6 @@ export class OrderItemResponseDto {
   lineTotalMinor!: number;
 }
 
-/** An order: snapshot lines + a total that is stable against later price changes. */
 export class OrderResponseDto {
   @ApiProperty({ format: 'uuid' })
   id!: string;

@@ -8,7 +8,6 @@ import { DOMAIN_EVENTS_DLQ_QUEUE } from './queue.constants';
 
 const LOG_CONTEXT = 'DeadLetterRouter';
 
-/** A dead-lettered message: the original envelope plus why it stopped being tried. */
 export interface DeadLetterJob extends DomainEventJob {
   failedReason: string;
   attemptsMade: number;
@@ -16,14 +15,10 @@ export interface DeadLetterJob extends DomainEventJob {
 }
 
 /**
- * Decides what happens to a failed delivery: let the queue retry it, or park it where retrying has
- * stopped being useful.
- *
- * The distinction is BullMQ's own, read back rather than recomputed. `Job.moveToFailed` sets
- * `finishedOn` only on the branch where it did NOT schedule another attempt, so that field answers
- * "is this the end of the road" for both ways a message gets there — a budget spent on a dependency
- * that never recovered, and a PermanentError that skipped the budget entirely. Re-deriving it from
- * `attemptsMade >= opts.attempts` would get the second case wrong.
+ * "Is this the end of the road" is BullMQ's own verdict, read back rather than recomputed:
+ * `Job.moveToFailed` sets `finishedOn` only on the branch where it did NOT schedule another attempt,
+ * so it covers both a spent budget and a PermanentError that skipped the budget entirely.
+ * Re-deriving it from `attemptsMade >= opts.attempts` would get the second case wrong.
  */
 @Injectable()
 export class DeadLetterRouter {
@@ -60,12 +55,10 @@ export class DeadLetterRouter {
     };
 
     try {
-      // Keyed on the message, not the delivery: a message that poisons twice occupies one slot here
-      // rather than growing the queue it was supposed to make inspectable. Dropping the previous
-      // entry first is what makes that slot hold the LATEST diagnosis — `add` on an id that already
-      // exists is silently ignored, so without this the operator would read the first failure and
-      // debug a reason that may no longer be the one. Safe to lose the entry in between: the main
-      // queue is holding this job in its failed set for a week either way.
+      // Keyed on the message, not the delivery, so a message that poisons twice occupies one slot.
+      // The remove is what makes that slot hold the LATEST diagnosis: `add` on an existing jobId is
+      // silently ignored, so without it an operator would debug the first failure. Safe to lose the
+      // entry in between — the main queue holds this job in its failed set for a week either way.
       if (messageId) await this.dlq.remove(messageId);
       await this.dlq.add(job.name, dead, { jobId: messageId });
       this.metrics.recordDeadLetter(eventType, reason);
@@ -74,9 +67,8 @@ export class DeadLetterRouter {
         `domain event moved to the dead-letter queue: ${error.message}`,
       );
     } catch (caught: unknown) {
-      // Best effort by construction — this is one more write to the Redis that just failed us. The
-      // main queue keeps the failed job for a week, so a lost move costs visibility, not the
-      // message. Logged at error because that backstop needs a human to notice it.
+      // Best effort by construction — one more write to the Redis that just failed us. The main
+      // queue keeps the failed job for a week, so a lost move costs visibility, not the message.
       this.logger.error(
         { context: LOG_CONTEXT, err: caught, eventType: job.name, messageId, reason },
         `failed to move a domain event to the dead-letter queue: ${caught instanceof Error ? caught.message : String(caught)}`,

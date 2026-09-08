@@ -10,36 +10,30 @@ import { DownstreamUnavailableError, type OutboundCall } from './outbound-call.p
 
 const LOG_CONTEXT = 'CircuitBreaker';
 
-// The breaker guards a thunk rather than one fixed function, so a single breaker can front every
-// method of a dependency. That is the right grain: what it tracks is the health of the downstream,
-// which those methods share, not the health of one endpoint.
+// Guarding a thunk rather than one fixed function lets a single breaker front every method of a
+// dependency — the right grain, since what it tracks is downstream health, not one endpoint's.
 type Task = () => Promise<unknown>;
 type TaskBreaker = CircuitBreaker<[Task], unknown>;
 
-// opossum's own verdicts: the codes it raises for a call it never let reach the downstream, or
-// stopped waiting on. Anything else surfacing from `fire` came from the task itself.
+// opossum's own verdicts, raised for a call it never let reach the downstream or stopped waiting
+// on. Anything else surfacing from `fire` came from the task itself.
 const BREAKER_OPEN = 'EOPENBREAKER';
 const CALL_TIMED_OUT = 'ETIMEDOUT';
-// A breaker shut down with the process refuses exactly like an open one. The only difference is that
-// it will never reopen, which is of no use to a caller during a drain.
+// A breaker shut down with the process refuses exactly like an open one, and reports neither open
+// nor closed; it just never reopens, which is of no use to a caller during a drain.
 const BREAKER_SHUT_DOWN = 'ESHUTDOWN';
 
 export interface BreakerOptions {
   /**
-   * Whether a rejection is evidence about the downstream's health. Default: every rejection is.
-   *
-   * Worth overriding wherever the caller can tell "they refused this request" from "they are
-   * struggling". A provider answering 4xx to a handful of malformed requests is answering; counting
-   * those opens the circuit on a healthy dependency and turns a few bad requests into an outage for
-   * everyone. The rejection still reaches the caller either way — this only decides whether it is
-   * counted.
+   * Whether a rejection counts against the downstream's health. Default: every rejection does.
+   * A provider answering 4xx to malformed requests is answering; counting those opens the circuit on
+   * a healthy dependency. Either way the rejection still reaches the caller — this only decides counting.
    */
   isDownstreamFault?: (error: unknown) => boolean;
 
   /**
-   * How long a call to THIS downstream may run, overriding the shared default. For a dependency
-   * whose healthy latency is nothing like the rest — a mail server against a payment API — one
-   * shared number can only be too short for one of them or too long for the other.
+   * Overrides the shared timeout for a dependency whose healthy latency is nothing like the rest —
+   * a mail server against a payment API — where one number is wrong for one of them.
    */
   timeoutMs?: number;
 }
@@ -48,8 +42,6 @@ function codeOf(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null ? (error as { code?: string }).code : undefined;
 }
 
-// A breaker that has been shut down reports neither open nor closed. It refuses like an open one,
-// which is the only part a caller can act on.
 function stateOf(breaker: TaskBreaker): BreakerState {
   if (breaker.halfOpen) {
     return 'half_open';
@@ -64,10 +56,9 @@ class BreakerOutboundCall implements OutboundCall {
   ) {}
 
   run<T>(task: () => Promise<T>): Promise<T> {
-    // A refused call never reaches the network, so it leaves no auto-instrumented span behind:
-    // without this one, a trace of a checkout during an outage ends at a 502 with nothing in it
-    // that says why. The state is read before the call because the interesting one is `half_open`
-    // — the single trial that decides whether the downstream is back.
+    // A refused call never reaches the network, so it leaves no auto-instrumented span behind and a
+    // trace of a checkout during an outage would end at a 502 explaining nothing. State is read
+    // before the call because the interesting one is `half_open` — the trial that decides recovery.
     return withSpan(`breaker:${this.name}`, async (span) => {
       span.setAttributes({ 'breaker.name': this.name, 'breaker.state': stateOf(this.breaker) });
       try {
@@ -82,13 +73,10 @@ class BreakerOutboundCall implements OutboundCall {
             throw new DownstreamUnavailableError(this.name, 'open', error);
           case CALL_TIMED_OUT:
             span.setAttribute('breaker.result', 'timeout');
-            // The task keeps running in the background — the timeout abandons our wait, it cannot
-            // cancel a request already on the wire. What it buys is the request slot back.
+            // The task keeps running: the timeout abandons our wait, it cannot cancel a request
+            // already on the wire. What it buys back is the request slot.
             throw new DownstreamUnavailableError(this.name, 'timeout', error);
           default:
-            // The downstream answered, badly. Whether that counts against its health is the
-            // caller's decision (`isDownstreamFault`), so this says only what happened to this
-            // call and leaves the verdict to the metric.
             span.setAttribute('breaker.result', 'error');
             throw error;
         }
@@ -98,14 +86,6 @@ class BreakerOutboundCall implements OutboundCall {
 }
 
 /**
- * Hands out circuit breakers for calls that leave this process.
- *
- * A failing downstream is dangerous less for its own errors than for its latency: every caller
- * waiting out a timeout holds one of our request slots, so their outage becomes ours. Once the
- * failure rate crosses the threshold the breaker opens and calls fail immediately, which frees
- * those slots and stops adding load to something already struggling. After `resetTimeout` one
- * trial call decides whether to close again.
- *
  * State is in-memory, so each replica learns the downstream's health from its own traffic. Sharing
  * it through Redis would put a network dependency in the path whose whole job is surviving a
  * network dependency going down.
@@ -135,9 +115,8 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
 
   /**
    * `name` becomes a metric label, so it must come from a fixed set — never a per-call value. The
-   * same name always returns the same breaker: two instances would each have to learn the outage
-   * separately, and would report contradicting states on one gauge series. Options therefore only
-   * take effect on the first `create` for a name.
+   * same name always returns the same breaker (two would learn the outage separately and contradict
+   * each other on one gauge series), so options only take effect on the first `create` for a name.
    */
   create(name: string, options: BreakerOptions = {}): OutboundCall {
     const existing = this.breakers.get(name);
@@ -158,9 +137,8 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
   }
 
   // Breakers hold a reset timer while open; shutting them down keeps a draining process from
-  // flipping state (and writing metrics) on its way out. They stay in the map deliberately — a
-  // `create` arriving late in the drain must hand back the same dead breaker, not a live one whose
-  // state nothing else can see.
+  // flipping state (and writing metrics) on its way out. They stay in the map deliberately: a
+  // `create` late in the drain must get the same dead breaker, not a live one nothing else sees.
   onApplicationShutdown(): void {
     for (const breaker of this.breakers.values()) {
       breaker.shutdown();
@@ -168,13 +146,9 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
   }
 
   /**
-   * Runs a timer-driven transition outside the request context it happened to inherit.
-   *
    * The reset timer is scheduled from inside the call that tripped the breaker, so its callback
-   * still sees that call's CLS store and its (by now ended) span. Left attached, the log line would
-   * carry the requestId and traceId of a checkout that finished a reset window ago — correlation
-   * ids an on-call would follow to the wrong request — and the span event would be appended to an
-   * ended span, which OpenTelemetry drops with a warning.
+   * inherits that call's CLS store and its already-ended span. Left attached, the log line would
+   * carry a stale requestId/traceId and the span event would land on an ended span (silently dropped).
    */
   private detached(run: () => void): void {
     otelContext.with(ROOT_CONTEXT, () => {
@@ -186,8 +160,7 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
     const entered = (state: BreakerState): void => {
       this.metrics.setBreakerState(name, state);
       this.metrics.recordBreakerTransition(name, state);
-      // Present only for a transition a call caused, which is the only case where hanging it off
-      // that call's span says anything.
+      // Present only for a transition a call caused — the only case where hanging it off a span says anything.
       trace.getActiveSpan()?.addEvent('breaker.state_changed', { 'breaker.name': name, 'breaker.state': state });
     };
     const fields = (state: BreakerState): Record<string, string> => ({ context: LOG_CONTEXT, breaker: name, state });
@@ -207,8 +180,8 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
       this.logger.info(fields('closed'), 'circuit closed — the downstream answered again');
     });
 
-    // A rejection that `isDownstreamFault` disowns arrives here rather than as a failure, which is
-    // the honest reading of it: the provider answered, it just answered "no" to that one request.
+    // A rejection that `isDownstreamFault` disowns arrives here, not as a failure: the provider
+    // answered, it just answered "no" to that one request.
     breaker.on('success', () => this.metrics.recordBreakerCall(name, 'success'));
     // An abandoned call emits `timeout` AND `failure`, so it is classified here instead of counted
     // from its own event — listening to both would count that one call twice.
@@ -217,8 +190,8 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
     );
     breaker.on('reject', () => this.metrics.recordBreakerCall(name, 'rejected'));
 
-    // Publish the closed series up front: an alert on "open" cannot tell a healthy breaker from a
-    // breaker that has never been exercised if the series only appears once something has failed.
+    // Publish the closed series up front: otherwise an alert on "open" cannot tell a healthy breaker
+    // from one that has never been exercised.
     this.metrics.setBreakerState(name, 'closed');
   }
 }

@@ -32,9 +32,6 @@ const systemClock: IdentityClock = {
 };
 
 /**
- * Mints UUIDv8 ids for one writer: the caller's routing bucket plus this generator's node id, a
- * per-millisecond sequence, and 40 random bits.
- *
  * Synchronous by design and lint-enforced to stay that way — an await between reading the clock and
  * stamping the sequence lets two callers emit the same `(timestamp, node, sequence)` triple.
  *

@@ -8,11 +8,9 @@ import { UploadRejectedError } from '../../domain/errors/upload-rejected.error';
 import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
 
 /**
- * Step two: confirm the bytes landed and let the asset be attached.
- *
- * This is where the size limit lives, because it is the first place it can: a presigned PUT signs
- * an exact Content-Length, never a maximum. A rejected upload is left PENDING on purpose — the
- * sweep then deletes both the oversized object and its row, so a refusal costs no storage.
+ * The size limit lives here because this is the first place it can: a presigned PUT signs an exact
+ * Content-Length, never a maximum. A rejected upload is left PENDING on purpose — the sweep then
+ * deletes both the oversized object and its row, so a refusal costs no storage.
  */
 @Injectable()
 export class CompleteUploadUseCase {
@@ -46,9 +44,8 @@ export class CompleteUploadUseCase {
       throw new UploadRejectedError(`Object is ${head.contentType}, but ${asset.contentType} was signed for`, assetId);
     }
 
-    // Extended, never cleared. An asset with no expiry can never be selected by the sweep, so a
-    // READY asset that is never attached would outlive everything it was uploaded for. Only a
-    // successful attach earns a null expiry.
+    // Extended, never cleared: an asset with no expiry can never be selected by the sweep, so only
+    // a successful attach earns a null one.
     const moved = await this.repository.markReady(
       assetId,
       head.sizeBytes,

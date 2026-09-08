@@ -8,7 +8,7 @@ export interface ChangePasswordInput {
   newPassword: string;
 }
 
-/** Change an authenticated user's password — re-verify the current password (a valid access token isn't enough), store the new hash, then revoke every session. */
+/** Re-verifies the current password: holding a valid access token must not be enough to change it. */
 @Injectable()
 export class ChangePasswordUseCase {
   constructor(
@@ -19,7 +19,7 @@ export class ChangePasswordUseCase {
 
   async execute(input: ChangePasswordInput): Promise<void> {
     const user = await this.users.findById(input.userId);
-    // Token was valid but the principal is gone — treat as an invalid credential.
+    // Token was valid but the principal is gone: 401, not 404.
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }

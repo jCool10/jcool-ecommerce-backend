@@ -98,7 +98,6 @@ describe('CreatePaymentSessionUseCase', () => {
 
     const result = await useCase.execute(ORDER_ID, OWNER);
 
-    // Amount + currency come from the order, never the caller.
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ orderId: ORDER_ID, amountMinor: 150_000, currency: 'VND' }),
     );

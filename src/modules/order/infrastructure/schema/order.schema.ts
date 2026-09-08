@@ -2,12 +2,6 @@ import { sql } from 'drizzle-orm';
 import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
-// Order schema — the transactional source of truth. Infrastructure only, never
-// imported by domain. Same conventions as the other contexts (UUID v7 ids, tz
-// stamps, integer minor-unit money, NO cross-context FK: userId → users and
-// skuId → product_variants stay app-layer boundaries). Order lines COPY name +
-// unit price at creation (snapshot), unlike cart lines which read price live.
-
 export const orderStatus = pgEnum('order_status', ['DRAFT', 'PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED']);
 
 const id = () =>
@@ -35,14 +29,12 @@ export const orders = pgTable(
     // aggregate can exceed int4 even when each line fits (Σ across lines / quantity).
     // `mode: 'number'` — order totals stay well inside JS safe-integer range.
     totalAmount: bigint('total_amount', { mode: 'number' }).notNull(),
-    // Optimistic-lock counter for the order aggregate (guards concurrent transitions
-    // on the same order). Placement currently uses a status-based conditional UPDATE;
-    // this column is reserved for version-based aggregate concurrency, not yet read.
+    // Nothing reads this yet: placement uses a status-based conditional UPDATE. Reserved for
+    // version-based aggregate concurrency.
     version: integer('version').notNull().default(0),
-    // The client Idempotency-Key that created this order (nullable). Stamped at checkout as the
-    // exit-defense backstop for retry-safety. Scoped per user (see the composite unique below), so
-    // two different users may reuse the same key value without colliding — mirrors the idempotency
-    // store's per-user (scope, key) model.
+    // The client Idempotency-Key that created this order, stamped at checkout as the exit-defense
+    // backstop for retry-safety. Scoped per user by the composite unique below, so two users may
+    // reuse the same key value without colliding.
     idempotencyKey: text('idempotency_key'),
     // Set when DRAFT → PENDING; null while still a draft.
     placedAt: timestamp('placed_at', { withTimezone: true }),

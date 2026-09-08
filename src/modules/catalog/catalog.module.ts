@@ -19,14 +19,10 @@ import { AdminCatalogController } from './interface/admin-catalog.controller';
 import { CatalogController } from './interface/catalog.controller';
 
 /**
- * Catalog bounded context — public read paths + admin write paths (`@Roles(Role.Admin)`),
- * read and write behind separate ports (CQRS-lite) so each port→adapter binding is a single
- * swap point. `CATALOG_SKU_QUERY` is the published SKU-read language exported for other
- * contexts (Cart reads live price/name through it, never Catalog's internals).
- *
- * Both ports resolve to a cache-aside decorator that wraps the Drizzle adapter (registered under
- * its own class token, injected by type): reads serve from Redis, writes bump the generation that
- * invalidates them. Everything above the port — controllers, use cases, domain — is unaware.
+ * `CATALOG_SKU_QUERY` is the published SKU-read language for other contexts (Cart reads live
+ * price/name through it, never Catalog's internals). The read and write ports resolve to
+ * cache-aside decorators wrapping the Drizzle adapters, which are registered under their own
+ * class tokens and injected by type; everything above the port is unaware of the cache.
  */
 @Module({
   // MediaModule for `MEDIA_FACADE` only — image bytes and their lifecycle stay entirely over there.

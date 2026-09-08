@@ -25,10 +25,8 @@ const envelope = (overrides: Partial<DomainEventJob> = {}): DomainEventJob => ({
   ...overrides,
 });
 
-/**
- * `finishedOn` is what BullMQ sets on the branch where it decided NOT to retry — it is the whole
- * terminal/transient signal, so every case here differs only in that field and the error type.
- */
+// `finishedOn` is the whole terminal/transient signal, so every case below differs only in that
+// field and the error type.
 function build({
   finishedOn,
   data = envelope(),
@@ -47,8 +45,8 @@ function build({
   const recordConsumeRetry = vi.fn();
   const recordDeadLetter = vi.fn();
   const logError = vi.fn();
-  // The real dispatcher, so the label assertions prove the router consults the actual dispatch table
-  // rather than a stub that folds by the same rule the assertion expects.
+  // The real dispatcher, so the label assertions prove the router consults the actual dispatch
+  // table rather than a stub that folds by the same rule the assertion expects.
   const dispatcher = new DomainEventDispatcher(
     { record: vi.fn() } as unknown as OrderEventsHandler,
     { settle: vi.fn() } as unknown as PaymentEventsHandler,
@@ -108,8 +106,8 @@ describe('DeadLetterRouter', () => {
 
     await router.route(job, new Error('second, different reason'));
 
-    // Ordering is the whole point: `add` on an existing jobId is silently ignored, so a remove that
-    // ran afterwards would leave the stale reason in place and delete nothing that mattered.
+    // `add` on an existing jobId is silently ignored, so a remove that ran afterwards would leave
+    // the stale reason in place.
     expect(remove).toHaveBeenCalledWith(MESSAGE_ID);
     expect(remove.mock.invocationCallOrder[0]).toBeLessThan(add.mock.invocationCallOrder[0]);
   });
@@ -147,7 +145,7 @@ describe('DeadLetterRouter', () => {
     await expect(router.route(job, new Error('boom'))).resolves.toBeUndefined();
 
     // Not counted: claiming a dead letter that never landed would hide the one failure mode this
-    // path cannot recover from on its own.
+    // path cannot recover from.
     expect(recordDeadLetter).not.toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('redis gone'));
   });

@@ -2,7 +2,6 @@ import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
 import { CsrfTokenService } from './csrf-token.service';
 
-// A ConfigService that only answers the one key the service reads.
 function serviceWithSecret(secret: string): CsrfTokenService {
   const config = { getOrThrow: () => secret } as unknown as ConfigService;
   return new CsrfTokenService(config);
@@ -18,7 +17,7 @@ describe('CsrfTokenService', () => {
     const b = csrf.issue();
 
     expect(a).toMatch(/^[\w-]+\.[\w-]+$/);
-    expect(a).not.toBe(b); // fresh randomness each mint
+    expect(a).not.toBe(b);
   });
 
   it('accepts a token echoed back identically in cookie + header', () => {
@@ -46,7 +45,6 @@ describe('CsrfTokenService', () => {
   it('rejects a well-formed token minted under a different secret (cookie injection)', () => {
     const attacker = serviceWithSecret('a-completely-different-secret-value-000000');
     const foreign = attacker.issue();
-    // Matches as a double-submit pair, but the signature fails under our key.
     expect(csrf.verify(foreign, foreign)).toBe(false);
   });
 

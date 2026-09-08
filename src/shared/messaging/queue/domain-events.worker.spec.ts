@@ -35,11 +35,8 @@ function build(overrides: Record<string, unknown> = {}) {
   return { worker, logger };
 }
 
-/**
- * Only the disabled path and the config contract: anything past an enabled `onModuleInit` opens a
- * real Redis connection and belongs to the e2e suite, which runs a genuine worker against a
- * container.
- */
+// Only the disabled path and the config contract: anything past an enabled `onModuleInit` opens a
+// real Redis connection and belongs to the e2e suite.
 describe('DomainEventsWorker', () => {
   it('reads its config at construction, so a missing key fails at boot rather than on first job', () => {
     expect(() => build({ 'queue.prefix': undefined })).toThrow(/Missing config queue.prefix/);

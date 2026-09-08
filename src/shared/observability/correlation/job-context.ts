@@ -1,19 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { CLS_ID, type ClsService } from 'nestjs-cls';
 
-/** CLS key holding the name of the background job running in this context. */
 export const JOB_NAME_KEY = 'jobName';
 
 /**
- * The correlation seam for work that has no request behind it.
- *
- * A timer or queue worker gets no requestId, so lines from one tick are indistinguishable from
- * lines from several ticks running side by side — exactly the question a retention or relay
- * incident asks. Opening a CLS scope per unit of background work gives each tick its own id, and
- * `jobName` rides alongside so a line names the driver that produced it.
- *
- * Deliberately NOT the trace id: {@link withSpan} already puts one on a tick. The trace follows work
- * across processes, this follows it across log lines; a tick usually wants both.
+ * Correlation for work with no request behind it: without a per-tick id, lines from one tick are
+ * indistinguishable from lines of several ticks running side by side. Deliberately NOT the trace id
+ * ({@link withSpan} supplies that) — the trace follows work across processes, this across log lines.
  */
 export function runInJobContext<T>(cls: ClsService, jobName: string, fn: () => Promise<T>): Promise<T> {
   return cls.run(() => {
@@ -24,7 +17,6 @@ export function runInJobContext<T>(cls: ClsService, jobName: string, fn: () => P
   });
 }
 
-/** The background job owning the active context, or undefined inside a request (or outside CLS). */
 export function getJobName(cls: ClsService): string | undefined {
   return cls.isActive() ? cls.get<string>(JOB_NAME_KEY) : undefined;
 }

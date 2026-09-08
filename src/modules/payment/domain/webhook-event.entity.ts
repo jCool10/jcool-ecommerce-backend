@@ -2,11 +2,9 @@ import { assertNonEmpty } from '@shared/kernel';
 import { WebhookEventStatus } from './webhook-event-status';
 
 /**
- * Webhook event — the domain view of one gateway delivery. Pure: no framework/DB
- * imports. The verified `payload` is kept for audit/reconcile. Uniqueness by
- * (provider, providerEventId) is a persistence concern (the unique index); this entity
- * only models the event and its processing status. `id`/`receivedAt` are null before
- * persistence, set once rehydrated from a row.
+ * Pure: no framework/DB imports. The verified `payload` is kept for audit/reconcile. Uniqueness by
+ * (provider, providerEventId) is a persistence concern (the unique index), not modelled here.
+ * `id`/`receivedAt` are null before persistence, set once rehydrated from a row.
  */
 export class WebhookEvent {
   private constructor(
@@ -20,7 +18,6 @@ export class WebhookEvent {
     public readonly processedAt: Date | null,
   ) {}
 
-  /** A newly received event (id/receivedAt assigned on insert). */
   static create(props: { provider: string; providerEventId: string; type: string; payload: unknown }): WebhookEvent {
     assertNonEmpty(props.provider, 'WebhookEvent.provider');
     assertNonEmpty(props.providerEventId, 'WebhookEvent.providerEventId');
@@ -37,7 +34,7 @@ export class WebhookEvent {
     );
   }
 
-  /** Reconstruct from persisted state (repository use only). */
+  /** Repository use only. */
   static rehydrate(props: {
     id: string;
     provider: string;

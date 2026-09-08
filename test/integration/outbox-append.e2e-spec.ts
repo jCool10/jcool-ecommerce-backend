@@ -148,9 +148,8 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
 
 // The other direction: a writer that FAILS must take the whole checkout down with it, so an event
 // the system could not record is never silently skipped in favour of a placed order. The writer is
-// stubbed here, which means this suite says nothing about whether the real one opens its own
-// transaction — that is proved above, against the real writer, in a transaction that fails after a
-// successful append.
+// stubbed here, so this suite says nothing about whether the real one opens its own transaction —
+// that is proved above.
 describe('Outbox append failure rolls back the checkout (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;

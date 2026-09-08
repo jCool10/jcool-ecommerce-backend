@@ -9,8 +9,7 @@ import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { CircuitBreakerFactory } from './circuit-breaker.factory';
 import { DownstreamUnavailableError } from './outbound-call.port';
 
-// Short enough to keep the suite quick, long enough that a loaded machine does not trip the
-// timeout on a call meant to succeed.
+// Long enough that a loaded machine does not trip the timeout on a call meant to succeed.
 const TIMEOUT_MS = 80;
 const RESET_MS = 100;
 const BREAKER = 'probe';
@@ -24,8 +23,7 @@ function build(overrides: Record<string, unknown> = {}) {
     'resilience.breaker.errorThresholdPercentage': 50,
     'resilience.breaker.resetTimeoutMs': RESET_MS,
     'resilience.breaker.rollingWindowMs': 2000,
-    // Two calls, so one failure cannot open the circuit on its own — the smallest setting that
-    // still exercises the volume gate.
+    // Smallest setting that still exercises the volume gate: one failure cannot open the circuit.
     'resilience.breaker.volumeThreshold': 2,
     ...overrides,
   };
@@ -47,7 +45,6 @@ function build(overrides: Record<string, unknown> = {}) {
   return { factory, metrics, logger };
 }
 
-/** Stands in for the service on the other side of the network: it can fail, hang, or recover. */
 class FakeDownstream {
   calls = 0;
   private failures = 0;
@@ -100,7 +97,6 @@ describe('CircuitBreakerFactory', () => {
 
     const error = await call.run(() => downstream.call()).catch((e: unknown) => e);
 
-    // Only the breaker's own verdict is translated; a downstream that answered "no" answered.
     expect(error).not.toBeInstanceOf(DownstreamUnavailableError);
     expect((error as Error).message).toBe('downstream boom');
   });
@@ -118,7 +114,6 @@ describe('CircuitBreakerFactory', () => {
     downstream.recover();
     const error = await call.run(() => downstream.call()).catch((e: unknown) => e);
 
-    // The whole point of open: the request costs nothing downstream and returns immediately.
     expect(downstream.calls).toBe(callsBeforeRefusal);
     expect(error).toBeInstanceOf(DownstreamUnavailableError);
     expect((error as DownstreamUnavailableError).reason).toBe('open');
@@ -152,7 +147,7 @@ describe('CircuitBreakerFactory', () => {
     downstream.failNext(1);
     await expect(call.run(() => downstream.call())).rejects.toThrow('downstream boom');
 
-    // One failed probe re-opens the circuit on its own — the volume threshold does not apply to it,
+    // One failed probe re-opens the circuit on its own: the volume threshold does not apply to it,
     // or a half-open breaker would need a burst of traffic to decide anything.
     const reopens = metrics.recordBreakerTransition.mock.calls.filter(([, to]) => to === 'open');
     expect(reopens).toHaveLength(2);
@@ -172,8 +167,7 @@ describe('CircuitBreakerFactory', () => {
 
     const results = await Promise.allSettled([1, 2, 3].map(() => call.run(() => downstream.call())));
 
-    // The probe is a probe, not an opening of the floodgates: a burst arriving the moment the reset
-    // window elapses must not become a second stampede against a downstream that is still fragile.
+    // A burst arriving the moment the reset window elapses must not stampede a fragile downstream.
     expect(downstream.calls).toBe(callsWhileOpen + 1);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
   });
@@ -186,8 +180,7 @@ describe('CircuitBreakerFactory', () => {
 
     const error = await call.run(() => downstream.call()).catch((e: unknown) => e);
 
-    // A downstream that hangs rather than errors would otherwise never trip anything: no call fails,
-    // we simply stop having request slots. The timeout is what turns hanging into a countable failure.
+    // A hanging downstream fails no call, it just eats request slots; the timeout is what makes it countable.
     expect(error).toBeInstanceOf(DownstreamUnavailableError);
     expect((error as DownstreamUnavailableError).reason).toBe('timeout');
     expect(metrics.recordBreakerCall).toHaveBeenCalledWith(BREAKER, 'timeout');
@@ -209,8 +202,6 @@ describe('CircuitBreakerFactory', () => {
       await expect(call.run(() => downstream.call())).rejects.toThrow('downstream boom');
     }
 
-    // A service that keeps rejecting our requests is a service that keeps answering. Counting those
-    // would open the circuit on a healthy dependency and make a run of bad requests everyone's outage.
     expect(metrics.recordBreakerTransition).not.toHaveBeenCalledWith(BREAKER, 'open');
     downstream.recover();
     await expect(call.run(() => downstream.call())).resolves.toBe('ok');
@@ -224,8 +215,7 @@ describe('CircuitBreakerFactory', () => {
 
     const error = await call.run(() => downstream.call()).catch((e: unknown) => e);
 
-    // A call landing mid-drain is refused, not attempted — the same thing an open circuit does, and
-    // callers translate it the same way. Left raw it would surface as a 500.
+    // Left raw, opossum's shutdown error would surface to callers as a 500 instead of a refusal.
     expect(error).toBeInstanceOf(DownstreamUnavailableError);
     expect((error as DownstreamUnavailableError).reason).toBe('open');
     expect(downstream.calls).toBe(0);
@@ -258,8 +248,7 @@ describe('CircuitBreakerFactory', () => {
   });
 });
 
-// A real in-memory tracer, because the thing worth proving is what a refusal leaves behind for
-// someone reading a trace — and a refusal makes no network call, so nothing else records it.
+// A real in-memory tracer, not a mock: a refusal makes no network call, so nothing else records it.
 describe('CircuitBreakerFactory tracing', () => {
   const exporter = new InMemorySpanExporter();
   let provider: BasicTracerProvider;
@@ -323,9 +312,8 @@ describe('CircuitBreakerFactory tracing', () => {
     const call = factory.create(BREAKER);
 
     await trip(call, downstream);
-    // Past the reset window, so the timer-driven half-open has also fired by now. It must not add
-    // a second event: the span it would land on belongs to the call that tripped the breaker a
-    // reset window ago and has long since ended.
+    // Past the reset window, so the timer-driven half-open has fired too. It must not add a second
+    // event: the only span it could land on tripped the breaker a reset window ago and has ended.
     await sleep(RESET_MS + 40);
 
     const transitions = spanNamed(`breaker:${BREAKER}`)
@@ -339,8 +327,8 @@ describe('CircuitBreakerFactory tracing', () => {
     const { factory, logger } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER);
-    // The pino mixin stamps requestId and traceId from whatever context the line is written in, so
-    // what a transition can see at log time is what ends up on it.
+    // The pino mixin stamps requestId/traceId from whatever context the line is written in, so what
+    // a transition can see at log time is what ends up on it.
     const contextAtLog: (string | undefined)[] = [];
     logger.warn.mockImplementation(() => {
       contextAtLog.push(trace.getActiveSpan()?.spanContext().spanId);

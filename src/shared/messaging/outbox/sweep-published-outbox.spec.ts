@@ -24,11 +24,9 @@ function build(days: unknown = 30) {
   };
 }
 
-/**
- * The predicate is proved against real rows in `retention-sweep.e2e-spec.ts`. What is worth
- * asserting without a database is the cutoff, since the way to get it wrong is to push it the wrong
- * way — a window ADDED to now would collect rows the relay published moments ago.
- */
+// The predicate is proved against real rows in `retention-sweep.e2e-spec.ts`. What is worth
+// asserting without a database is the cutoff's direction: a window ADDED to now would collect rows
+// the relay published moments ago.
 describe('SweepPublishedOutbox', () => {
   beforeEach(() => {
     vi.useFakeTimers();

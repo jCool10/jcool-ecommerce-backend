@@ -4,7 +4,6 @@ import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
 import { MetricsTokenGuard } from './metrics.guard';
 
-// ConfigService fake keyed by the two config paths the guard reads.
 function configFor(token: string | undefined, env: string): ConfigService {
   return {
     get: (key: string): unknown => (key === 'metrics.token' ? token : key === 'app.env' ? env : undefined),

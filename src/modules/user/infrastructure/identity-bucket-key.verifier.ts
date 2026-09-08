@@ -18,20 +18,11 @@ function reason(error: unknown): string {
 
 /**
  * Refuses to boot when the running `IDENTITY_BUCKET_KEY` is not the one this database was built
- * with. A wrong key mints ids into buckets their emails do not hash to, and since nothing reads a
- * bucket until a shard split, the damage surfaces years after the key that caused it was lost.
- *
- * Two checks. The row canary compares one real id against the bucket its email hashes to now; it
- * cannot see a key that was wrong from row 1, since both sides then use the same key. The pin
- * compares against a fingerprint stored in the database, so it holds with zero rows and survives a
- * restore into an environment carrying a different key.
- *
- * Canary first, even though the pin is stronger, because the pin *writes*: on a database with rows
- * but no pin row, pinning first would record a wrong key as the reference every later boot is held
- * to. Corroborate, then record.
- *
- * Both fail open on an unreachable database — no id is minted while it is down, and the next clean
- * boot re-checks. They fail closed only on a disagreement actually read back.
+ * with: a wrong key mints ids into buckets their emails do not hash to, and nothing reads a bucket
+ * until a shard split, so the damage surfaces years later. The canary runs before the pin even
+ * though the pin is stronger, because the pin *writes* — pinning first on a database that already
+ * holds rows would record a wrong key as the reference every later boot is held to. Both fail open
+ * on an unreachable database, and fail closed only on a disagreement actually read back.
  */
 @Injectable()
 export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {

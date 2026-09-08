@@ -9,14 +9,6 @@ import { MediaAsset } from '../domain/media-asset.entity';
 import type { ClaimedAsset, MediaAssetRepositoryPort } from '../application/ports/media-asset-repository.port';
 import { mediaAssets } from './schema/media.schema';
 
-/**
- * Drizzle adapter for MediaAssetRepositoryPort.
- *
- * Two access patterns, deliberately different. `attach`/`detach` run inside the caller's `tx` and
- * lock the row, so the state change commits with whatever referenced it. The sweep's claim is a
- * single self-contained UPDATE, because a row lock cannot be held across the bucket call that
- * follows it — the committed SWEEPING status is what takes that lock's place.
- */
 @Injectable()
 export class DrizzleMediaAssetRepository implements MediaAssetRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -56,16 +48,10 @@ export class DrizzleMediaAssetRepository implements MediaAssetRepositoryPort {
       and(eq(mediaAssets.status, AssetStatus.SWEEPING), lt(mediaAssets.updatedAt, staleClaimBefore)),
     );
 
-    // One statement, so the claim is atomic: whatever comes back is this pass's alone, and an
-    // attach committing a moment later finds a status it cannot transition out of.
-    //
-    // `eligible` is repeated on the UPDATE itself, and that repetition is load-bearing. Under READ
-    // COMMITTED an UPDATE that blocks on a concurrent writer re-checks its own WHERE against the
-    // row the winner committed — but only its own: the subquery keeps the statement's original
-    // snapshot, so `id IN (…)` alone still matches, and an attach that just committed would be
-    // claimed and its bytes deleted out from under the product. Repeating the predicate here is
-    // what makes that recheck see ATTACHED. It also re-reads `expires_at`, so an upload confirmed
-    // while this statement waited keeps its extended expiry.
+    // Repeating `eligible` on the UPDATE itself is load-bearing. Under READ COMMITTED an UPDATE that
+    // blocks on a concurrent writer rechecks its own WHERE against the row the winner committed —
+    // but the subquery keeps the statement's original snapshot, so `id IN (…)` alone would still
+    // match an attach that just committed and delete its bytes out from under the product.
     return this.db
       .update(mediaAssets)
       .set({ status: AssetStatus.SWEEPING, updatedAt: new Date() })
@@ -92,8 +78,7 @@ export class DrizzleMediaAssetRepository implements MediaAssetRepositoryPort {
   async attach(tx: DrizzleTx, id: string): Promise<void> {
     const status = await this.lockStatus(tx, id);
     assertTransition(status, AssetStatus.ATTACHED);
-    // The only place an expiry is cleared: an asset in use is not reclaimable, and everything else
-    // must stay selectable by the sweep.
+    // The only place an expiry is cleared; every other state must stay selectable by the sweep.
     await tx.update(mediaAssets).set({ status: AssetStatus.ATTACHED, expiresAt: null }).where(eq(mediaAssets.id, id));
   }
 

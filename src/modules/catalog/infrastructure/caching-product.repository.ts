@@ -27,10 +27,8 @@ const LIST_CODEC: CacheCodec<FindManyActiveResult> = {
 };
 
 /**
- * Stampede-protected read-through cache over the Drizzle read adapter, bound to `PRODUCT_REPOSITORY`
- * so the controller, use cases and domain never learn the cache exists. Postgres stays the source of
- * truth: any cache failure — an unreachable Redis, a snapshot that no longer decodes — falls through
- * to it, so Redis being down costs latency, not availability.
+ * Postgres stays the source of truth: any cache failure — an unreachable Redis, a snapshot that no
+ * longer decodes — falls through to it, so Redis being down costs latency, not availability.
  */
 @Injectable()
 export class CachingProductRepository implements ProductRepositoryPort {
@@ -43,8 +41,7 @@ export class CachingProductRepository implements ProductRepositoryPort {
     @Inject(METRICS) private readonly metrics: MetricsPort,
     config: ConfigService,
   ) {
-    // Catalog decides how long its own entries count as fresh; the stale window, jitter and lock
-    // bounds are process-wide and shared with every other stampede-protected read.
+    // Only freshness is catalog's to choose; the stale window, jitter and lock bounds stay process-wide.
     this.policy = { ...swr.defaultPolicy, softTtlMs: config.getOrThrow<number>('catalog.cacheTtlSec') * 1000 };
   }
 
@@ -76,9 +73,8 @@ export class CachingProductRepository implements ProductRepositoryPort {
     );
   }
 
-  // Uncached passthroughs: Cart prices a line off these reads and Order snapshots the price it
-  // charges from the same ones, where a stale price or a stale isActive is a wrong order, not a
-  // slow one.
+  // Deliberately uncached: Cart prices a line off these reads and Order snapshots the price it
+  // charges from them, where a stale price or isActive is a wrong order, not a slow one.
   findSkuView(skuId: string): Promise<SkuView | null> {
     return this.source.findSkuView(skuId);
   }

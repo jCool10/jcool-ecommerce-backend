@@ -1,11 +1,6 @@
 import { assertInteger, assertNonEmpty, assertPositive } from '@shared/kernel';
 
-/**
- * One line in a cart: which SKU (product-variant id) and how many. Cart is
- * scratch space, so a line carries no price — the live price is resolved from
- * Catalog at read time. Quantity is a domain invariant (integer >= 1), mirrored
- * by the DTO validation at the HTTP edge.
- */
+// `skuId` is a product-variant id.
 export class CartItem {
   private constructor(
     public readonly skuId: string,

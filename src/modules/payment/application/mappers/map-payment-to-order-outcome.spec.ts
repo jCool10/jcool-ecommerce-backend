@@ -13,7 +13,6 @@ describe('mapPaymentToOrderOutcome', () => {
 
   it('returns null for non-terminal or non-webhook statuses (nothing to finalize)', () => {
     expect(mapPaymentToOrderOutcome(PaymentStatus.PENDING)).toBeNull();
-    // Order EXPIRED is the reconciliation cron's outcome, never a webhook's.
     expect(mapPaymentToOrderOutcome(PaymentStatus.EXPIRED)).toBeNull();
   });
 });

@@ -23,7 +23,6 @@ describe('UserFacadeAdapter', () => {
     const summary = await build(USER).getUserSummary(USER.id);
 
     expect(summary).toEqual({ id: USER.id, email: 'buyer@test.local', role: Role.Customer });
-    // The whole reason the entity does not cross the boundary.
     expect(JSON.stringify(summary)).not.toContain('argon2');
   });
 

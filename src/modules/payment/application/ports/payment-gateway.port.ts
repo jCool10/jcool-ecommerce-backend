@@ -1,6 +1,5 @@
-// Swapping the provider is a DI change, never a caller change. The port is not speculative: two
-// adapters already implement it — StripeGatewayAdapter in production and FakeSignerGatewayAdapter
-// in e2e, which is how the webhook path is tested without Stripe's signing key.
+// FakeSignerGatewayAdapter implements this alongside StripeGatewayAdapter, which is how e2e exercises
+// the webhook path without Stripe's signing key.
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 
 export interface CreateSessionInput {
@@ -15,7 +14,7 @@ export interface CreateSessionInput {
 export interface GatewaySession {
   providerSessionId: string; // handle persisted on Payment (Stripe: cs_...)
   redirectUrl?: string; // hosted checkout URL, or a VietQR payload for domestic gateways
-  clientSecret?: string; // PaymentIntent client_secret, when the flow uses one
+  clientSecret?: string;
 }
 
 // Discriminated so the webhook handler branches on outcome instead of catching an opaque throw.
@@ -37,16 +36,12 @@ export interface GatewayPaymentStatus {
   intentId?: string | null;
 }
 
-/** What closing a session turned out to mean. The adapter resolves it, so no caller has to guess. */
 export type ExpireSessionOutcome =
   /** This call closed it. */
   | 'expired'
   /** Already unpayable — expired, or never issued. Nothing happened and nothing is owed. */
   | 'already_closed'
-  /**
-   * The buyer has already checked out through it. Payment may still be clearing (an async method
-   * leaves a completed session unpaid for a while), but the decision is the same either way.
-   */
+  /** The buyer already checked out through it; payment may still be clearing, but nothing to close. */
   | 'already_completed';
 
 export interface PaymentGatewayPort {

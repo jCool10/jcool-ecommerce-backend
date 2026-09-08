@@ -7,9 +7,8 @@ function failedProperties(raw: Record<string, unknown>): string[] {
   return validateSync(dto, { whitelist: true, forbidNonWhitelisted: true }).map((error) => error.property);
 }
 
-// These rules are what keeps an unauthenticated caller from handing the engine an oversized query, a
-// full-table page, or a category value that is not a slug — the last of which reaches a filter
-// expression, so the shape check here is the first of its two defences.
+// The categorySlug shape check is a security boundary, not tidiness: the value reaches the engine
+// inside a filter expression, and this is the first of its two defences.
 describe('SearchProductsQueryDto', () => {
   it('accepts a well-formed query', () => {
     expect(failedProperties({ q: 'headphones', page: '2', pageSize: '50', categorySlug: 'audio' })).toEqual([]);

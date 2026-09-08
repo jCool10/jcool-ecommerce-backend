@@ -2,12 +2,9 @@ import { DomainError } from '@shared/kernel';
 import { OrderStatus } from './order-status';
 
 /**
- * The single source of truth for which status changes are legal — every transition goes through
- * `assertTransition`, so no use case carries its own if/else.
- *
- * Every edge is currently wired. The `wired` flag stays because it is the cheap way to land a
- * transition ahead of the code that drives it: declaring an edge documents the intended shape while
- * still rejecting it at runtime, so enabling it later is a flag flip rather than a restructure.
+ * Every status change goes through `assertTransition`, so no use case carries its own if/else.
+ * Every edge is currently wired; the `wired` flag stays so a future transition can be declared
+ * ahead of the code that drives it and still be rejected at runtime until it is flipped.
  */
 
 interface Transition {
@@ -34,17 +31,14 @@ const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
   OrderStatus.CANCELLED,
 ]);
 
-/** True only for an edge that is both declared AND wired. */
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return TRANSITIONS.some((t) => t.from === from && t.to === to && t.wired);
 }
 
-/** True for a settled order (no outgoing transition) — the finalize idempotency guard reads this. */
 export function isTerminal(status: OrderStatus): boolean {
   return TERMINAL_STATUSES.has(status);
 }
 
-/** Raised when a status change is illegal (undeclared) or declared-but-not-yet-wired. */
 export class OrderTransitionError extends DomainError {
   constructor(
     readonly from: OrderStatus,
@@ -55,7 +49,6 @@ export class OrderTransitionError extends DomainError {
   }
 }
 
-/** Throws `OrderTransitionError` unless the transition is allowed. Pure — no I/O. */
 export function assertTransition(from: OrderStatus, to: OrderStatus): void {
   if (!canTransition(from, to)) {
     throw new OrderTransitionError(from, to);

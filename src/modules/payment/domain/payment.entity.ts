@@ -3,11 +3,8 @@ import { PaymentStatus } from './payment-status';
 import { assertTransition } from './payment-state-machine';
 
 /**
- * Payment aggregate — the payment side of a purchase. Pure: no framework/DB imports.
- * `amountMinor` is a frozen snapshot of the order total (integer minor units). Status
- * changes go through the state machine (`markSucceeded`/`markFailed` assert the
- * transition), so an out-of-order or terminal-state webhook is rejected in the domain,
- * not left to the DB. `id` is null before persistence, a string once rehydrated.
+ * Pure: no framework/DB imports. `amountMinor` is a frozen snapshot of the order total (integer minor
+ * units), and `id` is null before persistence, a string once rehydrated.
  */
 export class Payment {
   private constructor(
@@ -21,7 +18,6 @@ export class Payment {
     public readonly status: PaymentStatus,
   ) {}
 
-  /** A new PENDING payment for an order (id assigned later, on insert). */
   static create(props: {
     orderId: string;
     provider: string;
@@ -50,7 +46,7 @@ export class Payment {
     );
   }
 
-  /** Reconstruct a payment from persisted state (repository use only). */
+  /** Repository use only. */
   static rehydrate(props: {
     id: string;
     orderId: string;
@@ -73,18 +69,15 @@ export class Payment {
     );
   }
 
-  /** The frozen amount (minor units) as Money. */
   amount(): Money {
     return Money.of(this.amountMinor, this.currency);
   }
 
-  /** PENDING → SUCCEEDED; throws `PaymentTransitionError` from any other state. */
   markSucceeded(providerIntentId?: string | null): Payment {
     assertTransition(this.status, PaymentStatus.SUCCEEDED);
     return this.withStatus(PaymentStatus.SUCCEEDED, providerIntentId);
   }
 
-  /** PENDING → FAILED; throws `PaymentTransitionError` from any other state. */
   markFailed(providerIntentId?: string | null): Payment {
     assertTransition(this.status, PaymentStatus.FAILED);
     return this.withStatus(PaymentStatus.FAILED, providerIntentId);

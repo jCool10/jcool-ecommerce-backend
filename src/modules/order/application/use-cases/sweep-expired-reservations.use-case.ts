@@ -25,10 +25,8 @@ export interface SweepSummary {
 
 /**
  * The liveness backstop: an order whose stock hold has lapsed and which nothing ever settled is
- * expired here, so neither the order nor its stock waits on a payment result that is not coming.
- * It asks the gateway nothing — which is what lets it converge during an outage, and also why the
- * session it leaves open has to be closed by Payment reacting to `order.expired`. Ordering against
- * the reconcile sweep: docs/engineering-notes.md (Order — hết hạn giữ kho).
+ * expired here. It asks the gateway nothing — which is what lets it converge during an outage, and
+ * also why the session it leaves open has to be closed by Payment reacting to `order.expired`.
  */
 @Injectable()
 export class SweepExpiredReservationsUseCase {

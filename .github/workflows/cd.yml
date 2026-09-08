@@ -62,17 +62,32 @@ jobs:
         run: |
           set -euo pipefail
           deadline=$(( $(date +%s) + 900 ))
+          watched=""
           while :; do
             raw=$(railway deployment list --json --limit 1 \
               --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT")
-            status=$(printf '%s' "$raw" \
-              | jq -r '(if type == "array" then .[0] else (.deployments // .data // [])[0] end) | .status // empty')
+            entry=$(printf '%s' "$raw" \
+              | jq -r '(if type == "array" then .[0] else (.deployments // .data // [])[0] end)
+                       | "\(.id // .deploymentId // empty)\t\(.status // empty)"')
+            id=${entry%%$'\t'*}
+            status=${entry##*$'\t'}
 
             # An unreadable payload must fail loudly: treating "no status" as "not yet" would let a
             # CLI output change turn every deploy green on a 15-minute timeout instead.
             if [ -z "$status" ]; then
               echo "::error::cannot read deployment status from the CLI response"
               printf '%s\n' "$raw"
+              exit 1
+            fi
+
+            # Latch the first deployment seen and refuse to follow a different one. Without this the
+            # loop polls "whatever is newest", so a rollout triggered while this one is in flight
+            # would be reported as this run's result.
+            if [ -z "$watched" ]; then
+              watched=$id
+              echo "watching deployment ${watched:-<unknown id>} (status $status)"
+            elif [ "$id" != "$watched" ]; then
+              echo "::error::deployment $watched was superseded by $id — this run cannot report on it"
               exit 1
             fi
 

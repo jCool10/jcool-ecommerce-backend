@@ -2,11 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { MailMessage, MailTransportPort } from './mail-transport.port';
 
 /**
- * Development sink: records that a message was sent, never what it said.
- *
- * Bodies carry redeemable verification and password-reset tokens, and a central log is read by far
- * more people than the recipient's inbox — logging one would turn a forgotten env var into a
- * privilege-escalation path. Run Mailpit (docker compose) to read an actual link locally.
+ * Records that a message was sent, never what it said: bodies carry redeemable verification and
+ * password-reset tokens, and a central log is read by far more people than the recipient's inbox.
+ * Run Mailpit (docker compose) to read an actual link locally.
  */
 @Injectable()
 export class LogMailTransport implements MailTransportPort {

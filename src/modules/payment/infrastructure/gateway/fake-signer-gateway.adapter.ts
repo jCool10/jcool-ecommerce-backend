@@ -13,9 +13,8 @@ import { signStripeStyle, verifyAndParseStripeEvent } from './hmac-signature';
 
 /**
  * Deterministic gateway double for tests and local dev. It signs and verifies for real, sharing
- * hmac-signature.ts with the Stripe adapter, so the scheme can never drift — this is real
- * behavior, not a mock of our own domain. `sign` lets integration tests build validly /
- * invalidly / expired-signed webhook fixtures offline (no network, no Stripe account).
+ * hmac-signature.ts with the Stripe adapter so the scheme can never drift, which lets integration
+ * tests build validly / invalidly / expired-signed webhook fixtures offline.
  */
 export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
   // Emulates the Stripe scheme, so a payment it creates is recorded under the same provider key.
@@ -31,7 +30,6 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
     private readonly toleranceSec = 300,
   ) {}
 
-  /** Build a Stripe-style signature header for `rawBody` at `timestampSec` (test fixture helper). */
   sign(rawBody: Buffer | string, timestampSec: number): string {
     return signStripeStyle(this.secret, timestampSec, rawBody);
   }
@@ -54,7 +52,6 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
     });
   }
 
-  /** Script what the gateway reports for a handle. */
   setPaymentStatus(ref: string, status: GatewayStatus, intentId?: string): void {
     this.statuses.set(ref, status);
     if (intentId !== undefined) {
@@ -62,12 +59,11 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
     }
   }
 
-  /** Stage a provider outage: the next status query throws, as a real one would. */
+  /** Stages an outage: the status query throws, as a real one would, rather than answering UNKNOWN. */
   failPaymentStatus(ref: string): void {
     this.unreachable.add(ref);
   }
 
-  /** Stage a session the gateway refuses to close, to exercise the sweep's expiry guard. */
   failExpireSession(ref: string): void {
     this.unexpirable.add(ref);
   }

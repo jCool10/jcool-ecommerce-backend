@@ -3,11 +3,7 @@ import type { Request } from 'express';
 import { CSRF_HEADER, CSRF_TOKEN_COOKIE } from './auth-cookie.constants';
 import { CsrfTokenService } from './csrf-token.service';
 
-/**
- * Enforces the signed double-submit CSRF check on the cookie-authenticated routes (refresh/logout);
- * runs after the global JwtAuthGuard, so an invalid access token 401s before this 403s.
- * See docs/engineering-notes.md (Auth — Token delivery (cookie) & CSRF).
- */
+/** Runs after the global JwtAuthGuard, so an invalid access token 401s before this can 403. */
 @Injectable()
 export class CsrfGuard implements CanActivate {
   constructor(private readonly csrf: CsrfTokenService) {}

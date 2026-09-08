@@ -1,10 +1,9 @@
 import { index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
-// Inbox — the consumer half of the messaging infrastructure, and like the outbox deliberately not
-// owned by a bounded context (ADR 0019). One row per event a consumer has actually applied.
-// Retention is unbounded today: a row may only ever be pruned once the queue can no longer redeliver
-// the message it stands for, or dedup silently stops working.
+// One row per event a consumer has actually applied. Like the outbox, deliberately not owned by a
+// bounded context. A row may only ever be pruned once the queue can no longer redeliver the message
+// it stands for, or dedup silently stops working.
 
 const id = () =>
   uuid('id')
@@ -27,9 +26,8 @@ export const inbox = pgTable(
     processedAt: timestamp('processed_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    // The entire pattern in one line. At-least-once delivery is a fact of the transport; this index
-    // is what makes it harmless, and it is held by the database rather than by application logic —
-    // the same last line of defence as the idempotency-key store.
+    // At-least-once delivery is a fact of the transport; this index is what makes it harmless, and
+    // it is held by the database rather than by application logic.
     uniqueIndex('uq_inbox_consumer_message').on(t.consumer, t.messageId),
     // The retention sweep reads by age; the unique index above is on identity and cannot serve it.
     index('idx_inbox_processed').on(t.processedAt),

@@ -9,15 +9,14 @@ import type { DomainEventJob, PostCommitEffect } from '../queue/domain-event.job
 import { OrderEventsHandler } from './order-events.handler';
 
 /**
- * An effect runs inside the consumer's transaction — the same one that holds the inbox claim — so a
- * handler that fails un-marks the event and the redelivery runs it for real. A handler needing to
- * reach something the transaction cannot hold returns that work instead; see {@link PostCommitEffect}.
+ * An effect runs inside the consumer's transaction — the same one holding the inbox claim — so a
+ * handler that fails un-marks the event and the redelivery runs it for real. Work the transaction
+ * cannot hold is returned instead; see {@link PostCommitEffect}.
  */
 export type DomainEventHandler = (job: DomainEventJob, tx: DrizzleTx) => Promise<PostCommitEffect | void>;
 
 const UNREGISTERED_EVENT_LABEL = 'unregistered';
 
-/** Routes a consumed event to its effect. The one place that decides what this service reacts to. */
 @Injectable()
 export class DomainEventDispatcher {
   private readonly handlers: ReadonlyMap<string, DomainEventHandler>;
@@ -31,10 +30,9 @@ export class DomainEventDispatcher {
   ) {
     this.handlers = new Map<string, DomainEventHandler>([
       ['order.placed', (job) => orderEvents.record(job)],
-      // The finalize outcomes. No DB effect, for the same reason as order.placed: the finalizing
-      // transaction already settled the stock, so re-applying anything here would double it. What
-      // order.paid does owe is the buyer's confirmation, which is why it hands back an effect
-      // instead of doing the sending here.
+      // No DB effect, for the same reason as order.placed: the finalizing transaction already
+      // settled the stock, so re-applying anything here would double it. The buyer's confirmation
+      // is still owed, which is why order.paid hands back an effect instead of sending inline.
       [
         'order.paid',
         async (job) => {
@@ -44,8 +42,8 @@ export class DomainEventDispatcher {
       ],
       ['order.failed', (job) => orderEvents.record(job)],
       // The two exceptions: an order that dies unpaid settles its stock but cannot reach the gateway,
-      // so the checkout session it leaves open is an effect still owed, and only Payment can apply
-      // it. Two handlers because the logs tell the two deaths apart.
+      // so the checkout session it leaves open is an effect still owed, and only Payment can apply it.
+      // Two handlers because the logs tell the two deaths apart.
       [
         'order.expired',
         async (job, tx) => {
@@ -60,17 +58,16 @@ export class DomainEventDispatcher {
           await orderCancelled.close(job, tx);
         },
       ],
-      // Payment's settlements, unlike the above, carry an effect this consumer genuinely owns: the
-      // producing transaction moved money and nothing else, leaving the order still to settle.
+      // Unlike the above, these carry an effect this consumer genuinely owns: the producing
+      // transaction moved money and nothing else, leaving the order still to settle.
       ['payment.succeeded', (job, tx) => paymentEvents.settle(job, tx)],
       ['payment.failed', (job, tx) => paymentEvents.settle(job, tx)],
     ]);
   }
 
   /**
-   * The event name as a metric label, folding anything unrecognised into one constant. The dispatch
-   * table is the only bounded set of event names there is — a name off the wire is not — so a
-   * producer emitting garbage would otherwise mint a time series per value.
+   * The dispatch table is the only bounded set of event names there is — a name off the wire is not
+   * — so anything unrecognised folds into one constant rather than minting a time series per value.
    */
   label(eventType: string): string {
     return this.handlers.has(eventType) ? eventType : UNREGISTERED_EVENT_LABEL;
@@ -78,9 +75,8 @@ export class DomainEventDispatcher {
 
   async dispatch(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect | void> {
     const handler = this.handlers.get(job.eventType);
-    // Never ack an event we do not understand. A missing handler means a producer shipped ahead of
-    // its consumer; swallowing it would drop the event with nothing but a log line to show for it,
-    // whereas failing keeps it in the queue's failure path where it stays visible and replayable.
+    // Never ack an event we do not understand: failing keeps it in the queue's failure path, where
+    // it stays visible and replayable, rather than dropping it with only a log line to show for it.
     if (!handler) throw new UnhandledEventError(job.eventType);
 
     return handler(job, tx);

@@ -1,7 +1,7 @@
 import { Money } from '@shared/kernel';
 import { Product, type ProductStatus, type ProductVariant } from '../domain/entities';
 
-/** One flattened product×variant×price row (product/category inner-joined so always present; variant/price left-joined so nullable) — a plain shape so `assembleProducts` stays pure and Drizzle-independent. */
+// Nullability mirrors the join shape: product/category are inner-joined, variant/price left-joined.
 export interface ProductFlatRow {
   productId: string;
   productName: string;
@@ -31,13 +31,7 @@ interface ProductAcc {
   variants: Map<string, VariantAcc>;
 }
 
-/**
- * Collapse flattened join rows into Product entities, deduping variants and prices by id; product
- * order = first-seen, so the query's ORDER BY controls it.
- *
- * Images arrive as a separate map rather than another join: a product with 3 variants and 4 images
- * would otherwise come back as 12 rows, and every price would be counted three times over.
- */
+/** Product order is first-seen, so the caller's ORDER BY controls it. */
 export function assembleProducts(rows: ProductFlatRow[], imagesByProduct?: Map<string, string[]>): Product[] {
   const acc = new Map<string, ProductAcc>();
 
@@ -69,8 +63,7 @@ export function assembleProducts(rows: ProductFlatRow[], imagesByProduct?: Map<s
       row.priceAmountMinor !== null &&
       !variant.prices.has(row.priceId)
     ) {
-      // Money.of re-checks the integer + 3-letter-currency invariant at the persistence
-      // boundary; every persisted price already satisfies it (the write DTO gates both).
+      // Money.of re-checks the integer + 3-letter-currency invariant at the persistence boundary.
       variant.prices.set(row.priceId, Money.of(row.priceAmountMinor, row.priceCurrency));
     }
   }

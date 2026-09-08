@@ -31,8 +31,6 @@ import { ReconciliationScheduler } from './interface/reconciliation.scheduler';
 import { OrderCancelledHandler } from './interface/queue/order-cancelled.handler';
 import { OrderExpiredHandler } from './interface/queue/order-expired.handler';
 
-// Changing gateways is a DI + env change, never a caller change: every caller depends on
-// PAYMENT_GATEWAY, so the concrete adapter is chosen here and nowhere else.
 // The gateway is fronted by a circuit breaker because it is the one dependency here that lives on
 // someone else's network, so it is the one whose slowness can exhaust our request slots.
 function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFactory): PaymentGatewayPort {
@@ -43,17 +41,14 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     successUrl: config.get<string>('payment.successUrl'),
     cancelUrl: config.get<string>('payment.cancelUrl'),
   });
-  // A rejected request (card declined, bad amount) is our fault, not the provider's — counting it
-  // as a failure would trip the breaker on perfectly healthy traffic. Only Stripe's own
-  // unavailability signals open the circuit.
   const breaker = breakers.create(PAYMENT_GATEWAY_BREAKER, { isDownstreamFault: isStripeUnavailable });
   return new BreakerPaymentGateway(gateway, breaker);
 }
 
 /**
- * Payment bounded context: the "never double-charge" invariant. Reads an order only through Order's
- * published ORDER_PAYMENT_VIEW, behind Payment's own ORDER_READ_PORT anti-corruption adapter, and
- * settles one only through Order's exported FinalizeOrderUseCase — never Order's tables.
+ * Reads an order only through Order's published ORDER_PAYMENT_VIEW, behind Payment's own
+ * ORDER_READ_PORT anti-corruption adapter, and settles one only through Order's exported
+ * FinalizeOrderUseCase — never Order's tables.
  */
 @Module({
   imports: [OrderModule, ResilienceModule],
@@ -66,9 +61,7 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     { provide: TRANSACTION_RUNNER, useClass: DrizzleTransactionRunner },
     CreatePaymentSessionUseCase,
     ProcessWebhookEventUseCase,
-    // The controller depends on this orchestrator, not the raw processor.
     HandlePaymentWebhookUseCase,
-    // The webhook's polling counterpart, driving the same FinalizeOrderUseCase.
     ReconcileStaleOrdersUseCase,
     ReconciliationScheduler,
     ExpirePaymentSessionUseCase,
@@ -77,8 +70,8 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     OrderExpiredHandler,
     OrderCancelledHandler,
   ],
-  // Both queue handlers are exported so the shared event consumer can route Order's two unpaid
-  // endings back here — only Payment can reach the session each one closes.
+  // The queue handlers are exported so the shared event consumer can route Order's two unpaid endings
+  // back here — only Payment can reach the session each one closes.
   exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY, OrderExpiredHandler, OrderCancelledHandler],
 })
 export class PaymentModule {}

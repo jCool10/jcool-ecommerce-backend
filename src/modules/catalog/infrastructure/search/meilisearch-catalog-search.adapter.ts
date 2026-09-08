@@ -18,8 +18,6 @@ import {
 const HIGHLIGHT_PRE_TAG = '<em>';
 const HIGHLIGHT_POST_TAG = '</em>';
 
-// Cap one addDocuments payload so a full reindex of a growing catalog never sends the whole table in
-// a single request; the caller may still hand over more than a page at a time.
 const BULK_INDEX_CHUNK = 1000;
 
 // Only ACTIVE products are ever indexed, but a delete that failed while the engine was unreachable
@@ -29,14 +27,12 @@ const ACTIVE_ONLY_FILTER = 'status = "ACTIVE"';
 
 type FormattedHit = SearchableProduct & { _formatted?: Partial<SearchableProduct> };
 
-// The shape of a settled engine task, narrowed to what decides success.
 type SettledTask = { status: string; error?: { message?: string } | null };
 
 /**
- * Await a write and fail on a task the engine rejected. `waitTask()` resolves for EVERY terminal
- * task, `failed` included, so without this an out-of-space or unknown-index rejection is
- * indistinguishable from a successful write — leaving the caller's best-effort handler dead and a
- * full reindex reporting a count it never actually stored.
+ * `waitTask()` resolves for EVERY terminal task, `failed` included, so without this an out-of-space
+ * or unknown-index rejection is indistinguishable from a successful write — a full reindex would
+ * report a count it never actually stored.
  */
 async function settled(pending: { waitTask: () => Promise<SettledTask> }): Promise<void> {
   const task = await pending.waitTask();
@@ -46,25 +42,24 @@ async function settled(pending: { waitTask: () => Promise<SettledTask> }): Promi
 }
 
 /**
- * Render a value as a filter literal. The engine parses a filter as an expression, so an unescaped
- * quote inside a value ends the literal and turns the rest of the caller's string into filter syntax
- * — enough to bolt an `OR` onto the query. Escaping keeps a value a value.
+ * The engine parses a filter as an expression, so an unescaped quote inside a value ends the literal
+ * and turns the rest of the caller's string into filter syntax — enough to bolt an `OR` onto the
+ * query. Escaping keeps a value a value.
  */
 function quoted(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /**
- * The single place the search engine SDK is bound (ADR 0009). `SEARCH_ENABLED=false` leaves the
- * client unbuilt and every method a no-op, so dev and unit tests need no engine — the same gating
- * Sentry/OTel use when their config is absent. `search` swallows engine errors (an optional read
- * must never 5xx over Postgres data); the write methods let errors propagate so the caller owns the
- * best-effort decision.
+ * `SEARCH_ENABLED=false` leaves the client unbuilt and every method a no-op, so dev and unit tests
+ * need no engine. `search` swallows engine errors (an optional read must never 5xx over data
+ * Postgres can serve); the write methods let errors propagate so the caller owns the best-effort
+ * decision.
  */
 @Injectable()
 export class MeilisearchCatalogSearch implements CatalogSearchPort {
   private readonly logger = new Logger(MeilisearchCatalogSearch.name);
-  // Stateless HTTP client — nothing to open or close, so no shutdown hook (unlike the Redis client).
+  // Stateless HTTP client — nothing to open or close, hence no shutdown hook.
   private readonly client: Meilisearch | null;
 
   // Explicit @Inject rather than type reflection: the reindex CLI builds this under tsx/esbuild,
@@ -145,9 +140,8 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
 
       return {
         items: response.hits.map(toSearchHit),
-        // The engine reports how many documents matched but only serves the first
-        // SEARCH_MAX_TOTAL_HITS of them, so reporting the raw estimate would advertise pages that
-        // always come back empty. Capping it keeps every page the caller is told about fetchable.
+        // The engine only serves the first SEARCH_MAX_TOTAL_HITS of what it reports as matching, so
+        // the raw estimate would advertise pages that always come back empty.
         total: Math.min(response.estimatedTotalHits ?? response.hits.length, SEARCH_MAX_TOTAL_HITS),
       };
     } catch (err) {

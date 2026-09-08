@@ -11,12 +11,6 @@ import { idempotencyKeys } from './schema/idempotency-key.schema';
 
 type Row = typeof idempotencyKeys.$inferSelect;
 
-/**
- * Drizzle adapter for IdempotencyStorePort. `tryInsertInProgress` pushes the race down to the
- * unique (scope, key) index via ON CONFLICT DO NOTHING — one writer wins, the rest get null,
- * no read-modify-write window. `markCompleted` / `deleteInProgress` accept an optional tx so
- * they can enlist in the checkout transaction (key + order + reservation commit together).
- */
 @Injectable()
 export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}

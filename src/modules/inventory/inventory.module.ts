@@ -9,15 +9,9 @@ import { StockRepository } from './infrastructure/stock.repository';
 import { AdminInventoryController } from './interface/admin-inventory.controller';
 
 /**
- * Inventory bounded context: the "never oversell" invariant. Owns stock levels +
- * reservations behind STOCK_REPOSITORY; ReserveStockUseCase picks the locking
- * strategy from config and dispatches to the port. `STOCK_RESERVATION` is Inventory's
- * published language, exported so the order flow can hold stock inside its place-order
- * transaction. No cross-context imports — the only references out are
- * `variantId`/`orderId` as plain ids.
- *
- * STOCK_ADMIN is the operator's write side, deliberately NOT exported: setting stock outright is not
- * something another context may do on a buyer's behalf.
+ * No cross-context imports — the only references out are `variantId`/`orderId` as plain ids.
+ * STOCK_ADMIN is the operator's write side, deliberately NOT exported: setting stock outright is
+ * not something another context may do on a buyer's behalf.
  */
 @Module({
   controllers: [AdminInventoryController],

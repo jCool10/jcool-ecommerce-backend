@@ -2,12 +2,10 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { STOCK_ADMIN, type StockAdminPort, type StockView } from './ports/stock-admin.port';
 
 /**
- * The operator's stock writes. The one decision here is the difference between them: `setOnHand`
- * creates the row it cannot find ("this SKU now has 40 units" is complete on its own), while `adjust`
- * 404s, because "add 40" against an uninitialised SKU would invent a starting point nobody set.
- *
- * Neither checks the variant against Catalog: Inventory holds no FK to `product_variants` by design,
- * and asking across would be the cross-context read that boundary exists to prevent.
+ * `setOnHand` creates the row it cannot find ("this SKU now has 40 units" stands on its own), while
+ * `adjust` 404s: "add 40" against an uninitialised SKU would invent a starting point nobody set.
+ * Neither checks the variant against Catalog — Inventory holds no FK to `product_variants` by
+ * design, and asking across would be the cross-context read that boundary exists to prevent.
  */
 @Injectable()
 export class AdjustStockUseCase {

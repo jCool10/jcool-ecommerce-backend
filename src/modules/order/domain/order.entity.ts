@@ -14,14 +14,9 @@ export type FinalizeOutcome =
 export type OrderFinalizedEvent = OrderPaidEvent | OrderFailedEvent | OrderExpiredEvent | OrderCancelledEvent;
 
 /**
- * Order aggregate — the transactional source of truth. Pure: no framework/DB
- * imports. Holds price-snapshot lines, the frozen total, and a status. The total
- * is computed once from the lines at creation and then persisted/read back — never
- * recomputed against a live price. State changes go through the state machine
- * (`place()` asserts DRAFT → PENDING) so the transition rule stays in one place.
- *
- * `id` is null before persistence (created from a cart, id assigned by the DB) and
- * a string once rehydrated from a row.
+ * The transactional source of truth, and pure: no framework or DB imports. The total is computed
+ * once from the snapshot lines at creation, then persisted and read back — never recomputed against
+ * a live price. `id` is null until the DB assigns one on insert, and a string once rehydrated.
  */
 export class Order {
   private constructor(
@@ -38,7 +33,6 @@ export class Order {
     public readonly paymentRef: string | null,
   ) {}
 
-  /** Build a new DRAFT order from snapshotted lines (id assigned later, on insert). */
   static create(userId: string, currency: string, items: OrderItem[]): Order {
     assertNonEmpty(userId, 'Order.userId');
     if (items.length === 0) {
@@ -64,7 +58,7 @@ export class Order {
     );
   }
 
-  /** Reconstruct an order from persisted state (repository use only). */
+  /** Repository use only — no invariant is re-checked here. */
   static rehydrate(props: {
     id: string;
     userId: string;
@@ -91,16 +85,11 @@ export class Order {
     );
   }
 
-  /** The frozen snapshot total (minor units) as Money — the persisted source of truth. */
   total(): Money {
     return Money.of(this.totalAmountMinor, this.currency);
   }
 
-  /**
-   * Place the order: asserts the DRAFT → PENDING transition, then returns a placed
-   * copy (immutable). Throws `OrderTransitionError` from any non-DRAFT state — the
-   * use-case maps that to a 409. Persistence performs the atomic status change.
-   */
+  /** Throws `OrderTransitionError` from any non-DRAFT state; the use case maps that to a 409. */
   place(now: Date): Order {
     assertTransition(this.status, OrderStatus.PENDING);
     return new Order(
@@ -117,15 +106,11 @@ export class Order {
     );
   }
 
-  /** Settled, and must never regress. */
   isTerminal(): boolean {
     return isTerminal(this.status);
   }
 
-  /**
-   * Asserts the transition and returns a new copy. Idempotency is the use case's job (terminal check
-   * + row lock) before it ever gets here.
-   */
+  /** Idempotency is the use case's job (terminal check + row lock) before it ever gets here. */
   finalize(outcome: FinalizeOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
     assertTransition(this.status, outcome);
     return new Order(
@@ -142,10 +127,6 @@ export class Order {
     );
   }
 
-  /**
-   * The domain event this (placed) order represents; checkout appends it to the outbox in the
-   * placement transaction. Only a persisted, placed order can produce one.
-   */
   toPlacedEvent(): OrderPlacedEvent {
     if (this.id === null || this.placedAt === null) {
       throw new DomainError('Only a placed order can produce an OrderPlacedEvent');
@@ -153,7 +134,6 @@ export class Order {
     return new OrderPlacedEvent(this.id, this.userId, this.totalAmountMinor, this.currency, this.placedAt);
   }
 
-  /** Only a persisted, finalized order can produce one. */
   toFinalizedEvent(): OrderFinalizedEvent {
     if (this.id === null || this.finalizedAt === null) {
       throw new DomainError('Only a finalized order can produce a finalization event');

@@ -1,9 +1,6 @@
 /**
- * One table's reclamation rule, callable by the scheduler without knowing what it deletes.
- *
- * Each context implements this for the tables it owns, because a retention rule is a statement about
- * that context's correctness — how long an idempotency key must survive to keep a retry safe, how
- * long a revoked refresh token must survive to stay a theft signal.
+ * Implemented by the context that owns the table, because a retention rule is a statement about that
+ * context's correctness — how long an idempotency key must survive to keep a retry safe.
  */
 export interface RetentionSweep {
   /**
@@ -13,8 +10,8 @@ export interface RetentionSweep {
   readonly name: string;
 
   /**
-   * Delete at most `batchSize` rows this tick and return how many went; the rest wait for the next
-   * tick. A full batch is the scheduler's signal that the table is not keeping up.
+   * Delete at most `batchSize` rows this tick and return how many went; a full batch is the
+   * scheduler's signal that the table is not keeping up.
    */
   sweep(batchSize: number): Promise<number>;
 }

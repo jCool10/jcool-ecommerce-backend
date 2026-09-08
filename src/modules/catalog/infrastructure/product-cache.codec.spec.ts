@@ -53,9 +53,7 @@ describe('product cache codec', () => {
     expect(() => fromProductSnapshot(snapshot)).toThrow(TypeError);
   });
 
-  // An entry written by an older deploy is untyped data by the time it comes back out of Redis.
-  // Every one of these used to decode into a Product with undefined fields and fail later — the
-  // missing-category case as a 500 from the response mapper, on a read path.
+  // Every one of these used to decode into a Product with undefined fields and 500 downstream.
   describe('rejects a snapshot whose shape drifted', () => {
     const cases: { name: string; corrupt: (snapshot: ProductSnapshot) => unknown }[] = [
       { name: 'missing category', corrupt: ({ category: _omitted, ...rest }) => rest },

@@ -3,8 +3,6 @@ import type { Reflector } from '@nestjs/core';
 import { describe, expect, it } from 'vitest';
 import { resolveRouteTemplate } from './http-route.util';
 
-// Reflector fake: returns the controller path for the class target, the handler path for the
-// method target — mirroring how @Controller()/@Get() metadata is read.
 function reflectorFor(controller: object, controllerPath: string, handlerPath: string): Reflector {
   return {
     get: (_key: unknown, target: unknown): string => (target === controller ? controllerPath : handlerPath),

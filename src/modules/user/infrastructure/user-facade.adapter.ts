@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { UserFacade, UserSummary } from '../application/public/user-facade.port';
 import { USER_REPOSITORY, type UserRepositoryPort } from '../application/ports';
 
-/** Narrows the stored entity to the three fields other contexts may see; `passwordHash` never leaves here. */
 @Injectable()
 export class UserFacadeAdapter implements UserFacade {
   constructor(@Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort) {}

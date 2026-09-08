@@ -227,8 +227,6 @@ describe('RetentionScheduler', () => {
       await first;
     });
 
-    // The timeout records one failure; without a count on the skip path the sweep then reads
-    // exactly like a table with nothing to collect.
     it('counts every skipped tick, so a permanently stuck sweep does not go quiet in metrics', async () => {
       const stuck = vi.fn().mockReturnValue(new Promise<number>(() => {}));
       const { make, metrics } = build({}, [stub('messaging:outbox', stuck)]);
@@ -246,8 +244,6 @@ describe('RetentionScheduler', () => {
       expect(metrics.recordRetentionSweepFailure).toHaveBeenCalledTimes(3);
     });
 
-    // Releasing the guard from the result of the call would miss a sync throw entirely: the name
-    // stays in `running` forever and the throw escapes into the timer.
     it('survives a sweep that throws synchronously, and still frees it for the next tick', async () => {
       let mode: 'throw' | 'ok' = 'throw';
       const brittle = vi.fn<RetentionSweep['sweep']>().mockImplementation(() => {

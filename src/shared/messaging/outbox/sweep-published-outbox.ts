@@ -8,12 +8,9 @@ import { outbox } from './schema/outbox.schema';
 const DAY_MS = 86_400_000;
 
 /**
- * Reclaims outbox rows the relay has already published.
- *
  * The `published_at IS NOT NULL` half of the predicate is not decoration: an unpublished row is the
- * relay's work queue, so an old one is a stuck event, not a stale record. There is deliberately no
- * age at which it becomes collectable. Nothing downstream reads this table back — what a swept row
- * costs is the audit trail, which is what the window is sized for.
+ * relay's work queue, so an old one is a stuck event, not a stale record, and there is deliberately
+ * no age at which it becomes collectable. A swept row costs only the audit trail.
  */
 @Injectable()
 export class SweepPublishedOutbox implements RetentionSweep, OnModuleInit {
@@ -28,8 +25,8 @@ export class SweepPublishedOutbox implements RetentionSweep, OnModuleInit {
     this.retentionMs = config.getOrThrow<number>('retention.outboxDays') * DAY_MS;
   }
 
-  // Self-registering: a provider added without a matching line in some other file would be a sweep
-  // that exists and never runs, with nothing to report it.
+  // Self-registering: a provider added without a matching line elsewhere would be a sweep that
+  // exists and never runs, with nothing to report it.
   onModuleInit(): void {
     this.registry.register(this);
   }

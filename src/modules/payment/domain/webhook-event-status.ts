@@ -1,8 +1,7 @@
 /**
- * Webhook-event lifecycle status. Const object + union type (not a TS enum); the string
- * values are identical to the `webhook_status` pg enum. RECEIVED on insert;
- * PROCESSED/SKIPPED/FAILED once the event is applied. Idempotency itself is enforced by
- * the unique (provider, provider_event_id) index, not by this status.
+ * A const object rather than a TS enum; the string values must stay identical to the `webhook_status`
+ * pg enum. Idempotency is enforced by the unique (provider, provider_event_id) index, not by this
+ * status.
  */
 export const WebhookEventStatus = {
   RECEIVED: 'RECEIVED',

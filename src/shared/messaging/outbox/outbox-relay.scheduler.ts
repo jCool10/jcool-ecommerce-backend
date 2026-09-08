@@ -11,7 +11,6 @@ const INTERVAL_NAME = 'messaging-outbox-relay';
 // Long enough for a tick that is merely slow, short enough that SIGTERM never waits on a stuck one.
 const DRAIN_TIMEOUT_MS = 5_000;
 
-/** Owns the schedule and nothing else, so the relay stays something a test can drive tick by tick. */
 @Injectable()
 export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
   private inFlight: Promise<void> | null = null;
@@ -27,7 +26,7 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly logger: PinoLogger,
   ) {
     // A mistyped key reads as undefined, and `setInterval(fn, undefined)` fires every event-loop
-    // turn — a busy loop opening a transaction against the outbox. Refuse to build rather than boot that.
+    // turn — a busy loop opening a transaction against the outbox. Refuse to build rather than boot it.
     this.enabled = config.get<boolean>('outbox.relayEnabled') === true;
     this.intervalMs = requireInt(config, 'outbox.pollMs', 1);
     this.batchSize = requireInt(config, 'outbox.batchSize', 1);

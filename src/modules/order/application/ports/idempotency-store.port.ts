@@ -1,9 +1,7 @@
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 
-// Idempotency-key store port; the Drizzle adapter implements it in infrastructure/.
-// Keeps the application free of drizzle-orm/schema. The unique (scope, key) index —
-// not an application if-check — is the concurrency backstop: a racing duplicate loses
-// the INSERT rather than creating a second order.
+// The unique (scope, key) index — not an application if-check — is the concurrency backstop: a
+// racing duplicate loses the INSERT rather than creating a second order.
 export const IDEMPOTENCY_STORE = Symbol('IDEMPOTENCY_STORE');
 
 export type IdempotencyStatus = 'IN_PROGRESS' | 'COMPLETED';
@@ -48,7 +46,6 @@ export interface IdempotencyStorePort {
    */
   tryInsertInProgress(input: InsertInProgressInput): Promise<IdempotencyRecord | null>;
 
-  /** The current record for (scope, key), or null. Used to branch replay / 409 / 422. */
   findByScopeAndKey(scope: string, key: string): Promise<IdempotencyRecord | null>;
 
   /**
@@ -60,8 +57,7 @@ export interface IdempotencyStorePort {
 
   /**
    * Remove an IN_PROGRESS row so the client can retry — called when the handler failed with an
-   * unexpected error (the deterministic result was never recorded). Pass `tx` to run inside a
-   * unit of work; omit to run standalone.
+   * unexpected error (the deterministic result was never recorded).
    */
   deleteInProgress(scope: string, key: string, tx?: DrizzleTx): Promise<void>;
 
@@ -74,9 +70,6 @@ export interface IdempotencyStorePort {
   deleteExpiredInProgress(scope: string, key: string, now: Date): Promise<number>;
 
   /**
-   * DELETE WHERE expires_at < now, at most `limit` rows (TTL sweep). Returns how many were
-   * reclaimed.
-   *
    * `expires_at` is the ONLY legal condition here. Adding `status = 'COMPLETED'`, or excluding it,
    * would break the retry guarantee: a COMPLETED row inside its TTL is the frozen response a
    * legitimate retry replays, and removing it early lets that retry create a second order.

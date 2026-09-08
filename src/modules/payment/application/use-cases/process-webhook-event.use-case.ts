@@ -12,9 +12,8 @@ import { readCheckoutSession, type CheckoutSessionFacts } from '../mappers/read-
 import { toSettledOutboxRecord } from '../payment-outbox.mapper';
 
 /**
- * Outcome of one webhook delivery. `rejected` is the only non-2xx result (verify failed, nothing
- * persisted); every other outcome means the event was accepted and logged, so the gateway gets a
- * 2xx and stops retrying.
+ * `rejected` is the only non-2xx result (verify failed, nothing persisted); every other outcome means
+ * the event was accepted and logged, so the gateway gets a 2xx and stops retrying.
  */
 export type WebhookProcessResult =
   | { outcome: 'rejected'; reason: 'invalid_signature' | 'expired_timestamp' }
@@ -34,15 +33,12 @@ export type WebhookProcessResult =
         actualCurrency?: string;
       };
     }
-  // Only `processed` settled the payment, so only it carries what the caller needs to finalize.
   | { outcome: 'processed'; status: PaymentStatus; orderId: string; paymentRef: string | null; eventType: string };
 
 /**
- * Verify a gateway webhook, then apply it exactly once to the payment side only.
- *
- * The idempotency insert and the payment change share ONE transaction: split them, and a crash after
- * logging the event but before applying it leaves the redelivery seeing `inserted: false` and
- * no-oping forever. The DB unique(provider, eventId) turns concurrent redeliveries into one winner.
+ * Applies a verified webhook to the payment side only. The idempotency insert and the payment change
+ * share ONE transaction: split them, and a crash after logging the event but before applying it leaves
+ * the redelivery seeing `inserted: false` and no-oping forever.
  */
 @Injectable()
 export class ProcessWebhookEventUseCase {
@@ -71,7 +67,6 @@ export class ProcessWebhookEventUseCase {
         },
         tx,
       );
-      // Already logged by a prior (or racing) delivery — do not apply a second time.
       if (!inserted) return { outcome: 'duplicate' };
 
       const eventId = event.id;
@@ -79,7 +74,7 @@ export class ProcessWebhookEventUseCase {
 
       const facts = readCheckoutSession(verified.payload);
       const settlement = mapEventToOutcome(verified.type, facts.paymentStatus);
-      // An event type we log for audit but do not act on — left RECEIVED.
+      // Left RECEIVED, not skipped: logged for audit, never a candidate for application.
       if (settlement.kind === 'ignore') return { outcome: 'ignored' };
 
       // The session finished but the money has not cleared. Leaving the payment PENDING is the whole
@@ -136,10 +131,9 @@ export class ProcessWebhookEventUseCase {
       if (!updated) throw new Error(`payment vanished mid-transaction: ${payment.id}`);
       await this.webhookEvents.markProcessed(eventId, tx);
 
-      // Same tx as the settlement, so a settled payment can never lose the event that drives its
-      // order — the crash window the direct call in HandlePaymentWebhookUseCase cannot close, since
-      // that one runs after this commit. Payment and Order stay independent state machines: this
-      // publishes what happened to the money and says nothing about what the order should become.
+      // Same tx as the settlement, so a settled payment can never lose the event that drives its order
+      // — the crash window the direct call in HandlePaymentWebhookUseCase cannot close, since that one
+      // runs after this commit. It publishes what happened to the money, not what the order becomes.
       await this.outbox.append(
         tx,
         toSettledOutboxRecord({
@@ -163,10 +157,9 @@ export class ProcessWebhookEventUseCase {
 }
 
 /**
- * The event must describe the exact charge recorded when the session was created. A divergence is
- * never retryable: it means this session is not the one this payment was for — a mislinked or reused
- * handle, or a snapshot bug — so applying it would settle an order against the wrong money. Absent
- * fields count as a divergence; on the money path, no proof is not proof.
+ * A divergence is never retryable: it means this session is not the one this payment was for — a
+ * mislinked or reused handle, or a snapshot bug — so applying it would settle an order against the
+ * wrong money. Absent fields count as a divergence; on the money path, no proof is not proof.
  */
 function chargeMatchesPayment(payment: Payment, facts: CheckoutSessionFacts): boolean {
   return (

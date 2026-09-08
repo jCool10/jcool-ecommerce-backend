@@ -21,9 +21,8 @@ function toDomain(row: UserRow): User {
   });
 }
 
-// Drizzle adapter for UserRepositoryPort. The unique email index is the sole
-// uniqueness guarantee: create() inserts ON CONFLICT DO NOTHING so concurrent
-// signups serialize on the index — the losing writer gets a null row, not a 23505.
+// The unique email index is the sole uniqueness guarantee: create() inserts ON CONFLICT DO NOTHING
+// so concurrent signups serialize on the index — the losing writer gets a null row, not a 23505.
 //
 // Ids are minted here, not upstream: the bucket the id carries is what a sharded findByEmail/findById
 // will route on, so write-routing belongs beside read-routing.
@@ -48,7 +47,6 @@ export class DrizzleUserRepository implements UserRepositoryPort {
     const [row] = await this.db
       .insert(users)
       .values({
-        // A writer that loses the ON CONFLICT race just discards this id.
         id: this.identity.mintUserId(input.email),
         email: input.email,
         passwordHash: input.passwordHash,
@@ -57,7 +55,7 @@ export class DrizzleUserRepository implements UserRepositoryPort {
       })
       .onConflictDoNothing({ target: users.email })
       .returning();
-    return row ? toDomain(row) : null; // no row ⇒ email already taken
+    return row ? toDomain(row) : null;
   }
 
   async markEmailVerified(userId: string): Promise<void> {

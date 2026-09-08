@@ -11,7 +11,6 @@ import type {
   RotateRefreshTokenInput,
 } from '../application/ports';
 
-// Drizzle adapter for RefreshTokenRepositoryPort (only tokenHash is stored, never the raw token).
 @Injectable()
 export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort {
   constructor(
@@ -29,7 +28,10 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
     });
   }
 
-  /** Rotation + reuse detection in one transaction — lock the presented row (`FOR UPDATE`), then unknown/expired → invalid, revoked/replaced → revoke the family (reuse), live leaf → insert a successor and point the old row at it. See docs/engineering-notes.md (Auth — Refresh token rotation & reuse detection). */
+  /**
+   * Rotation and reuse detection share one transaction: the presented row is locked `FOR UPDATE`,
+   * so two concurrent refreshes of the same token cannot both mint a successor.
+   */
   async rotate(input: RotateRefreshTokenInput): Promise<RotateOutcome> {
     return this.db.transaction(async (tx) => {
       const [record] = await tx
@@ -71,7 +73,6 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
       const [successor] = await tx
         .insert(refreshTokens)
         .values({
-          // The owner is known only from the locked row, so the successor can only be minted here.
           id: this.identity.mintOwnedBy(record.userId),
           userId: record.userId,
           tokenHash: input.newTokenHash,
@@ -99,7 +100,6 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
   }
 
   async revokeAllForUser(userId: string): Promise<void> {
-    // One UPDATE stamps every still-live token for the user (already-revoked rows untouched).
     await this.db
       .update(refreshTokens)
       .set({ revokedAt: new Date() })
@@ -142,10 +142,9 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
   }
 
   async deleteCollectable(expiredBefore: Date, revokedBefore: Date, limit: number): Promise<number> {
-    // A disjunction over two columns, which is why the schema indexes both. Postgres has no LIMIT
-    // on DELETE, so the batch bound is a subquery. `isNull(revokedAt)` on the first arm is
-    // load-bearing — a rotated token has both timestamps set, and without it the expiry arm would
-    // collect one long before its revocation grace runs out. See the port docs.
+    // Postgres has no LIMIT on DELETE, so the batch bound is a subquery. `isNull(revokedAt)` on the
+    // expiry arm is load-bearing — a rotated token has both timestamps set, and without it that arm
+    // would collect one long before its revocation grace runs out.
     const doomed = this.db
       .select({ id: refreshTokens.id })
       .from(refreshTokens)

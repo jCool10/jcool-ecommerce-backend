@@ -69,7 +69,6 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
     sku = await seedSellableSku(app, { onHand: STOCK });
   });
 
-  /** Age a hold by moving its expiry into the past — the one thing a test cannot wait for. */
   async function lapse(orderId: string, minutesAgo = 30): Promise<void> {
     await db
       .update(schema.reservations)

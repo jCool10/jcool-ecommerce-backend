@@ -16,9 +16,9 @@ import { AdjustStockDto, SetStockDto, StockLevelResponseDto } from './dto';
 
 /**
  * Inventory's only HTTP surface, and it is operator-facing: customers reach stock through Order,
- * which holds it inside the checkout transaction. `PUT` states what the level is, `POST /adjust`
- * moves it; both answer 409 rather than 500 when the result would break a database invariant,
- * because that is a fact about current stock, not a malformed request.
+ * which holds it inside the checkout transaction. Writes answer 409 rather than 500 when the result
+ * would break a database invariant, because that is a fact about current stock, not a malformed
+ * request.
  */
 @ApiTags('admin-inventory')
 @ApiBearerAuth()

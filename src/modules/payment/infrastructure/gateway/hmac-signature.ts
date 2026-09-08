@@ -1,9 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { VerifiedEvent } from '../../application/ports/payment-gateway.port';
 
-// Stripe-style webhook signature scheme, shared verbatim by the real Stripe adapter and the
-// test fake signer so the two can never drift. Signed payload is `${timestamp}.${rawBody}`;
-// the header is `t=<unix-seconds>,v1=<hex-hmac-sha256>`.
+// Stripe-style webhook signature scheme, shared verbatim by the real Stripe adapter and the test fake
+// signer so the two can never drift.
 
 const SIGNATURE_ALGORITHM = 'sha256';
 
@@ -34,10 +33,9 @@ function parseHeader(header: string | undefined): ParsedHeader | null {
   return { timestamp, signature };
 }
 
-// Constant-time compare of two hex signatures. Decode first and compare BYTE lengths: comparing
-// hex-string lengths instead would let a malformed (non-hex) provided signature silently truncate
-// on decode and crash timingSafeEqual on mismatched buffer sizes — turning an attacker-controlled
-// header into a throw rather than an `invalid_signature` verdict.
+// Decode first and compare BYTE lengths: comparing hex-string lengths instead would let a malformed
+// (non-hex) provided signature silently truncate on decode and crash timingSafeEqual on mismatched
+// buffer sizes — turning an attacker-controlled header into a throw, not an `invalid_signature`.
 function signaturesMatch(expectedHex: string, providedHex: string): boolean {
   const expected = Buffer.from(expectedHex, 'hex');
   const provided = Buffer.from(providedHex, 'hex');
@@ -69,9 +67,8 @@ export function verifyStripeStyle(params: {
 
 const HEADER_STRIPE_SIGNATURE = 'stripe-signature';
 
-// Verify the signature, then (only on success) parse the authenticated body into a VerifiedEvent.
-// Shared by the Stripe and fake adapters. A valid signature over a body missing a usable id/type
-// is a real anomaly from an authentic sender, so it throws loud rather than silently degrading.
+// A valid signature over a body missing a usable id/type is a real anomaly from an authentic sender,
+// so it throws loud rather than silently degrading.
 export function verifyAndParseStripeEvent(params: {
   secret: string;
   toleranceSec: number;

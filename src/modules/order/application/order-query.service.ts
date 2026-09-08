@@ -17,9 +17,8 @@ export interface OrderPageView {
 }
 
 /**
- * Read side for orders. The buyer's reads are user-scoped at the repository, so someone else's id is
- * indistinguishable from one that does not exist; the admin reads drop that scope and are reachable
- * only behind the admin controller's role guard.
+ * Buyer reads are user-scoped at the repository, so someone else's id is indistinguishable from one
+ * that does not exist. The admin reads drop that scope and rely on the admin controller's role guard.
  */
 @Injectable()
 export class OrderQueryService {

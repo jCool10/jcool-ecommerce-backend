@@ -17,8 +17,6 @@ describe('toSettledOutboxRecord', () => {
     expect(toSettledOutboxRecord({ ...FACTS, status })).toMatchObject({ eventType, aggregateId: FACTS.paymentId });
   });
 
-  // The consumer settles an ORDER from an event about a PAYMENT, so the link has to travel in the
-  // payload — re-reading Payment's tables from Order is exactly what the published event replaces.
   it('carries the order and the gateway handle, with timestamps as strings', () => {
     const record = toSettledOutboxRecord({ ...FACTS, status: PaymentStatus.SUCCEEDED });
 

@@ -3,8 +3,8 @@
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 
 /**
- * Order owns this abstraction; Inventory supplies the adapter, wired at the module boundary. The
- * hold runs inside the placement transaction, so stock and the DRAFT → PENDING flip commit together.
+ * The hold runs inside the placement transaction, so stock and the DRAFT → PENDING flip commit
+ * together.
  */
 export const INVENTORY_RESERVATION = Symbol('INVENTORY_RESERVATION');
 
@@ -21,7 +21,6 @@ export interface StockResolution {
   count: number;
 }
 
-/** One order still holding stock past the moment that hold was meant to lapse. */
 export interface ExpiredHold {
   orderId: string;
   expiresAt: Date;

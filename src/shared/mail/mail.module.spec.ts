@@ -23,8 +23,6 @@ describe('createMailTransport', () => {
     expect(createMailTransport(config, breakers)).toBeInstanceOf(LogMailTransport);
   });
 
-  // The sink delivers nothing, so booting on it in production would leave every verification and
-  // reset link unsent while the app reported itself healthy.
   it('refuses to boot in production without an SMTP URL', () => {
     const { config, breakers } = build({ 'app.env': 'production' });
     expect(() => createMailTransport(config, breakers)).toThrow(/SMTP_URL is required in production/);
@@ -35,8 +33,7 @@ describe('createMailTransport', () => {
     expect(() => createMailTransport(config, breakers)).toThrow(/MAIL_FROM is required/);
   });
 
-  // The loopback default is what `.env.example` ships, so a copied dev file boots a server whose
-  // mail all lands in a catcher nobody reads — every metric still says delivered.
+  // The loopback default is what `.env.example` ships, so this is the copied-dev-file case.
   it('refuses to boot in production against a loopback relay', () => {
     const { config, breakers } = build({
       'app.env': 'production',

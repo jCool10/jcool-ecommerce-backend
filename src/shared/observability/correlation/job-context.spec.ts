@@ -2,8 +2,8 @@ import { ClsServiceManager } from 'nestjs-cls';
 import { describe, expect, it } from 'vitest';
 import { getJobName, JOB_NAME_KEY, runInJobContext } from './job-context';
 
-// The real service, not a fake: what is asserted here is AsyncLocalStorage behaviour, and a fake
-// would have exactly the behaviour it was written to have.
+// The real service, not a fake: what is asserted here is AsyncLocalStorage behaviour, which a fake
+// would simply be written to have.
 const cls = ClsServiceManager.getClsService();
 
 describe('runInJobContext', () => {
@@ -12,8 +12,7 @@ describe('runInJobContext', () => {
       Promise.resolve({ id: cls.getId(), job: getJobName(cls) }),
     );
 
-    // The pino mixin reads this one slot for both, so a timer's line answers the same query as a
-    // request's.
+    // The pino mixin reads this one slot for both, so a timer's line answers a request's query.
     expect(seen.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(seen.job).toBe('retention:messaging:outbox');
   });

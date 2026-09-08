@@ -13,17 +13,14 @@ import { RedisService } from '../../src/shared/infrastructure/redis';
 import { E2E_IDENTITY_BUCKET_KEY } from './identity.helper';
 import { waitForRedisReady } from './redis-ready';
 
-/** Swap one DI token for this app only — e.g. a scriptable gateway at the external-system boundary. */
 export interface ProviderOverride {
   provide: unknown;
   useValue: unknown;
 }
 
-// Real INestApplication on the container URLs, mirroring main.ts edge config.
-// `envOverrides` set config-backing env vars (e.g. INVENTORY_LOCK_STRATEGY) for
-// this app only: config reads process.env when the module compiles, so they are
-// applied before compile and restored after — one app's strategy never leaks into
-// the next (e2e files share this process and run sequentially).
+// `envOverrides` set config-backing env vars for this app only: config reads process.env when the
+// module compiles, so they are applied before compile and restored after — one app's config never
+// leaks into the next (e2e files share this process and run sequentially).
 export async function createTestApp(
   envOverrides: Record<string, string> = {},
   providerOverrides: ProviderOverride[] = [],
@@ -40,18 +37,12 @@ export async function createTestApp(
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
-  // The five background drivers, forced off so nothing runs behind a test's back: suites call
-  // ReconcileStaleOrdersUseCase / OutboxRelay.runOnce / DomainEventProcessor.process /
-  // SweepExpiredReservationsUseCase / RetentionScheduler.tick themselves, and a tick firing
-  // mid-assertion would settle an order, publish a row, drain a job, or DELETE the row the test is
-  // still asserting on. A suite that wants one of them passes it in `envOverrides`, which is
-  // applied below and wins.
-  //
-  // Assigned unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's
-  // .env into process.env, so from the second app onwards `??=` would silently inherit whatever
-  // that file happens to say — making the suite's behaviour depend on an untracked local file.
-  // Same reason, plus: two apps in a run bucketing under different keys would split a user's id and
-  // its token ids across buckets.
+  // Background drivers forced off so nothing runs behind a test's back — a tick firing mid-assertion
+  // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Suites
+  // drive them directly, or re-enable one via `envOverrides`, applied below. Assigned
+  // unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's .env into
+  // process.env, so from the second app onwards `??=` would inherit an untracked local file. The
+  // bucket key must also be identical across apps, or a user's id and its token ids split buckets.
   process.env.IDENTITY_BUCKET_KEY = E2E_IDENTITY_BUCKET_KEY;
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
@@ -64,13 +55,12 @@ export async function createTestApp(
   // suite may drive one app's relay and read the queue through another's.
   process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
-  // live path — billable and non-deterministic. Dropped unless a suite asks for it.
+  // live path — billable and non-deterministic.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {
     delete process.env.STRIPE_SECRET_KEY;
   }
-  // Same reason: `.env.example` ships an SMTP_URL, so a developer's copied .env would put every
-  // suite in this file on the real transport, mailing their local Mailpit from tests that have
-  // nothing to do with mail. Dropped unless the suite asks for it.
+  // Same reason: `.env.example` ships an SMTP_URL, so a copied .env would put every suite in this
+  // file on the real transport, mailing a developer's local Mailpit from unrelated tests.
   if (!('SMTP_URL' in envOverrides)) {
     delete process.env.SMTP_URL;
     delete process.env.MAIL_FROM;
@@ -99,7 +89,7 @@ export async function createTestApp(
     const moduleRef = await builder.compile();
     // `rawBody: true` mirrors main.ts so the payment webhook's raw-body signature check works in e2e.
     const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, rawBody: true });
-    app.useLogger(app.get(Logger)); // pino logger — mirrors main.ts so e2e logs match prod shape
+    app.useLogger(app.get(Logger));
 
     // Mirror main.ts edge config so the e2e app exercises the same middleware.
     const configService = app.get(ConfigService);
@@ -116,26 +106,21 @@ export async function createTestApp(
       methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
     });
-    app.use(cookieParser()); // so auth routes can read the refresh + CSRF cookies
+    app.use(cookieParser());
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     try {
       // HttpExceptionFilter is wired via APP_FILTER in AppModule (needs CLS injection).
       await app.init();
-      // Bind a real port once, for every suite. supertest ephemeral-listens a non-listening server per
-      // request and tears that listener down again when the request ends; firing a herd of concurrent
-      // requests at it races those binds and surfaces as `read ECONNRESET`. A listening server is just
-      // connected to, so the concurrency under test stays where it belongs — the DB, the cache, the
-      // lock — instead of the socket.
+      // Bind a real port. supertest ephemeral-listens a non-listening server per request and tears
+      // that listener down again; firing a herd of concurrent requests races those binds and
+      // surfaces as `read ECONNRESET`, moving the race off the DB/cache/lock under test.
       await app.listen(0);
-      // The shared client connects lazily and rejects commands until its socket is writable, so an
-      // assertion made in the first instants of a suite would measure the Redis-down fall-through.
       await waitForRedisReady(app.get(RedisService).getClient());
       return app;
     } catch (error) {
       // Providers are constructed by the time init can fail, so the pool and Redis socket are open
-      // and the caller never gets a handle to close them — a suite asserting a boot guard would leak
-      // one set per assertion. The close error is logged, not thrown: the init failure is the useful
-      // one, but a failed close means handles are still open and the run may hang later.
+      // and the caller never gets a handle to close them. The close error is logged, not thrown: the
+      // init failure is the useful one, but a failed close means the run may hang later.
       await app.close().catch((closeError) => {
         console.error('createTestApp: closing a partially initialised app failed', closeError);
       });
@@ -149,8 +134,7 @@ export async function createTestApp(
   }
 }
 
-// Spec filenames are unique, so this is stable within a file and distinct across files — the two
-// properties the isolation depends on.
+// Spec filenames are unique: stable within a file, distinct across files — what the isolation needs.
 function queuePrefixForCurrentSpec(): string {
   const testPath = expect.getState().testPath;
   return testPath ? `bull:${basename(testPath, '.e2e-spec.ts')}` : 'bull';

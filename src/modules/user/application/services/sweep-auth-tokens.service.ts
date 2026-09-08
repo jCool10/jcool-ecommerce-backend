@@ -13,13 +13,10 @@ import {
 const DAY_MS = 86_400_000;
 
 /**
- * Retention for the three token tables the auth surface owns.
- *
  * One file, THREE registered sweeps. `name` is both the metric label and the fault-isolation unit,
- * so a single `auth-tokens` sweep could not say which table stopped being collected, and one
- * failure would take the other two down with it. See
- * {@link RefreshTokenRepositoryPort.deleteCollectable} for why the refresh table is kept an order of
- * magnitude longer than the single-use ones.
+ * so a single `auth-tokens` sweep could not say which table stopped being collected, and one failure
+ * would take the other two down with it. See {@link RefreshTokenRepositoryPort.deleteCollectable}
+ * for why the refresh table is kept an order of magnitude longer than the single-use ones.
  */
 @Injectable()
 export class SweepAuthTokensService implements OnModuleInit {
@@ -57,7 +54,6 @@ export class SweepAuthTokensService implements OnModuleInit {
       },
       {
         name: 'auth-tokens:refresh',
-        // Two cutoffs, deliberately far apart: expiry is age, revocation is evidence.
         sweep: (batchSize) =>
           this.refresh.deleteCollectable(this.tokenCutoff(), new Date(Date.now() - this.refreshGraceMs), batchSize),
       },

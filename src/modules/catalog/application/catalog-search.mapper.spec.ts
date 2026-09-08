@@ -37,8 +37,8 @@ describe('toSearchableProduct', () => {
     expect(doc.currency).toBeNull();
   });
 
-  // A cheaper non-VND amount must not become the floor: the number and the currency label are
-  // rendered together, so mixing them would advertise a USD price as VND.
+  // The amount and the currency label are rendered together, so mixing them would advertise a USD
+  // price as VND.
   it('ignores a non-VND price when picking the floor', () => {
     const doc = toSearchableProduct(
       product([variant('WH-BLK', Money.of(1_990_000, 'VND')), variant('WH-USD', Money.of(1299, 'USD'))]),

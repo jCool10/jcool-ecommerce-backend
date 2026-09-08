@@ -3,7 +3,7 @@ import { Email } from '../../domain';
 import { USER_REPOSITORY, type UserRepositoryPort } from '../ports';
 import { PasswordResetService } from '../services';
 
-/** Start the "forgot password" flow, enumeration-safe (always the same generic response); a reset token is issued only for an existing account, independent of email verification. */
+/** Enumeration-safe: the unknown-address branch is a silent no-op, so every caller gets one generic response. */
 @Injectable()
 export class ForgotPasswordUseCase {
   constructor(

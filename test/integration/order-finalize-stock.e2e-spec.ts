@@ -52,7 +52,7 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     return row.id;
   }
 
-  // Establish a real HELD hold the way placement does — raises reserved, writes a HELD reservation row.
+  // A real hold, established the way placement does.
   async function hold(orderId: string, variantId: string, quantity: number): Promise<void> {
     await db.transaction((tx) => stock.reservePessimistic(tx, orderId, [{ variantId, quantity }]));
   }
@@ -87,7 +87,7 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
     const s = await readStock(SKU);
     expect(s.quantityOnHand).toBe(7); // goods shipped for real
-    expect(s.quantityReserved).toBe(0); // hold cleared
+    expect(s.quantityReserved).toBe(0);
   });
 
   it('FAILED releases the hold: reservation RELEASED, on-hand untouched, stock back to available', async () => {
@@ -102,7 +102,7 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
     const s = await readStock(SKU);
     expect(s.quantityOnHand).toBe(10); // never left the shelf
-    expect(s.quantityReserved).toBe(0); // hold returned to available
+    expect(s.quantityReserved).toBe(0);
   });
 
   it('EXPIRED releases the hold, same as FAILED', async () => {
@@ -261,8 +261,8 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
 
     await expect(finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' })).rejects.toThrow();
 
-    expect((await readOrder(orderId)).status).toBe('PENDING'); // flip rolled back
-    expect((await readReservation(orderId, SKU)).status).toBe('HELD'); // hold untouched
-    expect((await readStock(SKU)).quantityReserved).toBe(2); // stock unchanged
+    expect((await readOrder(orderId)).status).toBe('PENDING');
+    expect((await readReservation(orderId, SKU)).status).toBe('HELD');
+    expect((await readStock(SKU)).quantityReserved).toBe(2);
   });
 });

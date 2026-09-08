@@ -8,17 +8,12 @@ import { MetricsController } from './metrics.controller';
 import { MetricsTokenGuard } from './metrics.guard';
 import { METRICS } from './metrics.port';
 
-// Node/process default metrics. Guarded so a second import (e.g. e2e builds several Nest apps
-// in one process) is idempotent instead of throwing "already registered".
+// Guarded so a second import is idempotent instead of throwing "already registered": e2e builds
+// several Nest apps in one process.
 if (!register.getSingleMetric('process_cpu_seconds_total')) {
   collectDefaultMetrics();
 }
 
-/**
- * Metrics pillar (ADR-0014). Global so the `METRICS` port injects anywhere without each module
- * importing it. Registers default + RED + business metrics, the RED interceptor (APP_INTERCEPTOR),
- * and the guarded `/metrics` controller.
- */
 @Global()
 @Module({
   controllers: [MetricsController],

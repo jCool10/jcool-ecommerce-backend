@@ -6,18 +6,10 @@ import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
 import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
 
 /**
- * Reclaims uploads nothing ever claimed — the media half of the same idea as the reservation sweep,
- * with one extra step that reservations do not need.
- *
  * Deleting bytes cannot be undone, so the claim is committed first: one statement moves a batch to
- * SWEEPING and returns it, and only then is the bucket touched. Without that step an attach
- * committing between selecting a row and deleting its object leaves a live product pointing at
- * nothing — a `status IN (...)` guard on the DELETE protects the row and does nothing for the object
- * that is already gone.
- *
- * Object first, row second. A crash between them leaves a SWEEPING row that the next pass finds
- * again, and deleting an absent object is a no-op — so the retry is safe. The reverse order would
- * leave objects in the bucket that nothing in the database remembers.
+ * SWEEPING before the bucket is touched, or an attach committing mid-pass leaves a live product
+ * pointing at nothing. Then object first, row second — a crash between them leaves a SWEEPING row
+ * the next pass finds again, and deleting an absent object is a no-op.
  */
 @Injectable()
 export class SweepAbandonedAssetsUseCase implements RetentionSweep, OnModuleInit {

@@ -36,9 +36,9 @@ const QUANTITY = 2;
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
 /**
- * Cancelling an order end to end: the order half settles synchronously under a row lock, the money
- * half rides the outbox to Payment. The interesting cases are all in that gap — a buyer paying on
- * the hosted page after pressing cancel, and a consume that closes the session and then rolls back.
+ * The order half settles synchronously under a row lock; the money half rides the outbox to Payment.
+ * The interesting cases are all in that gap — a buyer paying on the hosted page after pressing
+ * cancel, and a consume that closes the session and then rolls back.
  */
 describe('Order cancel (integration, real Postgres + Redis)', () => {
   let app: INestApplication;

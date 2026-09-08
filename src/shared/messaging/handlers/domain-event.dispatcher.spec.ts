@@ -63,8 +63,7 @@ describe('DomainEventDispatcher', () => {
     },
   );
 
-  // The confirmation is handed back rather than sent: the caller owns when it runs, and that is
-  // after the transaction this dispatch is inside has committed.
+  // The caller owns when it runs, and that is after the transaction this dispatch is inside commits.
   it('returns the buyer confirmation from order.paid without sending it', async () => {
     const { dispatcher, prepare, sendMail } = build();
 
@@ -83,8 +82,6 @@ describe('DomainEventDispatcher', () => {
     },
   );
 
-  // An expiry is audited like the rest, but it also owes Payment a closed checkout session — and the
-  // audit must not be what carries it, so the effect gets the consumer's transaction too.
   it('routes order.expired to the payment session close, on the consumer tx', async () => {
     const { dispatcher, info, close } = build();
 
@@ -101,8 +98,6 @@ describe('DomainEventDispatcher', () => {
     await expect(dispatcher.dispatch(job('order.expired'), tx)).rejects.toThrow('gateway unreachable');
   });
 
-  // A cancel owes the same closed session as an expiry, but through its own handler — routing both
-  // to one would lose which death the order actually had.
   it('routes order.cancelled to its own payment session close, on the consumer tx', async () => {
     const { dispatcher, info, close, closeCancelled } = build();
 
@@ -123,8 +118,6 @@ describe('DomainEventDispatcher', () => {
     await expect(dispatcher.dispatch(job('order.cancelled'), tx)).rejects.toThrow('gateway unreachable');
   });
 
-  // Routes with an effect of their own get the consumer's transaction — the handler settles the
-  // order under the same transaction that holds the inbox claim.
   it.each(['payment.succeeded', 'payment.failed'])(
     'routes %s to the order settlement, on the consumer tx',
     async (eventType) => {

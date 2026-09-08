@@ -25,7 +25,6 @@ describe('Identity clock metrics (integration)', () => {
     return app;
   }
 
-  /** The `id_clock_drift_ms` sample as this app's `/metrics` reports it, or undefined when absent. */
   async function drift(app: INestApplication): Promise<number | undefined> {
     const res = await request(app.getHttpServer())
       .get('/metrics')

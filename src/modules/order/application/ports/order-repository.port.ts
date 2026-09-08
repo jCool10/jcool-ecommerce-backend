@@ -2,8 +2,6 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { Order } from '../../domain/order.entity';
 import type { OrderStatus } from '../../domain/order-status';
 
-// Order persistence port; the Drizzle adapter implements it in infrastructure/. Reads split into
-// user-scoped (`findForUser`/`findPageForUser`) and unscoped, which cross-context callers authorize.
 export const ORDER_REPOSITORY = Symbol('ORDER_REPOSITORY');
 
 export interface CheckoutPersistResult {
@@ -23,7 +21,6 @@ export interface OrderPageQuery {
   pageSize: number;
 }
 
-/** Both filters optional and independent; the unfiltered call reads the whole table, bounded by the page. */
 export interface AdminOrderPageQuery extends OrderPageQuery {
   status?: OrderStatus;
   userId?: string;
@@ -66,13 +63,13 @@ export interface OrderRepositoryPort {
   /** Only ever called on a row already locked by `findByIdForUpdate`. */
   persistFinalization(order: Order, tx: DrizzleTx): Promise<void>;
 
-  /** One order (with items) owned by `userId`; null if absent or owned by someone else. */
+  /** Null when the order is absent or owned by someone else — the two are indistinguishable. */
   findForUser(orderId: string, userId: string): Promise<Order | null>;
 
   /** Not user-scoped — for cross-context callers that authorize ownership themselves. */
   findById(orderId: string): Promise<Order | null>;
 
-  /** One page of a user's orders, newest first, with the total behind it. */
+  /** Newest first. */
   findPageForUser(userId: string, query: OrderPageQuery): Promise<OrderPage>;
 
   /**

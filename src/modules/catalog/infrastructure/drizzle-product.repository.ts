@@ -7,13 +7,12 @@ import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPor
 import type { SkuView } from '../application/public/catalog-sku-query.port';
 import { assembleProducts } from './product-row.mapper';
 
-// System default pricing currency (schema default + admin write default). The SKU
-// view reads the price in this currency; a SKU priced only in another currency
-// reads as unpriced here — acceptable while VND is the sole currency.
+// The SKU view reads the price in this currency only, so a SKU priced solely in another currency
+// reads as unpriced — acceptable while VND is the sole currency.
 const DEFAULT_CURRENCY = 'VND';
 
-// Column projection for the flattened product×variant×price read, shared by the
-// list and detail queries (matches ProductFlatRow). Left-joined columns are nullable.
+// Must stay structurally identical to ProductFlatRow; the projection is untyped, so a drift here
+// only surfaces in the mapper.
 const flatColumns = {
   productId: products.id,
   productName: products.name,
@@ -74,10 +73,8 @@ function escapeLike(input: string): string {
 // Exported because the cache keys must normalise exactly the tokens this treats as ids.
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/**
- * Image asset ids per product, in display order. A separate keyed read rather than a fourth join:
- * images multiply against variants and prices, and every price would then be counted once per image.
- */
+// A separate keyed read rather than a fourth join: images multiply against variants and prices, and
+// every price would then be counted once per image.
 async function loadImageAssetIds(db: DrizzleDB | DrizzleTx, productIds: string[]): Promise<Map<string, string[]>> {
   const byProduct = new Map<string, string[]>();
   if (productIds.length === 0) {
@@ -101,7 +98,6 @@ async function loadImageAssetIds(db: DrizzleDB | DrizzleTx, productIds: string[]
   return byProduct;
 }
 
-/** Drizzle adapter for ProductRepositoryPort — explicit SQL-first joins (readable `EXPLAIN ANALYZE`) with integer money passthrough, and the seam for a future cache-aside layer. */
 @Injectable()
 export class DrizzleProductRepository implements ProductRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -159,8 +155,7 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
           .select(flatColumns)
           .from(products)
           .innerJoin(categories, eq(products.categoryId, categories.id))
-          // Exclude archived variants in the JOIN so the product still lists but
-          // its dead SKUs do not.
+          // Archived variants are excluded in the JOIN, not the WHERE, so the product still lists.
           .leftJoin(
             productVariants,
             and(eq(productVariants.productId, products.id), isNull(productVariants.archivedAt)),
@@ -177,7 +172,6 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
 
         const images = await loadImageAssetIds(tx, ids);
 
-        // Reorder assembled products to match the page order from the id query.
         const byId = new Map(assembleProducts(rows, images).map((product) => [product.id, product]));
         const items = ids.map((id) => byId.get(id)).filter((product): product is Product => product !== undefined);
 
@@ -193,10 +187,8 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
       .select(flatColumns)
       .from(products)
       .innerJoin(categories, eq(products.categoryId, categories.id))
-      // Exclude archived variants from the public detail.
       .leftJoin(productVariants, and(eq(productVariants.productId, products.id), isNull(productVariants.archivedAt)))
       .leftJoin(prices, eq(prices.variantId, productVariants.id))
-      // A live product in an archived category is 404 here too (same as list).
       .where(
         and(
           eq(products.status, 'ACTIVE'),

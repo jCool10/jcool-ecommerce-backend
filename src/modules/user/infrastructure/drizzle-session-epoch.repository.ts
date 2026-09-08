@@ -4,7 +4,7 @@ import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { users } from './schema/user.schema';
 import type { SessionEpochPort } from '../application/ports';
 
-/** Drizzle adapter for the session epoch on `users.token_epoch`; `bump` is a single atomic `token_epoch + 1`, so concurrent logout-all calls can't lose an increment. */
+/** `bump` is a single atomic `token_epoch + 1`, so concurrent logout-all calls can't lose an increment. */
 @Injectable()
 export class DrizzleSessionEpochRepository implements SessionEpochPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}

@@ -9,15 +9,16 @@ import {
 
 export interface LogoutInput {
   userId: string;
-  /** The presented access token's jti — denylisted so it's rejected immediately. */
   accessJti: string;
-  /** The access token's exp (epoch seconds) — the denylist entry's expiry. */
+  /** Epoch seconds. */
   accessExp: number;
-  /** Raw refresh token to revoke alongside (the session's rotation handle). */
   rawRefreshToken: string;
 }
 
-/** Log out one session by revoking both halves — denylist the stateless access token until its exp, revoke the presented refresh token — idempotent (unknown/foreign/already-revoked is a silent no-op → always 204) and scoped to this session only. See docs/engineering-notes.md (Auth — Login, register, logout, profile). */
+/**
+ * Scoped to this one session, and idempotent: an unknown, foreign or already-revoked token is a
+ * silent no-op, so the route always answers 204.
+ */
 @Injectable()
 export class LogoutUserUseCase {
   constructor(

@@ -35,8 +35,6 @@ describe('MailerAdapter', () => {
     expect(sent().text).toContain('https://app.example.com/auth/reset-password?token=tok%20en%2F%2Braw');
   });
 
-  // forgot-password and resend-verification answer 202 whether or not the address exists; a throw
-  // here would 500 only the existing-account branch and hand back the answer they refuse to give.
   it('counts a failed send and swallows it, so a dead mail server is not an enumeration oracle', async () => {
     const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const { mailer, recordMailSendFailure } = build({ fails: true });

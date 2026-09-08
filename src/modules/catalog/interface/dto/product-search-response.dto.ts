@@ -11,8 +11,6 @@ export class SearchHighlightDto {
   description?: string;
 }
 
-// A hit carries only what a result list renders. The full product graph stays behind
-// GET /products/:idOrSlug, which reads Postgres rather than this derived index.
 export class SearchHitDto {
   @ApiProperty()
   id!: string;

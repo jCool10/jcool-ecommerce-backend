@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type { CartView } from '../../application/cart.service';
 
-/** One cart line with its live (not frozen) Catalog price at read time. */
 export class CartLineResponseDto {
   @ApiProperty({ format: 'uuid', description: 'Product-variant id (SKU)' })
   skuId!: string;
@@ -32,7 +31,6 @@ export class CartLineResponseDto {
   isActive!: boolean;
 }
 
-/** The user's cart: lines + a subtotal summed from live prices. */
 export class CartResponseDto {
   @ApiProperty({ type: [CartLineResponseDto] })
   items!: CartLineResponseDto[];

@@ -1,4 +1,4 @@
-// Barrel: User (auth) application services. Siblings import by file (avoid cycles).
+// Siblings import by file (avoid cycles).
 export * from './auth-tokens.service';
 export * from './email-verification.service';
 export * from './password-reset.service';

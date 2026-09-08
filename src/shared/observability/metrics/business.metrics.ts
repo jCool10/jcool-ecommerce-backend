@@ -49,8 +49,7 @@ const LOG_CONTEXT = 'BusinessMetrics';
 const BREAKER_STATE_VALUES: Record<BreakerState, number> = { closed: 0, half_open: 1, open: 2 };
 
 /**
- * prom-client implementation of MetricsPort. Every record is wrapped in `safely()` so a
- * telemetry failure can never break the business flow (ADR-0014). Injected as `METRICS`.
+ * Every record goes through `safely()` so a telemetry failure can never break the business flow.
  */
 @Injectable()
 export class BusinessMetrics implements MetricsPort {

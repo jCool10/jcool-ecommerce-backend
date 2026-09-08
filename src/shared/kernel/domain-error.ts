@@ -1,4 +1,5 @@
-/** A business-rule violation raised from inside the domain, distinct from infrastructure failures so the interface layer can map it deterministically (the exception filter turns `DomainError` into 422 and lets unexpected errors surface as 500). */
+/** The exception filter maps this to 422; anything else surfaces as a 500, so infrastructure
+ * failures must not be reported as a `DomainError`. */
 export class DomainError extends Error {
   constructor(message: string) {
     super(message);

@@ -1,32 +1,25 @@
 /**
  * Reconcile bucket, `media_assets` and `product_images` against each other:
- *   npm run storage:verify
  *   npm run storage:verify -- --prefix media/ --limit 5000
- * In a deployed container (no devDependencies, so no `tsx`), the compiled twin:
- *   npm run storage:verify:prod
+ *   npm run storage:verify:prod   (compiled twin, for a container without devDependencies)
  *
  * Three ways the stores can disagree, in increasing order of seriousness:
  *
- *   orphan object — bytes in the bucket that no row points at. Storage being paid for and nothing
- *   left that could ever reference it. Expected transiently: a sweep deletes the object before the
- *   row, so a crash between the two shows up here until the next pass.
+ *   orphan object — bytes no row points at. Expected transiently: a sweep deletes the object before
+ *   the row, so a crash between the two shows up here until the next pass.
  *
- *   missing object — an ATTACHED row whose object is gone. A product is rendering a broken image
- *   right now: bytes were deleted while something still pointed at them.
+ *   missing object — an ATTACHED row whose object is gone: a product is rendering a broken image
+ *   right now.
  *
  *   dangling link — a `product_images` row whose `media_assets` row is gone. There is no FK between
- *   them (Catalog and Media are separate contexts), so nothing at write time prevents it, and the
- *   read path hides it: an id that resolves to no URL is dropped from the response rather than
- *   rendered broken. So the product silently loses an image and nothing anywhere says why. Checked
+ *   them (separate contexts), and the read path hides it: an id that resolves to no URL is dropped
+ *   from the response rather than rendered broken, so the product silently loses an image. Checked
  *   here because this is the only place that looks at both tables.
  *
- * Read-only by design — it deletes nothing. Reconciliation tells you which of the three you have;
- * what to do about each differs, and none of the answers is safe to guess. Exits 1 when anything is
- * found, so a scheduled run fails loudly.
- *
- * Runs standalone rather than booting Nest: it needs only Postgres and the bucket, and it is most
- * useful when the app is what is suspect. Lives under `src/` because `scripts/` is excluded from
- * the build and `tsx` is a devDependency, so a `scripts/` entrypoint cannot run in the image.
+ * Read-only by design: what to do about each of the three differs and none is safe to guess. Exits 1
+ * when anything is found, so a scheduled run fails loudly. Lives under `src/` because `scripts/` is
+ * excluded from the build and `tsx` is a devDependency, so a `scripts/` entrypoint cannot run in the
+ * image.
  */
 import 'dotenv/config';
 import { HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';

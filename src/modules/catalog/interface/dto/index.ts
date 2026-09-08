@@ -1,4 +1,4 @@
-// Barrel: Catalog interface DTOs. Import siblings inside this folder by file (avoid cycles).
+// Import siblings inside this folder by file, not through this barrel (avoid cycles).
 export * from './admin-catalog.response.dto';
 export * from './attach-product-image.dto';
 export * from './create-category.dto';

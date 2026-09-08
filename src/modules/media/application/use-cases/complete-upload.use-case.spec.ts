@@ -57,7 +57,6 @@ describe('CompleteUploadUseCase', () => {
     const [id, sizeBytes, expiresAt] = ctx.markReady.mock.calls[0];
     expect(id).toBe('asset-1');
     expect(sizeBytes).toBe(512);
-    // Never null: an asset with no expiry can never be selected by the sweep.
     expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + READY_TTL_SEC * 1000);
   });
 
@@ -75,7 +74,6 @@ describe('CompleteUploadUseCase', () => {
     const { useCase, markReady } = build({ head: null });
 
     await expect(useCase.execute('asset-1')).rejects.toBeInstanceOf(UploadRejectedError);
-    // Left PENDING on purpose — the sweep reclaims both the row and whatever is in the bucket.
     expect(markReady).not.toHaveBeenCalled();
   });
 

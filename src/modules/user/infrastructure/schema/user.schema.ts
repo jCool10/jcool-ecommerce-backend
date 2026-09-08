@@ -1,8 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
-// User/Auth schema (users + refresh-token sessions). Infrastructure, never
-// imported by domain. Same conventions as catalog.schema.ts (tz stamps).
+// Infrastructure only: nothing in the domain layer may import this file.
 
 // Matches the Role union (src/shared/rbac/role.enum.ts).
 export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
@@ -11,7 +10,6 @@ export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 // would mint unroutable rows. Without one, each insert site supplies an id or fails to compile.
 const id = () => uuid('id').primaryKey();
 
-// Timezone-aware audit stamps; `updatedAt` bumped app-side on every UPDATE.
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true })
@@ -25,7 +23,6 @@ export const users = pgTable('users', {
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
   role: role('role').notNull().default('CUSTOMER'),
-  // Null until verified, then the verification timestamp (kept as a time, not a boolean).
   emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
   // Monotonic session epoch stamped into every access token; a bump (logout-all /
   // change-password) invalidates every token minted under an older epoch at once.
@@ -33,7 +30,6 @@ export const users = pgTable('users', {
   ...stamps,
 });
 
-/** Single-use email-verification tokens — only the SHA-256 hash is stored; `consumedAt` enforces single use. */
 export const emailVerificationTokens = pgTable(
   'email_verification_tokens',
   {
@@ -59,7 +55,6 @@ export const emailVerificationTokens = pgTable(
   ],
 );
 
-/** Single-use password-reset tokens — same shape as email-verification tokens (only the hash is stored). */
 export const passwordResetTokens = pgTable(
   'password_reset_tokens',
   {
@@ -82,7 +77,7 @@ export const passwordResetTokens = pgTable(
   ],
 );
 
-/** Stateful refresh tokens, one row per issued token (immediate revoke + rotation lineage) — `tokenHash` = SHA-256, `familyId` groups a login session (a detected reuse revokes the family), `replacedByTokenId` points at the successor. */
+/** One row per issued token: `familyId` groups a login session, and a detected reuse revokes the family. */
 export const refreshTokens = pgTable(
   'refresh_tokens',
   {
@@ -100,13 +95,12 @@ export const refreshTokens = pgTable(
   (t) => [
     index('idx_refresh_tokens_user').on(t.userId),
     index('idx_refresh_tokens_family').on(t.familyId),
-    // Two indexes for one sweep, whose predicate is a disjunction: expired WITHOUT ever being
-    // revoked, OR revoked long enough ago to stop being a reuse signal. Both partial, each mirroring
-    // its own arm exactly. `revoked_at IS NULL` is not just a size trick — rotation revokes every
-    // predecessor, so on a mature table a plain `expires_at` index hands the planner a match list
-    // that is almost entirely rejects. Measured on 200k rows: plain was a 41ms seq scan, partial is
-    // a BitmapOr at 0.09ms with a 152kB index. `listActiveSessions` filters the same way, so it
-    // stays usable there.
+    // The sweep's predicate is a disjunction — expired without ever being revoked, OR revoked long
+    // enough ago to stop being a reuse signal — so both arms need their own partial index.
+    // `revoked_at IS NULL` is not just a size trick: rotation revokes every predecessor, so on a
+    // mature table a plain `expires_at` index hands the planner a match list that is almost entirely
+    // rejects. Measured on 200k rows: plain was a 41ms seq scan, partial is a BitmapOr at 0.09ms
+    // with a 152kB index. `listActiveSessions` filters the same way, so it stays usable there.
     index('idx_refresh_tokens_expires')
       .on(t.expiresAt)
       .where(sql`${t.revokedAt} is null`),

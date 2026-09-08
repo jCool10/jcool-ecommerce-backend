@@ -1,5 +1,4 @@
-// Structured, side-band audit trail for security-relevant auth events. Recording
-// never alters the auth outcome and never throws back into the caller.
+// Side-band trail: recording never alters the auth outcome and never throws back into the caller.
 
 export const AUTH_AUDIT = Symbol('AUTH_AUDIT');
 
@@ -28,13 +27,12 @@ export interface AuthAuditContext {
 export interface AuthAuditRecord extends AuthAuditContext {
   event: AuthAuditEvent;
   outcome: 'success' | 'failure';
-  /** Account subject when known (logout, register, reuse); absent pre-auth. */
+  /** Absent pre-auth. */
   userId?: string;
-  /** Account identifier for credential events (login) where userId isn't resolved. */
+  /** Carries the account for credential events (login) where userId isn't resolved. */
   email?: string;
-  /** Machine-readable cause for failures/notable events (e.g. 'invalid_credentials'). */
+  /** Machine-readable cause, not free text (e.g. 'invalid_credentials'). */
   reason?: string;
-  /** Event-specific extras (e.g. the refresh token familyId on a reuse). */
   metadata?: Record<string, string | number | boolean>;
 }
 

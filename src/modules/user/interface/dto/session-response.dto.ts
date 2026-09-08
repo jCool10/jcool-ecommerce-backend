@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type { ActiveSession } from '../../application/ports';
 
-/** Public view of one active session for GET /auth/sessions; `id` is passed to DELETE /auth/sessions/:id. */
 export class SessionResponseDto {
   @ApiProperty({ example: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f', description: 'Session id (token family, UUID).' })
   id!: string;

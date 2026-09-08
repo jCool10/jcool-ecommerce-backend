@@ -26,12 +26,6 @@ function build(days: unknown = 30) {
   };
 }
 
-/**
- * The window this table is sized by is the GATEWAY's redelivery window, not the queue's: the rows
- * are read at one place only — ingress, where the unique `(provider, provider_event_id)` turns a
- * repeat delivery into a no-op. Collect a row while Stripe might still resend the event and the
- * resend is treated as new.
- */
 describe('SweepWebhookEventsUseCase', () => {
   beforeEach(() => {
     vi.useFakeTimers();

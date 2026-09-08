@@ -48,7 +48,6 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
 
   const server = () => app.getHttpServer();
 
-  // Open a real PENDING order + payment; returns the session handle the webhook must reference.
   async function openPayment(): Promise<{
     token: string;
     orderId: string;

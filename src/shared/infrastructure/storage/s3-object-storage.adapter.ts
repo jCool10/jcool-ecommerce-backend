@@ -23,8 +23,8 @@ export interface S3ObjectStorageOptions {
 }
 
 /**
- * S3-compatible storage (R2 in production, MinIO locally). Path-style addressing throughout: MinIO
- * only serves that way, and R2 accepts it, so one adapter covers both without a mode.
+ * Path-style addressing throughout: MinIO only serves that way and R2 accepts it, so one adapter
+ * covers both (R2 in production, MinIO locally) without a mode.
  */
 export class S3ObjectStorageAdapter implements ObjectStoragePort {
   private readonly client: S3Client;
@@ -47,10 +47,9 @@ export class S3ObjectStorageAdapter implements ObjectStoragePort {
   }
 
   async presignPut(key: string, contentType: string): Promise<PresignedUpload> {
-    // Signing `Content-Type` is the only constraint a presigned PUT actually enforces: send a
-    // different one and the bucket refuses the upload. Size is not enforceable this way — a v4
-    // signature pins Content-Length to one exact value, never to a ceiling — so the size limit
-    // lives at `complete` instead.
+    // Signing `Content-Type` is the only constraint a presigned PUT actually enforces. Size is not
+    // enforceable this way — a v4 signature pins Content-Length to one exact value, never to a
+    // ceiling — so the size limit lives at `complete` instead.
     const url = await getSignedUrl(
       this.client,
       new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }),

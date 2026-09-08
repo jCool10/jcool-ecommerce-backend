@@ -1,6 +1,9 @@
 import type { Role } from '@shared/rbac';
 
-/** User domain entity — pure, no framework/DB imports; `passwordHash` is the stored argon2id digest (never plaintext), identity + timestamps are DB-generated. */
+/**
+ * Pure — no framework/DB imports. `passwordHash` is the stored argon2id digest, never plaintext;
+ * id and timestamps are DB-generated.
+ */
 export class User {
   constructor(
     public readonly id: string,
@@ -13,7 +16,6 @@ export class User {
     public readonly tokenEpoch: number = 0,
   ) {}
 
-  /** Reconstitute a User from stored attributes (e.g. a persisted row). Pure, no I/O. */
   static create(props: {
     id: string;
     email: string;
@@ -36,7 +38,6 @@ export class User {
     );
   }
 
-  /** True once the email address has been verified. */
   get isEmailVerified(): boolean {
     return this.emailVerifiedAt !== null;
   }

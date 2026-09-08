@@ -3,7 +3,6 @@ import type { Order } from '../domain/order.entity';
 import type { OrderStatus } from '../domain/order-status';
 import type { OrderRepositoryPort } from './ports/order-repository.port';
 
-/** One order line as returned to the client (from the snapshot, not a live price). */
 export interface OrderItemView {
   skuId: string;
   productName: string;
@@ -21,8 +20,7 @@ export interface OrderView {
   items: OrderItemView[];
 }
 
-// Map the domain aggregate to the read model. Totals come from the snapshot lines,
-// so they are stable against later Catalog price changes.
+// Totals come from the snapshot lines, so they are stable against later Catalog price changes.
 export function toView(order: Order): OrderView {
   return {
     id: order.id as string,
@@ -40,8 +38,7 @@ export function toView(order: Order): OrderView {
   };
 }
 
-// Re-read after a mutation (or for a point read) so the client always sees
-// persisted state. Shared by the write use-cases and the query service.
+// Write use-cases call this after a mutation so the client always sees persisted state.
 export async function loadOrderView(repo: OrderRepositoryPort, orderId: string, userId: string): Promise<OrderView> {
   const order = await repo.findForUser(orderId, userId);
   if (!order) {

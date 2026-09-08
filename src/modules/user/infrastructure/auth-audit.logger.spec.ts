@@ -5,8 +5,6 @@ import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { AuthAuditRecord } from '../application/ports';
 import { AuthAuditLogger } from './auth-audit.logger';
 
-// Typed pino fakes (event fields go in the merging object, the event name is the message)
-// plus a CLS stub carrying a fixed request id and a metrics spy.
 function build(requestId: string | undefined) {
   const info = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();

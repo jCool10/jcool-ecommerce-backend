@@ -41,10 +41,6 @@ function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
   };
 }
 
-/**
- * A transaction handle that replays a fixed batch and records what the relay wrote back, so the
- * poll's locking clause and the failure policy can be pinned without a database.
- */
 function build(rows: OutboxRow[]) {
   const writes: Record<string, unknown>[] = [];
   const limits: number[] = [];
@@ -78,8 +74,8 @@ function build(rows: OutboxRow[]) {
   const connection = { status: 'ready' };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const recordEventPublished = vi.fn();
-  // The real table, not a stub that echoes back whatever it is given: what the label folds is the
-  // thing under test, and a stub would agree with any answer.
+  // The real dispatch table, not a stub: what the label folds is the thing under test, and a stub
+  // would agree with any answer.
   const dispatcher = new DomainEventDispatcher(
     { record: vi.fn() } as unknown as OrderEventsHandler,
     { settle: vi.fn() } as unknown as PaymentEventsHandler,
@@ -183,8 +179,8 @@ describe('OutboxRelay', () => {
 
     it('charges nothing when the queue refused every row, however healthy the socket looks', async () => {
       const t = build([row(), row(), row()]);
-      // What a Redis that is up but refusing writes returns: out of memory, a read-only replica
-      // after failover, a reload from disk. The connection stays `ready` throughout.
+      // What a Redis that is up but refusing writes returns (out of memory, read-only replica after
+      // failover, reload from disk); the connection stays `ready` throughout.
       t.add.mockRejectedValue(new Error("OOM command not allowed when used memory > 'maxmemory'"));
 
       await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 3 });
@@ -248,8 +244,7 @@ describe('OutboxRelay', () => {
 
       await t.relay.runOnce(10);
 
-      // `outbox.event_type` is free text a producer wrote; only the dispatch table bounds it. The
-      // fold doubles as a warning — these two are heading straight for the dead-letter queue.
+      // The fold doubles as a warning: these two are heading straight for the dead-letter queue.
       expect(t.recordEventPublished).toHaveBeenCalledTimes(2);
       expect(t.recordEventPublished).toHaveBeenNthCalledWith(1, 'unregistered', 'published');
       expect(t.recordEventPublished).toHaveBeenNthCalledWith(2, 'unregistered', 'published');

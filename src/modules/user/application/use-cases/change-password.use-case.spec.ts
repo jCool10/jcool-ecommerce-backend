@@ -5,7 +5,7 @@ import type { PasswordHasherPort, UserRepositoryPort } from '../ports';
 import type { SessionService } from '../services';
 import { ChangePasswordUseCase } from './change-password.use-case';
 
-// Hasher that encodes plaintext as `hashed:<plain>` so verify is deterministic.
+// A stored hash is `hashed:<plain>`, so verify is an equality check.
 class MockHasher implements PasswordHasherPort {
   hash(plain: string): Promise<string> {
     return Promise.resolve(`hashed:${plain}`);
@@ -64,7 +64,7 @@ describe('ChangePasswordUseCase', () => {
     await useCase.execute({ userId: 'u1', currentPassword: 'old-pw', newPassword: 'new-password' });
 
     expect(users.updated).toEqual([{ userId: 'u1', passwordHash: 'hashed:new-password' }]);
-    expect(sessions.revokedAllFor).toEqual(['u1']); // change-password = sign out everywhere
+    expect(sessions.revokedAllFor).toEqual(['u1']);
   });
 
   it('rejects a wrong current password with 401 and changes nothing', async () => {

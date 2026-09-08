@@ -3,10 +3,9 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
- * Signed double-submit CSRF tokens (`random.hmac(random)`): the same value sits in a readable
- * cookie and must be echoed in a header; the guard requires cookie === header AND a valid
- * signature (key derived from JWT_ACCESS_SECRET). Constant-time throughout.
- * See docs/engineering-notes.md (Auth — Token delivery (cookie) & CSRF).
+ * Signed double-submit tokens (`random.hmac(random)`): the same value sits in a readable cookie and
+ * must be echoed in a header, and a valid signature is required as well — so an attacker who can set
+ * a cookie still cannot forge one. The HMAC key is derived from JWT_ACCESS_SECRET.
  */
 @Injectable()
 export class CsrfTokenService {
@@ -17,13 +16,11 @@ export class CsrfTokenService {
     this.key = createHmac('sha256', appSecret).update('csrf-double-submit-v1').digest();
   }
 
-  /** Mint a fresh signed token to set in the CSRF cookie on login/refresh. */
   issue(): string {
     const random = randomBytes(32).toString('base64url');
     return `${random}.${this.sign(random)}`;
   }
 
-  /** Valid when both values are present, identical (double-submit), and signed authentically. */
   verify(cookieValue: string | undefined, headerValue: string | undefined): boolean {
     if (!cookieValue || !headerValue) return false;
     if (!this.constantTimeEquals(cookieValue, headerValue)) return false;

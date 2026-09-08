@@ -1,46 +1,36 @@
 import type { DefaultJobOptions } from 'bullmq';
 
-// Queue/job names and DI tokens in one place so the providers, the relay, the worker, and the
-// tests never drift on a string — the same reasoning as metric-definitions.ts.
-
 /** One queue for every event type; splitting per type only pays off once one consumer starves another. */
 export const QUEUE_DOMAIN_EVENTS = 'domain-events';
 
 export const DOMAIN_EVENTS_QUEUE = Symbol('DOMAIN_EVENTS_QUEUE');
 
 /**
- * Where a message goes once retrying it has stopped being useful. Deliberately a queue with no
- * worker: its job is to hold poison out of the main queue's way and keep it visible, not to run it.
- * Jobs sit in `wait` until a human replays or drops them.
+ * Deliberately a queue with no worker: it holds poison out of the main queue's way and keeps it
+ * visible, so jobs sit in `wait` until a human replays or drops them.
  */
 export const QUEUE_DOMAIN_EVENTS_DLQ = 'domain-events-dlq';
 
 export const DOMAIN_EVENTS_DLQ_QUEUE = Symbol('DOMAIN_EVENTS_DLQ_QUEUE');
 
-/**
- * Who the inbox dedups on behalf of. A consumer GROUP, not a process: every instance of this worker
- * shares the value so they collapse each other's duplicates, while a second consumer that needs the
- * same events for its own purpose gets its own identity and its own rows.
- */
+/** A consumer GROUP, not a process: every instance of this worker dedups against the same inbox rows. */
 export const DOMAIN_EVENTS_CONSUMER = 'domain-events';
 
 /** Held separately because BullMQ never closes a client it was handed. */
 export const QUEUE_CONNECTION = Symbol('QUEUE_CONNECTION');
 
 /**
- * How long a failed job stays in the main queue's failed set — the longest a message can still be
- * re-run. One half of a correctness pair: an inbox claim must outlive its message's ability to come
- * back, and `sweep-inbox.ts` asserts against this constant at boot.
+ * The longest a failed message can still be re-run. One half of a correctness pair: an inbox claim
+ * must outlive its message, and `sweep-inbox.ts` asserts against this constant at boot.
  */
 export const REMOVE_ON_FAIL_AGE_SEC = 604_800;
 
-/** The same bound in whole days, the unit `RETENTION_INBOX_DAYS` uses. Derived so the pair cannot drift. */
+/** The same bound in the whole days `RETENTION_INBOX_DAYS` uses, derived so the pair cannot drift. */
 export const MIN_INBOX_RETENTION_DAYS = Math.ceil(REMOVE_ON_FAIL_AGE_SEC / 86_400);
 
 /**
- * Retry policy for `domain-events`. A job's name is the outbox row's `event_type` verbatim, so a
- * new event type needs no change here. Retry is only safe because the inbox claim and the effect
- * share one transaction.
+ * A job's name is the outbox row's `event_type` verbatim, so a new event type needs no change here.
+ * Retry is only safe because the inbox claim and the effect share one transaction.
  */
 export function buildJobOptions(attempts: number, backoffMs: number): DefaultJobOptions {
   return {

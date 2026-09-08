@@ -3,7 +3,6 @@ import type { Counter, Gauge, Histogram } from 'prom-client';
 import { describe, expect, it, vi } from 'vitest';
 import { BusinessMetrics } from './business.metrics';
 
-// prom-client fakes: spy inc()/observe() and assert the label shapes (bounded values only).
 function build() {
   const ordersInc = vi.fn();
   const valueObserve = vi.fn();
@@ -181,8 +180,7 @@ describe('BusinessMetrics', () => {
     expect(mediaBytesInc).toHaveBeenCalledWith(2048);
   });
 
-  // An asset whose size was never recorded reports 0, and a counter incremented by 0 only adds a
-  // sample that says nothing.
+  // An asset whose size was never recorded reports 0, and incrementing a counter by 0 says nothing.
   it('ignores a zero-byte reclaim', () => {
     const { metrics, mediaBytesInc } = build();
     metrics.recordMediaBytesReclaimed(0);

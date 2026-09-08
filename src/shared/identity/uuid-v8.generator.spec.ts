@@ -22,7 +22,8 @@ interface FakeClock {
   advance(ms: number): void;
   /** Only the wall clock moves — an NTP step, or a suspended host resuming. */
   stepWallBy(ms: number): void;
-  /** Move both clocks forward on the Nth elapsed-time read — `spinPast` is their only caller, so this releases a spin from inside the loop without coupling to how often `now()` reads the clock. */
+  /** Moves both clocks forward on the Nth elapsed-time read. `spinPast` is their only caller, so
+   * this releases a spin from inside the loop without coupling to how often `now()` reads. */
   releaseAfterSpinReads(reads: number, byMs: number): void;
   /** Elapsed-time reads served. `spinPast` is their only caller, so a rise proves the spin ran. */
   spinReadCount(): number;

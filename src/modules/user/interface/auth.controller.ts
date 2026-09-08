@@ -63,7 +63,10 @@ import {
 } from './dto';
 import { AuthCookieService, CsrfGuard } from './security';
 
-/** Auth endpoints — thin (validate DTO, call a use case, map to a response DTO); access token in the JSON body (Bearer, CSRF-immune), refresh token only in an httpOnly cookie (refresh/logout add CSRF). */
+/**
+ * The access token travels in the JSON body (Bearer, so CSRF-immune); the refresh token lives only
+ * in an httpOnly cookie, which is why the cookie-driven routes add a CSRF guard.
+ */
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -163,7 +166,7 @@ export class AuthController {
   @Public()
   @Post('login')
   @Throttle(LOGIN_THROTTLE)
-  @HttpCode(HttpStatus.OK) // POST defaults to 201; login is not a creation.
+  @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: AuthTokensResponseDto })
   @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
   @ApiForbiddenResponse({ description: 'Email not verified (when verification is enforced)' })
@@ -180,7 +183,7 @@ export class AuthController {
       this.audit.record({ event: 'login.succeeded', outcome: 'success', email: dto.email, ip, userAgent });
       return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
     } catch (error) {
-      // Audit the failure (brute-force signal), then rethrow unchanged — the response reveals nothing beyond status.
+      // Audited as a brute-force signal, then rethrown unchanged so the response reveals nothing beyond status.
       this.audit.record({
         event: 'login.failed',
         outcome: 'failure',
@@ -222,7 +225,6 @@ export class AuthController {
       currentPassword: dto.currentPassword,
       newPassword: dto.newPassword,
     });
-    // Every session (this one included) is now revoked — drop the stale cookies.
     this.authCookies.clear(res);
     this.audit.record({ event: 'password.changed', outcome: 'success', userId: current.userId, ip, userAgent });
   }
@@ -285,7 +287,7 @@ export class AuthController {
   @Post('refresh')
   @UseGuards(CsrfGuard)
   @Throttle(REFRESH_THROTTLE)
-  @HttpCode(HttpStatus.OK) // POST defaults to 201; refresh returns, not creates.
+  @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: AuthTokensResponseDto })
   @ApiUnauthorizedResponse({ description: 'Invalid, expired, revoked, or reused refresh token' })
   @ApiForbiddenResponse({ description: 'Missing or invalid CSRF token' })
@@ -331,7 +333,6 @@ export class AuthController {
   }
 }
 
-// Machine-readable audit reason for a failed login.
 function loginFailureReason(error: unknown): string {
   if (error instanceof UnauthorizedException) return 'invalid_credentials';
   if (error instanceof ForbiddenException) return 'email_not_verified';

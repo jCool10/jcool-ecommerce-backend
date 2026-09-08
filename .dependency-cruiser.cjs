@@ -1,13 +1,4 @@
-/**
- * Architecture boundary rules for the modular monolith (ADR 0009). Enforces the
- * DDD structure the plan established so boundaries stop depending on hand
- * discipline: run `npm run arch:check` (also wired into CI).
- *
- * Layering per context: interface → application → domain (inward only);
- * infrastructure implements ports via DI. Cross-context talk goes ONLY through
- * `application/public/**` (the published language) — never another context's
- * domain / infrastructure / schema. `shared/kernel` is pure.
- */
+// Architecture boundary rules for the modular monolith: `npm run arch:check` (also wired into CI).
 module.exports = {
   forbidden: [
     {
@@ -43,7 +34,7 @@ module.exports = {
       name: 'app-domain-telemetry-free',
       severity: 'error',
       comment:
-        'domain/application stay telemetry-free (ADR-0013/0014/0015/0016): no OTel/pino/prom-client/Sentry, and observability only through the pure metrics port. The shared/observability barrel now transitively pulls @opentelemetry/api, so this keeps a stray `withSpan`/logger/captureException import from leaking telemetry into the core.',
+        'domain/application stay telemetry-free: no OTel/pino/prom-client/Sentry, and observability only through the pure metrics port. The shared/observability barrel now transitively pulls @opentelemetry/api, so this keeps a stray `withSpan`/logger/captureException import from leaking telemetry into the core.',
       from: { path: '^src/modules/[^/]+/(domain|application)/' },
       to: {
         path: 'node_modules/(@opentelemetry|@sentry|pino|nestjs-pino|prom-client)/|^src/shared/observability/',
@@ -72,7 +63,7 @@ module.exports = {
       name: 'shared-no-module-internals',
       severity: 'error',
       comment:
-        'shared/ is the leaf layer every context imports; importing a context back turns it into a hidden context. All of src/modules is off limits, including a context`s own *.module.ts, which drags its providers, controllers and schema along. Exempt: the two composition roots — shared/messaging wires context handlers into DI, and the schema barrel collects every context table for the migrator (ADR 0007).',
+        'shared/ is the leaf layer every context imports; importing a context back turns it into a hidden context. All of src/modules is off limits, including a context`s own *.module.ts, which drags its providers, controllers and schema along. Exempt: the two composition roots — shared/messaging wires context handlers into DI, and the schema barrel collects every context table for the migrator.',
       from: {
         path: '^src/shared/',
         pathNot: '^src/shared/(messaging|infrastructure/database/schema)/',
@@ -105,7 +96,6 @@ module.exports = {
     tsConfig: { fileName: './tsconfig.json' },
     tsPreCompilationDeps: true,
     exclude: {
-      // Type-only import graphs are covered; skip generated migration snapshots.
       path: 'node_modules|^src/shared/infrastructure/database/migrations/',
     },
   },

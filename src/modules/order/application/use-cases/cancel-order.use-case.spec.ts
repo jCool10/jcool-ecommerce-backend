@@ -26,7 +26,6 @@ function order(status: OrderStatus, userId = OWNER): Order {
 function build(found: Order | null) {
   const findByIdForUpdate = vi.fn().mockResolvedValue(found);
   const repo = {
-    // The real one opens a transaction; here it just supplies the handle the lookup takes.
     withTransaction: vi.fn(<T>(fn: (tx: DrizzleTx) => Promise<T>) => fn({} as DrizzleTx)),
     findByIdForUpdate,
   } as unknown as OrderRepositoryPort;

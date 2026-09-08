@@ -15,14 +15,12 @@ import {
 import { MIN_BUCKET_KEY_LENGTH } from '@shared/identity/email-bucket';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
 
-// Enum so an unexpected NODE_ENV fails validation instead of enabling wrong behavior.
 export enum NodeEnv {
   Development = 'development',
   Test = 'test',
   Production = 'production',
 }
 
-// pino log levels (ascending severity). Default applied in configuration.ts.
 export enum LogLevel {
   Trace = 'trace',
   Debug = 'debug',
@@ -31,24 +29,23 @@ export enum LogLevel {
   Error = 'error',
 }
 
-// Stock-reservation concurrency strategy. Default applied in configuration.ts.
 export enum InventoryLockStrategy {
   Pessimistic = 'pessimistic',
   Optimistic = 'optimistic',
 }
 
-// Payment gateway selected at boot. One member today: the enum still earns its place by rejecting
-// any other value at startup instead of letting a typo pick a gateway that does not exist.
+// One member today: the enum earns its place by rejecting any other value at startup instead of
+// letting a typo pick a gateway that does not exist.
 export enum PaymentProvider {
   Stripe = 'stripe',
 }
 
-/** Environment schema, validated once at startup (fail-fast) — required: NODE_ENV, DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, IDENTITY_BUCKET_KEY; optional vars fall back to defaults applied in configuration.ts. */
+/** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
+ * default applied in configuration.ts; the comments here only explain the BOUNDS. */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
   NODE_ENV!: NodeEnv;
 
-  // Defaults to 3000 (configuration.ts); when present must be a valid TCP port.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -56,9 +53,6 @@ export class EnvironmentVariables {
   @Max(65535)
   PORT?: number;
 
-  // Grace period (ms) the process keeps returning /health/ready 503 after SIGTERM before the
-  // HTTP server closes, so a load balancer drains this instance first. Default 0 (configuration.ts)
-  // → instant shutdown in tests/dev; set a few seconds under an orchestrator.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -69,17 +63,14 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   DATABASE_URL!: string;
 
-  // Overrides where the migration runner looks for .sql files; the production image sets it because
-  // it ships migrations/ without the src/ tree. Read by the migrate CLI outside Nest, declared here
-  // to fail-fast if blank (same reason as the OTEL_*/SENTRY_* vars instrumentation.ts reads raw).
+  // The production image sets this because it ships migrations/ without the src/ tree. Read by the
+  // migrate CLI outside Nest, declared here so a blank value fails the boot.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   MIGRATIONS_DIR?: string;
 
-  // App-side pg pool bounds; validated so an out-of-range value fails at boot.
-  // Defaults (10 / 5000ms / 10000ms) applied in configuration.ts. Timeouts allow 0
-  // to opt back into pg's native behavior (0 = wait forever / never reap idle).
+  // The timeouts allow 0, which opts back into pg's native behaviour (wait forever / never reap idle).
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -102,21 +93,19 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   REDIS_URL!: string;
 
-  // BullMQ key prefix; default 'bull' (configuration.ts). @IsNotEmpty because a blank prefix would
-  // silently produce a different, colliding key layout rather than falling back to the default.
+  // @IsNotEmpty because a blank prefix would silently produce a different, colliding key layout
+  // rather than falling back to the default.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   QUEUE_PREFIX?: string;
 
-  // Consumer kill-switch; on by default (configuration.ts). Off leaves jobs queued, never lost.
   @IsOptional()
   @IsBooleanString()
   QUEUE_WORKER_ENABLED?: string;
 
-  // Jobs consumed in parallel; default 5 (configuration.ts). The cap is a sanity bound, NOT a
-  // guarantee against the pool: each in-flight job holds a connection for its transaction, so this
-  // and DB_POOL_MAX have to be sized against each other.
+  // The cap is a sanity bound, NOT a guarantee against the pool: each in-flight job holds a
+  // connection for its transaction, so this and DB_POOL_MAX have to be sized against each other.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -124,9 +113,8 @@ export class EnvironmentVariables {
   @Max(50)
   QUEUE_WORKER_CONCURRENCY?: number;
 
-  // Deliveries before a message is dead-lettered; default 8 (configuration.ts). Capped at 10 rather
-  // than left open because the backoff doubles: ten tries already stretch the last wait past eight
-  // minutes, and a message nobody can apply belongs in the DLQ long before that.
+  // Capped at 10 rather than left open because the backoff doubles: ten tries already stretch the
+  // last wait past eight minutes, and a message nobody can apply belongs in the DLQ long before that.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -134,8 +122,8 @@ export class EnvironmentVariables {
   @Max(10)
   QUEUE_CONSUMER_ATTEMPTS?: number;
 
-  // First retry delay in ms; default 1000 (configuration.ts). Min 100 so a typo cannot turn the
-  // retry budget into a tight loop against whatever dependency is already failing.
+  // Min 100 so a typo cannot turn the retry budget into a tight loop against whatever dependency is
+  // already failing.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -143,21 +131,20 @@ export class EnvironmentVariables {
   @Max(60_000)
   QUEUE_CONSUMER_BACKOFF_MS?: number;
 
-  // Outbox relay kill-switch; on by default (configuration.ts).
   @IsOptional()
   @IsBooleanString()
   OUTBOX_RELAY_ENABLED?: string;
 
-  // Relay period (ms); default 1000 (configuration.ts). Min 100 so a typo cannot turn the relay into
-  // a busy loop opening transactions against the outbox table.
+  // Min 100 so a typo cannot turn the relay into a busy loop opening transactions against the
+  // outbox table.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(100)
   OUTBOX_POLL_MS?: number;
 
-  // Rows per relay tick; default 100 (configuration.ts). Capped because the publish happens inside
-  // the polling transaction, so the batch size is also how long row locks are held.
+  // Capped because the publish happens inside the polling transaction, so the batch size is also
+  // how long row locks are held.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -169,44 +156,39 @@ export class EnvironmentVariables {
   @IsBooleanString()
   SWAGGER_ENABLED?: string;
 
-  // pino log level; defaults to debug in dev, info in prod (configuration.ts).
   @IsOptional()
   @IsEnum(LogLevel)
   LOG_LEVEL?: LogLevel;
 
-  // Bearer token for GET /metrics (ADR-0018); optional in dev, MinLength keeps it non-trivial.
   @IsOptional()
   @IsString()
   @MinLength(16)
   METRICS_TOKEN?: string;
 
-  // Tracing kill-switch (ADR-0015); the OTel SDK (instrumentation.ts) starts only when "true".
+  // The OTel SDK (instrumentation.ts) starts only when this is "true".
   @IsOptional()
   @IsBooleanString()
   OTEL_ENABLED?: string;
 
-  // service.name on every span; read in instrumentation.ts, declared here to fail-fast if invalid.
+  // service.name on every span; read in instrumentation.ts, declared here so a bad value fails boot.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   OTEL_SERVICE_NAME?: string;
 
-  // OTLP/HTTP base endpoint of the Collector; the traces path (/v1/traces) is appended.
-  // Defaults to http://localhost:4318 (instrumentation.ts).
+  // Base endpoint of the Collector; the traces path (/v1/traces) is appended to it.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
 
-  // Sentry DSN (ADR-0016); unset (dev/test) → the SDK never initializes and captureException is a
-  // silent no-op. Read in instrumentation.ts; declared here to fail-fast if blank.
+  // Unset (dev/test) → the SDK never initializes and captureException is a silent no-op. Read in
+  // instrumentation.ts; declared here so a blank value fails boot.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   SENTRY_DSN?: string;
 
-  // Fraction (0–1) of transactions sampled for Sentry performance; 0/absent → errors only (no perf
-  // spans, so no duplicate http spans in Jaeger — see instrumentation.ts).
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
@@ -214,30 +196,27 @@ export class EnvironmentVariables {
   @Max(1)
   SENTRY_TRACES_SAMPLE_RATE?: number;
 
-  // Public base URL for links in outbound email; plain string so localhost/non-TLD hosts validate.
+  // Plain string, not @IsUrl, so localhost and other non-TLD hosts validate.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   APP_PUBLIC_URL?: string;
 
-  // Overrides the Secure flag on auth cookies; defaults to on in production only.
   @IsOptional()
   @IsBooleanString()
   COOKIE_SECURE?: string;
 
-  // Comma-separated CORS allow-list; empty means CORS disabled (same-origin only).
+  // Comma-separated allow-list.
   @IsOptional()
   @IsString()
   CORS_ORIGINS?: string;
 
-  // Express `trust proxy` for req.ip (throttle + audit); off unless set. Accepts a hop
-  // count, a subnet/CSV, or "true"/"false".
+  // A hop count, a subnet/CSV, or "true"/"false".
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   TRUST_PROXY?: string;
 
-  // Rate-limiting kill-switch; defaults to enabled (configuration.ts).
   @IsOptional()
   @IsBooleanString()
   THROTTLE_ENABLED?: string;
@@ -246,16 +225,14 @@ export class EnvironmentVariables {
   @IsBooleanString()
   RECONCILE_ENABLED?: string;
 
-  // Sweep period (ms); default 60000 (configuration.ts). Min 1000 so a typo can't turn the sweep
-  // into a busy loop hammering the payment gateway.
+  // Min 1000 so a typo can't turn the sweep into a busy loop hammering the payment gateway.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1000)
   RECONCILE_INTERVAL_MS?: number;
 
-  // Orders per sweep tick; default 50 (configuration.ts). Capped so one tick can't fan out an
-  // unbounded number of gateway round-trips.
+  // Capped so one tick can't fan out an unbounded number of gateway round-trips.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -263,16 +240,13 @@ export class EnvironmentVariables {
   @Max(500)
   RECONCILE_BATCH_SIZE?: number;
 
-  // Minimum age (s) before a PENDING order is swept; default 120 (configuration.ts). 0 is legal —
-  // e2e drives the sweep deterministically.
+  // 0 is legal — e2e drives the sweep deterministically.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   ORDER_STALE_THRESHOLD_SEC?: number;
 
-  // Age (s) after which an unsettled PENDING order is expired and its stock released; default 900
-  // (configuration.ts), matching the reservation TTL.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -283,16 +257,14 @@ export class EnvironmentVariables {
   @IsBooleanString()
   RESERVATION_SWEEP_ENABLED?: string;
 
-  // Sweep period (ms); default 60000 (configuration.ts). Min 1000 so a typo can't turn the sweep
-  // into a busy loop opening transactions.
+  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1000)
   RESERVATION_SWEEP_INTERVAL_MS?: number;
 
-  // Reservation rows per sweep tick; default 50 (configuration.ts). Capped because each distinct
-  // order in the batch costs a finalize transaction, so one tick can't run unbounded.
+  // Capped because each distinct order in the batch costs a finalize transaction.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -300,30 +272,27 @@ export class EnvironmentVariables {
   @Max(500)
   RESERVATION_SWEEP_BATCH_SIZE?: number;
 
-  // Extra age (s) past a hold's expiry before the sweep claims it; default 900 (configuration.ts),
-  // keeping it behind the gateway-driven reconcile. 0 is legal — e2e drives the sweep deterministically.
+  // 0 is legal — e2e drives the sweep deterministically.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   RESERVATION_SWEEP_GRACE_SEC?: number;
 
-  // --- Retention sweeps ---------------------------------------------------------------------
-  // Off for e2e, which drives the sweeps directly.
   @IsOptional()
   @IsBooleanString()
   RETENTION_ENABLED?: string;
 
-  // Sweep period (ms); default 3600000 (configuration.ts). Min 1000 so a typo can't turn hourly
-  // housekeeping into a loop issuing DELETEs as fast as the pool allows.
+  // Min 1000 so a typo can't turn hourly housekeeping into a loop issuing DELETEs as fast as the
+  // pool allows.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1000)
   RETENTION_INTERVAL_MS?: number;
 
-  // Rows one sweep deletes per tick; default 500 (configuration.ts). Capped because a larger batch
-  // holds row locks on a table the request path is writing to for proportionally longer.
+  // Capped because a larger batch holds row locks on a table the request path is writing to for
+  // proportionally longer.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -331,31 +300,27 @@ export class EnvironmentVariables {
   @Max(10_000)
   RETENTION_BATCH_SIZE?: number;
 
-  // How long the scheduler waits on one sweep before giving the tick back; default 30000.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(100)
   RETENTION_SWEEP_TIMEOUT_MS?: number;
 
-  // Extra age (s) past an idempotency key's own expiry before collection; default 3600. 0 is legal
-  // — the key's TTL is already the retry window, so this is only slack for clock skew.
+  // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   RETENTION_IDEMPOTENCY_GRACE_SEC?: number;
 
-  // Grace (days) past expiry/consumption for the single-use token tables; default 7.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   RETENTION_AUTH_TOKEN_GRACE_DAYS?: number;
 
-  // Grace (days) past REVOCATION for refresh tokens; default 30. The floor is not a preference — a
-  // revoked token that reappears is the reuse signal, and detecting it is a row lookup. It is only
-  // real because the sweep's expiry arm excludes revoked rows; without that exclusion the much
+  // The 30-day floor is not a preference: a revoked token that reappears is the reuse signal. It is
+  // only real because the sweep's expiry arm excludes revoked rows — without that exclusion the much
   // shorter RETENTION_AUTH_TOKEN_GRACE_DAYS would collect rotated tokens first.
   @IsOptional()
   @Type(() => Number)
@@ -363,44 +328,38 @@ export class EnvironmentVariables {
   @Min(30)
   RETENTION_REFRESH_TOKEN_GRACE_DAYS?: number;
 
-  // How long a PUBLISHED outbox row is kept (days); default 30. Unpublished rows are never
-  // collected at any age, so this bounds the audit trail, not the relay's work queue.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   RETENTION_OUTBOX_DAYS?: number;
 
-  // How long an inbox claim is kept (days); default 30. A correctness bound: while the queue can
-  // still redeliver a message, its claim is the only thing stopping the effect being applied twice.
-  // The floor is DERIVED from the queue's failed-job horizon so the pair cannot drift.
+  // A correctness bound: while the queue can still redeliver a message, its claim is the only thing
+  // stopping the effect being applied twice. The floor is DERIVED from the queue's failed-job
+  // horizon so the pair cannot drift.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(MIN_INBOX_RETENTION_DAYS)
   RETENTION_INBOX_DAYS?: number;
 
-  // How long a received webhook is kept (days); default 30. The floor tracks the GATEWAY's
-  // redelivery window (Stripe retries for ~72h), not the queue's.
+  // The floor tracks the GATEWAY's redelivery window (Stripe retries for ~72h), not the queue's.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(14)
   RETENTION_WEBHOOK_EVENT_DAYS?: number;
 
-  // Catalog's fresh window (s); default 60 (configuration.ts). Total staleness is this plus
-  // CACHE_STALE_WINDOW_SEC plus CACHE_TTL_JITTER_SEC. Min 1 — a 0 would make every entry stale the
-  // instant it is written, turning every read into a stale serve plus a background rebuild.
+  // Min 1 — a 0 would make every entry stale the instant it is written, turning every read into a
+  // stale serve plus a background rebuild.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   CATALOG_CACHE_TTL_SEC?: number;
 
-  // Stampede-protected cache windows; defaults 60s / 30s / 10s (configuration.ts). Min 1 on the
-  // fresh window because a 0 makes every entry stale the instant it is written, turning every read
-  // into a stale serve plus a background rebuild. The other two accept 0, which switches off
-  // stale-serving (resp. jitter) — switching off SWR takes both, since jitter also outlives freshness.
+  // The stale window and the jitter below accept 0, which switches off stale-serving (resp. jitter);
+  // switching off SWR takes both, since jitter also outlives freshness.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -419,15 +378,14 @@ export class EnvironmentVariables {
   @Min(0)
   CACHE_TTL_JITTER_SEC?: number;
 
-  // Rebuild-lock lease (ms); default 5000 (configuration.ts). Min 100 because a lease shorter than a
-  // rebuild admits a second holder on every refill, which is the stampede this lock exists to stop.
+  // Min 100 because a lease shorter than a rebuild admits a second holder on every refill, which is
+  // the stampede this lock exists to stop.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(100)
   CACHE_LOCK_LEASE_MS?: number;
 
-  // How long a reader waits for the lock holder's value (ms); default 500 (configuration.ts).
   // 0 is legal — it opts out of waiting and reads through to Postgres immediately.
   @IsOptional()
   @Type(() => Number)
@@ -435,29 +393,25 @@ export class EnvironmentVariables {
   @Min(0)
   CACHE_LOCK_WAIT_MS?: number;
 
-  // Catalog search kill-switch; off unless "true" (configuration.ts), so dev, unit tests and any
-  // boot without a search engine still start — the index is a derived read path, never required.
   @IsOptional()
   @IsBooleanString()
   SEARCH_ENABLED?: string;
 
-  // Search engine base URL; default http://localhost:7700 (configuration.ts). @IsNotEmpty so a
-  // blank value fails at boot instead of silently falling back to the local default.
+  // @IsNotEmpty so a blank value fails at boot instead of silently falling back to the local default.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   SEARCH_URL?: string;
 
-  // Search engine master/admin key. Optional because a local engine may run keyless; MinLength
-  // keeps it non-trivial where it is set (same reasoning as METRICS_TOKEN).
+  // Optional because a local engine may run keyless.
   @IsOptional()
   @IsString()
   @MinLength(16)
   SEARCH_API_KEY?: string;
 
-  // S3-compatible object storage (R2 in production, MinIO locally). All four are optional here and
-  // required together in StorageModule, which is where "half-configured" can be told apart from
-  // "not configured" — a rule the per-variable decorators here cannot express.
+  // The four storage vars are optional here and required together in StorageModule, which is where
+  // "half-configured" can be told apart from "not configured" — a rule per-variable decorators
+  // cannot express.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
@@ -478,21 +432,19 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   STORAGE_SECRET_ACCESS_KEY?: string;
 
-  // Signing region; default "auto" (configuration.ts), which is what R2 expects.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   STORAGE_REGION?: string;
 
-  // Public read base (bucket domain or CDN). Unset means every read mints a presigned GET.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   STORAGE_PUBLIC_BASE_URL?: string;
 
-  // Presigned URL lifetime (s); default 900. Min 60 so an upload has time to finish. It must also
-  // stay strictly below MEDIA_UPLOAD_TTL_SEC — a cross-field rule no per-field range can express, so
-  // it is checked at boot instead (initiate-upload.use-case.ts).
+  // Min 60 so an upload has time to finish. It must also stay strictly below MEDIA_UPLOAD_TTL_SEC —
+  // a cross-field rule no per-field range can express, so it is checked at boot instead
+  // (initiate-upload.use-case.ts).
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -500,36 +452,30 @@ export class EnvironmentVariables {
   @Max(3600)
   STORAGE_PRESIGN_TTL_SEC?: number;
 
-  // How long an asset stays reclaimable at PENDING (s); default 3600. Min 300 keeps a slow upload
-  // from being swept out from under itself.
+  // Min 300 keeps a slow upload from being swept out from under itself.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(300)
   MEDIA_UPLOAD_TTL_SEC?: number;
 
-  // How long an uploaded but unattached asset survives (s); default 86400.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(300)
   MEDIA_READY_TTL_SEC?: number;
 
-  // Largest object accepted at `complete` (bytes); default 5 MiB. Min 1024 rejects a value that
-  // would refuse every real image.
+  // Min 1024 rejects a value that would refuse every real image.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1024)
   MEDIA_MAX_BYTES?: number;
 
-  // Circuit-breaker kill-switch; on by default (configuration.ts). Off passes every guarded call
-  // straight through to its downstream.
   @IsOptional()
   @IsBooleanString()
   BREAKER_ENABLED?: string;
 
-  // How long one outbound call may run before it is abandoned (ms); default 3000 (configuration.ts).
   // Min 100 so a typo cannot make every call time out before the downstream can possibly answer.
   @IsOptional()
   @Type(() => Number)
@@ -537,10 +483,9 @@ export class EnvironmentVariables {
   @Min(100)
   BREAKER_TIMEOUT_MS?: number;
 
-  // Failure share that opens the circuit; default 50 (configuration.ts). The share is compared
-  // strictly, so 100 never opens however many calls fail — capped at 99 so a breaker that reads as
-  // configured cannot in fact be switched off. At the low end 1 opens on the first failure once the
-  // window holds enough calls to count.
+  // The share is compared strictly, so 100 never opens however many calls fail — capped at 99 so a
+  // breaker that reads as configured cannot in fact be switched off. At the low end 1 opens on the
+  // first failure once the window holds enough calls to count.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -548,7 +493,6 @@ export class EnvironmentVariables {
   @Max(99)
   BREAKER_ERROR_THRESHOLD_PCT?: number;
 
-  // How long the circuit stays open before a trial call (ms); default 10000 (configuration.ts).
   // Min 100 keeps the open state from being so brief it never sheds any load.
   @IsOptional()
   @Type(() => Number)
@@ -556,36 +500,33 @@ export class EnvironmentVariables {
   @Min(100)
   BREAKER_RESET_TIMEOUT_MS?: number;
 
-  // Window the failure share is measured over (ms); default 10000 (configuration.ts). Min 1000 —
-  // a window shorter than the calls it counts would forget each failure before the next arrives.
+  // Min 1000 — a window shorter than the calls it counts would forget each failure before the next
+  // arrives.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1000)
   BREAKER_ROLLING_WINDOW_MS?: number;
 
-  // Calls the window needs before the share counts; default 5 (configuration.ts). 0 and 1 behave
-  // identically — one failure is then the whole window — so the floor only rules out the value that
-  // reads as "no gate at all".
+  // 0 and 1 behave identically — one failure is then the whole window — so the floor only rules out
+  // the value that reads as "no gate at all".
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   BREAKER_VOLUME_THRESHOLD?: number;
 
-  // Stock-reservation locking strategy; defaults to pessimistic (configuration.ts).
   @IsOptional()
   @IsEnum(InventoryLockStrategy)
   INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
 
-  // How far ahead a HELD reservation stamps expires_at ("15m"/"1h"); default in configuration.ts.
+  // Duration form ("15m"/"1h").
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   INVENTORY_RESERVATION_TTL?: string;
 
-  // Optimistic reserve retry budget after a lost version CAS; default 3 (configuration.ts).
-  // Capped so a misconfig can't blow up 2^attempt backoff and pin the stock row's write-lock.
+  // Capped so a misconfig can't blow up the 2^attempt backoff and pin the stock row's write-lock.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -593,41 +534,36 @@ export class EnvironmentVariables {
   @Max(10)
   INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
 
-  // Base backoff (ms) between optimistic retries; default 20 (configuration.ts).
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   INVENTORY_OPTIMISTIC_BACKOFF_MS?: number;
 
-  // Payment gateway; defaults to stripe (configuration.ts). Stripe is the only coded adapter.
   @IsOptional()
   @IsEnum(PaymentProvider)
   PAYMENT_PROVIDER?: PaymentProvider;
 
-  // Webhook signing secret. Optional here so a boot that doesn't touch payments isn't blocked;
-  // the Stripe adapter fail-fasts at construction when it's absent. MinLength keeps it non-trivial.
+  // Optional here so a boot that doesn't touch payments isn't blocked; the Stripe adapter
+  // fail-fasts at construction when it's absent.
   @IsOptional()
   @IsString()
   @MinLength(16)
   PAYMENT_WEBHOOK_SECRET?: string;
 
-  // Replay window (seconds) for the webhook timestamp tolerance; default 300 (configuration.ts).
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   PAYMENT_WEBHOOK_TOLERANCE_SEC?: number;
 
-  // Live Stripe secret key (sk_test_.../sk_live_...). Optional: absent → the adapter uses its
-  // network-free coded path; present → createSession calls the real Stripe API.
   @IsOptional()
   @IsString()
   @MinLength(8)
   STRIPE_SECRET_KEY?: string;
 
-  // Post-checkout redirect targets. String (not @IsUrl): the success default carries Stripe's
-  // {CHECKOUT_SESSION_ID} brace template, which strict URL validation would reject.
+  // String, not @IsUrl: the success default carries Stripe's {CHECKOUT_SESSION_ID} brace template,
+  // which strict URL validation would reject.
   @IsOptional()
   @IsString()
   STRIPE_SUCCESS_URL?: string;
@@ -636,21 +572,21 @@ export class EnvironmentVariables {
   @IsString()
   STRIPE_CANCEL_URL?: string;
 
-  // HMAC secret for access tokens; MinLength(32) enforces a ~256-bit floor for HS256 (no default → missing fails boot).
+  // MinLength(32) enforces a ~256-bit floor for HS256.
   @IsString()
   @MinLength(32)
   JWT_ACCESS_SECRET!: string;
 
   // HMAC key behind the routing bucket in every user-context id. PERMANENT — rotating it routes
   // every existing account to a shard that does not hold its rows, and old buckets are not
-  // recomputable. Back it up with the same rank as the database.
-  // MinLength gates length, not entropy: a long passphrase is brute-forceable from a few
-  // self-registered (email, bucket) pairs. Generate with `openssl rand -base64 48`.
+  // recomputable, so back it up with the same rank as the database. MinLength gates length, not
+  // entropy: a passphrase is brute-forceable from a few self-registered (email, bucket) pairs, so
+  // generate it with `openssl rand -base64 48`.
   @IsString()
   @MinLength(MIN_BUCKET_KEY_LENGTH)
   IDENTITY_BUCKET_KEY!: string;
 
-  // TTLs in "15m"/"7d" string form; defaults applied in configuration.ts.
+  // The four token TTLs below take duration form ("15m"/"7d").
   @IsOptional()
   @IsString()
   @IsNotEmpty()
@@ -661,38 +597,31 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   REFRESH_TOKEN_TTL?: string;
 
-  // Email-verification token lifetime ("24h"/"30m"); default applied in configuration.ts.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   EMAIL_VERIFICATION_TTL?: string;
 
-  // Password-reset token lifetime ("1h"/"30m"); default applied in configuration.ts.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   PASSWORD_RESET_TTL?: string;
 
-  // Gate login on a verified email; defaults to disabled (configuration.ts).
   @IsOptional()
   @IsBooleanString()
   AUTH_REQUIRE_VERIFIED_EMAIL?: string;
 
-  // SMTP connection URL (smtp://user:pass@host:587). Absent → the log sink outside production;
-  // in production MailModule refuses to boot, because that sink delivers nothing.
+  // Connection URL (smtp://user:pass@host:587).
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   SMTP_URL?: string;
 
-  // Envelope sender; MailModule requires it whenever SMTP_URL is set.
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   MAIL_FROM?: string;
 
-  // How long one SMTP send may run before the breaker abandons it (ms); default 10000. Min 100 for
-  // the same reason as BREAKER_TIMEOUT_MS: a typo must not time out every send before it can land.
   // Capped below BullMQ's 30s job lock, which the order-confirmation send runs inside: past that the
   // queue reclaims the job mid-send, and the original delivery — already applied, already sent —
   // finishes without its lock and is filed as a dead letter.
@@ -703,7 +632,6 @@ export class EnvironmentVariables {
   @Max(25_000)
   MAIL_TIMEOUT_MS?: number;
 
-  // Argon2id cost overrides; validated here so an out-of-range value fails at boot.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -723,7 +651,6 @@ export class EnvironmentVariables {
   ARGON2_PARALLELISM?: number;
 }
 
-// ConfigModule `validate` hook — throws on any violation so the process exits at boot.
 export function validate(config: Record<string, unknown>): EnvironmentVariables {
   const validated = plainToInstance(EnvironmentVariables, config, {
     enableImplicitConversion: false,

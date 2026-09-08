@@ -6,13 +6,16 @@ import type { AccessTokenClaims } from '../../application';
 import { SESSION_EPOCH, type SessionEpochPort, TOKEN_DENYLIST, type TokenDenylistPort } from '../../application/ports';
 import type { AuthenticatedUser } from '@shared/rbac';
 
-// Verified payload: our custom claims plus the registered iat/exp.
 interface AccessTokenPayload extends AccessTokenClaims {
   iat: number;
   exp: number;
 }
 
-/** Passport strategy for Bearer access tokens with `algorithms: ['HS256']` pinned (blocks algorithm-confusion); two stateful checks make revocation immediate — the jti denylist (one logged-out token) and the session epoch (every token before a logout-all / change-password). See docs/engineering-notes.md (Auth — Token model). */
+/**
+ * `algorithms: ['HS256']` is pinned to block algorithm-confusion attacks. Two stateful checks make
+ * revocation immediate: the jti denylist (one logged-out token) and the session epoch (every token
+ * minted before a logout-all or change-password).
+ */
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(

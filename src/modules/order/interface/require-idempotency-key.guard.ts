@@ -2,7 +2,6 @@ import { BadRequestException, Injectable, type CanActivate, type ExecutionContex
 import { isUUID } from 'class-validator';
 import type { Request } from 'express';
 
-/** Request carrying the validated Idempotency-Key the guard normalized onto it. */
 export interface IdempotentRequest extends Request {
   idempotencyKey?: string;
 }
@@ -10,11 +9,10 @@ export interface IdempotentRequest extends Request {
 export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
 
 /**
- * Fails fast (400) when a retry-safe endpoint is called without a valid `Idempotency-Key`.
- * Requiring the header is the endpoint's contract: the client must be able to name each attempt
- * so a network retry replays instead of double-charging. Runs after the global auth guards, so
- * an unauthenticated request still 401s before it reaches here. The normalized value is stashed
- * on the request for the interceptor, which owns the store lifecycle.
+ * Requiring the header is the endpoint's contract: the client must be able to name each attempt so
+ * a network retry replays instead of double-charging. Runs after the global auth guards, so an
+ * unauthenticated request 401s before it reaches here; the normalized value is stashed on the
+ * request for the interceptor, which owns the store lifecycle.
  */
 @Injectable()
 export class RequireIdempotencyKeyGuard implements CanActivate {

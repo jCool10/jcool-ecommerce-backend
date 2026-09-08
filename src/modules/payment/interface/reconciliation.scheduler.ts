@@ -13,10 +13,8 @@ const INTERVAL_NAME = 'payment-reconcile-stale-orders';
 /**
  * Owns the schedule and nothing else, so the sweep stays a plain use case a test can call directly.
  * The interval is registered dynamically rather than via `@Cron`, whose decorator is evaluated long
- * before ConfigService exists; disabled means no timer at all, not a timer that returns early.
- *
- * Single-instance by design — replicas stay correct but duplicate gateway calls. See
- * docs/engineering-notes.md (Payment — Reconciliation sweep).
+ * before ConfigService exists. Single-instance by design — replicas stay correct but duplicate
+ * gateway calls.
  */
 @Injectable()
 export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {

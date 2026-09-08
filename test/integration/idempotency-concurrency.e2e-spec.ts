@@ -15,16 +15,11 @@ import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// The behaviour proof for idempotent checkout over a REAL Postgres — the count on the DB, not the
-// HTTP status, is the verdict (a replay is also a 201, so status alone can't tell one order from two).
-// Sibling specs own the adjacent cases: `idempotency-interceptor` covers the mandatory-header 400 and
-// the sequential same-key replay; `checkout-oversell` covers N distinct keys racing the same stock.
-// This spec proves what only a concurrent, real-DB run can: same-key fan-out collapses to one order,
-// distinct keys stay independent, a reused key with a different body is rejected, and both crash-reclaim
-// paths converge on a single order without a second hold.
+// The count on the DB, not the HTTP status, is the verdict: a replay is also a 201, so status alone
+// cannot tell one order from two.
 //
-// Stock is seeded WELL above one order's need on purpose: a duplicate order would then succeed on stock
-// and reveal itself as a second row/hold, instead of being masked by a stock-shortfall 409.
+// Stock is seeded WELL above one order's need on purpose: a duplicate order would then succeed on
+// stock and reveal itself as a second row/hold, instead of being masked by a shortfall 409.
 const CONTENDERS = 16;
 const AMPLE_STOCK = 50;
 
@@ -90,7 +85,6 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     // Every 201 points at the one order — replays return the winner's id, not a fresh one.
     expect(new Set(created.map((r) => r.body.id as string)).size).toBe(1);
 
-    // The verdict: one order, one HELD reservation, stock reserved exactly once.
     expect(await ordersOf(token)).toHaveLength(1);
     expect(await countHeldReservations(app, variantId)).toBe(1);
     expect(await getStockView(app, variantId)).toEqual({
@@ -167,7 +161,6 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
       available: AMPLE_STOCK - 1,
     });
 
-    // The key is re-frozen COMPLETED and points back at the same order.
     const [row] = await db
       .select({ status: schema.idempotencyKeys.status, orderId: schema.idempotencyKeys.orderId })
       .from(schema.idempotencyKeys)

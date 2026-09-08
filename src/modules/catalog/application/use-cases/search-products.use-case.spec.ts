@@ -10,7 +10,6 @@ class MockCatalogSearch implements CatalogSearchPort {
     return Promise.resolve(this.result);
   }
 
-  // Unused by this use-case; present to satisfy the port.
   ensureIndex(): Promise<void> {
     return Promise.resolve();
   }
@@ -76,8 +75,7 @@ describe('SearchProductsUseCase', () => {
     });
   });
 
-  // The adapter answers a down engine with an empty result instead of throwing, so this is also the
-  // degraded path: the caller gets an ordinary empty page, not a failed request.
+  // Also the degraded path: the adapter answers a down engine with an empty result, not a throw.
   it('reports an empty page rather than failing when the port returns nothing', async () => {
     search.result = { items: [], total: 0 };
 

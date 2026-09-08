@@ -72,16 +72,13 @@ describe('IdentityBucketKeyVerifier', () => {
       await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
     });
 
-    // A restore into an environment holding a different key misfiles every id it mints, with no
-    // request ever failing.
     it('refuses to boot when the pinned fingerprint is a different key', async () => {
       const { db } = fakeDb({ pinRow: () => Promise.resolve([{ fingerprint: identityKeyFingerprint(OTHER_KEY) }]) });
 
       await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not match the key/);
     });
 
-    // Fail open: no id is minted while the database is down, so refusing to start would only turn a
-    // brief outage into a longer one.
+    // Fail open: no id is minted while the database is down, so refusing to start only extends the outage.
     it('starts when the database cannot be reached', async () => {
       const { db } = fakeDb({ pinInsert: unreachable, userRow: unreachable });
 
@@ -104,7 +101,6 @@ describe('IdentityBucketKeyVerifier', () => {
       await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not route to the bucket/);
     });
 
-    // A mismatch, not the codec's parse error, which at boot reads as a bug in the codec.
     it('refuses to boot on a user id that is not a UUIDv8', async () => {
       const { db } = fakeDb({
         userRow: () => Promise.resolve([{ id: '01920000-0000-7000-8000-000000000001', email: EMAIL }]),
@@ -127,8 +123,7 @@ describe('IdentityBucketKeyVerifier', () => {
     });
   });
 
-  // The pin is what every later boot is held to, so it must never record a key the rows already
-  // disprove. A database with users but no pin row is the ordinary case on the first boot after this.
+  // The pin is what every later boot is held to, so it must never record a key the rows already disprove.
   it('does not pin a key the newest row has already disproved', async () => {
     const id = idInBucket(bucketForEmail(EMAIL, OTHER_KEY));
     const { db, values } = fakeDb({ userRow: () => Promise.resolve([{ id, email: EMAIL }]) });
@@ -137,8 +132,6 @@ describe('IdentityBucketKeyVerifier', () => {
     expect(values).not.toHaveBeenCalled();
   });
 
-  // A pool that cannot connect rejects by itself; a server that accepts and then goes quiet does
-  // not, and would turn a fail-open check into the one thing keeping the app from starting.
   it('starts when the database accepts a query but never answers', async () => {
     vi.useFakeTimers();
     const never = (): Promise<never> => new Promise(() => undefined);

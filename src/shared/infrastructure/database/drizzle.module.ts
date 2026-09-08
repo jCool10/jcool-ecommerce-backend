@@ -7,7 +7,6 @@ import { createDbQueryCounterLogger } from '@shared/observability';
 import * as schema from './schema';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
 
-/** Global Drizzle provider — one lazily-connecting pg Pool + `db` opened at startup and closed on shutdown, split into PG_POOL (internal, closed here) and DRIZZLE (exported). See docs/engineering-notes.md (Shared — Database (Drizzle + node-postgres)). */
 @Global()
 @Module({
   providers: [
@@ -17,9 +16,9 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
       useFactory: (config: ConfigService): Pool => {
         const pool = new Pool({
           connectionString: config.getOrThrow<string>('database.url'),
-          // Bounded so a connection spike can't exhaust Postgres backends; the finite
-          // connectionTimeoutMillis (vs pg's default 0 = wait forever) makes a saturated
-          // pool fail fast instead of piling requests up. See docs/engineering-notes.md.
+          // Bounded so a connection spike can't exhaust Postgres backends; a finite
+          // connectionTimeoutMillis (pg defaults to 0 = wait forever) makes a saturated pool fail
+          // fast instead of piling requests up.
           max: config.get<number>('database.poolMax'),
           connectionTimeoutMillis: config.get<number>('database.connectionTimeoutMs'),
           idleTimeoutMillis: config.get<number>('database.idleTimeoutMs'),
@@ -36,8 +35,8 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
     {
       provide: DRIZZLE,
       inject: [PG_POOL, ClsService],
-      // The CLS-backed logger only tallies queries per request (no output) so the
-      // canonical log line can report db.queries — e.g. to surface an N+1 (Phase 1).
+      // The CLS-backed logger only tallies queries per request (no output) so the canonical log
+      // line can report db.queries — e.g. to surface an N+1.
       useFactory: (pool: Pool, cls: ClsService): DrizzleDB =>
         drizzle(pool, { schema, logger: createDbQueryCounterLogger(cls) }),
     },
@@ -47,10 +46,9 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
 export class DrizzleModule implements OnApplicationShutdown {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  // Drain on onApplicationShutdown (the last shutdown hook, after the HTTP server has closed) rather
-  // than onModuleDestroy (the first): this keeps the pool alive through the readiness-drain grace
-  // window and until in-flight requests finish, so a load balancer can stop routing before the DB
-  // connections go away — otherwise late requests would 500 at the data layer mid-drain.
+  // onApplicationShutdown (the last hook, after the HTTP server closed) rather than onModuleDestroy
+  // (the first): the pool stays alive through the readiness-drain window and until in-flight
+  // requests finish, otherwise late requests would 500 at the data layer mid-drain.
   async onApplicationShutdown(): Promise<void> {
     await this.pool.end();
   }

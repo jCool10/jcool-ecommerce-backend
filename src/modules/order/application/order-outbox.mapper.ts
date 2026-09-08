@@ -23,7 +23,6 @@ export function toPlacedOutboxRecord(event: OrderPlacedEvent): OutboxRecord {
   };
 }
 
-/** One shape for every outcome; `eventType` is what tells them apart downstream. */
 export function toFinalizedOutboxRecord(event: OrderFinalizedEvent): OutboxRecord {
   return {
     aggregateType: AGGREGATE_TYPE,

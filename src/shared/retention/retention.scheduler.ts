@@ -13,14 +13,10 @@ const LOG_CONTEXT = 'RetentionScheduler';
 const INTERVAL_NAME = 'shared-retention-sweep';
 
 /**
- * Drives every registered retention sweep on one timer.
- *
  * Starts at `onApplicationBootstrap`, not `onModuleInit`: module init is interleaved, so a scheduler
  * started there can tick before the last context has registered its sweep — and that sweep would
- * never run, silently. Bootstrap is the first point at which the registry is known to be complete.
- *
- * The `running` flag, `catch` and timeout are per sweep, not per tick, so one blocked or throwing
- * sweep cannot cost the others theirs.
+ * never run, silently. The `running` flag, `catch` and timeout are per sweep, not per tick, so one
+ * blocked or throwing sweep cannot cost the others theirs.
  */
 @Injectable()
 export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestroy {
@@ -72,7 +68,7 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
     }
   }
 
-  /** One pass over every registered sweep. Public so a test can drive it without a timer. */
+  /** Public so a test can drive one pass without a timer. */
   async tick(): Promise<void> {
     const sweeps = this.registry.all();
 
@@ -105,7 +101,7 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
 
   private async runSweep(sweep: RetentionSweep): Promise<void> {
     if (this.running.has(sweep.name)) {
-      // Counted, not just logged. A statement that never settles leaves this sweep skipping every
+      // Counted, not just logged: a statement that never settles leaves this sweep skipping every
       // tick from here on, and the timeout already recorded its one failure — so without this the
       // sweep goes flat in metrics, indistinguishable from a table with nothing to collect.
       this.metrics.recordRetentionSweepFailure(sweep.name);
@@ -115,10 +111,9 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
     this.running.add(sweep.name);
 
     const startedAt = process.hrtime.bigint();
-    // Deliberately NOT `sweep.sweep(...).finally(...)`: the port does not forbid a sync throw, and
-    // one would escape before `.finally` attached — leaking `running` forever and reaching the
-    // timer as an unhandled rejection. The flag is cleared by the statement finishing, not by the
-    // timeout below, which stops waiting on the DELETE without stopping the DELETE.
+    // Deliberately NOT `sweep.sweep(...).finally(...)`: a sync throw would escape before `.finally`
+    // attached, leaking `running` forever. The flag is cleared by the statement finishing, not by
+    // the timeout below, which stops waiting on the DELETE without stopping the DELETE.
     const work = Promise.resolve()
       .then(() => sweep.sweep(this.batchSize))
       .finally(() => this.running.delete(sweep.name));

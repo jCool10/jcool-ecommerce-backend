@@ -2,15 +2,11 @@ import { Money } from '@shared/kernel';
 import { Product, PRODUCT_STATUSES, type ProductStatus, type ProductVariant } from '../domain/entities';
 
 /**
- * JSON-safe mirror of the `Product` read aggregate. The entity holds `Money` value objects and a
- * `Date`, neither of which survives a JSON round-trip, so the cache stores this shape and
- * rehydrates through `Money.of`.
+ * JSON-safe mirror of `Product`, whose `Money` and `Date` do not survive a JSON round-trip.
  *
- * A cached entry is data written by some earlier deploy, not a value the compiler ever checked —
- * `JSON.parse` returns whatever is in Redis under this type. So `fromProductSnapshot` validates
- * every field it reads: shape drift then surfaces as a throw the caching decorator catches and
- * refills, instead of a `Product` carrying `undefined` that blows up further downstream (the
- * response mapper dereferences `category.slug`, which would be a 500 on a read path).
+ * A cached entry is data written by some earlier deploy, not a value the compiler ever checked, so
+ * `fromProductSnapshot` validates every field: shape drift surfaces as a throw the caching decorator
+ * catches and refills, instead of a `Product` whose `undefined` category 500s the response mapper.
  */
 export interface ProductSnapshot {
   id: string;
@@ -99,7 +95,7 @@ export function fromProductSnapshot(snapshot: unknown): Product {
       id: asString(variant.id, 'variant.id'),
       sku: asString(variant.sku, 'variant.sku'),
       name: asString(variant.name, 'variant.name'),
-      // `Money.of` re-checks the integer/currency invariant on top of the type check here.
+      // `Money.of` re-checks the integer/currency invariant on top of the type check.
       prices: asArray(variant.prices, 'variant.prices').map((priceEntry) => {
         const price = asRecord(priceEntry, 'variant.price');
         return Money.of(
@@ -131,7 +127,6 @@ export function fromProductSnapshot(snapshot: unknown): Product {
 export function fromProductListSnapshot(snapshot: unknown): { items: Product[]; total: number } {
   const raw = asRecord(snapshot, 'list snapshot');
   return {
-    // `total` drives the pagination the client sees, so it is checked as strictly as the items are.
     items: asArray(raw.items, 'items').map(fromProductSnapshot),
     total: asNumber(raw.total, 'total'),
   };

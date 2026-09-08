@@ -10,19 +10,16 @@ export interface InboxEntry {
 }
 
 /**
- * Dedup store for consumed events. Writes through the CALLER'S transaction and never opens its own,
- * so the claim and the effect commit or roll back together: a failed effect takes its claim with it
- * and the redelivery does real work, while a committed effect can never be applied a second time.
+ * Writes through the CALLER'S transaction and never opens its own, so claim and effect commit or
+ * roll back together: a failed effect takes its claim with it and the redelivery does real work,
+ * while a committed effect can never be applied twice.
  */
 @Injectable()
 export class InboxStore {
   /**
-   * True when this delivery won the row and therefore owns the effect; false when another delivery
-   * already applied it.
-   *
-   * Two concurrent deliveries do not race: the loser BLOCKS on the unique index until the winner's
-   * transaction ends, then either sees the committed row and returns nothing, or — if the winner
-   * rolled back — takes the row itself and runs the effect that was lost.
+   * True when this delivery won the row and owns the effect. Two concurrent deliveries do not race:
+   * the loser BLOCKS on the unique index until the winner's transaction ends, then either sees the
+   * committed row and returns false, or — if the winner rolled back — takes the row itself.
    */
   async claim(tx: DrizzleTx, entry: InboxEntry): Promise<boolean> {
     const claimed = await tx

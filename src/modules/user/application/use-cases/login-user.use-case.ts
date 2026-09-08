@@ -16,7 +16,6 @@ const INVALID_CREDENTIALS = 'Invalid credentials';
 // doesn't distinguish "no user" from "wrong password". Not a secret.
 const DUMMY_PASSWORD = 'dummy-password-for-constant-time-login';
 
-/** Authenticate email/password and issue a token pair — generic 401 on failure (constant-time via a real argon2 verify against a dummy hash on the unknown-email branch), 403 when `auth.requireVerifiedEmail` blocks an unverified address. See docs/engineering-notes.md (Auth — Login, register, logout, profile). */
 @Injectable()
 export class LoginUserUseCase {
   private dummyHashPromise?: Promise<string>;
@@ -53,8 +52,8 @@ export class LoginUserUseCase {
   }
 
   private getDummyHash(): Promise<string> {
-    // Clear the field on a rejected hash() so the next login retries; caching a
-    // rejection would 500 every unknown-email login and re-open the oracle.
+    // Clear the field on a rejected hash() so the next login retries: caching a rejection would 500
+    // every unknown-email login and re-open the oracle.
     if (!this.dummyHashPromise) {
       this.dummyHashPromise = this.hasher.hash(DUMMY_PASSWORD).catch((error: unknown) => {
         this.dummyHashPromise = undefined;

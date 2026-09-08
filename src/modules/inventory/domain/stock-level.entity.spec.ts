@@ -44,7 +44,7 @@ describe('StockLevel entity', () => {
   it('reserve() beyond available throws InsufficientStockError and leaves state unchanged', () => {
     const s = stock(10, 3, 5);
     expect(() => s.reserve(8)).toThrow(InsufficientStockError);
-    expect(s.quantityReserved).toBe(3); // unchanged
-    expect(s.version).toBe(5); // unchanged
+    expect(s.quantityReserved).toBe(3);
+    expect(s.version).toBe(5);
   });
 });

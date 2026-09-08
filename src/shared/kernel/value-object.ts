@@ -1,4 +1,4 @@
-/** Base for immutable value objects compared by structure, not identity: props are frozen on construction and `equals` does a shallow per-key comparison (nested-VO props would override `equals` to recurse). */
+/** `equals` compares props shallowly: a subclass holding value-object props must override it to recurse. */
 export abstract class ValueObject<TProps extends object> {
   protected readonly props: TProps;
 

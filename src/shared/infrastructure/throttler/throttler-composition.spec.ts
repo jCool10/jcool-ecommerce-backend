@@ -25,10 +25,9 @@ import {
 import { UserThrottlerGuard } from './user-throttler.guard';
 
 /**
- * The two guards split the tiers between them, and neither unit test can see the split: it only
- * exists once a real Nest app resolves the global guard and a route-level one against the same
- * options. This boots that app with the storage faked (no Redis, no Docker) and asserts what
- * actually reaches the storage — which tiers, at which limits, exactly once each.
+ * The split of tiers between the two guards only exists once a real Nest app resolves the global
+ * guard and a route-level one against the same options, so no unit test can see it. This boots that
+ * app with the storage faked and asserts which tiers reach it, at which limits, exactly once each.
  */
 
 const USER_ID = 'u-1';

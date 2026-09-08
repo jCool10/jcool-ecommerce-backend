@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type { StockView } from '../../application/ports/stock-admin.port';
 
-/** One SKU's stock as the operator sees it. `available` is derived, never stored. */
 export class StockLevelResponseDto {
   @ApiProperty({ format: 'uuid' })
   variantId!: string;

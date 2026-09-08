@@ -4,9 +4,9 @@ import { Redis, type RedisOptions } from 'ioredis';
 const logger = new Logger('QueueConnection');
 
 /**
- * A dedicated ioredis client for BullMQ. Deliberately NOT `RedisService.getClient()`: that one gives
- * up after one retry so a Redis outage falls through to Postgres fast, while a consumer parked on a
- * blocking command (BZPOPMIN) needs an unbounded budget — BullMQ refuses to build one otherwise.
+ * Deliberately NOT `RedisService.getClient()`: that one gives up after one retry so a Redis outage
+ * falls through to Postgres fast, while a consumer parked on a blocking command (BZPOPMIN) needs an
+ * unbounded budget — BullMQ refuses to build on a finite `maxRetriesPerRequest`.
  */
 export function createQueueConnection(url: string, overrides: Omit<RedisOptions, 'maxRetriesPerRequest'> = {}): Redis {
   const connection = new Redis(url, {

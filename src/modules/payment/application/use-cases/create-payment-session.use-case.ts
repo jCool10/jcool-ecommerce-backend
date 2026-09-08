@@ -32,10 +32,7 @@ export interface CreatePaymentSessionResult {
   clientSecret?: string;
 }
 
-/**
- * Opens a payment for a PENDING order and nothing more: the order is settled elsewhere, by the
- * webhook or the reconciliation sweep.
- */
+/** Opens a payment and nothing more: the order is settled by the webhook or the reconciliation sweep. */
 @Injectable()
 export class CreatePaymentSessionUseCase {
   private readonly logger = new Logger(CreatePaymentSessionUseCase.name);
@@ -63,11 +60,9 @@ export class CreatePaymentSessionUseCase {
     }
 
     // Amount is the order's frozen total, never a client-supplied figure (anti price-tampering).
-    // idempotencyKey is minted per attempt (not per order): the live Stripe path keys its create
-    // call so its own network retries are safe, while a retry after a FAILED payment still opens a
-    // FRESH session instead of replaying the stale failed one. No-double-charge does not rest on this
-    // key — the DB active-payment guard + unique index do; a lost race just leaves a harmless unpaid
-    // session that Stripe expires. The offline adapter ignores the key.
+    // idempotencyKey is minted per attempt, not per order: Stripe's own network retries stay safe,
+    // while a retry after a FAILED payment still opens a FRESH session. No-double-charge does not rest
+    // on this key — the DB active-payment guard and its unique index do.
     let session: GatewaySession;
     try {
       session = await this.gateway.createSession({
@@ -77,11 +72,9 @@ export class CreatePaymentSessionUseCase {
         idempotencyKey: uuidv7(),
       });
     } catch (error) {
-      // Provider/network fault (live Stripe down) — a 502, not a 500. Nothing persisted yet. The
-      // client only ever sees a masked generic 502, so log the gateway detail + cause HERE or a
-      // checkout outage is undiagnosable; chain the cause so Sentry links the original Stripe error.
-      // The saga stalls here with stock still held, so it is a failed step — unlike the guards
-      // above, which refuse a request without leaving the order any worse off.
+      // Provider/network fault — a 502, not a 500, and nothing is persisted yet. The client only sees
+      // a masked generic 502, so log the gateway detail and chain the cause HERE or a checkout outage
+      // is undiagnosable. A failed saga step, because the order is left with its stock still held.
       this.metrics.recordSagaStep('payment_session', 'failed');
       if (error instanceof PaymentGatewayError) {
         this.logger.error(
@@ -107,14 +100,14 @@ export class CreatePaymentSessionUseCase {
         }),
       );
     } catch (error) {
-      // A concurrent request beat us past the pre-check and won the DB unique index. Not a failed
-      // step — the order has an active payment, just not this request's — though the session this
-      // attempt opened is orphaned at the gateway until it expires there.
+      // A concurrent request beat us past the pre-check and won the DB unique index. Not a failed step
+      // — the order has an active payment, just not this request's — though the session this attempt
+      // opened is orphaned at the gateway until it expires there.
       if (error instanceof DuplicateActivePaymentError) {
         throw new ConflictException(error.message);
       }
-      // A session now open at the gateway that no payment row points at: the order cannot be paid
-      // and nothing will clean the session up until the expiry sweep does.
+      // A session is now open at the gateway that no payment row points at: the order cannot be paid,
+      // and nothing cleans the session up until the expiry sweep does.
       this.metrics.recordSagaStep('payment_session', 'failed');
       throw error;
     }
@@ -131,13 +124,10 @@ export class CreatePaymentSessionUseCase {
   }
 
   /**
-   * Reading the order again AFTER the payment row commits turns the PENDING check at the top of
-   * `execute` into an act-then-check, which needs no lock: either the cancel commits before this read
-   * — and this closes the session it just opened — or it commits after the payment row, and the
-   * `order.cancelled` consumer finds that row and closes the session itself. Neither can miss.
-   *
-   * Without it a cancel landing inside the gateway round-trip finds no payment, acks, and leaves a
-   * payable session behind an order nothing revisits.
+   * Re-reading the order AFTER the payment row commits makes the PENDING check an act-then-check that
+   * needs no lock: a cancel commits either before this read (and this closes the session it just
+   * opened) or after the payment row (and the `order.cancelled` consumer closes it). Without it, a
+   * cancel inside the gateway round-trip finds no payment, acks, and leaves a payable session behind.
    */
   private async abortIfOrderDiedMeanwhile(orderId: string, payment: Payment): Promise<void> {
     const current = await this.orders.findForPayment(orderId);

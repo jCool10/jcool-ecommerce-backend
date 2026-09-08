@@ -15,18 +15,15 @@ import { Public } from '@shared/rbac';
 import { HandlePaymentWebhookUseCase } from '../application/use-cases';
 
 /**
- * Gateway webhook sink. `@Public()` — the caller is the payment gateway, authenticated by the HMAC
- * signature over the raw body, not by a bearer token. Both IP-keyed tiers are skipped so a
- * gateway's retry burst can't trip it into 429s: the gateway calls from a small fixed set of IPs,
- * a shape an IP limit reads as an attack, and a non-2xx only makes it retry harder — dropping a
- * legitimate retry loses the event. (The per-user tier needs a route guard to be charged at all,
- * and this route has none.) What actually protects this route is the signature check plus
+ * `@Public()` — the caller is the payment gateway, authenticated by the HMAC signature over the raw
+ * body, not by a bearer token. Both IP-keyed tiers are skipped because the gateway calls from a small
+ * fixed set of IPs, a shape an IP limit reads as an attack, and a non-2xx only makes it retry harder —
+ * dropping a legitimate retry loses the event. What protects this route is the signature check plus
  * idempotency on the event id, not a request count.
  *
- * The body is read as raw bytes (`req.rawBody`, enabled by `rawBody: true` in the bootstrap) and
- * never bound to a DTO, so the global ValidationPipe/JSON parser can't re-serialize it and break
- * the signature. Only a verify failure is non-2xx (401); every accepted event — including a
- * duplicate or a skipped one — returns 200 so the gateway stops redelivering.
+ * The body is read as raw bytes (`req.rawBody`, enabled by `rawBody: true` in the bootstrap) and never
+ * bound to a DTO, so the global ValidationPipe/JSON parser cannot re-serialize it and break the
+ * signature. Only a verify failure is non-2xx (401); every accepted event returns 200.
  */
 @ApiTags('payments')
 @Controller('webhooks')

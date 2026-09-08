@@ -7,9 +7,6 @@ import type { EmailVerificationMessage, MailerPort, PasswordResetMessage } from 
 const LOG_CONTEXT = 'MailerAdapter';
 
 /**
- * User's transactional mail: this context owns the wording and the links, the shared transport owns
- * delivery.
- *
  * Sent directly rather than through the outbox, unlike every other event here: the body carries a
  * raw redeemable token, and the outbox is jsonb in Postgres — where the token tables deliberately
  * keep only hashes.

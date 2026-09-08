@@ -1,6 +1,5 @@
 import type { ClsService } from 'nestjs-cls';
 
-/** CLS key holding the idempotency scope+key for the active request. */
 export const IDEMPOTENCY_CLS_KEY = 'idempotency';
 
 export interface IdempotencyContext {
@@ -9,10 +8,8 @@ export interface IdempotencyContext {
 }
 
 /**
- * Carries {scope, key} from the interceptor down to the use case over the already-mounted CLS
- * request context, so the checkout transaction can flip the idempotency record to COMPLETED
- * inside the same unit of work as the order + reservation. Reuses the correlation CLS store —
- * no separate AsyncLocalStorage.
+ * Rides the already-mounted correlation CLS store (no separate AsyncLocalStorage) so the checkout
+ * transaction can flip the idempotency record to COMPLETED in the same unit of work as the order.
  */
 export function setIdempotencyContext(cls: ClsService, ctx: IdempotencyContext): void {
   cls.set(IDEMPOTENCY_CLS_KEY, ctx);

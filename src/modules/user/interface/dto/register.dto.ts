@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
 
-/** Body for POST /auth/register — `password` is bounded MinLength(8) baseline and MaxLength(72) to cap the argon2 input (DoS guard). */
+/** `MaxLength(72)` caps the argon2 input, so an oversized password cannot buy extra hashing work. */
 export class RegisterDto {
   @ApiProperty({ example: 'user@example.com', format: 'email' })
   @IsEmail()

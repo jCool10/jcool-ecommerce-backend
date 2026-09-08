@@ -14,12 +14,6 @@ const ACTIVE_PAYMENT_INDEX = 'uq_payments_one_active_per_order';
 
 type PaymentRow = typeof payments.$inferSelect;
 
-/**
- * Drizzle adapter for PaymentRepositoryPort. `create` and `updateStatus` accept an
- * optional `tx` so a payment write can commit inside the caller's transaction (e.g. the
- * webhook handler applying a status change alongside the event log); without one they run
- * on the pooled connection.
- */
 @Injectable()
 export class DrizzlePaymentRepository implements PaymentRepositoryPort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
@@ -72,10 +66,9 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
       .where(eq(payments.providerSessionId, providerSessionId))
       .orderBy(desc(payments.createdAt), desc(payments.id))
       .limit(1);
-    // Inside the webhook's apply transaction, lock the row (FOR UPDATE): two concurrent *distinct*
-    // events for the same payment (e.g. a success and a failure) then serialize — the second reads
-    // the already-settled status and the domain's canTransition guard rejects it, instead of both
-    // reading PENDING and the loser clobbering the winner.
+    // Inside the webhook's apply transaction, lock the row: two concurrent *distinct* events for the
+    // same payment (a success and a failure, say) then serialize — the second reads the already-settled
+    // status and canTransition rejects it, instead of both reading PENDING and the loser clobbering.
     const [row] = await (tx ? query.for('update') : query);
     return row ? toDomain(row) : null;
   }

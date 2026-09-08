@@ -21,9 +21,9 @@ const SESSION_LIFETIME_SEC = 30 * 60;
 export interface StripeGatewayOptions {
   webhookSecret?: string;
   toleranceSec: number;
-  // Live-mode config. When `secretKey` is set (or `stripeClient` injected) createSession calls the
-  // real Stripe API and the persisted cs_... is a genuine Checkout Session that a real
-  // checkout.session.completed webhook can settle. Absent → the network-free coded path below.
+  // When `secretKey` is set (or `stripeClient` injected) createSession calls the real Stripe API and
+  // the persisted cs_... is a genuine Checkout Session a real webhook can settle. Absent → the
+  // network-free coded path, which never touches Stripe and can never settle for real.
   secretKey?: string;
   successUrl?: string;
   cancelUrl?: string;
@@ -31,14 +31,6 @@ export interface StripeGatewayOptions {
   stripeClient?: Pick<Stripe, 'checkout'>;
 }
 
-/**
- * Primary coded gateway. Webhook verification is the core security path: HMAC-SHA256 + timestamp
- * tolerance + replay defense via hmac-signature.ts.
- *
- * `createSession` has two paths: with a live `STRIPE_SECRET_KEY` it creates a real Stripe Checkout
- * Session (genuine cs_... + hosted URL); without one it fabricates a stripe-shaped handle so the
- * flow — and every offline test — runs with no live key and never touches Stripe.
- */
 @Injectable()
 export class StripeGatewayAdapter implements PaymentGatewayPort {
   readonly provider = 'stripe';
@@ -92,8 +84,8 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
     }
 
     try {
-      // One line item for the order's frozen total: the amount is snapshotted server-side, so a
-      // single price_data line is the whole charge — no per-item breakdown is needed to collect it.
+      // One line item for the order's frozen total: the amount is snapshotted server-side, so no
+      // per-item breakdown is needed to collect it.
       const session = await this.stripe.checkout.sessions.create(
         {
           mode: 'payment',

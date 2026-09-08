@@ -24,8 +24,8 @@ const COMPENSATION_TRIGGER: Readonly<Record<Exclude<FinalizeOutcome, typeof Orde
 /**
  * The one path that settles an order, shared by the webhook, the reconciliation sweep, and the
  * payment-settled consumer. Its exactly-once effect is a row lock plus a terminal guard, no
- * distributed lock — see docs/engineering-notes.md (Order). Callers must resolve the gateway BEFORE
- * calling: no network I/O may run inside this transaction, which holds the order's row lock.
+ * distributed lock. Callers must resolve the gateway BEFORE calling: no network I/O may run inside
+ * this transaction, which holds the order's row lock.
  */
 @Injectable()
 export class FinalizeOrderUseCase {
@@ -44,7 +44,7 @@ export class FinalizeOrderUseCase {
   async execute(input: FinalizeInput, join?: DrizzleTx): Promise<FinalizeResult> {
     const result = await this.settle(input, join);
     if (result.status !== 'finalized') {
-      return result; // a duplicate or a conflict moved nothing — see the counter's help text
+      return result; // a duplicate or a conflict moved nothing, so no saga step is counted
     }
 
     const { orderId, outcome, reason } = input;
@@ -55,8 +55,7 @@ export class FinalizeOrderUseCase {
     if (outcome !== OrderStatus.PAID) {
       this.metrics.recordCompensation(COMPENSATION_TRIGGER[outcome]);
     }
-    // The one line that says an order reached its end state, and the only place the audit reason and
-    // the outcome appear together. Every other settlement log here is a path that changed nothing.
+    // The only log here that says an order actually reached its end state.
     this.logger.info({ context: LOG_CONTEXT, orderId, outcome, reason }, 'order finalized');
 
     return result;

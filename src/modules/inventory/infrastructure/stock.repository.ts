@@ -16,12 +16,6 @@ import type {
 } from '../application/ports/stock-repository.port';
 import { reservations, stockLevels } from './schema/inventory.schema';
 
-/**
- * Drizzle adapter for StockRepositoryPort. Pessimistic reserve locks the stock row
- * (`SELECT ... FOR UPDATE`); optimistic reserve reads without a lock and holds via a
- * version compare-and-swap with bounded retry. Both run inside the caller's `tx` so the
- * hold commits or rolls back with the order. `getStockView` is a plain read.
- */
 @Injectable()
 export class StockRepository implements StockRepositoryPort {
   private readonly reservationTtlMs: number;

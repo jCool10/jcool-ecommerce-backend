@@ -9,13 +9,9 @@ import type {
   StockResolution,
 } from '../application/ports/inventory-reservation.port';
 
-/**
- * Anti-corruption adapter: implements Order's `InventoryReservationPort` by
- * delegating to Inventory's published `STOCK_RESERVATION`. The ONLY place Order
- * touches Inventory, importing just its `application/public` surface. Maps Order's
- * `skuId` to the variant id Inventory holds stock by; the caller's `tx` flows through
- * so the hold joins the placement transaction. `StockReservationError` propagates.
- */
+// The only place Order touches Inventory, and only through its `application/public` surface. Order's
+// `skuId` maps to the variant id Inventory holds stock by, and the caller's `tx` flows through so
+// the hold joins the placement transaction.
 @Injectable()
 export class InventoryReservationAdapter implements InventoryReservationPort {
   constructor(

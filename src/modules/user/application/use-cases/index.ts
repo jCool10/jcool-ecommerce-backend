@@ -1,4 +1,3 @@
-// Barrel: User (auth) application use-cases.
 export * from './change-password.use-case';
 export * from './forgot-password.use-case';
 export * from './get-profile.use-case';

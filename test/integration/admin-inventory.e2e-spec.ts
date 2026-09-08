@@ -47,7 +47,7 @@ describe('Admin inventory (integration, real Postgres)', () => {
   const getStock = (variantId: string): request.Test =>
     request(server()).get(`/admin/inventory/${variantId}`).set(authHeader(adminToken));
 
-  /** A SKU with a hold on it: `quantity` units reserved by a real, still-pending order. */
+  /** The hold is a real, still-pending order's, not a hand-written reservation row. */
   async function skuWithHold(onHand: number, quantity: number): Promise<string> {
     const { variantId } = await seedSellableSku(app, { onHand });
     const token = await buyerWithCart(app, variantId, quantity);

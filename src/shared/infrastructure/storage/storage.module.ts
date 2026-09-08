@@ -10,9 +10,9 @@ import {
 import { S3ObjectStorageAdapter } from './s3-object-storage.adapter';
 
 /**
- * Every call fails, and says why. There is no offline equivalent of a bucket — a local-disk stand-in
- * would be a second implementation that only ever runs where it cannot be trusted — so an
- * unconfigured app keeps booting and serving everything else, and only the media routes break.
+ * There is deliberately no offline stand-in for a bucket — a local-disk one would be a second
+ * implementation that only ever runs where it cannot be trusted — so an unconfigured app keeps
+ * booting and serving everything else, and only the media routes break.
  */
 class UnconfiguredObjectStorage implements ObjectStoragePort {
   presignPut(): Promise<PresignedUpload> {

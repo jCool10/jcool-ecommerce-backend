@@ -13,9 +13,8 @@ interface MaybeAuthenticatedRequest {
 }
 
 /**
- * Route-level throttler for the `user` tier: caps one authenticated account however many IPs it
- * comes from — the limit an IP tier can't express. Mounted with `@UseGuards` rather than globally
- * because the global guard runs ahead of JwtAuthGuard, where `req.user` does not exist yet.
+ * Mounted with `@UseGuards` rather than globally because the global guard runs ahead of
+ * JwtAuthGuard, where `req.user` does not exist yet.
  */
 @Injectable()
 export class UserThrottlerGuard extends MeteredThrottlerGuard {

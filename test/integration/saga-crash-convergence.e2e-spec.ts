@@ -36,17 +36,10 @@ const QUANTITY = 2;
 const SWEEP_ALL = { graceSec: 0, batchSize: 50 };
 
 /**
- * Kill the process anywhere along the checkout saga and the ledger still converges.
- *
  * Each case leaves the database in the exact state one interruption produces, then runs what a
- * restarted service does unattended — drain the outbox, apply what the queue holds, sweep the holds
- * nothing settled — and reads the WHOLE ledger back: every order's stock and money agree, nothing is
- * still pending, and the seeded units are all accounted for. Asserting one order's row would pass on
- * a state that leaked stock somewhere else.
- *
- * A real SIGKILL mid-transaction is not reproducible in a test, so the interruption is injected at
- * the boundary it would land on: a throw inside the transaction, an event committed but unpublished,
- * a row published but never marked, a delivery applied but never acknowledged.
+ * restarted service does unattended and reads the WHOLE ledger back — asserting one order's row
+ * would pass on a state that leaked stock somewhere else. A real SIGKILL mid-transaction is not
+ * reproducible in a test, so the interruption is injected at the boundary it would land on.
  */
 describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -119,10 +112,8 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
       .where(eq(schema.reservations.orderId, orderId));
   }
 
-  /**
-   * Everything the service does on its own after coming back up, in the order it does it. Run twice:
-   * settling an order emits its own events, which need a second drain before the ledger is quiet.
-   */
+  // Run twice: settling an order emits its own events, which need a second drain before the ledger
+  // is quiet.
   async function restartAndConverge(): Promise<void> {
     for (let pass = 0; pass < 2; pass += 1) {
       await relay.runOnce(50);
@@ -146,7 +137,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     });
   }
 
-  /** The state the interruption above must leave, asserted wherever it is used to set a case up. */
+  /** The state the interruption above must leave — asserted wherever it sets a case up. */
   async function expectFinalizeWasLost(orderId: string): Promise<void> {
     expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.SUCCEEDED);
     expect((await readOrder(app, orderId)).status).toBe(OrderStatus.PENDING);
@@ -260,8 +251,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     await expectLedgerConverged(1);
   });
 
-  // The claim the whole design is for, stated over a batch rather than one order: three sagas cut at
-  // three different points, one unattended recovery, and a ledger that adds up afterwards.
+  // The claim the whole design is for, over a batch rather than one order.
   it('converges a batch cut at three different points at once', async () => {
     const paid = await placeAndOpenSession(app, sku, QUANTITY);
     const failed = await placeAndOpenSession(app, sku, QUANTITY);

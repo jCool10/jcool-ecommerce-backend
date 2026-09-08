@@ -2,13 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 import type { ClsModuleOptions, ClsService } from 'nestjs-cls';
 
-/** Header that carries the correlation id across a hop (read on the way in, echoed out). */
 export const REQUEST_ID_HEADER = 'x-request-id';
 
-/** CLS key holding the per-request correlation id (mirrors `cls.getId()`). */
 export const REQUEST_ID_KEY = 'requestId';
 
-/** CLS key holding the request-start timestamp (`process.hrtime.bigint()`) for durationMs. */
 export const REQUEST_START_KEY = 'requestStart';
 
 // Trust a caller-supplied x-request-id (lets a proxy stitch hops); otherwise mint a UUID.
@@ -19,8 +16,7 @@ function resolveRequestId(req: Request): string {
 }
 
 /**
- * AsyncLocalStorage-backed correlation context. Import FIRST in AppModule (before the pino
- * logger) so every downstream log shares one requestId. See ADR-0013.
+ * Import FIRST in AppModule, before the pino logger, so every downstream log shares one requestId.
  */
 export const clsModuleOptions: ClsModuleOptions = {
   global: true,
@@ -38,15 +34,11 @@ export const clsModuleOptions: ClsModuleOptions = {
   },
 };
 
-/**
- * Client-facing correlation id for the active request (the CLS request id), or undefined
- * outside a request. Distinct from the trace id ({@link getActiveTraceId}). See ADR-0013.
- */
+/** Client-facing correlation id — deliberately distinct from the trace id ({@link getActiveTraceId}). */
 export function getCorrelationId(cls: ClsService): string | undefined {
   return cls.isActive() ? cls.getId() : undefined;
 }
 
-/** Milliseconds since the request-start stamp (3-decimal), or undefined outside a request. */
 export function getRequestDurationMs(cls: ClsService): number | undefined {
   if (!cls.isActive()) return undefined;
   const start = cls.get<bigint>(REQUEST_START_KEY);

@@ -1,11 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { Argon2PasswordHasher } from './argon2-password-hasher';
 
-/**
- * Unit test for the argon2id hasher (Success Criteria: hash→verify true; wrong
- * password→false). Real argon2 is used (no mock) — the roundtrip is the point,
- * and it stays fast at the low OWASP params below.
- */
+// Real argon2 rather than a mock — the roundtrip is the point, and it stays fast at the low params below.
 describe('Argon2PasswordHasher', () => {
   const params: Record<string, number> = {
     'argon2.memoryCost': 19456,

@@ -3,9 +3,8 @@ import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
 
-// Query params for GET /products. `pageSize` is capped so a caller can't request
-// a full-table dump. Every field here is also part of the read cache's key fingerprint,
-// so an unbounded field is an unbounded number of cache keys as well as an unbounded query.
+// Every field here is part of the read cache's key fingerprint, so an unbounded field is an
+// unbounded number of cache keys as well as an unbounded query.
 export class ListProductsQueryDto {
   @ApiPropertyOptional({
     minimum: 1,

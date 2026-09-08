@@ -16,9 +16,6 @@ import { createTestProduct } from './catalog.fixture';
 import { seedStock } from './inventory.fixture';
 import { createTestUser } from './user.fixture';
 
-// The buy pipeline as a customer walks it — cart → checkout → payment session → webhook — plus the
-// ledger audit that reads money, stock, and status back out of Postgres and checks they agree.
-
 export interface SellableSku {
   variantId: string;
   priceMinor: number;
@@ -45,7 +42,7 @@ export async function seedSellableSku(
   return { variantId, priceMinor, onHand: options.onHand };
 }
 
-/** A fresh buyer with the SKU already in their cart — checkout isolates by user, so each one races alone. */
+/** Checkout isolates by user, so each buyer races alone. */
 export async function buyerWithCart(app: INestApplication, variantId: string, quantity = 1): Promise<string> {
   const { accessToken } = await createTestUser(app);
   await request(app.getHttpServer())
@@ -64,7 +61,7 @@ export function openSession(app: INestApplication, token: string, orderId: strin
   return request(app.getHttpServer()).post(`/orders/${orderId}/pay`).set(authHeader(token));
 }
 
-/** The whole path up to "buyer is looking at the hosted page": order PENDING, hold HELD, session open. */
+/** Leaves the order PENDING, the hold HELD, and the session open. */
 export async function placeAndOpenSession(app: INestApplication, sku: SellableSku, quantity = 1): Promise<OpenOrder> {
   const token = await buyerWithCart(app, sku.variantId, quantity);
   const order = await checkout(app, token).expect(201);
@@ -108,7 +105,7 @@ export async function readOrder(app: INestApplication, orderId: string) {
   return row;
 }
 
-/** The active payment for an order — newest first, so a retried session wins over its dead predecessor. */
+/** Newest first, so a retried session wins over its dead predecessor. */
 export async function readPayment(app: INestApplication, orderId: string) {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const [row] = await db
@@ -129,19 +126,16 @@ export async function readStock(app: INestApplication, variantId: string) {
 export interface M2AuditReport {
   /** Asserted by callers so an audit over an empty DB can never read as "everything is fine". */
   orders: number;
-  /** Orders still awaiting an outcome — the M2 acceptance requires this to be empty at rest. */
+  /** Orders still awaiting an outcome — the M2 acceptance requires this empty at rest. */
   pending: string[];
   /** One line per invariant breach; empty means money, stock, and status agree. */
   violations: string[];
 }
 
 /**
- * Read the whole ledger back and cross-check the M2 invariant on every row, not just the ones a test
- * happened to name: a settled order's holds match its outcome, its payment matches its amount, and
- * every stock row still equals what its reservations say it should be.
- *
- * `seededOnHand` (variantId → the on-hand the test seeded) turns the on-hand check from "not negative"
- * into the exact "seeded minus committed" equality.
+ * Cross-checks every row in the ledger, not just the ones a test happened to name. `seededOnHand`
+ * (variantId → the on-hand the test seeded) turns the on-hand check from "not negative" into the
+ * exact "seeded minus committed" equality.
  */
 export async function auditM2Invariants(
   app: INestApplication,
@@ -199,7 +193,7 @@ export async function auditM2Invariants(
         break;
       }
       default:
-        // DRAFT, or anything a later state machine adds: unclassified, so unaudited.
+        // DRAFT, or anything a later state machine adds: unclassified, so unaudited — not benign.
         violations.push(`order ${order.id} sits in ${order.status}, which this audit does not know how to check`);
     }
   }
@@ -210,8 +204,8 @@ export async function auditM2Invariants(
     const committed = sumQuantity(forVariant.filter((r) => r.status === 'COMMITTED'));
 
     if (row.quantityOnHand < 0) violations.push(`sku ${row.variantId}: on-hand ${row.quantityOnHand} is negative`);
-    // The oversell invariant itself. `ck_stock_no_oversell` enforces it in Postgres; asserting it here
-    // means dropping that constraint shows up as a failure instead of silently widening what can commit.
+    // `ck_stock_no_oversell` enforces this in Postgres; re-asserting it here means dropping that
+    // constraint fails the suite instead of silently widening what can commit.
     if (row.quantityReserved > row.quantityOnHand) {
       violations.push(
         `sku ${row.variantId}: oversold — reserved ${row.quantityReserved} > on-hand ${row.quantityOnHand}`,

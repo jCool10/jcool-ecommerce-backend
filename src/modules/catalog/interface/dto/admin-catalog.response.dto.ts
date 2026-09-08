@@ -8,9 +8,6 @@ import {
   type Sku,
 } from '../../domain/entities';
 
-// Response shapes for the admin write paths, always mapped via `fromEntity` so DB
-// internals never leak. `archivedAt` is a nullable ISO string (null = active).
-
 export class AdminCategoryResponseDto {
   @ApiProperty()
   id!: string;

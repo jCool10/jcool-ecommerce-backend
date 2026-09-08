@@ -26,27 +26,21 @@ export default tseslint.config(
   },
   {
     rules: {
-      // Aligns with docs/code-standards.md ("no any") and its reliability rules
-      // (idempotent consumers, transactional writes) — an un-awaited promise is
-      // a real correctness bug, not a style nit.
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-unsafe-argument': 'error',
-      // Honour the `_`-prefix convention for deliberately-unused bindings (e.g. a
-      // fake implementing a wider signature than it needs).
       '@typescript-eslint/no-unused-vars': [
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
-      // Prettier options come solely from .prettierrc (single source of truth);
-      // no inline overrides so `eslint --fix` and `prettier --write` never fight.
+      // No inline overrides: options come solely from .prettierrc, so `eslint --fix` and
+      // `prettier --write` never fight.
       'prettier/prettier': 'error',
     },
   },
-  // Id generation must stay synchronous: an await between reading the clock and stamping the
-  // sequence lets two callers emit the same (timestamp, node, sequence) triple. Fenced across every
-  // file `generate()` runs through, since the interleave is reachable via the entropy draw and the
-  // encode too. Callers above it hold no clock state and are free to await.
+  // Id generation must stay synchronous: an await between reading the clock and stamping the sequence
+  // lets two callers emit the same (timestamp, node, sequence) triple. Fenced across every file
+  // `generate()` runs through; callers above it hold no clock state and are free to await.
   {
     files: [
       'src/shared/identity/uuid-v8.generator.ts',
@@ -71,11 +65,10 @@ export default tseslint.config(
       ],
     },
   },
-  // Where user-context ids are minted: an id from a general-purpose generator carries no routing
-  // bucket, and nothing notices until a shard split. The DB CHECK rejects such a row at write time;
-  // this catches the reach for one at edit time. Not a global ban — `jti` and `familyId` have no
-  // bucket and stay on uuidv7, and specs must be able to mint a non-v8 id to prove it is rejected.
-  // All of `scripts/`, not just today's user seeder: scripts reach the table over raw SQL.
+  // An id from a general-purpose generator carries no routing bucket, and nothing notices until a
+  // shard split. Not a global ban: `jti`/`familyId` have no bucket and stay on uuidv7, and specs must
+  // be able to mint a non-v8 id to prove it is rejected. All of `scripts/`, because scripts reach the
+  // table over raw SQL.
   {
     files: [
       'src/modules/user/infrastructure/**/*.ts',
@@ -108,7 +101,6 @@ export default tseslint.config(
       ],
     },
   },
-  // Clean Architecture boundary: domain/ must stay framework/DB-free (basic guard, tightened over time).
   {
     files: ['src/**/domain/**/*.ts'],
     rules: {

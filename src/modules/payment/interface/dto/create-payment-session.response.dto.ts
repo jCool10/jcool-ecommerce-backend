@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type { CreatePaymentSessionResult } from '../../application/use-cases';
 
-/** The opened payment session: the persisted Payment id plus the gateway handles the client needs. */
 export class CreatePaymentSessionResponseDto {
   @ApiProperty({ format: 'uuid', description: 'Id of the PENDING Payment just created' })
   paymentId!: string;

@@ -12,8 +12,6 @@ import { hashRefreshToken } from '..';
 import type { AuthTokens, AuthTokensService, IssuedRefreshToken } from '../services';
 import { RefreshTokensUseCase } from './refresh-tokens.use-case';
 
-// Fixed successor the mocked service mints — lets tests assert exactly what the
-// use case passes to rotate() and returns to the client.
 const SUCCESSOR: IssuedRefreshToken = {
   raw: 'new-raw-refresh-token',
   hash: 'new-token-hash',
@@ -68,7 +66,6 @@ class MockAuthTokensService {
   }
 }
 
-// Records whatever the use case audits so tests can assert the reuse event.
 class MockAuthAudit implements AuthAuditPort {
   readonly records: AuthAuditRecord[] = [];
   record(entry: AuthAuditRecord): void {
@@ -76,7 +73,6 @@ class MockAuthAudit implements AuthAuditPort {
   }
 }
 
-// Records epoch bumps so tests can assert the theft response kills access tokens too.
 class MockSessionEpoch implements SessionEpochPort {
   readonly bumps: string[] = [];
   current(): Promise<number | null> {
@@ -109,13 +105,11 @@ describe('RefreshTokensUseCase', () => {
 
     const result: AuthTokens = await useCase.execute(PRESENTED_RAW);
 
-    // Presented token is looked up by hash (never raw); successor is handed to rotate.
     expect(repo.lastRotate).toEqual({
       presentedTokenHash: hashRefreshToken(PRESENTED_RAW),
       newTokenHash: SUCCESSOR.hash,
       newExpiresAt: SUCCESSOR.expiresAt,
     });
-    // Access token signed with the *fresh* role + session epoch read during rotation.
     expect(authTokens.signAccessCalls).toEqual([{ sub: 'u1', role: 'CUSTOMER', epoch: 3 }]);
     expect(result).toEqual({
       accessToken: 'signed-access-token',
@@ -140,7 +134,6 @@ describe('RefreshTokensUseCase', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(debug).not.toHaveBeenCalled();
     expect(authTokens.signAccessCalls).toHaveLength(0);
-    // Real reuse is audited as a security event, tagged with the family.
     expect(audit.records).toEqual([
       {
         event: 'token.reuse_detected',
@@ -150,7 +143,6 @@ describe('RefreshTokensUseCase', () => {
         metadata: { familyId: 'fam1' },
       },
     ]);
-    // Theft response also bumps the epoch → the thief's outstanding access token dies now.
     expect(sessionEpoch.bumps).toEqual(['u1']);
 
     vi.restoreAllMocks();
@@ -164,9 +156,8 @@ describe('RefreshTokensUseCase', () => {
     await expect(useCase.execute(PRESENTED_RAW)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(warn).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalledTimes(1);
-    // Benign revoked-token replay is a diagnostic, not an audited security event.
     expect(audit.records).toHaveLength(0);
-    // ...and does not bump the epoch, so a user's other live sessions stay signed in.
+    // No epoch bump, so the user's other live sessions stay signed in.
     expect(sessionEpoch.bumps).toHaveLength(0);
 
     vi.restoreAllMocks();

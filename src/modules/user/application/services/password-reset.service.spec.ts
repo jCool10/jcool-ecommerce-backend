@@ -123,17 +123,15 @@ describe('PasswordResetService', () => {
       const before = Date.now();
       await service.issueAndSend({ id: 'u1', email: 'user@test.local' });
 
-      expect(tokens.invalidatedFor).toEqual(['u1']); // prior tokens superseded
+      expect(tokens.invalidatedFor).toEqual(['u1']);
       expect(tokens.created).toHaveLength(1);
       expect(mailer.reset).toHaveLength(1);
 
       const emailed = mailer.reset[0];
       expect(emailed.to).toBe('user@test.local');
-      // The stored value is the SHA-256 of the emailed raw token — raw never persisted.
       expect(tokens.created[0].tokenHash).toBe(sha256Hex(emailed.token));
       expect(tokens.created[0].userId).toBe('u1');
 
-      // Expiry ≈ now + TTL.
       const expiresAt = tokens.created[0].expiresAt.getTime();
       expect(expiresAt).toBeGreaterThanOrEqual(before + TTL_MS);
       expect(expiresAt).toBeLessThanOrEqual(Date.now() + TTL_MS);
@@ -158,9 +156,9 @@ describe('PasswordResetService', () => {
 
       const result = await service.reset('raw-token', 'new-password');
 
-      expect(tokens.consumedHash).toBe(sha256Hex('raw-token')); // looked up by hash
+      expect(tokens.consumedHash).toBe(sha256Hex('raw-token'));
       expect(users.updated).toEqual([{ userId: 'u7', passwordHash: 'hashed:new-password' }]);
-      expect(sessions.revokedAll).toEqual(['u7']); // every session killed (refresh + epoch bump)
+      expect(sessions.revokedAll).toEqual(['u7']);
       expect(result).toEqual({ userId: 'u7' });
     });
 

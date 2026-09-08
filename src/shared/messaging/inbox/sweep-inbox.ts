@@ -10,12 +10,9 @@ const DAY_MS = 86_400_000;
 const SEC_PER_DAY = 86_400;
 
 /**
- * Reclaims inbox claims old enough that the message they stand for can no longer come back.
- *
- * The one retention rule here that is a correctness bound, not housekeeping. The claim and the
- * effect commit together, so a redelivery finds the claim and does nothing. Delete the claim while
- * the message can still be redelivered and the effect is applied twice — silently, and during an
- * incident, because that is when messages get retried.
+ * A correctness bound, not housekeeping. The claim and the effect commit together, so a redelivery
+ * finds the claim and does nothing. Delete the claim while the message can still be redelivered and
+ * the effect is applied twice — silently, and during an incident, because that is when retries happen.
  */
 @Injectable()
 export class SweepInbox implements RetentionSweep, OnModuleInit {
@@ -48,8 +45,6 @@ export class SweepInbox implements RetentionSweep, OnModuleInit {
 }
 
 /**
- * Refuses to boot on a configuration that would let a retry outlive its own dedup claim.
- *
  * The horizon to clear is the main queue's failed-job retention, not the DLQ's — the DLQ has no age
  * limit at all, so there is no bound to compare against. Its unbounded horizon is handled instead by
  * `dead-letter.replay.ts`, which asks the inbox directly rather than trusting a clock.

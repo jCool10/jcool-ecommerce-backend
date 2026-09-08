@@ -13,8 +13,8 @@ import {
 } from './queue.constants';
 
 /**
- * Producer side of the queue. A consumer gets its own connection: a worker's blocking read holds
- * one open for the whole poll, so sharing would stall every publish behind it.
+ * Producer side only. A consumer gets its own connection: a worker's blocking read holds one open
+ * for the whole poll, so sharing would stall every publish behind it.
  */
 export const QUEUE_PROVIDERS: Provider[] = [
   {
@@ -22,14 +22,12 @@ export const QUEUE_PROVIDERS: Provider[] = [
     inject: [ConfigService],
     useFactory: (config: ConfigService): Redis =>
       createQueueConnection(config.getOrThrow<string>('redis.url'), {
-        // Reject a publish while disconnected instead of buffering it in memory. The outbox row is
-        // the durable buffer: a rejected publish leaves `published_at` NULL for the next relay tick,
-        // whereas an offline queue would accept a publish that dies with the process.
+        // Reject a publish while disconnected instead of buffering it in memory: the outbox row is
+        // the durable buffer, whereas an offline queue would accept a publish that dies with the process.
         enableOfflineQueue: false,
         // That only covers commands not yet sent. `maxRetriesPerRequest: null` makes one already on
-        // the wire wait for the connection to come back — unbounded — and the relay publishes inside
-        // a transaction, so an outage would pin row locks and a pool client for its whole duration.
-        // Set here rather than in the factory: a consumer's blocking read is supposed to wait.
+        // the wire wait unboundedly, and the relay publishes inside a transaction, so an outage would
+        // pin row locks for its whole duration. Producer-only: a consumer's blocking read must wait.
         commandTimeout: 5_000,
       }),
   },
@@ -42,7 +40,7 @@ export const QUEUE_PROVIDERS: Provider[] = [
         // Namespaces every key, so one Redis can host several environments without their queues
         // reading each other's jobs.
         prefix: config.getOrThrow<string>('queue.prefix'),
-        // Read here rather than baked in, so a suite can collapse the backoff to milliseconds and
+        // Configured rather than baked in, so a suite can collapse the backoff to milliseconds and
         // still exercise the real retry path.
         defaultJobOptions: buildJobOptions(
           config.getOrThrow<number>('queue.consumerAttempts'),

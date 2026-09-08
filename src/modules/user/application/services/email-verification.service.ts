@@ -13,13 +13,11 @@ import {
   type UserRepositoryPort,
 } from '../ports';
 
-/** Minimal recipient shape needed to issue + send a verification token. */
 export interface VerificationRecipient {
   id: string;
   email: string;
 }
 
-/** Owns the email-verification token lifecycle (shared by register + resend): issue-and-send a single-use token, then spend it to mark the address verified. */
 @Injectable()
 export class EmailVerificationService {
   private readonly ttlMs: number;
@@ -35,7 +33,6 @@ export class EmailVerificationService {
     this.ttlMs = durationToMs(config.getOrThrow<string>('auth.emailVerificationTtl'));
   }
 
-  /** Issue a fresh single-use token and email it; any earlier unconsumed token is invalidated first. */
   async issueAndSend(recipient: VerificationRecipient): Promise<void> {
     const rawToken = randomBytes(32).toString('base64url');
 
@@ -45,10 +42,9 @@ export class EmailVerificationService {
       tokenHash: sha256Hex(rawToken),
       expiresAt: new Date(Date.now() + this.ttlMs),
     });
-    // Not awaited: this also serves the two enumeration-safe routes, and waiting on a mail server
-    // would make the existing-account branch measurably slower than the unknown-address one — the
-    // same answer, told by the clock. The mailer never rejects (see MailerAdapter); the catch is
-    // only the unhandledRejection guard `void` needs.
+    // Not awaited: this also serves the enumeration-safe routes, where waiting on a mail server would
+    // make the existing-account branch measurably slower than the unknown-address one — the same answer,
+    // told by the clock. The mailer never rejects (see MailerAdapter); the catch is only what `void` needs.
     void this.mailer.sendEmailVerification({ to: recipient.email, token: rawToken }).catch(() => undefined);
 
     this.audit.record({
@@ -59,7 +55,7 @@ export class EmailVerificationService {
     });
   }
 
-  /** Spend the token and mark the owner's email verified; generic 400 on any invalid/expired/used token. */
+  /** One generic 400 covers invalid, expired and already-used tokens alike. */
   async verify(rawToken: string): Promise<{ userId: string }> {
     const outcome = await this.tokens.consume(sha256Hex(rawToken));
     if (outcome.status === 'invalid') {

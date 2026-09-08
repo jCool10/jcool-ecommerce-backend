@@ -17,7 +17,10 @@ export function bindIdentityClockMetrics(generator: UuidV8Generator): void {
   bound = generator;
 }
 
-/** Guarded on identity: in a process that builds a second app before closing the first, the older app's shutdown must not tear down the newer app's binding. */
+/**
+ * Guarded on identity: where a process builds a second app before closing the first, the older
+ * app's shutdown must not tear down the newer app's binding.
+ */
 export function unbindIdentityClockMetrics(generator: UuidV8Generator): void {
   if (bound === generator) bound = null;
 }

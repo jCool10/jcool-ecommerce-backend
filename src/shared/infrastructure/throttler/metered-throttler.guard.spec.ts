@@ -73,8 +73,6 @@ describe('MeteredThrottlerGuard', () => {
     expect(recordRateLimitRejection).toHaveBeenCalledWith(USER_THROTTLER, '/orders');
   });
 
-  // The tier is the field the exception filter's own 429 line cannot carry, and the only one that
-  // separates a spray from one client retrying too fast.
   it('names the tier in the rejection log', async () => {
     const { shim, logger } = await build(true);
 

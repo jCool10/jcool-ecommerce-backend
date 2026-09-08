@@ -22,11 +22,9 @@ return 0
 `;
 
 /**
- * Mutual exclusion for cache rebuilds: one holder per key refills from the source while the rest
- * wait or serve stale, so an expiring hot key costs one query instead of one per request.
- *
- * Lease-bounded rather than absolute — a holder that crashes cannot wedge the key, at the price of
- * a rare second rebuild when a lease expires under a slower-than-expected source.
+ * One holder per key refills from the source while the rest wait or serve stale. Lease-bounded
+ * rather than absolute — a holder that crashes cannot wedge the key, at the price of a rare second
+ * rebuild when a lease expires under a slower-than-expected source.
  */
 @Injectable()
 export class SingleFlightLock {

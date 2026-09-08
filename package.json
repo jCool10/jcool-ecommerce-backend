@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.9"
   },
   "scripts": {
     "build": "nest build",
@@ -14,7 +14,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node --import ./dist/instrumentation.js dist/main",
+    "start:prod": "node --env-file-if-exists=.env --import ./dist/instrumentation.js dist/main",
     "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\" --fix",
     "lint:check": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -97,6 +97,9 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
+    "@opentelemetry/context-async-hooks": "^2.11.0",
+    "@opentelemetry/core": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
     "@swc/cli": "^0.8.1",
     "@swc/core": "^1.16.1",
     "@testcontainers/minio": "^12.1.0",

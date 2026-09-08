@@ -4,7 +4,10 @@ interface SlugProps {
   value: string;
 }
 
-/** URL-safe identifier for catalog products/categories (trim + lowercase, single canonical shape check mirroring the DTO's `SLUG_PATTERN`); the DTO's `@Matches` is the primary HTTP gate (400), this VO is the backstop and normalizer for non-HTTP callers. */
+/**
+ * Mirrors the DTO's `SLUG_PATTERN`: the DTO's `@Matches` is the primary HTTP gate (400), this VO is
+ * the backstop and normalizer for non-HTTP callers.
+ */
 export class Slug extends ValueObject<SlugProps> {
   private static readonly PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 

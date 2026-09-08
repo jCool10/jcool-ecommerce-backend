@@ -132,7 +132,7 @@ groups:
           description: '>6% of requests slower than 250ms over 6h and 30m — ~10 days to exhaust the 30-day budget.'
 
   # The event pipeline fails silently against every rule above it: a dead relay serves 200s all day,
-  # so none of these failures move the RED numerator. Triage steps in docs/observability-runbook.md §9.
+  # so none of these failures move the RED numerator.
   - name: messaging-alerts
     rules:
       # Age, not count, is the page — on a quiet shop a dead relay barely moves the count. The relay

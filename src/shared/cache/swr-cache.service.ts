@@ -15,13 +15,11 @@ const LOG_SAMPLE_WINDOW_MS = 10_000;
 const UNLABELLED = '(unlabelled)';
 
 /**
- * Translates between the value a caller works with and the JSON that survives a Redis round-trip.
  * `decode` must throw on a payload it does not recognise: the entry is then treated as absent and
  * overwritten by the next rebuild, instead of poisoning the key until its TTL runs out.
  */
 export interface CacheCodec<T> {
-  // Never called with an absent value: the read-through does not store one, and the type says so
-  // rather than leaving each codec to hand-wave a branch it can never reach.
+  // Never called with an absent value: the read-through does not store one.
   encode(value: NonNullable<T>): unknown;
   decode(raw: unknown): T;
 }
@@ -44,12 +42,10 @@ interface ResolvedOptions<T> {
 }
 
 /**
- * Stampede-protected read-through cache. Three mechanisms, each covering what the others cannot:
- * a single-flight lock so one expiring key costs one rebuild rather than one per request,
- * stale-while-revalidate so nobody waits on that rebuild, and TTL jitter so keys written together
- * do not expire together. Layered over the plain cache-aside path, which stays as it is.
- *
- * Redis is never load-bearing here either: any failure degrades to reading through to `rebuild`.
+ * Three mechanisms, each covering what the others cannot: a single-flight lock so one expiring key
+ * costs one rebuild rather than one per request, stale-while-revalidate so nobody waits on that
+ * rebuild, and TTL jitter so keys written together do not expire together. Redis is never
+ * load-bearing here either: any failure degrades to reading through to `rebuild`.
  */
 @Injectable()
 export class SwrCacheService {
@@ -136,9 +132,8 @@ export class SwrCacheService {
     if (filled) {
       return filled.data;
     }
-    // The wait ended with nothing: the holder is slower than the budget, or it let the lock go
-    // without storing a value. Reading through is the one case where the herd is not fully
-    // suppressed, which is why it is counted separately.
+    // The holder is slower than the budget, or let the lock go without storing a value. Reading
+    // through is the one case where the herd is not fully suppressed, hence its own count.
     this.metrics.recordCatalogCacheOperation('lock_timeout');
     // Sampled per key shape: a stampede times out every waiter at once, and one line each would
     // put its heaviest logging exactly where the cache is already failing to absorb load.
@@ -158,9 +153,8 @@ export class SwrCacheService {
   }
 
   /**
-   * Refresh behind a stale hit. Fire-and-forget by design — the caller already has an answer — so a
-   * failure here must leave the stale entry in place rather than surface, and losing the lock is
-   * the normal outcome under load, not an error.
+   * Fire-and-forget by design — the caller already has an answer — so a failure here must leave the
+   * stale entry in place rather than surface, and losing the lock is normal under load, not an error.
    */
   private refreshInBackground<T>(key: string, rebuild: () => Promise<T>, options: ResolvedOptions<T>): void {
     void this.refreshIfUncontended(key, rebuild, options).catch((caught: unknown) => {
@@ -245,7 +239,6 @@ export class SwrCacheService {
     });
   }
 
-  /** A value that is present and still fresh, or null — used to skip a rebuild the winner already did. */
   private async readFreshEnvelope<T>(key: string, options: ResolvedOptions<T>): Promise<CacheEnvelope<T> | null> {
     const read = await this.cache.read<unknown>(key);
     if (read.status !== 'hit') {
@@ -271,9 +264,8 @@ export class SwrCacheService {
         return this.toEnvelope<T>(key, read.value, options);
       }
       // A holder can finish without storing anything — an absent value is never cached, a rebuild
-      // can throw, a write can be refused — and then no amount of waiting produces a value. The
-      // lock disappearing is the signal to stop and read through, which is what this caller would
-      // have done at the deadline anyway.
+      // can throw, a write can be refused — and then no amount of waiting produces a value, so the
+      // lock disappearing is the signal to stop and read through.
       if (!(await this.lock.isHeld(lockKeyFor(key)))) {
         return null;
       }

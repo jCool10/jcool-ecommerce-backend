@@ -7,11 +7,6 @@ import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-fou
 import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
 import { MediaAssetUnavailableError, type MediaFacade } from '../public/media-facade.port';
 
-/**
- * Media's published language. Everything another context is allowed to know about a stored object
- * passes through here, translated into one error type — a caller must not have to know what a
- * storage key or a SWEEPING row is to decide on a 409.
- */
 @Injectable()
 export class MediaFacadeService implements MediaFacade {
   private readonly readyTtlSec: number;
@@ -47,9 +42,8 @@ export class MediaFacadeService implements MediaFacade {
 
   async detach(tx: DrizzleTx, assetId: string): Promise<void> {
     try {
-      // Detaching restores an expiry rather than deleting anything: the bytes go when the sweep
-      // takes them, outside this transaction, because a bucket call inside one holds a connection
-      // across the network.
+      // Restores an expiry rather than deleting anything: a bucket call inside the caller's
+      // transaction would hold a connection across the network, so the bytes go when the sweep does.
       await this.repository.detach(tx, assetId, new Date(Date.now() + this.readyTtlSec * 1000));
     } catch (error) {
       throw this.translate(error, assetId);

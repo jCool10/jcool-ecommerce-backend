@@ -10,7 +10,6 @@ import { mapGatewayStatusToOutcome, type GatewayOutcome } from '../mappers/map-g
 
 const LOG_CONTEXT = 'ReconcileStaleOrders';
 
-/** The payment status that matches a reconciled order outcome. */
 const PAYMENT_STATUS_FOR: Record<GatewayOutcome, PaymentStatus> = {
   PAID: PaymentStatus.SUCCEEDED,
   FAILED: PaymentStatus.FAILED,
@@ -22,11 +21,10 @@ export interface ReconcileInput {
   staleAfterSec: number;
   /** Past this age an unsettled order expires, freeing its stock hold. */
   ttlSec: number;
-  /** Cap on orders — and so on gateway calls — per tick; the rest wait for the next one. */
+  /** Caps gateway calls per tick; the rest wait for the next one. */
   batchSize: number;
 }
 
-/** Every scanned order lands in exactly one bucket. */
 type OrderOutcome = 'finalized' | 'stillPending' | 'alreadySettled' | 'raced' | 'unresolved';
 
 export interface ReconcileSummary {
@@ -45,13 +43,10 @@ export interface ReconcileSummary {
 }
 
 /**
- * The second source of truth behind the webhook: poll the gateway for orders stuck in PENDING and
- * settle them through the same idempotent `FinalizeOrderUseCase`, so a lost delivery still converges.
- * Also the expiry sweep — past its TTL an unsettled order is expired to release its stock hold.
- *
- * The loop's invariants (gateway I/O outside every transaction, one try/catch per order, payment
- * settled before order, compare-and-set on every payment write) and why each is load-bearing:
- * docs/engineering-notes.md (Payment — Reconciliation sweep).
+ * The second source of truth behind the webhook, so a lost delivery still converges; also the expiry
+ * sweep — past its TTL an unsettled order is expired to release its stock hold. Loop invariants:
+ * gateway I/O outside every transaction, one try/catch per order, payment settled before order, and
+ * compare-and-set on every payment write.
  */
 @Injectable()
 export class ReconcileStaleOrdersUseCase {
@@ -186,7 +181,6 @@ export class ReconcileStaleOrdersUseCase {
   }
 }
 
-/** Apply the reconciled outcome to the payment aggregate; the state machine rejects an illegal move. */
 function settlePayment(payment: Payment, outcome: GatewayOutcome): Payment {
   switch (PAYMENT_STATUS_FOR[outcome]) {
     case PaymentStatus.SUCCEEDED:

@@ -13,14 +13,10 @@ import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// The boss-fight proof at the REAL endpoint: N distinct buyers race POST /orders (atomic checkout)
-// for the last unit(s) over a REAL Postgres (each on its own connection, so the row lock / version-CAS
-// actually contends — a mock DB can't show this). Each buyer has its own user, cart, and
-// Idempotency-Key, so the idempotency layer is transparent and only STOCK contends. The invariant
-// holds for BOTH lock strategies: exactly `min(onHand, N)` checkouts win (201 PENDING), on-hand never
-// drops (two-phase hold), available never goes negative, every loser answers 409 and its whole
-// checkout rolls back — no order and no reservation persist. Asserted on outcomes, not timing, so it
-// stays deterministic.
+// N distinct buyers race POST /orders for the last unit(s), each on its own connection so the row
+// lock / version-CAS actually contends. Each buyer has its own user, cart, and Idempotency-Key, so
+// the idempotency layer is transparent and only STOCK contends. Asserted on outcomes, not timing.
+//
 // > pool max (10) so the DB, not the app, is where the race is decided. No-deadlock rests on each
 // checkout using exactly one connection for its whole transaction (cart/catalog reads happen before
 // the tx opens; the contended stock-row lock is always held by a tx that waits on nothing else).
@@ -49,15 +45,13 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
 
   const server = () => app.getHttpServer();
 
-  // A fresh user (checkout isolates by user) with one contested SKU line in their cart, ready to buy.
+  // Checkout isolates by user, so each buyer races alone.
   async function buyerFor(skuId: string, quantity: number): Promise<string> {
     const { accessToken } = await createTestUser(app);
     await request(server()).post('/cart/items').set(authHeader(accessToken)).send({ skuId, quantity }).expect(200);
     return accessToken;
   }
 
-  // Seed `onHand`, build `contenders` buyers each wanting 1 unit, then fire every checkout at once.
-  // Returns the contested variant and one status per buyer.
   async function race(
     onHand: number,
     contenders: number,
@@ -73,7 +67,6 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     return { variantId: product.variantId, statuses };
   }
 
-  // Distinct orders that carry a line for this SKU — one per winning checkout, zero for losers.
   async function orderLineCount(variantId: string): Promise<number> {
     const rows = await db
       .select({ id: schema.orderItems.id })
@@ -98,11 +91,10 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     expect(await orderLineCount(variantId)).toBe(1);
   });
 
-  // K = default optimistic retry budget (3). Exactly-K holds under both strategies: every optimistic
-  // CAS miss implies a rival's reserving bump, so K misses exhaust the K units and the next re-read
-  // sees available=0 → InsufficientStock (a terminal 409) before the retry budget is spent — no slot
-  // is ever left unclaimed. (For K > the retry budget a contender could 409 as a conflict with a slot
-  // still open; K=3 with the default budget of 3 stays clear of that.)
+  // K equals the default optimistic retry budget (3) on purpose: every CAS miss implies a rival's
+  // reserving bump, so K misses exhaust the K units and the next re-read sees available=0 — a
+  // terminal 409 — before the budget is spent, leaving no slot unclaimed. With K above the budget a
+  // contender could 409 as a conflict with a slot still open.
   it('onHand=K with N>K → exactly K check out, available floored at 0', async () => {
     const K = 3;
     const { variantId, statuses } = await race(K, CONTENDERS);

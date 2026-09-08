@@ -26,12 +26,10 @@ const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * MINUTE_M
 const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * MINUTE_MS);
 
 /**
- * Reclaiming bytes is the one thing here that cannot be undone, so these tests are about what the
- * sweep must NOT take: anything attached, anything not yet expired, and anything another
- * transaction is in the middle of claiming.
- *
- * The order the sweep works in — claim, then object, then row — is what makes an interrupted pass
- * safe, and the crash cases below are the reason it is that way round rather than the obvious one.
+ * Reclaiming bytes cannot be undone, so these tests are about what the sweep must NOT take: anything
+ * attached, anything not yet expired, and anything another transaction is claiming. The order the
+ * sweep works in — claim, then object, then row — is what makes an interrupted pass safe, and the
+ * crash cases below are the reason it is that way round rather than the obvious one.
  */
 describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   let storage: StartedObjectStorage;
@@ -76,7 +74,6 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
     uploaderId = (await createTestAdmin(app)).user.id;
   });
 
-  /** A row plus its object, in whatever state the test needs them. */
   async function seedAsset(overrides: {
     status: 'PENDING' | 'READY' | 'ATTACHED' | 'DETACHED' | 'SWEEPING';
     expiresAt?: Date | null;
@@ -148,11 +145,10 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   });
 
   it('loses to an attach that took the row lock first, even though the row was eligible when the pass began', async () => {
-    // The other ordering, and the one that actually costs bytes. The asset is expired and therefore
-    // eligible, so the sweep's subquery selects it — then the UPDATE blocks on the attach's lock.
-    // Postgres rechecks the statement's own WHERE against the committed row but re-runs the
-    // subquery under the original snapshot, so a claim matching on `id` alone would win here and
-    // delete an object a product had just started pointing at.
+    // The ordering that actually costs bytes. The asset is eligible when the sweep's subquery selects
+    // it, then the UPDATE blocks on the attach's lock. Postgres rechecks the statement's own WHERE
+    // against the committed row but re-runs the subquery under the original snapshot, so a claim
+    // matching on `id` alone would win here and delete an object a product just started pointing at.
     const asset = await seedAsset({ status: 'READY' });
 
     let releaseAttach!: () => void;

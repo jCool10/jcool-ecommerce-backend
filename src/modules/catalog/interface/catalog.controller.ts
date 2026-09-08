@@ -11,7 +11,7 @@ import {
   SearchProductsQueryDto,
 } from './dto';
 
-/** Catalog read paths — thin (validate, call a use case, map to a response DTO); `@Public()` is applied per handler so any future write handler here defaults to protected. */
+/** `@Public()` is applied per handler, so any future write handler here defaults to protected. */
 @ApiTags('catalog')
 @Controller('products')
 export class CatalogController {

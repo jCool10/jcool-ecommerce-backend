@@ -3,8 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ShutdownService } from '../shutdown.service';
 import { ShutdownHealthIndicator } from './shutdown.health-indicator';
 
-// Fake the Terminus session: check(key) hands back up()/down() builders that stamp the key,
-// so the test asserts the indicator's up/down decision without booting TerminusModule.
+// Fake Terminus session, so the up/down decision is asserted without booting TerminusModule.
 const healthIndicatorService = {
   check: (key: string) => ({
     up: () => ({ [key]: { status: 'up' } }),

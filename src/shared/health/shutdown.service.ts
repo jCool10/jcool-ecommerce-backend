@@ -1,10 +1,9 @@
 import { BeforeApplicationShutdown, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-// Tracks whether the process has begun a graceful shutdown so /health/ready can report
-// 503 the moment SIGTERM/SIGINT arrives — a load balancer then stops routing to this
-// instance BEFORE the HTTP server actually closes, so no new request hits a half-drained
-// process. Liveness stays untouched: the process is still alive while it drains.
+// /health/ready reports 503 the moment SIGTERM/SIGINT arrives, so a load balancer stops routing
+// here BEFORE the HTTP server closes and no new request hits a half-drained process. Liveness stays
+// untouched: the process is still alive while it drains.
 @Injectable()
 export class ShutdownService implements BeforeApplicationShutdown {
   private readonly logger = new Logger(ShutdownService.name);
@@ -19,10 +18,9 @@ export class ShutdownService implements BeforeApplicationShutdown {
     return this.shuttingDown;
   }
 
-  // Nest (main.ts enableShutdownHooks) calls this on SIGTERM/SIGINT, before it disposes
-  // the HTTP server. Flip the flag first so readiness immediately 503s, then hold for the
-  // configured grace so an orchestrator can observe the 503 and drain this instance. A
-  // grace of 0 (the default) keeps tests and local dev shutting down instantly.
+  // Runs before Nest disposes the HTTP server. Flip the flag first so readiness immediately 503s,
+  // then hold for the configured grace so an orchestrator can observe the 503 and drain this
+  // instance. A grace of 0 (the default) keeps tests and local dev shutting down instantly.
   async beforeApplicationShutdown(signal?: string): Promise<void> {
     this.shuttingDown = true;
     this.logger.log(

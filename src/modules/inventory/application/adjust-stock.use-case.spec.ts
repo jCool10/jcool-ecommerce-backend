@@ -14,7 +14,6 @@ function build(port: Partial<StockAdminPort> = {}) {
   return { useCase: new AdjustStockUseCase(stock), getLevel, setOnHand, adjust };
 }
 
-// The whole unit is one decision: which of the two writes may invent the row it cannot find.
 describe('AdjustStockUseCase', () => {
   it('creates the row when setting an absolute level for a SKU that has none', async () => {
     const { useCase, setOnHand } = build();
@@ -26,8 +25,6 @@ describe('AdjustStockUseCase', () => {
   it('refuses to adjust a SKU whose stock was never initialised', async () => {
     const { useCase } = build({ adjust: vi.fn().mockResolvedValue(null) });
 
-    // 404 rather than an upsert from zero: "add 25" against a starting point nobody set would be
-    // inventing that starting point.
     await expect(useCase.adjust(VARIANT, 25)).rejects.toBeInstanceOf(NotFoundException);
   });
 

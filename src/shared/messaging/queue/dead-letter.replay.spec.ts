@@ -10,10 +10,7 @@ const DAY_MS = 86_400_000;
 const RETENTION_MS = 30 * DAY_MS;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
-/**
- * No inbox claim — the ordinary case, so every test below is about the branch it names and nothing
- * else.
- */
+// No inbox claim — the ordinary case, so every test below is about the branch it names.
 const guards: Pick<ReplayOptions, 'inboxLookup' | 'inboxRetentionMs'> = {
   inboxLookup: () => Promise.resolve(null),
   inboxRetentionMs: RETENTION_MS,
@@ -47,11 +44,8 @@ const entry = (data: Partial<DeadLetterJob>, id = data.outboxId): FakeJob => ({
   remove: vi.fn().mockResolvedValue(undefined),
 });
 
-/**
- * The function takes nothing but two queues, so a pair of fakes reaches every branch — which is why
- * it lives apart from the CLI that calls it. `mainJobs` stands for the failed job still holding the
- * message id: the thing whose absence turns a naive replay into a silent no-op.
- */
+// `mainJobs` stands for the failed job still holding the message id — the thing whose absence turns
+// a naive replay into a silent no-op.
 function build({
   entries = [],
   mainJobs = new Map<string, FakeJob>(),
@@ -108,8 +102,8 @@ describe('replayDeadLetters', () => {
     const [name, published, opts] = add.mock.calls[0] as [string, Record<string, unknown>, unknown];
     expect(name).toBe('order.placed');
     expect(opts).toEqual({ jobId: ID_A });
-    // The diagnosis is why the message is here, not part of the message — republishing it would
-    // hand the consumer fields the envelope contract does not have.
+    // The diagnosis is why the message is here, not part of it — republishing it would hand the
+    // consumer fields the envelope contract does not have.
     expect(Object.keys(published).sort()).toEqual(
       ['aggregateId', 'aggregateType', 'eventType', 'occurredAt', 'outboxId', 'payload', 'traceparent'].sort(),
     );
@@ -183,8 +177,8 @@ describe('replayDeadLetters', () => {
     expect(getJobs).toHaveBeenCalledWith(['waiting', 'prioritized'], 0, 19, true);
   });
 
-  // Only the inbox knows whether the effect already happened, and when it says nothing, only
-  // `occurredAt` can establish that its silence means anything.
+  // Only the inbox knows whether the effect already happened, and when it says nothing only
+  // `occurredAt` establishes that its silence means anything.
   describe('the inbox guard', () => {
     const applied = new Date('2026-08-01T10:00:00.000Z');
 
@@ -199,8 +193,7 @@ describe('replayDeadLetters', () => {
         force: true,
       });
 
-      // Replaying it would collapse on the inbox's unique index, and the operator would read
-      // "replayed" and stop looking.
+      // Replaying it would collapse on the inbox's unique index while the operator reads "replayed".
       expect(add).not.toHaveBeenCalled();
       expect(dlqJob.remove).not.toHaveBeenCalled();
       expect(summary).toMatchObject({ replayed: 0, skipped: 1 });

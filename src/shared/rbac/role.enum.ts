@@ -1,5 +1,5 @@
-// RBAC vocabulary shared by every bounded context; const tuple + derived union so values
-// serve as both runtime data (guards, seed) and a compile-time type, mirroring the `role` pgEnum.
+// Mirrors the `role` pgEnum; the const tuple carries both the runtime values (guards, seed) and the
+// compile-time union below.
 export const ROLES = ['ADMIN', 'CUSTOMER'] as const;
 
 export type Role = (typeof ROLES)[number];

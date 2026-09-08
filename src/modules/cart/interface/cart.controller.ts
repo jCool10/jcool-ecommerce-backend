@@ -14,11 +14,8 @@ import { CartResponseDto } from './dto/cart-response.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 
 /**
- * Cart endpoints for the authenticated user (the global JwtAuthGuard protects
- * the whole controller — no `@Public()`). Thin: read the user, call the service,
- * map to a DTO. Every mutation returns the resulting cart so the client always
- * sees current state. Cart is per-user: the id comes from the token, never the
- * request body, so one user can't touch another's cart.
+ * The global JwtAuthGuard protects the whole controller — no `@Public()`. Cart is per-user: the id
+ * comes from the token, never the request body, so one user can't touch another's cart.
  */
 @ApiTags('cart')
 @ApiBearerAuth()

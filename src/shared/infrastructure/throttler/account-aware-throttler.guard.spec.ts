@@ -3,15 +3,13 @@ import type { ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER, USER_THROTTLER } from './throttler.constants';
 
-// generateKey is the overridden extension point and uses only the context/body,
-// so construct the guard with placeholder framework deps and exercise it directly.
+// generateKey uses only the context/body, so placeholder framework deps are enough to exercise it.
 function makeGuard(storage: ThrottlerStorage = {} as never): AccountAwareThrottlerGuard {
   return new AccountAwareThrottlerGuard({ throttlers: [] }, storage, {} as never, {} as never, {} as never);
 }
 
-// Minimal ExecutionContext: generateKey reads class/handler names and, for the
-// account tier, the request body; a tier that is actually enforced also writes
-// the rate-limit response headers.
+// generateKey reads class/handler names and, for the account tier, the request body; an enforced
+// tier also writes the rate-limit response headers.
 function contextFor(body: unknown): ExecutionContext {
   return {
     switchToHttp: () => ({
@@ -76,10 +74,8 @@ describe('AccountAwareThrottlerGuard.generateKey', () => {
     const blank = keyFor(guard, { email: '   ' }, ip, ACCOUNT_THROTTLER);
     const withEmail = keyFor(guard, { email: 'a@b.com' }, ip, ACCOUNT_THROTTLER);
 
-    // Every no-email variant collapses to the same IP-only bucket...
     expect(badType).toBe(noEmail);
     expect(blank).toBe(noEmail);
-    // ...while a real email is a distinct (IP, account) bucket.
     expect(withEmail).not.toBe(noEmail);
   });
 });
@@ -100,8 +96,6 @@ describe('AccountAwareThrottlerGuard tiers', () => {
     });
   }
 
-  // This guard is global, so it runs before authentication — it has no id to key the user tier by,
-  // and counting it here on the IP would silently give the tier the wrong meaning.
   it('leaves the user tier alone', async () => {
     const increment = vi.fn<ThrottlerStorage['increment']>();
 

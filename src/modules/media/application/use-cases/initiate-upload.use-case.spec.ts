@@ -75,8 +75,6 @@ describe('InitiateUploadUseCase', () => {
     expect(ctx.calls).toEqual([]);
   });
 
-  // A URL that outlives its row means the sweep reclaims the row while the PUT still works, and the
-  // upload lands as an object nothing references. Both settings validate fine on their own.
   it.each([
     ['longer than', UPLOAD_TTL_SEC + 1],
     ['equal to', UPLOAD_TTL_SEC],

@@ -78,7 +78,6 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
     return { orderId, sessionId: pay.body.providerSessionId as string, variantId };
   }
 
-  /** Place an order without ever opening a payment session. */
   async function placeOrderOnly(): Promise<{ orderId: string; variantId: string }> {
     const { accessToken: token } = await createTestUser(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 99_000 });

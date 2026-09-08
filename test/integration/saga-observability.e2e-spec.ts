@@ -31,13 +31,9 @@ const QUANTITY = 2;
 const SWEEP_ALL = { graceSec: 0, batchSize: 50 };
 
 /**
- * What the saga looks like from the outside while it runs. The effects themselves are proven
- * elsewhere; this is about whether an operator watching only `/metrics` and the log could tell a
- * healthy checkout funnel from a stalled one, and one kind of rollback from another.
- *
- * Trace continuity across the queue hop is not re-proven here — outbox-queue-e2e drives it through
- * real Redis and asserts on the finished span tree, which is a stronger claim than this file could
- * make.
+ * The effects themselves are proven elsewhere; this is about whether an operator watching only
+ * `/metrics` and the log could tell a healthy checkout funnel from a stalled one, and one kind of
+ * rollback from another. Trace continuity across the queue hop is outbox-queue-e2e's claim.
  */
 describe('Saga observability (integration, real Postgres)', () => {
   let app: INestApplication;
@@ -80,9 +76,8 @@ describe('Saga observability (integration, real Postgres)', () => {
   }
 
   /**
-   * One sample out of the exposition format, 0 when the series has not been touched yet. Counters
-   * accumulate for the life of the process and `resetDatabase` cannot reach the registry, so every
-   * assertion below is a delta across an action rather than an absolute.
+   * 0 when the series has not been touched yet. Counters accumulate for the life of the process and
+   * `resetDatabase` cannot reach the registry, so every assertion below is a delta, not an absolute.
    */
   function sample(text: string, name: string, labels: Record<string, string> = {}): number {
     const pairs = Object.entries(labels);
@@ -97,7 +92,6 @@ describe('Saga observability (integration, real Postgres)', () => {
     return 0;
   }
 
-  /** Age a hold by moving its expiry into the past — the one thing a test cannot wait for. */
   async function lapse(orderId: string): Promise<void> {
     await db
       .update(schema.reservations)

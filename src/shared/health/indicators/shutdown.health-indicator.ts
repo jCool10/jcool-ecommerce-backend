@@ -2,10 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
 import { ShutdownService } from '../shutdown.service';
 
-// Readiness gate for graceful shutdown: reports "down" once shutdown has begun so Terminus
-// returns 503 and load balancers drain this instance before it closes. Checked before the
-// DB/Redis indicators so a shutting-down process 503s even while its dependencies are still
-// reachable (the point is to stop taking traffic, not to prove a dependency failed).
+// Reports "down" once shutdown has begun so load balancers drain this instance before it closes.
+// Checked before the DB/Redis indicators so a shutting-down process 503s even while its
+// dependencies are still reachable: the point is to stop taking traffic, not to fail a dependency.
 @Injectable()
 export class ShutdownHealthIndicator {
   constructor(

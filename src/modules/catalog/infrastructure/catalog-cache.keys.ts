@@ -7,17 +7,14 @@ import { UUID_PATTERN } from './drizzle-product.repository';
 const NAMESPACE = 'catalog:v2';
 
 /**
- * Generation counter mixed into every catalog key. One INCR after any admin write makes the
- * whole cached generation unreachable in O(1) — no SCAN, no KEYS (which blocks the server) —
- * and the orphaned keys die on their own TTL. Coarser than deleting the keys a write actually
- * touched, but complete: a product's cached detail also embeds its category's name and slug,
- * and a slug rename leaves the old slug's key addressable, so targeted deletes would have to
- * fan out across relationships to stay correct.
+ * Generation counter mixed into every catalog key: one INCR after any admin write strands the
+ * whole generation in O(1) (no SCAN/KEYS), and orphans die on their own TTL. Coarser than
+ * targeted deletes but complete — a cached detail embeds its category's name and slug, and a
+ * rename leaves the old slug addressable, so targeted deletes would have to fan out.
  *
  * This key carries no TTL and must never be evicted while data keys survive: losing it rewinds
- * the generation to 0 and re-exposes entries a write already invalidated. Keep Redis without a
- * `maxmemory` eviction policy that can reclaim it (`allkeys-*`), or give this key its own
- * non-evictable store.
+ * the generation to 0 and re-exposes entries a write already invalidated. Keep Redis off any
+ * `allkeys-*` maxmemory policy, or give this key its own non-evictable store.
  */
 export const CATALOG_CACHE_VERSION_KEY = `${NAMESPACE}:ver`;
 

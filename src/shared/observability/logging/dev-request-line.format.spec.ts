@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatDevRequestLine } from './dev-request-line.format';
 
-// Strip ANSI so assertions read the visible text; ESC () built at runtime to avoid a
-// control character in the source / regex.
+// ESC is built at runtime to keep a control character out of the source and the regex.
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, 'g');
 const plain = (s: string): string => s.replace(ANSI, '');
 

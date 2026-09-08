@@ -10,9 +10,9 @@ const NO_OVERSELL = 'ck_stock_no_oversell';
 const ON_HAND_NONNEG = 'ck_stock_on_hand_nonneg';
 
 /**
- * Drizzle adapter for the operator write side. Both writes are single statements — never
- * read-modify-write — because they race the reservation CAS in stock.repository.ts, which raises
- * `quantity_reserved` under no lock these statements take part in.
+ * Both writes are single statements — never read-modify-write — because they race the reservation
+ * CAS in stock.repository.ts, which raises `quantity_reserved` under no lock these statements take
+ * part in.
  *
  * Written through Drizzle, not raw SQL: `id` has no database default (it is minted by `$defaultFn`
  * in the schema) and `updated_at` moves via `$onUpdate`, so a raw INSERT would fail on a null id and

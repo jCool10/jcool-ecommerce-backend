@@ -6,9 +6,6 @@ import type { AdminProduct, Category, Price, Sku } from '../../domain/entities';
 import type { CatalogAdminRepositoryPort, CatalogSearchPort, ProductRepositoryPort } from '../ports';
 import { CatalogAdminService } from './catalog-admin.service';
 
-// Pins the service's business decisions over a mocked port: 404 for missing refs
-// and 409 for a refused archive (unique-violation 409s live in the adapter), plus the
-// best-effort search write-through each mutation runs once its write has committed.
 describe('CatalogAdminService', () => {
   const now = new Date('2026-01-01T00:00:00.000Z');
   const category = (over: Partial<Category> = {}): Category => ({
@@ -51,8 +48,8 @@ describe('CatalogAdminService', () => {
       now,
     );
 
-  // Members typed as plain `Mock` so `expect(repo.method)` isn't flagged as
-  // an unbound method; `keyof` still pins the port shape.
+  // Plain `Mock` members so `expect(repo.method)` isn't flagged as an unbound method; `keyof` still
+  // pins the port shape.
   type MockRepo = Record<keyof CatalogAdminRepositoryPort, Mock>;
   function makeRepo(): MockRepo {
     return {
@@ -240,7 +237,6 @@ describe('CatalogAdminService', () => {
       expect(search.indexProduct).toHaveBeenCalledWith(expect.objectContaining({ id: 'prod1' }));
     });
 
-    // Unpublishing is the transition that must remove a live document, not just stop refreshing it.
     it('deletes the document when a product is unpublished to DRAFT', async () => {
       repo.updateProduct.mockResolvedValue(product({ status: 'DRAFT' }));
 

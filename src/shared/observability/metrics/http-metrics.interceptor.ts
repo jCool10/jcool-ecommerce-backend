@@ -7,14 +7,9 @@ import { type Observable, tap } from 'rxjs';
 import { resolveRouteTemplate } from '../http-route.util';
 import { HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS } from './metric-definitions';
 
-// Skip the scrape endpoint (it would measure itself); every other route is measured.
+// The scrape endpoint is skipped because it would measure itself.
 const METRICS_ROUTE = '/metrics';
 
-/**
- * RED (Rate · Errors · Duration) for HTTP: observes `http_request_duration_seconds` and
- * increments `http_requests_total`, labelled by method, route template and status_code.
- * Records on success and error; on error the status is derived from the exception. ADR-0014.
- */
 @Injectable()
 export class HttpMetricsInterceptor implements NestInterceptor {
   constructor(

@@ -3,12 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { Role } from './role.enum';
 import { ROLES_KEY, Roles } from './roles.decorator';
 
-/**
- * `@Roles` just writes the allowed roles onto ROLES_KEY metadata; RolesGuard
- * reads them (covered in roles.guard.spec). Here we prove the write: the exact
- * roles land under the exact key the guard looks up. Applied at class level so
- * the metadata target is the constructor (no unbound method reference).
- */
+// Applied at class level so the metadata target is the constructor (no unbound method reference).
 describe('@Roles', () => {
   const reflector = new Reflector();
 

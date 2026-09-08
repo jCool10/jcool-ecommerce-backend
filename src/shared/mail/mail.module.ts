@@ -17,17 +17,16 @@ function isLoopbackRelay(url: string): boolean {
 }
 
 /**
- * Picks the transport from configuration: the presence of `SMTP_URL` is the switch, the way
- * `SENTRY_DSN` is — a separate MAIL_ENABLED flag could disagree with it.
+ * The presence of `SMTP_URL` is the switch, the way `SENTRY_DSN` is: a separate MAIL_ENABLED flag
+ * could disagree with it.
  */
 export function createMailTransport(config: ConfigService, breakers: CircuitBreakerFactory): MailTransportPort {
   const url = config.get<string>('mail.smtpUrl')?.trim();
   const isProduction = config.get<string>('app.env') === 'production';
 
   if (!url) {
-    // The log transport delivers nothing. Falling back to it in production would leave every
-    // verification and reset link unsent while the app looked healthy, so a missing URL is a boot
-    // failure rather than a silent downgrade.
+    // Falling back to the log sink in production would leave every verification and reset link
+    // unsent while the app looked healthy, so a missing URL is a boot failure, not a downgrade.
     if (isProduction) {
       throw new Error('SMTP_URL is required in production: without it mail is written to the log and never delivered');
     }

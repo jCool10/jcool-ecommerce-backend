@@ -10,11 +10,8 @@ import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
 /**
- * Phase 6 — change-password + session management over real Postgres + Redis.
- * Locks the contract: change-password re-verifies the old credential and revokes
- * every session; the session-epoch bump (logout-all / change-password) rejects
- * every outstanding access token at once; sessions can be listed and revoked one
- * at a time, scoped to the owner.
+ * The session-epoch bump (logout-all / change-password) rejects every outstanding access token at
+ * once rather than leaving each alive until it expires.
  */
 describe('Auth session management (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -201,7 +198,6 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
       // Every outstanding access token is rejected by the epoch bump (not just A's).
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(a.accessToken)).expect(401);
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(b.accessToken)).expect(401);
-      // Neither refresh cookie can rotate.
       await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(a)).expect(401);
       await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(b)).expect(401);
     });

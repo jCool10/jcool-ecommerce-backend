@@ -3,9 +3,8 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Metrics pillar over the real HTTP stack: the guarded /metrics endpoint (Phase 2 DoD-14) and
-// the RED route-template label (DoD-6 cardinality rule). METRICS_TOKEN is set before the app
-// builds so the ConfigModule factory picks it up (mirrors how the factory reads container URLs).
+// The guarded /metrics endpoint and the RED route-template label, over the real HTTP stack.
+// METRICS_TOKEN is set before the app builds so the ConfigModule factory picks it up.
 const METRICS_TOKEN = 'e2e-metrics-token-abcdef';
 
 describe('Metrics endpoint (integration)', () => {
@@ -38,19 +37,17 @@ describe('Metrics endpoint (integration)', () => {
     const body = res.text;
     // Default (saturation): event-loop lag proves collectDefaultMetrics ran.
     expect(body).toContain('nodejs_eventloop_lag_seconds');
-    // RED.
     expect(body).toContain('http_request_duration_seconds');
     expect(body).toContain('http_requests_total');
-    // ≥5 business metrics (HELP/TYPE present even before first observation).
+    // HELP/TYPE are present even before the first observation, so presence is assertable.
     expect(body).toContain('orders_created_total');
     expect(body).toContain('order_value_minor');
     expect(body).toContain('cart_operations_total');
     expect(body).toContain('catalog_cache_operations_total');
     expect(body).toContain('auth_events_total');
-    // Messaging + the outbox gauges. Presence only: the gauges now read the table on every scrape,
-    // and this app shares its database with whatever suite ran before it — asserting a value here
-    // would make this file fail for another file's leftovers. What the numbers mean is
-    // outbox-queue-e2e's subject, on a database it resets itself.
+    // Presence only: the gauges read the table on every scrape and this app shares its database with
+    // whatever suite ran before it, so asserting a value would fail on another file's leftovers.
+    // What the numbers mean is outbox-queue-e2e's subject, on a database it resets itself.
     expect(body).toContain('messaging_publish_total');
     expect(body).toContain('messaging_consume_total');
     expect(body).toContain('outbox_backlog_pending');

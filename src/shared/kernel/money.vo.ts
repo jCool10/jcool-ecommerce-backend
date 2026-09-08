@@ -7,7 +7,8 @@ interface MoneyProps {
   currency: string;
 }
 
-/** Money as an integer count of the currency's smallest unit (VND đồng, USD cents) — never a float, so arithmetic stays exact; immutable, with cross-currency operations throwing `DomainError` rather than coercing, and no locale formatting (that belongs in the interface layer). */
+/** An integer count of the currency's smallest unit (VND đồng, USD cents), never a float, so
+ * arithmetic stays exact. Locale formatting belongs in the interface layer. */
 export class Money extends ValueObject<MoneyProps> {
   private constructor(props: MoneyProps) {
     super(props);
@@ -55,7 +56,7 @@ export class Money extends ValueObject<MoneyProps> {
     return Money.of(this.amountMinor * qtyInt, this.currency);
   }
 
-  /** -1 / 0 / 1 like a comparator; throws on currency mismatch. */
+  /** -1 / 0 / 1, like a comparator. */
   compare(other: Money): number {
     this.assertSameCurrency(other);
     if (this.amountMinor < other.amountMinor) return -1;

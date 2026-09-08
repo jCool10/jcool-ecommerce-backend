@@ -1,4 +1,4 @@
-// Barrel: User (auth) interface security (cookie delivery + CSRF). Siblings import by file.
+// Siblings import each other by file, not through this barrel.
 export * from './auth-cookie.constants';
 export * from './auth-cookie.service';
 export * from './csrf-token.service';

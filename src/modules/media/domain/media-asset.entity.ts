@@ -3,11 +3,9 @@ import type { AllowedContentType } from './asset-content-type';
 import { AssetStatus } from './asset-status';
 
 /**
- * One uploadable object and the state it is in. Pure domain object, created PENDING.
- *
- * `expiresAt` is the same idea as a reservation's: the moment the sweep may take it back. It is
- * null in exactly one state, ATTACHED — an asset in use is not reclaimable, and every other state
- * must remain selectable by an `expires_at < now()` sweep or it would never be collected.
+ * `expiresAt` is the moment the sweep may take the asset back. It is null in exactly one state,
+ * ATTACHED — every other state must remain selectable by an `expires_at < now()` sweep or it would
+ * never be collected.
  */
 export class MediaAsset {
   private constructor(
@@ -20,7 +18,6 @@ export class MediaAsset {
     public readonly expiresAt: Date | null,
   ) {}
 
-  /** A fresh PENDING asset: the key is reserved and an upload URL may be signed for it. */
   static pending(props: {
     id: string;
     storageKey: string;
@@ -35,8 +32,8 @@ export class MediaAsset {
       props.id,
       props.storageKey,
       props.contentType,
-      // Unknown until the upload is confirmed: the size is whatever the bucket reports, never what
-      // the client claimed.
+      // Size: unknown until the upload is confirmed, and then whatever the bucket reports rather
+      // than what the client claimed.
       null,
       AssetStatus.PENDING,
       props.uploadedBy,
@@ -44,7 +41,7 @@ export class MediaAsset {
     );
   }
 
-  /** Reconstruct from a persisted row (repository use only). */
+  /** Repository use only: none of the invariants `pending` asserts are re-checked. */
   static rehydrate(props: {
     id: string;
     storageKey: string;

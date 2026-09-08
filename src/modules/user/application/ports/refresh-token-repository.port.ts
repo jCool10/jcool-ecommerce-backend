@@ -18,16 +18,15 @@ export interface RotateRefreshTokenInput {
 }
 
 /**
- * Outcome of an atomic rotation: `rotated` carries the owner's `role`+`tokenEpoch` (same-tx) for the
- * successor token; `reuse` means a retired token was replayed (family revoked), `replaced` = theft signal.
- * See docs/engineering-notes.md (Auth — Refresh token rotation & reuse detection).
+ * `rotated` carries the owner's `role`+`tokenEpoch` read in the same transaction, for the successor
+ * token; `reuse` means a retired token was replayed and the family is now revoked, `replaced` = theft signal.
  */
 export type RotateOutcome =
   | { status: 'rotated'; userId: string; role: Role; tokenEpoch: number }
   | { status: 'invalid' }
   | { status: 'reuse'; userId: string; familyId: string; replaced: boolean };
 
-/** One active session (a token family) shown to the account owner; `id` is the familyId. */
+/** One session as shown to the account owner; `id` is the familyId. */
 export interface ActiveSession {
   id: string;
   createdAt: Date;
@@ -38,35 +37,31 @@ export interface ActiveSession {
 export interface RefreshTokenRepositoryPort {
   create(input: CreateRefreshTokenInput): Promise<void>;
 
-  /** Atomically rotate the presented token or detect reuse (row-locked: concurrent rotations can't both win). */
+  /** Row-locked, so concurrent rotations can't both win. */
   rotate(input: RotateRefreshTokenInput): Promise<RotateOutcome>;
 
-  /** Revoke the presented token if it belongs to `userId`; no-op otherwise. */
+  /** No-op when the token does not belong to `userId`. */
   revoke(userId: string, tokenHash: string): Promise<void>;
 
-  /** Revoke every live refresh token for a user — the global session kill. */
   revokeAllForUser(userId: string): Promise<void>;
 
-  /** The user's active sessions, newest first; `currentTokenHash` flags the caller's own. */
+  /** Newest first; `currentTokenHash` flags the caller's own. */
   listActiveSessions(userId: string, currentTokenHash: string | null): Promise<ActiveSession[]>;
 
-  /** Revoke one family owned by `userId`; false if unknown or not theirs (so the caller can 404). */
+  /** False if the family is unknown or not theirs (so the caller can 404). */
   revokeFamily(userId: string, familyId: string): Promise<boolean>;
 
   /**
-   * DELETE tokens that expired before `expiredBefore` **and were never revoked**, plus tokens
-   * revoked before `revokedBefore`. At most `limit` rows; returns how many went (retention sweep).
+   * Retention sweep: deletes tokens expired before `expiredBefore` **and never revoked**, plus
+   * tokens revoked before `revokedBefore`, at most `limit`, returning how many went.
    *
    * Two cutoffs because the arms answer to different clocks: expiry is age, revocation is evidence.
-   * A revoked row is what lets {@link rotate} say "this token was retired and has come back" — the
-   * reuse detection the rotation scheme is built on — so it gets a much longer grace, floored at 30
-   * days in `env.validation`.
-   *
-   * The `revoked_at IS NULL` qualifier on the expiry arm is what makes that floor real. Every
-   * rotation revokes its predecessor, so a rotated token carries both an expiry and a revocation,
-   * and {@link rotate} checks revoked/replaced *before* expiry so a retired token still reads as
-   * reuse. Without the qualifier the expiry arm would collect those rows on the short clock and the
-   * 30-day guarantee would be fiction for every token that was ever rotated.
+   * A revoked row is what lets {@link rotate} say "this token was retired and has come back", so it
+   * gets a much longer grace, floored at 30 days in `env.validation`. The `revoked_at IS NULL`
+   * qualifier on the expiry arm is what makes that floor real: every rotation revokes its
+   * predecessor, so a rotated token carries both an expiry and a revocation, and {@link rotate}
+   * checks revoked/replaced *before* expiry. Without the qualifier the expiry arm would collect
+   * those rows on the short clock and the 30-day guarantee would be fiction after any rotation.
    */
   deleteCollectable(expiredBefore: Date, revokedBefore: Date, limit: number): Promise<number>;
 }

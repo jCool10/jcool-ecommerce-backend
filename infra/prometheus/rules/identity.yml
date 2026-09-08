@@ -1,7 +1,7 @@
 # Alerts for the host clock the id generator mints from. Neither failure shows up on the RED
 # dashboard as itself: a stall answers 503, which burns the error budget without saying why, and
 # drift is invisible there entirely — the requests succeed, and the ids they write simply carry the
-# wrong time. Triage steps in docs/observability-runbook.md §12.
+# wrong time.
 #
 # Blind spot to know about: drift measures catch-up *since the process started*. A host whose clock
 # was already wrong when the process booted reports drift 0 forever, because the generator anchored

@@ -1,20 +1,12 @@
-# Local development infrastructure for the JCool E-commerce backend.
+# Deterministic host ports (5433/6380) avoid clashes with any host-installed Postgres/Redis and
+# prevent port auto-increment / ghost processes.
 #
-# Deterministic host ports (5433/6380) avoid clashes with any host-installed
-# Postgres/Redis and prevent port auto-increment / ghost processes
-# (see .claude/rules/process-management.md and plan phase-02).
+# All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here. Copy
+# `.env.example` → `.env` first: the `app` service reads it via `env_file`, so a missing `.env` fails
+# `up` fast (clearer than a later env-validation crash inside the container).
 #
-# All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here.
-# PREREQUISITE: copy `.env.example` → `.env` first. The `app` service reads it via `env_file`, so a
-# missing `.env` fails `up` fast (clearer than a later env-validation crash inside the container).
-#   Core (dev default):     docker compose up -d                            # postgres + redis + meilisearch + mailpit + minio + app
-#   Infra only:             docker compose up -d postgres redis meilisearch mailpit minio minio-init
-#   + observability stack:  docker compose --profile observability up -d    # + collector/jaeger/prometheus/grafana
-#   Reset everything:       docker compose down -v
-#
-# The 4 observability services sit behind the `observability` profile so the default `up` stays
-# light. To trace/scrape the app container, set OTEL_ENABLED=true + METRICS_TOKEN in .env first
-# (the app loads .env via env_file), and provision infra/prometheus/secrets/metrics-token to match.
+# To trace/scrape the app container under `--profile observability`, set OTEL_ENABLED=true +
+# METRICS_TOKEN in .env and provision infra/prometheus/secrets/metrics-token to match.
 
 name: jcool-ecommerce
 
@@ -55,8 +47,8 @@ services:
     networks:
       - jcool-net
 
-  # Search engine holding the catalog search index. The index is derived from Postgres and
-  # rebuildable from it, so this volume is a cache, not a system of record.
+  # The search index is derived from Postgres and rebuildable from it, so this volume is a cache,
+  # not a system of record.
   meilisearch:
     image: getmeili/meilisearch:v1.53.1
     container_name: jcool-meilisearch
@@ -78,9 +70,9 @@ services:
     networks:
       - jcool-net
 
-  # Dev mail server: accepts every message and delivers none, with a web inbox on 8025. The log
-  # sink the app falls back to records only the envelope, so this is how a developer reads a
-  # verification or reset link. Nothing is persisted — a restart empties the inbox.
+  # Accepts every message and delivers none. The log sink the app falls back to records only the
+  # envelope, so this web inbox is how a developer reads a verification or reset link. Nothing is
+  # persisted — a restart empties it.
   mailpit:
     image: axllent/mailpit:v1.31.1
     container_name: jcool-mailpit
@@ -96,8 +88,8 @@ services:
     networks:
       - jcool-net
 
-  # S3-compatible object storage, standing in for Cloudflare R2. Same API and same adapter, so a
-  # local upload exercises the code that runs in production rather than a disk-backed lookalike.
+  # Stands in for Cloudflare R2: same S3 API and same adapter, so a local upload exercises the code
+  # that runs in production rather than a disk-backed lookalike.
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: jcool-minio
@@ -137,9 +129,6 @@ services:
     networks:
       - jcool-net
 
-  # Convenience: run the whole stack in-network. Not required to be up this week
-  # (the app has no DB access until Phase 3); brought up from P3+ once it uses the DB.
-  # Inside the compose network the app reaches services by NAME, never localhost.
   app:
     build:
       context: .
@@ -148,9 +137,8 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
-    # Load .env for the app's own secrets/config (JWT_ACCESS_SECRET, METRICS_TOKEN, SENTRY_DSN,
-    # OTEL_ENABLED, LOG_LEVEL, …). The network-specific values below then override any
-    # host-oriented ones from .env (e.g. DATABASE_URL/REDIS_URL point at localhost in .env).
+    # .env carries the app's own secrets/config; the values below then override the host-oriented
+    # ones it also holds (DATABASE_URL/REDIS_URL point at localhost there).
     env_file:
       - .env
     environment:
@@ -165,8 +153,6 @@ services:
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-    # Preload the OTel/Sentry instrumentation before the app (no-op unless OTEL_ENABLED=true /
-    # SENTRY_DSN set). Mirrors `npm run start:prod`; the Dockerfile CMD stays plain for other runs.
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # meilisearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -179,9 +165,7 @@ services:
       # thing that creates it.
       minio-init:
         condition: service_completed_successfully
-    # Liveness probe (dependency-free) so `compose up --wait` confirms the app is
-    # actually serving HTTP. Uses node (present in the image) — alpine has no
-    # curl/wget. start_period covers boot before failures are counted.
+    # Probes with node (present in the image) because alpine has no curl/wget.
     healthcheck:
       test:
         [
@@ -197,11 +181,10 @@ services:
     networks:
       - jcool-net
 
-  # --- Observability stack (opt-in: `docker compose --profile observability up -d`) ---------------
-  # Internal UIs bind to 127.0.0.1 only — no service is exposed on all interfaces.
+  # Every observability UI below binds to 127.0.0.1 only — no service is exposed on all interfaces.
 
-  # OTel Collector: receives OTLP from the app, redacts PII, forwards to Jaeger (config in
-  # infra/otel-collector/config.yaml). Distroless (no shell) → no healthcheck; started, not waited on.
+  # Receives OTLP from the app, redacts PII, forwards to Jaeger. Distroless (no shell) → no
+  # healthcheck; started, not waited on.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.109.0
     container_name: jcool-otel-collector
@@ -219,7 +202,7 @@ services:
     networks:
       - jcool-net
 
-  # Jaeger v2 (all-in-one): ingests OTLP natively from the Collector; trace UI on 16686.
+  # All-in-one: ingests OTLP natively, so the Collector exports to it with no extra bridge.
   jaeger:
     image: jaegertracing/jaeger:2.1.0
     container_name: jcool-jaeger
@@ -230,9 +213,9 @@ services:
     networks:
       - jcool-net
 
-  # Prometheus: scrapes the app's guarded /metrics (bearer token from a mounted secret file),
-  # evaluates the SLO recording + burn-rate rules. depends_on app with service_started (NOT
-  # healthy) — Prometheus must be up to observe the app failing, not blocked by it.
+  # Scrapes the app's guarded /metrics with a bearer token read from the mounted secret file.
+  # depends_on app is service_started, NOT healthy — Prometheus must be up to observe the app
+  # failing, not blocked by it.
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: jcool-prometheus
@@ -254,8 +237,7 @@ services:
     networks:
       - jcool-net
 
-  # Grafana: provisioned datasources (Prometheus + Jaeger) + the 3-tier dashboard. Admin password
-  # from .env; UI on 3001 (host) to avoid clashing with the app on 3000.
+  # UI is mapped to host 3001 to avoid clashing with the app on 3000.
   grafana:
     image: grafana/grafana:11.3.0
     container_name: jcool-grafana

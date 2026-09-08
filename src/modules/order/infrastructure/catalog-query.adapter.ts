@@ -6,12 +6,7 @@ import {
 } from '@modules/catalog/application/public/catalog-sku-query.port';
 import type { CatalogQueryPort, OrderSkuView } from '../application/ports/catalog-query.port';
 
-/**
- * Anti-corruption adapter: implements Order's `CatalogQueryPort` by delegating to
- * Catalog's published `CATALOG_SKU_QUERY`. Used at order-creation time to resolve
- * live price/name, which Order then freezes into the order. Imports only Catalog's
- * `application/public` surface (allowed cross-context) — never its internals.
- */
+// The only place Order touches Catalog, and only through Catalog's `application/public` surface.
 @Injectable()
 export class CatalogQueryAdapter implements CatalogQueryPort {
   constructor(

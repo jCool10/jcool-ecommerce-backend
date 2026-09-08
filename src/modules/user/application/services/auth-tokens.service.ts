@@ -8,29 +8,23 @@ import type { Role } from '@shared/rbac';
 import { type AccessTokenClaims, durationToMs, hashRefreshToken } from '..';
 import { REFRESH_TOKEN_REPOSITORY, type RefreshTokenRepositoryPort } from '../ports';
 
-/** Token pair returned to the client on register-then-login / login / refresh. */
 export interface AuthTokens {
   /** Signed JWT (HS256). */
   accessToken: string;
   /** Opaque high-entropy string; only the SHA-256 hash is persisted. */
   refreshToken: string;
-  /** Access-token lifetime in seconds (client hint for proactive refresh). */
+  /** Seconds — a client hint for proactive refresh. */
   expiresIn: number;
 }
 
-/** A freshly minted opaque refresh token + the fields needed to persist it. */
 export interface IssuedRefreshToken {
-  /** Raw token — returned to the client once, never stored. */
+  /** Returned to the client once, never stored. */
   raw: string;
-  /** SHA-256 hex of `raw` — this is what gets persisted / looked up. */
+  /** SHA-256 hex of `raw` — this is what gets persisted and looked up. */
   hash: string;
   expiresAt: Date;
 }
 
-/**
- * Issues the access + refresh token pair, keeping token mechanics out of the use cases.
- * See docs/engineering-notes.md (Auth — Token model).
- */
 @Injectable()
 export class AuthTokensService {
   private readonly accessExpiresInSeconds: number;
@@ -47,18 +41,17 @@ export class AuthTokensService {
     this.refreshTtlMs = durationToMs(config.getOrThrow<string>('auth.refreshTokenTtl'));
   }
 
-  /** Access-token lifetime in seconds (the `expiresIn` client hint). */
   get accessExpiresIn(): number {
     return this.accessExpiresInSeconds;
   }
 
-  // Fresh jti per token (so logout can denylist exactly this one) + the user's session epoch at issue time.
+  // Fresh jti per token, so logout can denylist exactly this one.
   signAccess(sub: string, role: Role, epoch = 0): Promise<string> {
     const claims: AccessTokenClaims = { sub, role, jti: uuidv7(), epoch };
     return this.jwt.signAsync(claims);
   }
 
-  // Mint an opaque refresh token; raw returned once, only its hash persisted. Caller owns family + persistence.
+  // Mints only: the caller owns the family id and the persistence.
   newRefreshToken(): IssuedRefreshToken {
     const raw = randomBytes(48).toString('base64url');
     return { raw, hash: hashRefreshToken(raw), expiresAt: new Date(Date.now() + this.refreshTtlMs) };

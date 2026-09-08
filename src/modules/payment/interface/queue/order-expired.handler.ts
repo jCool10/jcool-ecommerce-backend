@@ -5,11 +5,9 @@ import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
 import { ExpirePaymentSessionUseCase } from '../../application/use-cases';
 
 /**
- * The money half of a TTL expiry — an order the reservation sweep gave up on, not one anybody
- * cancelled (that is `OrderCancelledHandler`). Order publishes what it decided and never tells
- * Payment to expire anything, so the reaction lives here. Via the outbox rather than a direct call
- * because the gateway is exactly what is unreachable when these events pile up, and the queue's
- * retry path is what carries the attempt until it answers.
+ * Order publishes what it decided and never tells Payment to expire anything, so the reaction lives
+ * here. Via the outbox rather than a direct call because the gateway is exactly what is unreachable
+ * when these events pile up, and the queue's retry path is what carries the attempt until it answers.
  */
 @Injectable()
 export class OrderExpiredHandler {

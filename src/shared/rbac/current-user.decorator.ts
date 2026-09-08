@@ -1,14 +1,13 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import type { Role } from './role.enum';
 
-// Shape JwtStrategy.validate attaches to request.user (no DB round-trip); carries the access
-// token's jti + exp so logout can denylist exactly this token — handlers needing more load it.
+// What JwtStrategy.validate attaches to request.user, with no DB round-trip: jti and exp are here
+// so logout can denylist exactly this token. A handler needing more has to load it.
 export interface AuthenticatedUser {
   userId: string;
   role: Role;
-  /** Access-token id — logout denylists this to revoke the token. */
   jti: string;
-  /** Access-token expiry (epoch seconds) — the denylist TTL horizon. */
+  /** Epoch seconds — the denylist TTL horizon. */
   exp: number;
 }
 
@@ -18,5 +17,5 @@ export function currentUserFactory(_data: unknown, ctx: ExecutionContext): Authe
   return request.user;
 }
 
-/** Inject the authenticated user `{ userId, role }`. Undefined on a public route. */
+/** Undefined on a public route, despite what the factory's return type promises. */
 export const CurrentUser = createParamDecorator(currentUserFactory);

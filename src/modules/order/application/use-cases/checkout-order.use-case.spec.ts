@@ -66,7 +66,6 @@ function build(
   const store = { markCompleted } as unknown as IdempotencyStorePort;
   const outbox: OutboxWriterPort = { append };
   const metrics = { recordOrderCreated, observeOrderValue, recordSagaStep } as unknown as MetricsPort;
-  // noContext models CLS inactive at the use-case boundary (the wired route always has it active).
   const cls = {
     isActive: () => !opts.noContext,
     get: () => ({ scope: SCOPE, key: KEY }),
@@ -163,9 +162,7 @@ describe('CheckoutOrderUseCase', () => {
       totalAmountMinor: 200_000,
     });
     expect(view.placedAt).toEqual(expect.any(String));
-    // Reserve ran inside the tx with the freshly-assigned order id.
     expect(spies.reserve).toHaveBeenCalledWith(TX, 'order-1', [{ skuId: SKU, quantity: 2 }]);
-    // OrderPlaced appended in the SAME tx, carrying the id the INSERT just assigned.
     const [tx, record] = spies.append.mock.calls[0] as [DrizzleTx, OutboxRecord];
     expect(tx).toBe(TX);
     expect(record).toMatchObject({ aggregateType: 'Order', aggregateId: 'order-1', eventType: 'order.placed' });
@@ -176,7 +173,6 @@ describe('CheckoutOrderUseCase', () => {
       currency: 'VND',
     });
     expect(typeof record.payload.placedAt).toBe('string');
-    // COMPLETED written in the SAME tx (second arg) — the cached responseBody is the returned view.
     expect(spies.markCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ scope: SCOPE, key: KEY, responseStatus: 201, orderId: 'order-1', responseBody: view }),
       TX,
@@ -187,8 +183,6 @@ describe('CheckoutOrderUseCase', () => {
   });
 
   it('fails loud (500) when the idempotency context is missing, never opening the checkout', async () => {
-    // POST /orders is always behind the guard+interceptor; a missing CLS context is a broken wiring
-    // contract, not a client error — proceeding would strand an un-completable key.
     const { useCase, spies } = build({ noContext: true });
 
     await expect(useCase.execute('u1')).rejects.toBeInstanceOf(InternalServerErrorException);
@@ -196,8 +190,6 @@ describe('CheckoutOrderUseCase', () => {
   });
 
   it('maps a stock shortfall to 409 and records no order (tx rolled back)', async () => {
-    // reserve throws the published inventory error inside the tx → the whole tx (order, hold, key)
-    // rolls back, so createCheckout rejects.
     const { useCase, spies } = build({
       checkout: () => Promise.reject(new StockReservationError('Insufficient stock', 'OUT_OF_STOCK')),
     });
@@ -225,16 +217,14 @@ describe('CheckoutOrderUseCase', () => {
     const view = await useCase.execute('u1');
 
     expect(view).toMatchObject({ id: 'order-existing', status: OrderStatus.PENDING });
-    // No fresh hold and no second event; the existing order already reserved and emitted when it
-    // was first placed.
+    // The existing order already reserved and emitted when it was first placed.
     expect(spies.reserve).not.toHaveBeenCalled();
     expect(spies.append).not.toHaveBeenCalled();
-    // Key healed to the existing order — a standalone write (single arg, no tx) so replay points at it.
+    // Standalone write (no tx): the heal runs outside the checkout transaction that never opened.
     expect(spies.markCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ scope: SCOPE, key: KEY, orderId: 'order-existing' }),
     );
     expect(spies.recordOrderCreated).not.toHaveBeenCalled();
-    // No second hold was taken, so the funnel must not show a second one.
     expect(spies.recordSagaStep).not.toHaveBeenCalled();
   });
 });

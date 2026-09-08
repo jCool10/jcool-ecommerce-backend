@@ -22,8 +22,6 @@ import { ResilienceModule } from './resilience.module';
 })
 class FakeMetricsModule {}
 
-// Mirrors nestjs-pino's LoggerModule, which is global too — the factory logs transitions without
-// importing a logging module.
 @Global()
 @Module({
   providers: [{ provide: PinoLogger, useValue: { warn: vi.fn(), info: vi.fn() } }],
@@ -36,8 +34,7 @@ describe('ResilienceModule', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         ConfigModule.forRoot({ load: [configuration], ignoreEnvFile: true, isGlobal: true }),
-        // The real thing rather than a fake: the factory leans on it to keep a timer-driven
-        // transition from inheriting the request context that scheduled it.
+        // Real, not faked: the factory leans on it to detach timer-driven transitions.
         ClsModule.forRoot({ global: true }),
         FakeMetricsModule,
         FakeLoggerModule,
@@ -46,8 +43,8 @@ describe('ResilienceModule', () => {
     }).compile();
     const app = await moduleRef.createNestApplication().init();
 
-    // Every breaker option is read with getOrThrow in the constructor, so resolving the provider is
-    // what proves the six keys are spelled the same here and in configuration.ts.
+    // Every breaker option is read with getOrThrow in the constructor, so merely resolving the
+    // provider proves the six keys are spelled the same here and in configuration.ts.
     const call = app.get(CircuitBreakerFactory).create('probe');
     await expect(call.run(() => Promise.resolve('ok'))).resolves.toBe('ok');
 

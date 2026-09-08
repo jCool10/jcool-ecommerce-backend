@@ -24,10 +24,9 @@ export interface RelayTickSummary {
 }
 
 /**
- * Carries committed outbox rows to the queue: poll the unpublished ones, publish, mark published —
- * all in one transaction. A crash between the publish and the commit leaves the row unpublished, so
- * the next tick sends it again. At-least-once by construction; collapsing a redelivery back into a
- * single effect belongs to the consumer.
+ * Poll, publish and mark published all happen in one transaction. A crash between the publish and
+ * the commit leaves the row unpublished, so the next tick sends it again: at-least-once by
+ * construction, and collapsing a redelivery back into one effect belongs to the consumer.
  */
 @Injectable()
 export class OutboxRelay {
@@ -36,11 +35,9 @@ export class OutboxRelay {
     @Inject(DOMAIN_EVENTS_QUEUE) private readonly queue: Queue,
     @Inject(QUEUE_CONNECTION) private readonly connection: Redis,
     @Inject(METRICS) private readonly metrics: MetricsPort,
-    // Not to dispatch anything — for `label()`. The dispatch table is the only bounded set of event
-    // names in the system, and `outbox.event_type` is free text a producer wrote, so publishing a
-    // name nobody consumes has to fold into one series rather than mint its own. That fold is also
-    // the signal: `event_type="unregistered"` climbing here means we are shipping events straight at
-    // the dead-letter queue, visible a full retry budget before the DLQ counter says so.
+    // Not to dispatch anything — for `label()`, which folds the free-text `outbox.event_type` into
+    // the bounded set of names. The fold is also the signal: `event_type="unregistered"` climbing
+    // here means events are heading straight for the DLQ, a full retry budget before it says so.
     private readonly dispatcher: DomainEventDispatcher,
     private readonly logger: PinoLogger,
   ) {}
@@ -48,8 +45,7 @@ export class OutboxRelay {
   async runOnce(batchSize: number): Promise<RelayTickSummary> {
     // Cheap short-circuit only: with no offline buffer every publish throws while Redis is away, so
     // there is no point opening a transaction to fail inside. What actually keeps an outage off the
-    // rows' attempt budget is the batch check below, which also covers a Redis that is reachable but
-    // refusing writes.
+    // rows' attempt budget is the batch check below.
     if (!this.isConnected()) return { published: 0, failed: 0 };
 
     return this.db.transaction(async (tx) => {
@@ -82,9 +78,8 @@ export class OutboxRelay {
           continue;
         }
         // Counted at the publish, not after the commit: the job is on the queue from here on, and a
-        // crash before the mark commits does not take it back — it only means the row is sent again
-        // next tick. Counting after the commit would under-report exactly the window the outbox
-        // exists to survive.
+        // crash before the mark commits does not take it back. Counting after the commit would
+        // under-report exactly the window the outbox exists to survive.
         this.metrics.recordEventPublished(eventType, 'published');
         await tx.update(outbox).set({ publishedAt: new Date() }).where(eq(outbox.id, row.id));
         published += 1;
@@ -93,8 +88,7 @@ export class OutboxRelay {
       if (refused.length > 0) {
         // Only charge an attempt once something else in this batch got through: that is the proof
         // the queue works and the row itself is what it rejected. Otherwise the queue is refusing
-        // everything — out of memory, a read-only replica, a reload — and charging for that would
-        // let one outage dead-letter a healthy backlog the moment a retry budget reads the column.
+        // everything, and charging for that would let one outage dead-letter a healthy backlog.
         if (published > 0) {
           for (const row of refused) {
             await tx
@@ -123,8 +117,8 @@ export class OutboxRelay {
 
     await context.with(parent, () =>
       withSpan('outbox.publish', async () => {
-        // Re-injected rather than forwarded so the consumer's spans hang off this publish. Falls back
-        // to the stored header when no SDK is registered, which would otherwise drop the context.
+        // Re-injected rather than forwarded so the consumer's spans hang off this publish; falls
+        // back to the stored header when no SDK is registered.
         const { traceparent } = injectTraceContext();
         const job: DomainEventJob = {
           outboxId: row.id,

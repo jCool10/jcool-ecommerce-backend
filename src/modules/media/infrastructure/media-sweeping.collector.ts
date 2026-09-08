@@ -6,10 +6,10 @@ import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle
 import { AssetStatus } from '../domain/asset-status';
 import { mediaAssets } from './schema/media.schema';
 
-// Rows the sweep claimed but never finished deleting. A brief non-zero reading is one pass in
-// flight; a reading that stays up means the bucket is refusing deletes, and every one of those rows
-// is an object still being paid for. There is deliberately no way back to READY: nothing here can
-// know whether the bytes survived, and guessing wrong puts a 404 on a product page.
+// A brief non-zero reading is one pass in flight; a reading that stays up means the bucket is
+// refusing deletes and every one of those rows is an object still being paid for. There is
+// deliberately no way back from SWEEPING: nothing here can know whether the bytes survived, and
+// guessing wrong puts a 404 on a product page.
 export const MEDIA_ASSETS_SWEEPING = 'media_assets_sweeping';
 
 const SCRAPE_TIMEOUT_MS = 2_000;

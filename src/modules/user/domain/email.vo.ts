@@ -4,7 +4,7 @@ interface EmailProps {
   value: NormalizedEmail;
 }
 
-/** A user's email as a domain value — the single place that canonicalizes (trim + lowercase via `normalizeEmail`) and shape-validates; the DTO's `@IsEmail` stays the primary HTTP gate (400), this is the deliberately loose domain backstop. */
+/** Deliberately loose domain backstop: the DTO's `@IsEmail` stays the primary HTTP gate (400). */
 export class Email extends ValueObject<EmailProps> {
   private static readonly PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 

@@ -3,9 +3,6 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema';
 
-// Idempotent Catalog seed: inserts use onConflictDoNothing, then rows are read
-// back by natural key (slug/sku) to resolve the generated UUID v7 ids.
-
 // Fail loudly if a prerequisite row is missing instead of inserting bad FKs.
 function must<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
@@ -80,7 +77,6 @@ async function seed(): Promise<void> {
     const variants = await db.select().from(schema.productVariants);
     const variantBySku = new Map(variants.map((v) => [v.sku, v]));
 
-    // Prices in VND, stored as integer đồng (amount_minor). No float.
     await db
       .insert(schema.prices)
       .values([
@@ -107,10 +103,9 @@ async function seed(): Promise<void> {
       ])
       .onConflictDoNothing();
 
-    // Checkout reserves stock, so every variant needs an on-hand row or `POST /orders`
-    // 409s. On-hand is set effectively unlimited so load tests never
-    // deplete it (held stock isn't released within a run); real inventory is managed
-    // elsewhere. Idempotent: never clobbers a live count or its reserved holds.
+    // Checkout reserves stock, so every variant needs an on-hand row or `POST /orders` 409s. On-hand
+    // is effectively unlimited so load tests never deplete it (held stock isn't released within a
+    // run); real inventory is managed elsewhere, and this never clobbers a live count or its holds.
     await db
       .insert(schema.stockLevels)
       .values(variants.map((v) => ({ variantId: v.id, quantityOnHand: 1_000_000_000 })))

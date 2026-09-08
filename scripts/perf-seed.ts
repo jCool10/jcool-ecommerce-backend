@@ -3,23 +3,18 @@
  *   SCALE=20000 CART_LINES=30 npm run db:seed:perf
  *   npm run db:seed:perf -- --clean
  *
- * Below a few hundred rows a Seq Scan is always the cheapest plan, so an index added on top of the
- * demo seed changes nothing and every "improvement" measured against it is an artifact. This grows
- * the catalog until EXPLAIN and a load test can tell the difference.
- *
- * Idempotent: every row has a deterministic natural key (`perf-*` slugs, `PERF-*` SKUs) and inserts
- * are ON CONFLICT DO NOTHING, so a re-run tops up rather than duplicating. That same prefix is what
+ * Below a few hundred rows a Seq Scan is always the cheapest plan, so every "improvement" measured
+ * against the demo seed is an artifact. Rows carry deterministic natural keys (`perf-*` slugs,
+ * `PERF-*` SKUs) and insert ON CONFLICT DO NOTHING, so a re-run tops up; that same prefix is all
  * `--clean` deletes, so synthetic rows can never take a real product with them.
  *
- * `--clean` is scoped to what this script writes: catalog rows, the perf account and its cart. It
- * does NOT remove what a load run against that data produces — orders, reservations, outbox rows,
- * and the throwaway accounts k6 registers itself. Reservations have no FK to the variants being
- * deleted, so any left behind point at ids a re-seed will never mint again. For a true reset use
- * `docker compose down -v` followed by `npm run db:migrate`.
+ * `--clean` does NOT remove what a load run against that data produces — orders, reservations,
+ * outbox rows, the throwaway accounts k6 registers itself. Reservations have no FK to the variants
+ * being deleted, so any left behind point at ids a re-seed will never mint again; for a true reset
+ * use `docker compose down -v` followed by `npm run db:migrate`.
  *
- * Leaves Redis alone. The public read path is cached behind a generation counter that only an admin
- * write bumps, so an app that was already serving pre-seed pages keeps serving them until that
- * counter is bumped — the final log line says how.
+ * Leaves Redis alone: the public read path is cached behind a generation counter only an admin write
+ * bumps, so an app already serving pre-seed pages keeps serving them — the final log line says how.
  */
 import 'dotenv/config';
 import * as argon2 from 'argon2';
@@ -45,9 +40,8 @@ const SKU_PREFIX = 'PERF-';
 // Normalized here so the insert, the lookups, the cleanup and the bucket derivation share bytes.
 const PERF_USER_EMAIL = normalizeEmail('perf@loadtest.jcool.local');
 
-// Unlike the bulk user seeder's rows, this account is meant to authenticate over HTTP, so the
-// credential is overridable rather than fixed in a committed file. The default is a throwaway for
-// a local throwaway database and nothing else.
+// This account authenticates over HTTP (unlike the bulk seeder's rows), so the credential is
+// overridable rather than fixed in a committed file. The default is for a throwaway database only.
 function perfUserPassword(): string {
   return process.env.PERF_USER_PASSWORD ?? 'perf-load-not-a-real-secret';
 }
@@ -198,7 +192,7 @@ async function seedPricesAndStock(db: Db, variantIds: readonly string[]): Promis
   }
 }
 
-/** A fixed account whose cart is deliberately fat, so `GET /cart` shows the per-line SKU fan-out. */
+// The cart is deliberately fat, so `GET /cart` shows the per-line SKU fan-out.
 async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: string; lines: number }> {
   let [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
   if (!user) {

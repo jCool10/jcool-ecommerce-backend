@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import type { User } from '../../domain/entities/user.entity';
 import { ROLES } from '@shared/rbac';
 
-/** Public view of a user — the safe subset only, always built via `fromEntity` so `passwordHash` (and any future internal field) can never leak. */
+/** Always build through `fromEntity`: naming the safe fields is what keeps `passwordHash` from leaking. */
 export class UserResponseDto {
   @ApiProperty({
     example: '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f',

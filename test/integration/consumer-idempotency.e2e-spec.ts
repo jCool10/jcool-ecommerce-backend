@@ -25,11 +25,9 @@ const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
 const ORDER_ID = '0198f0d8-1111-7000-8000-000000000001';
 
 /**
- * Where at-least-once delivery stops being a problem. The transport can and does deliver twice —
- * the relay may crash after publishing but before marking, the queue redelivers a job whose worker
- * died — and every assertion here is about that second delivery costing nothing.
- *
- * Deliveries are driven by hand: the worker is off in e2e, so nothing consumes behind a test's back.
+ * The transport can and does deliver twice — the relay may crash after publishing but before
+ * marking, the queue redelivers a job whose worker died — and every assertion here is about that
+ * second delivery costing nothing. Deliveries are driven by hand; the worker is off in e2e.
  */
 describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -165,8 +163,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
       .expect(200);
 
     // Presence, not value: counters accumulate across the tests in this file, so only a delta would
-    // be meaningful (the registry itself is per-file — vitest isolates each e2e file in its own
-    // process).
+    // be meaningful.
     expect(text).toContain('messaging_consume_total{event_type="order.placed",result="processed"}');
     expect(text).toContain('messaging_consume_total{event_type="order.placed",result="duplicate"}');
   });

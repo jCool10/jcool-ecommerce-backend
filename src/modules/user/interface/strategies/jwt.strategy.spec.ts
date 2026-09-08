@@ -2,13 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { SessionEpochPort, TokenDenylistPort } from '../../application/ports';
 import { JwtStrategy } from './jwt.strategy';
 
-/**
- * JwtStrategy is mostly declarative (options passed to passport-jwt). Its own
- * logic is `validate`: reject a denylisted (logged-out) jti or a token whose
- * epoch predates the user's current one (a logout-all / change-password), else
- * map the verified claims onto `{ userId, role, jti, exp }` without a DB round for
- * the claims themselves (the epoch read is the one stateful lookup).
- */
+// The epoch read is the only stateful lookup `validate` performs; the claims are used as verified.
 describe('JwtStrategy', () => {
   function makeStrategy(opts: { denylisted?: boolean; currentEpoch?: number | null } = {}): JwtStrategy {
     const { denylisted = false, currentEpoch = 0 } = opts;

@@ -1,8 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
 
-// URL-safe lowercase kebab slug (letters/digits, single hyphens between groups).
-// Shared shape for category + product slugs; the DB also enforces uniqueness.
+// Shared by category and product slugs; uniqueness is enforced by the DB, not by this pattern.
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const SLUG_MESSAGE = 'slug must be lowercase alphanumeric with single hyphens (e.g. "wireless-headphones")';
 

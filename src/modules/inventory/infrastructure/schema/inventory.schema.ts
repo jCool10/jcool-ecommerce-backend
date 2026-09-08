@@ -2,10 +2,8 @@ import { check, index, integer, pgEnum, pgTable, timestamp, uniqueIndex, uuid } 
 import { sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 
-// Inventory schema (stock levels + reservations) — infrastructure, never imported
-// by domain. UUID v7 ids, tz stamps, integer counts. No cross-context FK
-// (variantId → product_variants, orderId → orders): boundary kept at the app layer.
-// Stock is held (reserved) at placement, never subtracted from on-hand until commit.
+// No cross-context FK (variantId → product_variants, orderId → orders): the boundary is kept at the
+// app layer. Stock is held (reserved) at placement, never subtracted from on-hand until commit.
 
 export const reservationStatus = pgEnum('reservation_status', ['HELD', 'RELEASED', 'COMMITTED']);
 
@@ -22,7 +20,7 @@ const stamps = {
     .$onUpdate(() => new Date()),
 };
 
-// One row per SKU. `available = quantity_on_hand − quantity_reserved` is derived.
+// `available = quantity_on_hand − quantity_reserved` is derived, deliberately not a column.
 export const stockLevels = pgTable(
   'stock_levels',
   {
@@ -43,9 +41,6 @@ export const stockLevels = pgTable(
   ],
 );
 
-// One hold of stock for one SKU of one order. HELD at placement; COMMITTED on
-// payment or RELEASED on failure/expiry. `expiresAt` is when the hold lapses and
-// the expiry sweep may hand the stock back.
 export const reservations = pgTable(
   'reservations',
   {
@@ -61,9 +56,8 @@ export const reservations = pgTable(
     index('idx_reservations_variant_status').on(t.variantId, t.status),
     // One hold per (order, SKU); its left-most prefix also serves WHERE order_id = ?.
     uniqueIndex('uq_reservations_order_variant').on(t.orderId, t.variantId),
-    // Partial: the expiry sweep's queue is only ever HELD rows, so the index stays proportional to
-    // holds in flight rather than to every reservation ever written — and it also supplies the sort,
-    // since the sweep reads oldest-expiry-first.
+    // Partial: the sweep's queue is only ever HELD rows, so the index stays proportional to holds in
+    // flight rather than to every reservation ever written — and it supplies the oldest-first sort.
     index('idx_reservations_held_expires_at')
       .on(t.expiresAt)
       .where(sql`${t.status} = 'HELD'`),

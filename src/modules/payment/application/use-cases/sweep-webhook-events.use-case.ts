@@ -6,12 +6,9 @@ import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../po
 const DAY_MS = 86_400_000;
 
 /**
- * Reclaims webhook events older than the gateway's redelivery window.
- *
- * The window that matters is the GATEWAY's, not the queue's. This table is read at ingress only,
- * through `insertIfNew`, where the unique `(provider, provider_event_id)` turns a repeated delivery
- * into a no-op — so what a row must outlive is Stripe redelivering the same event (~72h), not a
- * dead-letter replay, which never touches this table.
+ * The retention window that matters is the GATEWAY's, not the queue's: this table is read at ingress
+ * only, through `insertIfNew`, so what a row must outlive is Stripe redelivering the same event
+ * (~72h), not a dead-letter replay, which never touches this table.
  */
 @Injectable()
 export class SweepWebhookEventsUseCase implements RetentionSweep, OnModuleInit {

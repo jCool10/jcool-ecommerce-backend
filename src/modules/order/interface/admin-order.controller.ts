@@ -19,14 +19,8 @@ import { ListAdminOrdersQueryDto } from './dto/list-orders-query.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
 import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto';
 
-/**
- * The operator's view of orders: the same reads as `OrderController` without the per-user scope,
- * plus a force-cancel. Class-level `@Roles(Role.Admin)` — the global guards authenticate (401), this
- * authorizes (403).
- *
- * Force-cancel is the same `CancelOrderUseCase`, differing only in the audit reason it stamps, so an
- * admin cannot reach an outcome a buyer's own cancel could not.
- */
+// Force-cancel is the same `CancelOrderUseCase` as the buyer's, differing only in the audit reason
+// it stamps, so an admin cannot reach an outcome a buyer's own cancel could not.
 @ApiTags('admin-orders')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })

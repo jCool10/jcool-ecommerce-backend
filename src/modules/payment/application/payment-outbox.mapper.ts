@@ -1,8 +1,8 @@
 import type { OutboxRecord } from '@shared/messaging/outbox/outbox-writer.port';
 import { PaymentStatus, type SettledPaymentStatus } from '../domain/payment-status';
 
-// Payment settlements → outbox rows. The payload is a snapshot, not a reference: the consumer that
-// settles the order must not have to read Payment's tables to know which order settled and how.
+// The payload is a snapshot, not a reference: the consumer that settles the order must not have to
+// read Payment's tables to know which order settled and how.
 
 const AGGREGATE_TYPE = 'Payment';
 

@@ -3,10 +3,9 @@ import { Transform, Type } from 'class-transformer';
 import { IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
 
-// Query params for GET /products/search. `q` is required, unlike the list endpoint's optional
-// substring filter: a relevance search with no terms has nothing to rank by. `categorySlug` is
-// pinned to the slug shape because it reaches the engine inside a filter expression — the adapter
-// escapes it as well, so neither layer is the only thing between a caller and that expression.
+// `q` is required, unlike the list endpoint's optional substring filter: a relevance search with no
+// terms has nothing to rank by. `categorySlug` is pinned to the slug shape because it reaches the
+// engine inside a filter expression — the adapter escapes it as well, so neither layer stands alone.
 export class SearchProductsQueryDto {
   @ApiProperty({
     maxLength: 100,

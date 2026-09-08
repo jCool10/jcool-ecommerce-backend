@@ -4,9 +4,8 @@ import { timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
 
 /**
- * Guards `/metrics` with a bearer token (ADR-0018). Invalid/missing token → 404 (not 401) so a
- * probe can't confirm the endpoint exists. Constant-time compare. With no token configured:
- * allowed outside production, hidden (404) in production.
+ * Every rejection is 404, never 401, so a probe cannot confirm the endpoint exists — including the
+ * unconfigured-token case, which is allowed outside production and hidden in production.
  */
 @Injectable()
 export class MetricsTokenGuard implements CanActivate {

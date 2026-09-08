@@ -20,11 +20,8 @@ function job(overrides: Partial<DomainEventJob> = {}): DomainEventJob {
   };
 }
 
-/**
- * The claim/effect/commit ordering, pinned without a database. What a fake CAN prove here is that
- * the effect never runs on a lost claim and that the counter follows the transaction's outcome;
- * that the claim itself is atomic is the database's job, and the e2e suite's.
- */
+// A fake can prove the effect never runs on a lost claim and that the counter follows the
+// transaction's outcome; that the claim itself is atomic is the database's job, and the e2e suite's.
 function build({
   claimed = true,
   known = true,
@@ -76,7 +73,6 @@ describe('DomainEventProcessor', () => {
 
     await expect(ctx.processor.process(job())).resolves.toBe('duplicate');
 
-    // The whole point of the inbox: a redelivery is acknowledged, never re-applied.
     expect(ctx.dispatch).not.toHaveBeenCalled();
     expect(ctx.recordEventConsumed).toHaveBeenCalledWith('order.placed', 'duplicate');
   });
@@ -87,9 +83,8 @@ describe('DomainEventProcessor', () => {
 
     await expect(ctx.processor.process(job())).rejects.toThrow('handler exploded');
 
-    // The claim rolls back with the effect, so the outcome has to be visible as a failure — silence
-    // would read as "nothing arrived" on the dashboard, which is exactly what a stuck event looks
-    // like from the producer side.
+    // The claim rolls back with the effect, so the outcome must be visible as a failure — silence
+    // reads as "nothing arrived" on the dashboard, which is what a stuck event looks like too.
     expect(ctx.recordEventConsumed).toHaveBeenCalledWith('order.placed', 'failed');
   });
 
@@ -99,8 +94,8 @@ describe('DomainEventProcessor', () => {
 
     await expect(ctx.processor.process(job({ eventType: 'order.whatever' }))).rejects.toThrow(/No handler/);
 
-    // A name nobody registered is attacker- or typo-controlled; labelling it verbatim would let one
-    // bad producer mint unbounded time series in Prometheus.
+    // A name nobody registered is attacker- or typo-controlled; verbatim it would mint unbounded
+    // time series in Prometheus.
     expect(ctx.recordEventConsumed).toHaveBeenCalledWith('unregistered', 'failed');
   });
 

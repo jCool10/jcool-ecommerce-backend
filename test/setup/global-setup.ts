@@ -5,7 +5,6 @@ import { runMigrations } from '../../src/shared/infrastructure/database/migrate'
 const POSTGRES_IMAGE = 'postgres:16-alpine';
 const REDIS_IMAGE = 'redis:7-alpine';
 
-// Typed channel for inject('DATABASE_URL') in test files.
 declare module 'vitest' {
   interface ProvidedContext {
     DATABASE_URL: string;
@@ -19,8 +18,8 @@ export default async function setup({
 }: {
   provide: (key: 'DATABASE_URL' | 'REDIS_URL', value: string) => void;
 }): Promise<() => Promise<void>> {
-  // allSettled (not Promise.all) so a one-sided failure still exposes the started
-  // container to stop it instead of orphaning it.
+  // allSettled, not Promise.all: a one-sided failure must still expose the container that did
+  // start, or it is orphaned.
   const [pgResult, redisResult] = await Promise.allSettled([
     new PostgreSqlContainer(POSTGRES_IMAGE).start(),
     new RedisContainer(REDIS_IMAGE).start(),

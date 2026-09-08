@@ -4,15 +4,16 @@ import { RedisService } from '@shared/infrastructure/redis';
 
 const LOG_CONTEXT = 'CacheService';
 
-/** Outcome of one cache read. `miss` and `error` are kept apart because a cold key and an unreachable Redis are different incidents — folding them together hides an outage behind a plausible-looking miss rate. */
+/**
+ * `miss` and `error` are kept apart because a cold key and an unreachable Redis are different
+ * incidents — folding them together hides an outage behind a plausible-looking miss rate.
+ */
 export type CacheRead<T> = { status: 'hit'; value: T } | { status: 'miss' } | { status: 'error' };
 
 /**
- * Fail-open JSON cache over the shared Redis client: no operation throws, so an outage degrades a
- * read to a miss (caller falls through to the source of truth) instead of a 500. Failures are
- * reported in the return value rather than swallowed silently, so callers can still tell the
- * operator that the cache is down. `enableOfflineQueue: false` on the client makes those failures
- * immediate rather than a hang.
+ * Fail-open: no operation throws, so an outage degrades a read to a miss instead of a 500, but the
+ * failure is reported in the return value rather than swallowed. `enableOfflineQueue: false` on the
+ * client is what makes those failures immediate rather than a hang.
  */
 @Injectable()
 export class CacheService {
@@ -41,12 +42,12 @@ export class CacheService {
     }
   }
 
-  /** `false` means Redis rejected the write — the read still succeeded from the source, but the cache is not absorbing load. */
+  /** `false` means Redis rejected the write: nothing is broken, but the cache is not absorbing load. */
   async write(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
     return this.set(key, value, 'EX', ttlSeconds);
   }
 
-  /** Same, at millisecond resolution — a jittered expiry needs finer granularity than a second to spread keys apart. */
+  /** Millisecond resolution: a jittered expiry needs finer granularity than a second. */
   async writeMs(key: string, value: unknown, ttlMs: number): Promise<boolean> {
     return this.set(key, value, 'PX', ttlMs);
   }

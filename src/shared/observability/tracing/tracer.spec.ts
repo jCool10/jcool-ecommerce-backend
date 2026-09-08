@@ -4,8 +4,8 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { withSpan } from './tracer';
 
-// A real in-memory tracer so we can assert on recorded spans; unit runs have no OTel SDK
-// otherwise (OTEL_ENABLED unset), which is exactly why withSpan must also work no-op.
+// A real in-memory tracer, since unit runs have no OTel SDK otherwise (OTEL_ENABLED unset) —
+// which is exactly why withSpan must also work no-op.
 const exporter = new InMemorySpanExporter();
 let provider: BasicTracerProvider;
 

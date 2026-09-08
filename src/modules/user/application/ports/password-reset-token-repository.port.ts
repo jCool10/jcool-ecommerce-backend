@@ -12,16 +12,15 @@ export type ConsumePasswordResetOutcome = { status: 'consumed'; userId: string }
 export interface PasswordResetTokenRepositoryPort {
   create(input: CreatePasswordResetTokenInput): Promise<void>;
 
-  /** Atomically spend the token only if still live (one conditional UPDATE: concurrent submits can't both consume). */
+  /** One conditional UPDATE, so concurrent submits can't both consume the token. */
   consume(tokenHash: string): Promise<ConsumePasswordResetOutcome>;
 
-  /** Consume every live token for a user — called before issuing a fresh one. */
+  /** Called before issuing a fresh token. */
   invalidateAllForUser(userId: string): Promise<void>;
 
   /**
-   * DELETE the tokens that can no longer be spent — expired, or already consumed — once they are
-   * older than `cutoff`. At most `limit` rows; returns how many went (retention sweep). Same
-   * reasoning as the email-verification twin.
+   * Retention sweep: deletes rows expired or already consumed before `cutoff`, at most `limit`,
+   * returning how many went. Same safety reasoning as the email-verification twin.
    */
   deleteSpentBefore(cutoff: Date, limit: number): Promise<number>;
 }

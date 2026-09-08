@@ -16,7 +16,6 @@ const RECORD: OutboxRecord = {
   payload: { orderId: '01a03000-0000-7000-8000-000000000001' },
 };
 
-// A transaction handle that records what was inserted without touching a database.
 function fakeTx() {
   const values = vi.fn().mockResolvedValue(undefined);
   const insert = vi.fn().mockReturnValue({ values });
@@ -29,11 +28,8 @@ const inSpan = <T>(fn: () => T): T =>
     fn,
   );
 
-/**
- * The trace hop the outbox exists to preserve: auto-instrumentation cannot follow an event across a
- * queue, so the producer's context has to be serialized into the row at insert time. Exercised here
- * rather than in e2e because tracing is off there — with no SDK, there is no span to capture.
- */
+// Covered here rather than in e2e because tracing is off there — with no SDK, there is no span to
+// capture, and the producer's context must be serialized into the row at insert time.
 describe('DrizzleOutboxWriter', () => {
   // Both globals are what the SDK installs at boot. Without the context manager `context.with` is a
   // no-op and `context.active()` always returns ROOT_CONTEXT, so the span would never be seen.

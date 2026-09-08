@@ -17,10 +17,7 @@ import { DEFAULT_THROTTLER } from './throttler.constants';
 const LOG_CONTEXT = 'RateLimit';
 const LOG_SAMPLE_WINDOW_MS = 10_000;
 
-/**
- * Base for this app's throttler guards: the enforcement kill-switch and the rejection counter,
- * so both live in one place. Subclasses decide only what a request is keyed by.
- */
+// Holds the kill-switch and the rejection counter; subclasses decide only what a request is keyed by.
 @Injectable()
 export class MeteredThrottlerGuard extends ThrottlerGuard {
   private readonly shouldLog = createLogSampler(LOG_SAMPLE_WINDOW_MS);
@@ -45,8 +42,7 @@ export class MeteredThrottlerGuard extends ThrottlerGuard {
   }
 
   // Counted around the per-tier call rather than in throwThrottlingException, which isn't told
-  // which tier ran out. The tier is what makes a 429 spike readable: on the pre-auth tiers it
-  // reads as an attack or one NAT'd office, on the per-user tier as a single account misbehaving.
+  // which tier ran out — and the tier is what makes a 429 spike readable.
   protected override async handleRequest(request: ThrottlerRequest): Promise<boolean> {
     try {
       return await super.handleRequest(request);
@@ -64,9 +60,8 @@ export class MeteredThrottlerGuard extends ThrottlerGuard {
     const tier = request.throttler.name ?? DEFAULT_THROTTLER;
     const route = resolveRouteTemplate(this.reflector, context, path);
     this.metrics.recordRateLimitRejection(tier, route);
-    // The exception filter already logs every 429; what it cannot say is which tier ran out, the
-    // one field that separates a spray from one client retrying too fast. Sampled because a flood
-    // is the case this exists for, and every rejected request already costs one line there.
+    // The exception filter already logs every 429; what it cannot say is which tier ran out.
+    // Sampled because a flood is the case this exists for, and each rejection already costs a line.
     if (this.shouldLog(`${tier}|${route}`)) {
       this.logger.warn({ context: LOG_CONTEXT, tier, route }, 'rate limit exceeded');
     }

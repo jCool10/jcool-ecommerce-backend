@@ -19,8 +19,6 @@ export interface InitiateUploadResult {
 }
 
 /**
- * Step one of the handshake: reserve a row and hand back a URL the client PUTs to directly.
- *
  * The row is written before the URL is signed, so an upload that is never confirmed still has
  * something for the sweep to find. The reverse order would leave objects in the bucket that nothing
  * in the database knows about.
@@ -41,8 +39,6 @@ export class InitiateUploadUseCase {
   async execute(input: InitiateUploadInput): Promise<InitiateUploadResult> {
     const contentType = assertAllowedContentType(input.contentType);
     const assetId = uuidv7();
-    // The key is minted here, from the id and a server-side extension table. No part of it comes
-    // from the client, so there is no filename to traverse with and no type to disagree about.
     const storageKey = `media/${assetId}.${extensionFor(contentType)}`;
 
     await this.repository.insertPending(
@@ -60,14 +56,7 @@ export class InitiateUploadUseCase {
   }
 }
 
-/**
- * Refuses to boot on a configuration where the upload URL outlives the row it uploads into.
- *
- * The two settings have independent ranges, so nothing else stops `STORAGE_PRESIGN_TTL_SEC` from
- * being the larger. When it is, the sweep reclaims a `PENDING` row while its URL is still signed and
- * usable — and the PUT that follows writes an object no row points at: unfindable, and billed
- * forever. The one thing this design promises it never creates.
- */
+// The two settings have independent ranges, so nothing else stops the presign TTL being the larger.
 function assertUrlDiesBeforeRow(presignTtlSec: number, uploadTtlSec: number): void {
   if (presignTtlSec >= uploadTtlSec) {
     throw new Error(

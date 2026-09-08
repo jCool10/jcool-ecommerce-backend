@@ -46,8 +46,8 @@ describe('createLogSampler', () => {
       shouldLog(`key-${i}`);
     }
 
-    // Suppression was dropped along with the entries, still inside the window — the price of a
-    // bound that costs nothing to maintain, and the reason keys come from a fixed set.
+    // Suppression is dropped with the entries, still inside the window: the price of a bound that
+    // costs nothing to maintain, and the reason keys come from a fixed set.
     expect(shouldLog('user|/orders')).toBe(true);
   });
 });

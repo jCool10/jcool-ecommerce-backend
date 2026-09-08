@@ -55,7 +55,6 @@ export async function archiveTestCategory(app: INestApplication, categoryId: str
     .where(eq(schema.categories.id, categoryId));
 }
 
-// Full sellable unit: category → product → variant (SKU) → price.
 export async function createTestProduct(app: INestApplication, options: TestProductOptions = {}): Promise<TestProduct> {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const suffix = uniq();
@@ -105,9 +104,8 @@ export interface SeedProductsOptions {
   status?: 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
 }
 
-// Bulk-insert `count` products under a single category in one INSERT, for
-// pagination tests. Variants/prices are omitted on purpose: the public list
-// left-joins them, so a product appears on ACTIVE status + a live category alone.
+// Variants/prices are omitted on purpose: the public list left-joins them, so a product appears on
+// ACTIVE status + a live category alone.
 export async function seedProducts(
   app: INestApplication,
   count: number,

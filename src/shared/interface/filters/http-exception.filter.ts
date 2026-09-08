@@ -23,7 +23,8 @@ const SERVICE_UNAVAILABLE: number = HttpStatus.SERVICE_UNAVAILABLE;
 // pino `context` label; passed per-call because the base PinoLogger is a shared singleton.
 const LOG_CONTEXT = 'HttpExceptionFilter';
 
-/** Unified error envelope: <500 keep their payload, >=500 are masked to a generic message (real error logged); Terminus health results pass through. Every response carries the correlation requestId; the exception is logged once (4xx warn, 5xx error). See docs/engineering-notes.md and ADR-0013. */
+/** Unified error envelope: <500 keep their payload, >=500 are masked to a generic message with the
+ * real error logged. Every response carries the correlation requestId. */
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly devPretty: boolean;
@@ -87,12 +88,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // logs already carry it via the pino mixin.
     const traceId = getActiveTraceId();
 
-    // Report server errors to Sentry (no-op when SENTRY_DSN is unset, so tests/dev are unaffected).
-    // traceId/spanId also land on the event natively via the Sentry context manager; the tags make
-    // requestId/traceId searchable in issue search. 4xx are client errors — not reported (noise).
+    // Server errors only: 4xx are client errors and would be noise. A no-op when SENTRY_DSN is
+    // unset. traceId/spanId land natively via the context manager; the tags make them searchable.
     if (isServerError && err) {
-      // Fire-and-forget: reporting must never break the error response. captureException is
-      // contractually non-throwing (no-op without a DSN), but guard the masking path regardless.
       try {
         const routeTemplate = (request.route as { path?: string } | undefined)?.path;
         Sentry.captureException(err, {

@@ -2,11 +2,10 @@
  * Full scan of `users`, checking that every id routes to the bucket its email hashes to:
  *   npm run identity:verify
  *
- * The boot canary samples one row; this reads all of them — for the two questions the sample cannot
- * answer: does this database agree with a freshly provisioned key, and how many rows did a drift hit.
- *
- * Only `users`: token routing follows the owner's `user_id`, so a misrouted user is the whole finding.
- * Read-only, and exits non-zero on disagreement so it can gate a deploy.
+ * The boot canary samples one row; this reads all of them, answering what a sample cannot: does this
+ * database agree with a freshly provisioned key, and how many rows did a drift hit. Only `users` —
+ * token routing follows the owner's `user_id`, so a misrouted user is the whole finding. Read-only,
+ * and exits non-zero on disagreement so it can gate a deploy.
  */
 import 'dotenv/config';
 import { Pool } from 'pg';
@@ -23,7 +22,7 @@ interface UserRow {
   email: string;
 }
 
-/** Bucket carried by the id, or null for any non-v8 id. */
+// null means the id is not v8 at all — bucketOf throws on those.
 function carriedBucket(id: string): number | null {
   try {
     return bucketOf(id);

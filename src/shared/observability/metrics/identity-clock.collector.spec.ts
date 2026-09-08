@@ -12,8 +12,8 @@ import {
 
 const START_MS = 1_700_000_000_000;
 
-// Drives the generator's clock from the test: the wall clock can be stepped forward (which the
-// generator absorbs as drift) or frozen (which makes it refuse to mint).
+// Stepping the wall clock forward is what the generator absorbs as drift; leaving it frozen is
+// what makes it refuse to mint.
 function fakeClock(): { clock: IdentityClock; stepWall: (ms: number) => void } {
   let wall = START_MS;
   return {
@@ -24,8 +24,8 @@ function fakeClock(): { clock: IdentityClock; stepWall: (ms: number) => void } {
   };
 }
 
-// Through the real factories, so both metrics and their collect hooks land in the default registry
-// exactly as MetricsModule does. willsoto puts its own options token first in `inject`.
+// Through the real factories, so the collect hooks land in the default registry as MetricsModule
+// leaves them. willsoto puts its own options token first in `inject`.
 for (const provider of IDENTITY_CLOCK_PROVIDERS as FactoryProvider[]) {
   provider.useFactory(undefined);
 }

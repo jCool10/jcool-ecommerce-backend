@@ -14,9 +14,8 @@ import { formatDevRequestLine } from './dev-request-line.format';
 const SKIP_ROUTE_PREFIXES = ['/health', '/metrics'];
 
 /**
- * Emits one canonical "request completed" line per successful HTTP request: method, route
- * template, status, durationMs, db.queries. Errors are logged by HttpExceptionFilter instead,
- * so a request never yields two summary lines. See ADR-0013.
+ * One canonical line per SUCCESSFUL request only: errors are logged by HttpExceptionFilter
+ * instead, so a request never yields two summary lines.
  */
 @Injectable()
 export class CanonicalLogInterceptor implements NestInterceptor {

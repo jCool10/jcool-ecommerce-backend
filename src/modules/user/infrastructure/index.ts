@@ -1,4 +1,3 @@
-// Barrel: User (auth) infrastructure adapters (Drizzle repositories, Redis denylist, hasher, mailer, audit).
 export * from './argon2-password-hasher';
 export * from './auth-audit.logger';
 export * from './drizzle-email-verification-token.repository';

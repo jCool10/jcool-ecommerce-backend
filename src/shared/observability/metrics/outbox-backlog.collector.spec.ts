@@ -13,8 +13,8 @@ type BacklogRow = { pending: number; oldestAgeSeconds: string };
 let queries = 0;
 let answer: () => Promise<BacklogRow[]>;
 
-// Enough of the drizzle builder for `select().from().where()`; `where()` is where the query is
-// actually issued, so that is what counts.
+// Enough of the drizzle builder for `select().from().where()`; `where()` is where the query issues,
+// so that is what counts.
 const db = {
   select: () => ({
     from: () => ({
@@ -26,9 +26,8 @@ const db = {
   }),
 } as unknown as DrizzleDB;
 
-// Registration is the point: the factories put both gauges and their collect hooks into the default
-// registry exactly as MetricsModule does. willsoto puts its own options token first in `inject`, so
-// the injected db is the second factory argument.
+// Through the real factories, so the collect hooks land in the default registry as MetricsModule
+// leaves them. willsoto puts its own options token first in `inject`, so db is the second argument.
 for (const provider of OUTBOX_BACKLOG_PROVIDERS as FactoryProvider[]) {
   provider.useFactory(undefined, db);
 }
@@ -54,8 +53,8 @@ describe('outbox backlog collector', () => {
   it('reads the table once per scrape, no matter how many gauges ask', async () => {
     const text = await register.metrics();
 
-    // The property the e2e cannot observe: prom-client starts both collect() calls before awaiting
-    // either, and they collapse into a single read.
+    // prom-client starts both collect() calls before awaiting either, and they collapse into one
+    // read — the property the e2e cannot observe.
     expect(queries).toBe(1);
     expect(valueOf(text, OUTBOX_BACKLOG_PENDING)).toBe(7);
     expect(valueOf(text, OUTBOX_OLDEST_AGE_SECONDS)).toBe(42.5);

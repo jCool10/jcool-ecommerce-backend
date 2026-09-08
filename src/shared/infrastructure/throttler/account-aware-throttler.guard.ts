@@ -9,9 +9,8 @@ import { MeteredThrottlerGuard } from './metered-throttler.guard';
 import { ACCOUNT_THROTTLER, USER_THROTTLER } from './throttler.constants';
 
 /**
- * ThrottlerGuard that keys the `account` tier by IP + hashed email, so brute-forcing one account
- * can't lock out others behind the same NAT (other tiers stay IP-only, which catches password-spray).
- * See docs/engineering-notes.md (Auth — Rate limiting / brute-force protection).
+ * Keys the `account` tier by IP + hashed email, so brute-forcing one account can't lock out others
+ * behind the same NAT. Other tiers stay IP-only, which is what catches password-spray.
  */
 @Injectable()
 export class AccountAwareThrottlerGuard extends MeteredThrottlerGuard {
@@ -42,7 +41,6 @@ export class AccountAwareThrottlerGuard extends MeteredThrottlerGuard {
     return super.generateKey(context, suffix, name);
   }
 
-  // Fold a hashed account id into the IP suffix → the account tier buckets per (IP, account).
   private accountSuffix(ipSuffix: string, body: unknown): string {
     const email = this.extractEmail(body);
     if (!email) {

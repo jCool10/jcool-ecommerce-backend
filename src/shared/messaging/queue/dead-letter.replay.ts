@@ -30,11 +30,8 @@ export interface ReplayOptions {
 }
 
 /**
- * Re-publish a dead-lettered message to `domain-events` and drop the dead-letter copy.
- *
- * Replay used to be unconditionally safe — the message goes back under the outbox row id the inbox
- * dedups on. Retention ends that: once claims are swept, "no claim" no longer distinguishes "never
- * applied" from "applied and forgotten". So the inbox decides, in three branches:
+ * Once inbox claims are swept, "no claim" no longer distinguishes "never applied" from "applied and
+ * forgotten", so the inbox decides in three branches:
  *
  * | inbox claim | decision |
  * |---|---|
@@ -42,13 +39,11 @@ export interface ReplayOptions {
  * | absent, born inside the retention window | replay |
  * | absent, born before the window | refuse unless `--force` — the claim may just have been swept |
  *
- * Branch 3 keys on `occurredAt`, not `failedAt`. It must establish that IF the message had been
+ * Branch 3 keys on `occurredAt`, not `failedAt`: it must establish that IF the message had been
  * applied, its claim would still be here to say so. A consumer transaction cannot begin before the
- * producer committed, so `processed_at >= occurredAt` holds unconditionally, and a message born
- * inside the window cannot have had its claim swept. `failedAt` proves nothing of the sort — it is
- * rewritten on every dead-lettering, so a message applied long ago and re-parked today carries a
- * brand-new stamp. It stays on the envelope as the operator's diagnosis, and is reported in the
- * refusal, but decides nothing.
+ * producer committed, so `processed_at >= occurredAt` holds unconditionally. `failedAt` proves
+ * nothing of the sort — it is rewritten on every dead-lettering, so a message applied long ago and
+ * re-parked today carries a brand-new stamp. It is reported in the refusal but decides nothing.
  *
  * `dryRun` is the default because this puts real traffic on a live queue; the guard runs in dry run
  * too, so the listing shows what would actually be refused.
@@ -63,8 +58,7 @@ export async function replayDeadLetters(
   const outcomes: ReplayOutcome[] = [];
 
   for (const job of jobs as Job<DeadLetterJob>[]) {
-    // Per job, never per batch: one unreadable entry must not cost the operator the record of
-    // which of the others went back.
+    // Per job, never per batch: one unreadable entry must not cost the record of which others went back.
     try {
       outcomes.push(await replayOne(main, dlq, job, { dryRun, inboxLookup, inboxRetentionMs, force }));
     } catch (error) {
@@ -90,8 +84,8 @@ async function replayOne(
   job: Job<DeadLetterJob>,
   { dryRun, inboxLookup, inboxRetentionMs, force }: Required<Omit<ReplayOptions, 'limit'>>,
 ): Promise<ReplayOutcome> {
-  // The DLQ is where malformed envelopes are parked, so its contents are the one place that must
-  // not be trusted to match its type. Both fields below are used as keys further down.
+  // The DLQ is where malformed envelopes are parked, so its contents must not be trusted to match
+  // their type. Both fields below are used as keys further down.
   if (!isWellFormedEnvelope(job.data)) {
     return {
       messageId: job.id ?? 'unknown',
@@ -111,9 +105,8 @@ async function replayOne(
     return outcome;
   }
 
-  // Branch 3, only now that the inbox has said there is no claim. An unparseable stamp counts as
-  // born before the window — `isWellFormedEnvelope` does not vet this field, and an unprovable
-  // replay is refused rather than attempted.
+  // An unparseable stamp counts as born before the window: `isWellFormedEnvelope` does not vet this
+  // field, and an unprovable replay is refused rather than attempted.
   const occurredAtMs = Date.parse(job.data.occurredAt);
   const olderThanRetention = !Number.isFinite(occurredAtMs) || Date.now() - occurredAtMs > inboxRetentionMs;
   if (olderThanRetention && !force) {
@@ -137,8 +130,7 @@ async function replayOne(
     try {
       await stale.remove();
     } catch (error) {
-      // A locked job is one a worker is running right now; removing it underneath is exactly what
-      // must not happen.
+      // A locked job is one a worker is running right now; removing it underneath must not happen.
       outcome.detail = `main-queue job still held: ${error instanceof Error ? error.message : String(error)}`;
       return outcome;
     }
@@ -148,8 +140,8 @@ async function replayOne(
   await main.add(envelope.eventType, envelope satisfies DomainEventJob, { jobId: messageId });
 
   // Only after the re-publish landed — the reverse order would lose the message outright. Re-read
-  // rather than reuse the handle: if the replay poisoned again meanwhile, the router has replaced
-  // this entry with a fresher diagnosis and deleting that would hide the failure.
+  // rather than reuse the handle: if it poisoned again meanwhile, the router has replaced this entry
+  // with a fresher diagnosis and deleting that would hide the failure.
   const current = (await dlq.getJob(messageId)) as Job<DeadLetterJob> | undefined;
   if (current && current.data?.failedAt === job.data.failedAt) await current.remove();
 

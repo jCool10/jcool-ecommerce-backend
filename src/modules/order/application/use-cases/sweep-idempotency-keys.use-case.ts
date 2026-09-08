@@ -4,11 +4,8 @@ import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
 import { IDEMPOTENCY_STORE, type IdempotencyStorePort } from '../ports/idempotency-store.port';
 
 /**
- * Reclaims idempotency keys past their TTL.
- *
- * The rule that matters is what it must NOT do. A COMPLETED row is the frozen response a retry
- * replays — deleting one before its TTL is up turns the next retry into a second order. So the
- * predicate is `expires_at < now` alone, never `status`.
+ * A COMPLETED row is the frozen response a retry replays — deleting one before its TTL is up turns
+ * the next retry into a second order. So the predicate is `expires_at < now` alone, never `status`.
  */
 @Injectable()
 export class SweepIdempotencyKeysUseCase implements RetentionSweep, OnModuleInit {

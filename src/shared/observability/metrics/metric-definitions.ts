@@ -3,98 +3,47 @@ import { makeCounterProvider, makeGaugeProvider, makeHistogramProvider } from '@
 import { IDENTITY_CLOCK_PROVIDERS } from './identity-clock.collector';
 import { OUTBOX_BACKLOG_PROVIDERS } from './outbox-backlog.collector';
 
-// Metric names in one place so the providers, the @InjectMetric() consumers, and the tests
-// never drift. Prometheus conventions: `_total` suffix for counters, base-unit suffix
-// (`_seconds`) for histograms, no id/email/sku in any labelName (cardinality iron rule).
+// Prometheus conventions to hold to: `_total` suffix for counters, base-unit suffix (`_seconds`)
+// for histograms, and no id/email/sku in any labelName (the cardinality iron rule).
 
-// --- RED (http) ---
 export const HTTP_REQUEST_DURATION_SECONDS = 'http_request_duration_seconds';
 export const HTTP_REQUESTS_TOTAL = 'http_requests_total';
 
-// --- Business ---
 export const ORDERS_CREATED_TOTAL = 'orders_created_total';
 export const ORDER_VALUE_MINOR = 'order_value_minor';
 export const CART_OPERATIONS_TOTAL = 'cart_operations_total';
 export const CATALOG_CACHE_OPERATIONS_TOTAL = 'catalog_cache_operations_total';
 export const AUTH_EVENTS_TOTAL = 'auth_events_total';
 
-// --- Resilience ---
-// How long the source takes to answer while a rebuild lock is held. It is the number the lock lease
-// has to stay ahead of: once the p99 here approaches the lease, holders start losing the lock
-// mid-rebuild and the herd comes back.
 export const CACHE_REBUILD_DURATION_SECONDS = 'cache_rebuild_duration_seconds';
-// The breaker's current position, per breaker. A gauge rather than a counter because "open right
-// now" is what pages someone; how often it got there is the transitions counter below.
+// A gauge, not a counter: "open right now" is what pages someone; how often it got there is the
+// transitions counter below.
 export const CIRCUIT_BREAKER_STATE = 'circuit_breaker_state';
 export const CIRCUIT_BREAKER_TRANSITIONS_TOTAL = 'circuit_breaker_transitions_total';
-// The two halves of a breaker's story: `failure`/`timeout` are calls the downstream actually cost
-// us, `rejected` are the ones it never saw because the breaker was open — a rising rejected rate
-// with no failures is the breaker doing its job, not a new outage.
 export const CIRCUIT_BREAKER_CALLS_TOTAL = 'circuit_breaker_calls_total';
-// Requests refused by the rate limiter. Read per tier: a spike on the pre-auth tiers is an attack
-// or a NAT'd office, the same spike on the per-user tier is one account misbehaving.
 export const RATE_LIMIT_REJECTIONS_TOTAL = 'rate_limit_rejections_total';
 
-// --- Messaging ---
-// Publishes are the producer half of the pipeline, and the only place a queue outage is visible as
-// a number: the relay keeps refused rows for the next tick, so nothing is lost, but a sustained
-// `refused` rate means events are piling up in Postgres. Read it against the backlog gauges — this
-// counter says the relay is trying, they say how far behind it has fallen.
 export const MESSAGING_PUBLISH_TOTAL = 'messaging_publish_total';
-// The ratio between the results is the operational read on the pipeline: a steady trickle of
-// duplicates is at-least-once working as designed, a spike means the relay or the queue is
-// redelivering far more than it should, and any sustained `failed` rate means events are being
-// published and never applied. Counting failures matters as much as successes — without them a
-// pipeline where every consume throws is indistinguishable from an idle one.
 export const MESSAGING_CONSUME_TOTAL = 'messaging_consume_total';
-// Retries and dead letters are the same failure seen at two horizons. A rising retry rate with a
-// flat DLQ is a dependency wobbling and the backoff absorbing it; a rising DLQ means messages are
-// now being parked for a human, and is the one of the two worth waking someone for.
 export const MESSAGING_CONSUME_RETRIES_TOTAL = 'messaging_consume_retries_total';
 export const MESSAGING_DLQ_TOTAL = 'messaging_dlq_total';
 
-// --- Saga ---
-// The checkout saga's funnel. Each step commits its own transaction, so an order can stop between
-// any two of them and sit there holding stock. Read the steps as rates side by side, not as a
-// subtraction: an order that reserves, never opens a session and is expired straight from the hold
-// reaches finalize without ever reaching payment_session, so the steps are not nested and a
-// difference between them can go negative. What leaves the funnel shows up in the counters below.
+// The steps are NOT nested — an order expired straight from its hold reaches finalize without ever
+// reaching payment_session — so read them as rates side by side; a subtraction can go negative.
 export const SAGA_STEP_TOTAL = 'saga_step_total';
-// Compensation is the saga's only rollback, so this is the rate at which checkouts are being undone.
-// The trigger says whose fault it was — a payment_failed spike is the gateway, a ttl_expired spike is
-// buyers abandoning or webhooks not arriving, and telling those apart is the whole point of the label.
 export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
-// Deliberately narrower than saga_compensation_total{trigger=ttl_expired}: that one counts every
-// order that ended EXPIRED, this one only those the reservation sweep itself claimed. The difference
-// is what the gateway-driven reconcile expired first, which is the ordering the sweep's boot guard
-// exists to preserve — so once expiries are actually happening, the two rates converging means
-// reconcile has stopped. Both sit at 0 on a healthy quiet shop, where the comparison says nothing.
+// Narrower than saga_compensation_total{trigger=ttl_expired}: only the orders the reservation sweep
+// itself claimed. The difference is what the gateway-driven reconcile expired first, so once
+// expiries are happening at all, the two rates converging means reconcile has stopped.
 export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
-// The one counter here that asks for a human. Observations, not refunds: one stranded payment is
-// routinely seen by two paths. Alert on non-zero, then read the logs for the order ids.
 export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
 
-// --- Mail ---
-// Messages that did not go out. Mail is sent after its transaction commits, so nothing retries it:
-// every increment here is one notification the recipient will never receive.
 export const MAIL_SEND_FAILURES_TOTAL = 'mail_send_failures_total';
 
-// --- Retention ---
-// Rows reclaimed per sweep. Read per label rather than in total: a sweep whose counter has been
-// flat since a deploy is either a table with nothing to collect or a sweep that stopped running,
-// and only the failure counter below distinguishes them.
 export const RETENTION_ROWS_DELETED_TOTAL = 'retention_rows_deleted_total';
-// How long one sweep took. Its use is comparative — one sweep far above the others is the one that
-// will start timing out and holding its own next tick.
 export const RETENTION_SWEEP_DURATION_SECONDS = 'retention_sweep_duration_seconds';
-// Sweeps that threw or timed out. Separate from the counter above because a sweep that deletes
-// nothing and a sweep that cannot run look identical from the rows counter alone.
 export const RETENTION_SWEEP_FAILURES_TOTAL = 'retention_sweep_failures_total';
 
-// --- Media ---
-// Bytes the media sweep gave back to the bucket. Rows are already counted by the retention sweep;
-// this is the number a storage bill is read against, and the two diverge whenever a few very large
-// objects are what actually accumulated.
 export const MEDIA_BYTES_RECLAIMED_TOTAL = 'media_bytes_reclaimed_total';
 
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
@@ -121,8 +70,8 @@ export const CACHE_REBUILD_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 
 export const RETENTION_SWEEP_BUCKETS = [0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10, 30];
 
 /**
- * Every metric registered as an eager DI provider, so all appear in `/metrics` (HELP/TYPE)
- * before the first observation. Outbox gauges live in outbox-backlog.collector.ts.
+ * Eager DI providers, so every metric appears in `/metrics` (HELP/TYPE) before its first
+ * observation rather than popping into existence when something happens to touch it.
  */
 export const METRIC_PROVIDERS: Provider[] = [
   makeHistogramProvider({

@@ -1,10 +1,8 @@
 import { Money } from '@shared/kernel';
 
-// Catalog domain entities — pure, no framework/DB imports. Price is the shared `Money`
-// value object (integer smallest-unit, currency-checked), so cross-currency mistakes can't compile.
+// Pure domain — no framework/DB imports.
 
-// Single source for the status vocabulary (a DTO can @IsIn it, Swagger can
-// enumerate it). Mirrors the Drizzle `product_status` pgEnum.
+// Mirrors the Drizzle `product_status` pgEnum.
 export const PRODUCT_STATUSES = ['DRAFT', 'ACTIVE', 'ARCHIVED'] as const;
 
 export type ProductStatus = (typeof PRODUCT_STATUSES)[number];
@@ -32,9 +30,8 @@ export class Product {
     public readonly variants: ProductVariant[],
     public readonly createdAt: Date,
     /**
-     * Image assets in display order — ids only, never URLs. Catalog does not know where the bytes
-     * live, and a resolved URL can expire, so keeping ids here is what lets this whole aggregate be
-     * cached safely.
+     * In display order, ids only, never URLs: a resolved URL can expire, and ids are what let this
+     * aggregate be cached safely.
      */
     public readonly imageAssetIds: string[] = [],
   ) {}

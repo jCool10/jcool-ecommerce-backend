@@ -1,6 +1,5 @@
-// The envelope on the wire between the relay and the worker. It lives beside the queue rather than
-// with either half because both sides have to agree on it: change a field here and the producer,
-// the consumer, and every job already sitting in Redis are all affected.
+// The envelope on the wire: change a field here and the producer, the consumer, and every job
+// already sitting in Redis are all affected.
 
 export interface DomainEventJob {
   /** The outbox row id. Stable across redeliveries of the same event — the key a consumer dedups on. */
@@ -16,18 +15,17 @@ export interface DomainEventJob {
 
 /**
  * Work a handler wants done only once its transaction has committed — reaching something no
- * transaction can hold, like an SMTP server. Returned rather than run, so the handler cannot
- * perform it early by accident.
+ * transaction can hold, like an SMTP server. Returned rather than run, so the handler cannot perform
+ * it early by accident.
  */
 export type PostCommitEffect = () => Promise<void>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * The envelope arrives as JSON from Redis, so its declared type is a claim rather than a guarantee.
- * Checked wherever `outboxId` is about to be used as a key — the consumer before it claims the
- * message, the replay tool before it re-publishes under that id — so a bad value surfaces here
- * rather than as a Postgres cast error deep inside a transaction.
+ * The envelope arrives as JSON from Redis, so its declared type is a claim, not a guarantee. Called
+ * wherever `outboxId` is about to be used as a key, so a bad value surfaces here rather than as a
+ * Postgres cast error deep inside a transaction.
  */
 export function isWellFormedEnvelope(job: DomainEventJob | undefined): boolean {
   return UUID.test(job?.outboxId ?? '') && Boolean(job?.eventType);

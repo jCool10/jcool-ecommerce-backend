@@ -7,13 +7,10 @@ import { toView, type OrderView } from '../order-view.mapper';
 import { FinalizeOrderUseCase } from './finalize-order.use-case';
 
 /**
- * Cancelling an order, by its owner or by an admin. All it adds to `FinalizeOrderUseCase` is
- * authorization — the settlement is the same one the webhook and the sweeps drive. The check runs
- * under the same row lock as the finalize, which joins this transaction; otherwise the order could
- * settle some other way in between and this would answer 200 for a cancel that never happened.
- *
- * Closing the gateway session is NOT done here: this holds an order row lock, and reaching the
- * gateway under it would hold that lock for a network call. Payment reacts to `order.cancelled`.
+ * Authorization runs under the same row lock as the finalize, which joins this transaction;
+ * otherwise the order could settle some other way in between and this would answer 200 for a cancel
+ * that never happened. Closing the gateway session is NOT done here — reaching the gateway would
+ * hold that row lock for a network call; Payment reacts to `order.cancelled` instead.
  */
 @Injectable()
 export class CancelOrderUseCase {
@@ -22,7 +19,6 @@ export class CancelOrderUseCase {
     private readonly finalize: FinalizeOrderUseCase,
   ) {}
 
-  /** The buyer cancelling their own order. */
   cancelOwn(orderId: string, userId: string): Promise<OrderView> {
     return this.cancel(orderId, 'user:cancel', (order) => {
       // 404, not 403, for someone else's order: the same answer an id that does not exist gets, so
@@ -33,7 +29,6 @@ export class CancelOrderUseCase {
     });
   }
 
-  /** An admin cancelling any order — same settlement, different audit reason. */
   cancelAsAdmin(orderId: string): Promise<OrderView> {
     return this.cancel(orderId, 'admin:cancel');
   }

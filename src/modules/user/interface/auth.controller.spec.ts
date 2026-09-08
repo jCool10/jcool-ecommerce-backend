@@ -22,8 +22,6 @@ import { AuthController } from './auth.controller';
 import type { AuthenticatedUser } from '@shared/rbac';
 import type { AuthCookieService } from './security';
 
-// Verifies the controller emits the right audit event at each auth boundary —
-// the one place with request context (IP/UA) and the success/failure outcome.
 class MockAudit implements AuthAuditPort {
   readonly records: AuthAuditRecord[] = [];
   record(entry: AuthAuditRecord): void {
@@ -51,7 +49,6 @@ describe('AuthController (audit trail)', () => {
     } as unknown as AuthCookieService;
   });
 
-  // Build a controller with only the collaborators a given test needs.
   function build(over: {
     login?: LoginUserUseCase;
     register?: RegisterUserUseCase;

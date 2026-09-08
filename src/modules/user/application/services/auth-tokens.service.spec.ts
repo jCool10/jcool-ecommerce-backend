@@ -60,7 +60,7 @@ describe('AuthTokensService', () => {
     expect(payload.role).toBe('CUSTOMER');
     expect(payload.jti).toEqual(expect.any(String));
     expect(payload.jti.length).toBeGreaterThan(0);
-    expect(payload.epoch).toBe(0); // fresh user → epoch 0
+    expect(payload.epoch).toBe(0);
   });
 
   it('stamps the user’s current session epoch into the access token', async () => {
@@ -97,7 +97,7 @@ describe('AuthTokensService', () => {
     expect(refreshToken).toHaveLength(64); // 48 random bytes -> base64url
     const expectedHash = createHash('sha256').update(refreshToken).digest('hex');
     expect(repo.last?.tokenHash).toBe(expectedHash);
-    expect(repo.last?.tokenHash).not.toBe(refreshToken); // never the raw token
+    expect(repo.last?.tokenHash).not.toBe(refreshToken);
     expect(repo.last?.userId).toBe('u1');
     expect(repo.last?.familyId).toEqual(expect.any(String));
     expect(repo.last?.familyId.length).toBeGreaterThan(0);

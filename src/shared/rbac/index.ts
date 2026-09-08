@@ -1,5 +1,4 @@
-// Barrel: interface-level RBAC vocabulary (role enum + @Roles decorator + guard + @Public opt-out
-// + the authenticated-principal shape every guarded controller reads). Siblings import by file.
+// Siblings import each other by file, never through this barrel.
 export * from './role.enum';
 export * from './roles.decorator';
 export * from './roles.guard';

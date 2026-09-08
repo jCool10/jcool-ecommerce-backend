@@ -2,7 +2,7 @@
 # circuit breaker, the rate limiter, and the catalog stampede lock. None of them are visible on the
 # RED dashboard while they work — a breaker that fails fast answers 502 in a millisecond and the
 # limiter answers 429, and neither is a slow request or a 5xx, so the burn-rate rules stay quiet
-# through an outage these are absorbing. Triage steps in docs/observability-runbook.md §11.
+# through an outage these are absorbing.
 groups:
   - name: resilience
     rules:

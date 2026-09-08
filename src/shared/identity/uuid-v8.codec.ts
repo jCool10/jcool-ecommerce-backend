@@ -85,7 +85,8 @@ export function decode(id: string): UuidV8Fields {
   };
 }
 
-/** Routing bucket carried by a v8 id. Throws on a v4/v7/malformed id rather than returning a fallback, which would route the row to a shard that does not hold it. */
+/** Throws on a v4/v7/malformed id rather than returning a fallback, which would route the row to a
+ * shard that does not hold it. */
 export function bucketOf(id: string): number {
   return decode(id).bucket;
 }

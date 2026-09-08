@@ -4,11 +4,10 @@ import { MEDIA_QUERY, PRODUCT_REPOSITORY, type MediaQueryPort, type ProductRepos
 
 export interface ProductDetailResult {
   product: Product;
-  /** assetId → URL, for the ids on `product.imageAssetIds`. */
+  /** assetId → URL. */
   imageUrls: Map<string, string>;
 }
 
-// Fetch one ACTIVE product by id or slug; absent (or non-ACTIVE) → 404.
 @Injectable()
 export class GetProductDetailUseCase {
   constructor(

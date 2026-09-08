@@ -12,7 +12,6 @@ const LOG_CONTEXT = 'ReservationTtlScheduler';
 const INTERVAL_NAME = 'order-reservation-ttl-sweep';
 
 /**
- * Owns the schedule and nothing else, so the sweep stays a plain use case a test can call directly.
  * The interval is registered dynamically rather than via `@Cron`, whose decorator is evaluated long
  * before ConfigService exists; disabled means no timer at all, not a timer that returns early.
  *

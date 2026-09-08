@@ -15,9 +15,8 @@ import { CreatePaymentSessionUseCase } from '../application/use-cases';
 import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
 
 /**
- * Payment endpoints (global JwtAuthGuard protects the whole controller — no `@Public()`). Owns
- * `orders/:id/pay`: opening a payment is a Payment-context concern, so the route lives here rather
- * than on OrderController. The amount is taken from the order server-side; the body carries nothing.
+ * The global JwtAuthGuard protects the whole controller — no `@Public()`. `orders/:id/pay` lives here
+ * rather than on OrderController because opening a payment is a Payment-context concern.
  */
 @ApiTags('payments')
 @ApiBearerAuth()

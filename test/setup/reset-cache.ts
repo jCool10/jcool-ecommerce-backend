@@ -3,10 +3,9 @@ import { CacheService } from '../../src/shared/cache';
 import { CATALOG_CACHE_VERSION_KEY } from '../../src/modules/catalog/infrastructure/catalog-cache.keys';
 
 /**
- * Drop everything the catalog cache is serving. `resetDatabase` truncates Postgres only, and
- * fixtures insert straight through Drizzle (bypassing the admin path that would invalidate), so
- * without this a suite would read the previous test's rows out of Redis. One INCR, same mechanism
- * production uses.
+ * `resetDatabase` truncates Postgres only, and fixtures insert straight through Drizzle (bypassing
+ * the admin path that would invalidate), so without this a suite reads the previous test's rows
+ * out of Redis.
  */
 export async function resetCatalogCache(app: INestApplication): Promise<void> {
   await app.get(CacheService).bumpCounter(CATALOG_CACHE_VERSION_KEY);

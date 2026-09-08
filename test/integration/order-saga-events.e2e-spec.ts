@@ -32,15 +32,10 @@ const ON_HAND = 5;
 const QUANTITY = 2;
 
 /**
- * The asynchronous half of the checkout saga: Payment publishes that money moved, and Order settles
- * itself from that event instead of from an in-process call that a crash can swallow.
- *
+ * Order settles itself from Payment's event instead of from an in-process call a crash can swallow.
  * The webhook still finalizes directly for latency, so most assertions here are about the event
- * arriving at an order that is ALREADY settled and costing nothing — and about the one case that
- * matters, where the direct call never happened and the event is the only thing left.
- *
- * Deliveries are driven by hand: the relay and worker are off in e2e, so nothing consumes behind a
- * test's back.
+ * arriving at an order that is ALREADY settled and costing nothing — and about the one case where
+ * the direct call never happened and the event is all that is left.
  */
 describe('Payment settlement events → order saga (integration, real Postgres + Redis)', () => {
   let app: INestApplication;

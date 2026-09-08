@@ -1,6 +1,5 @@
 /**
- * Reservation lifecycle states. Modelled as a const object + union type (not a TS
- * enum) to match OrderStatus and keep the string values identical to the
+ * A const object + union type, not a TS enum, so the string values stay identical to the
  * `reservation_status` pg enum. Declaration order matches that pg enum.
  */
 export const ReservationStatus = {
@@ -14,5 +13,5 @@ export const ReservationStatus = {
 
 export type ReservationStatus = (typeof ReservationStatus)[keyof typeof ReservationStatus];
 
-/** All statuses, in declaration order — the pg enum + exhaustive test iteration use this. */
+/** In declaration order — the pg enum and exhaustive test iteration depend on it. */
 export const RESERVATION_STATUSES: readonly ReservationStatus[] = Object.values(ReservationStatus);

@@ -7,8 +7,6 @@ import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { CanonicalLogInterceptor } from './canonical-log.interceptor';
 
-// A minimal ExecutionContext whose class/handler identities drive the reflector fake,
-// matching the `as unknown as` mocking style used across the repo's guard specs.
 function httpContext(controller: object, handler: () => void, statusCode: number): ExecutionContext {
   const request = { method: 'GET', path: '/concrete' };
   const response = { statusCode, getHeader: () => '431' };
@@ -20,12 +18,11 @@ function httpContext(controller: object, handler: () => void, statusCode: number
   } as unknown as ExecutionContext;
 }
 
-// ConfigService fake returning a fixed `app.env`; drives the dev (morgan) vs prod (JSON) branch.
 function configFor(env: string): ConfigService {
   return { get: () => env } as unknown as ConfigService;
 }
 
-// CLS stub: a real bigint start (so getRequestDurationMs yields a number) and a fixed query tally.
+// The start stamp must be a real bigint, or getRequestDurationMs yields undefined.
 function clsStub(): ClsService {
   return {
     isActive: () => true,
@@ -33,7 +30,6 @@ function clsStub(): ClsService {
   } as unknown as ClsService;
 }
 
-// Reflector returning the controller path for the class and the handler path for the method.
 function reflectorFor(controller: object, controllerPath: string, handlerPath: string): Reflector {
   return {
     get: (_key: unknown, target: unknown): string => (target === controller ? controllerPath : handlerPath),
@@ -89,11 +85,10 @@ describe('CanonicalLogInterceptor', () => {
 
     expect(info).toHaveBeenCalledTimes(1);
     const [line, second] = info.mock.calls[0];
-    // Single string arg (message only) — no structured fields object in dev.
     expect(typeof line).toBe('string');
     expect(second).toBeUndefined();
-    // Morgan shape: `GET /products/:idOrSlug <200> 12.345 ms - 431 db=3`. Status and db are wrapped
-    // in ANSI color, so assert only substrings that stay contiguous around those codes.
+    // Status and db are wrapped in ANSI color, so only substrings contiguous around those codes
+    // can be asserted.
     const text = line as string;
     expect(text).toContain('GET /products/:idOrSlug ');
     expect(text).toContain('200');

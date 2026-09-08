@@ -26,11 +26,9 @@ function linkIn(body: string, path: string): URL {
 }
 
 /**
- * Auth mail over a real SMTP server, delivered to a real inbox and read back out of it.
- *
- * Auth mail is the one path that carries a raw, redeemable token, which is why it is sent directly
- * rather than through the outbox — so the proof it has to offer is that the token which arrives in
- * the message actually redeems.
+ * Auth mail is the one path carrying a raw, redeemable token, which is why it is sent directly
+ * rather than through the outbox — so the proof it owes is that the token which arrives in the
+ * message actually redeems.
  */
 describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', () => {
   let mail: StartedMailServer;

@@ -34,7 +34,6 @@ describe('FinalizeOrderUseCase', () => {
     await expect(useCase.execute({ orderId: ORDER_ID, outcome: OrderStatus.FAILED })).rejects.toBe(boom);
 
     expect(recordSagaStep).toHaveBeenCalledExactlyOnceWith('finalize', 'failed');
-    // Nothing rolled back, so nothing was compensated and no order reached an end state.
     expect(recordCompensation).not.toHaveBeenCalled();
     expect(logger.info).not.toHaveBeenCalled();
   });
