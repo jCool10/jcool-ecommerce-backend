@@ -12,9 +12,7 @@ import { PaymentStatus, type SettledPaymentStatus } from '../../domain/payment-s
 const SETTLED_PAYMENT_STATUSES = new Set(['paid', 'no_payment_required']);
 
 export type EventOutcome =
-  | { kind: 'settle'; status: SettledPaymentStatus }
-  | { kind: 'awaiting_payment' }
-  | { kind: 'ignore' };
+  { kind: 'settle'; status: SettledPaymentStatus } | { kind: 'awaiting_payment' } | { kind: 'ignore' };
 
 export function mapEventToOutcome(type: string, paymentStatus?: string): EventOutcome {
   if (type === 'checkout.session.completed') {

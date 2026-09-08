@@ -181,7 +181,7 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
       route: '/orders',
     });
 
-    for (let spent = 0; spent < IP_LIMIT; ) {
+    for (let spent = 0; spent < IP_LIMIT;) {
       const { accessToken } = await createTestUser(app);
       for (let i = 0; i < Math.min(USER_LIMIT, IP_LIMIT - spent); i++, spent++) {
         // 400, not merely "not 429": a fresh buyer has an empty cart, and the guard increments the
