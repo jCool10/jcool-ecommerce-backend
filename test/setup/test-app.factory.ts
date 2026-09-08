@@ -75,6 +75,15 @@ export async function createTestApp(
     delete process.env.SMTP_URL;
     delete process.env.MAIL_FROM;
   }
+  // Same again for object storage: `.env.example` ships the local MinIO credentials, so a copied
+  // .env would point every suite's uploads at the developer's own bucket — and leave objects there.
+  if (!('STORAGE_ENDPOINT' in envOverrides)) {
+    delete process.env.STORAGE_ENDPOINT;
+    delete process.env.STORAGE_BUCKET;
+    delete process.env.STORAGE_ACCESS_KEY_ID;
+    delete process.env.STORAGE_SECRET_ACCESS_KEY;
+    delete process.env.STORAGE_PUBLIC_BASE_URL;
+  }
 
   const savedEnv: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(envOverrides)) {

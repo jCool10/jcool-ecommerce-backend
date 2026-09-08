@@ -134,6 +134,13 @@
       "when": 1788757196592,
       "tag": "0018_slim_wild_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788794688937,
+      "tag": "0019_sad_talisman",
+      "breakpoints": true
     }
   ]
 }

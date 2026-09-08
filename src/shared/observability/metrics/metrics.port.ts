@@ -104,4 +104,6 @@ export interface MetricsPort {
   observeRetentionSweepDuration(sweep: string, seconds: number): void;
   /** One retention sweep threw or timed out. Counted separately because a sweep that reclaims nothing and one that cannot run are indistinguishable from the rows counter alone. */
   recordRetentionSweepFailure(sweep: string): void;
+  /** Bytes the media sweep returned to the bucket. Rows are counted by the retention sweep; this is what those rows cost. */
+  recordMediaBytesReclaimed(bytes: number): void;
 }

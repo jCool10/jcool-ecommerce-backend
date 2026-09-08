@@ -17,6 +17,7 @@ import { DebugController } from '@shared/interface/controllers/debug.controller'
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { CartModule } from '@modules/cart/cart.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
+import { MediaModule } from '@modules/media/media.module';
 import { OrderModule } from '@modules/order/order.module';
 import { PaymentModule } from '@modules/payment/payment.module';
 import { UserModule } from '@modules/user/user.module';
@@ -47,6 +48,9 @@ import { AuthModule } from '@modules/user/auth.module';
     CatalogModule,
     CartModule,
     InventoryModule,
+    // Before CatalogModule reads it below only in the import list's order; the DI graph is what
+    // matters, and Catalog reaches Media through MEDIA_FACADE.
+    MediaModule,
     OrderModule,
     PaymentModule,
     UserModule,

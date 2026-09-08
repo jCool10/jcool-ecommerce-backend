@@ -25,6 +25,7 @@ import {
   CIRCUIT_BREAKER_STATE,
   CIRCUIT_BREAKER_TRANSITIONS_TOTAL,
   MAIL_SEND_FAILURES_TOTAL,
+  MEDIA_BYTES_RECLAIMED_TOTAL,
   MESSAGING_CONSUME_RETRIES_TOTAL,
   MESSAGING_CONSUME_TOTAL,
   MESSAGING_DLQ_TOTAL,
@@ -71,6 +72,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(RETENTION_ROWS_DELETED_TOTAL) private readonly retentionRowsDeleted: Counter<string>,
     @InjectMetric(RETENTION_SWEEP_DURATION_SECONDS) private readonly retentionSweepDuration: Histogram<string>,
     @InjectMetric(RETENTION_SWEEP_FAILURES_TOTAL) private readonly retentionSweepFailures: Counter<string>,
+    @InjectMetric(MEDIA_BYTES_RECLAIMED_TOTAL) private readonly mediaBytesReclaimed: Counter<string>,
     @InjectMetric(CACHE_REBUILD_DURATION_SECONDS) private readonly cacheRebuildDuration: Histogram<string>,
     @InjectMetric(CIRCUIT_BREAKER_STATE) private readonly breakerState: Gauge<string>,
     @InjectMetric(CIRCUIT_BREAKER_TRANSITIONS_TOTAL) private readonly breakerTransitions: Counter<string>,
@@ -147,6 +149,11 @@ export class BusinessMetrics implements MetricsPort {
 
   recordRetentionSweepFailure(sweep: string): void {
     this.safely('retention_sweep_failure', () => this.retentionSweepFailures.inc({ sweep }));
+  }
+
+  recordMediaBytesReclaimed(bytes: number): void {
+    if (bytes <= 0) return; // A counter cannot take 0 usefully, and an unmeasured object reports null as 0.
+    this.safely('media_bytes_reclaimed', () => this.mediaBytesReclaimed.inc(bytes));
   }
 
   observeCacheRebuild(seconds: number): void {
