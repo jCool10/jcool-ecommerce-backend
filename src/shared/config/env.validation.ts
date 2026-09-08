@@ -455,6 +455,74 @@ export class EnvironmentVariables {
   @MinLength(16)
   SEARCH_API_KEY?: string;
 
+  // S3-compatible object storage (R2 in production, MinIO locally). All four are optional here and
+  // required together in StorageModule, which is where "half-configured" can be told apart from
+  // "not configured" — a rule the per-variable decorators here cannot express.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  STORAGE_ENDPOINT?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  STORAGE_BUCKET?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  STORAGE_ACCESS_KEY_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  STORAGE_SECRET_ACCESS_KEY?: string;
+
+  // Signing region; default "auto" (configuration.ts), which is what R2 expects.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  STORAGE_REGION?: string;
+
+  // Public read base (bucket domain or CDN). Unset means every read mints a presigned GET.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  STORAGE_PUBLIC_BASE_URL?: string;
+
+  // Presigned URL lifetime (s); default 900. Min 60 so an upload has time to finish. It must also
+  // stay strictly below MEDIA_UPLOAD_TTL_SEC — a cross-field rule no per-field range can express, so
+  // it is checked at boot instead (initiate-upload.use-case.ts).
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(60)
+  @Max(3600)
+  STORAGE_PRESIGN_TTL_SEC?: number;
+
+  // How long an asset stays reclaimable at PENDING (s); default 3600. Min 300 keeps a slow upload
+  // from being swept out from under itself.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(300)
+  MEDIA_UPLOAD_TTL_SEC?: number;
+
+  // How long an uploaded but unattached asset survives (s); default 86400.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(300)
+  MEDIA_READY_TTL_SEC?: number;
+
+  // Largest object accepted at `complete` (bytes); default 5 MiB. Min 1024 rejects a value that
+  // would refuse every real image.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1024)
+  MEDIA_MAX_BYTES?: number;
+
   // Circuit-breaker kill-switch; on by default (configuration.ts). Off passes every guarded call
   // straight through to its downstream.
   @IsOptional()
