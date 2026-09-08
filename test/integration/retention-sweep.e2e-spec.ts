@@ -114,6 +114,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       'auth-tokens:email-verification',
       'auth-tokens:password-reset',
       'auth-tokens:refresh',
+      'media:assets',
       'messaging:inbox',
       'messaging:outbox',
       'order:idempotency-keys',
