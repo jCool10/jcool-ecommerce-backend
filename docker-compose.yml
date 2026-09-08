@@ -7,8 +7,8 @@
 # All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here.
 # PREREQUISITE: copy `.env.example` → `.env` first. The `app` service reads it via `env_file`, so a
 # missing `.env` fails `up` fast (clearer than a later env-validation crash inside the container).
-#   Core (dev default):     docker compose up -d                            # postgres + redis + meilisearch + mailpit + app
-#   Infra only:             docker compose up -d postgres redis meilisearch mailpit
+#   Core (dev default):     docker compose up -d                            # postgres + redis + meilisearch + mailpit + minio + app
+#   Infra only:             docker compose up -d postgres redis meilisearch mailpit minio minio-init
 #   + observability stack:  docker compose --profile observability up -d    # + collector/jaeger/prometheus/grafana
 #   Reset everything:       docker compose down -v
 #
@@ -96,6 +96,47 @@ services:
     networks:
       - jcool-net
 
+  # S3-compatible object storage, standing in for Cloudflare R2. Same API and same adapter, so a
+  # local upload exercises the code that runs in production rather than a disk-backed lookalike.
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: jcool-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "${STORAGE_HOST_PORT:-9000}:9000"
+      - "${STORAGE_CONSOLE_HOST_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # One-shot: MinIO starts with no buckets, and the app never creates one — a process that can make
+  # a bucket can make the wrong bucket and never notice. Exits as soon as the bucket is there.
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: jcool-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "mc alias set local http://minio:9000 $${STORAGE_ACCESS_KEY_ID} $${STORAGE_SECRET_ACCESS_KEY} &&
+             mc mb --ignore-existing local/$${STORAGE_BUCKET}"
+    environment:
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY}
+      STORAGE_BUCKET: ${STORAGE_BUCKET}
+    networks:
+      - jcool-net
+
   # Convenience: run the whole stack in-network. Not required to be up this week
   # (the app has no DB access until Phase 3); brought up from P3+ once it uses the DB.
   # Inside the compose network the app reaches services by NAME, never localhost.
@@ -120,6 +161,7 @@ services:
       REDIS_URL: redis://redis:6379
       SEARCH_URL: http://meilisearch:7700
       SMTP_URL: smtp://mailpit:1025
+      STORAGE_ENDPOINT: http://minio:9000
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
@@ -133,6 +175,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # The bucket must exist before the first upload is confirmed, and this container is the only
+      # thing that creates it.
+      minio-init:
+        condition: service_completed_successfully
     # Liveness probe (dependency-free) so `compose up --wait` confirms the app is
     # actually serving HTTP. Uses node (present in the image) — alpine has no
     # curl/wget. start_period covers boot before failures are counted.
@@ -233,6 +279,7 @@ volumes:
   pgdata:
   redisdata:
   meilidata:
+  miniodata:
   promdata:
   grafanadata:
 

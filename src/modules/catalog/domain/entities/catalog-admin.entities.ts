@@ -30,6 +30,16 @@ export interface Sku {
   createdAt: Date;
 }
 
+/** One image slot on a product. `assetId` belongs to Media; this row is only the link and its order. */
+export interface ProductImage {
+  id: string;
+  productId: string;
+  assetId: string;
+  position: number;
+  alt: string | null;
+  createdAt: Date;
+}
+
 export interface Price {
   variantId: string;
   currency: string;

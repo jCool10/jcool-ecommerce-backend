@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
-import { categories, prices, productVariants, products } from './schema/catalog.schema';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
+import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
 import type { Product, ProductStatus } from '../domain/entities';
 import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../application/ports';
 import type { SkuView } from '../application/public/catalog-sku-query.port';
@@ -73,6 +73,33 @@ function escapeLike(input: string): string {
 // UUID-shaped input — comparing it against a slug throws on Postgres' text→uuid cast.
 // Exported because the cache keys must normalise exactly the tokens this treats as ids.
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Image asset ids per product, in display order. A separate keyed read rather than a fourth join:
+ * images multiply against variants and prices, and every price would then be counted once per image.
+ */
+async function loadImageAssetIds(db: DrizzleDB | DrizzleTx, productIds: string[]): Promise<Map<string, string[]>> {
+  const byProduct = new Map<string, string[]>();
+  if (productIds.length === 0) {
+    return byProduct;
+  }
+
+  const rows = await db
+    .select({ productId: productImages.productId, assetId: productImages.assetId })
+    .from(productImages)
+    .where(inArray(productImages.productId, productIds))
+    .orderBy(productImages.position, productImages.id);
+
+  for (const row of rows) {
+    const assetIds = byProduct.get(row.productId);
+    if (assetIds) {
+      assetIds.push(row.assetId);
+    } else {
+      byProduct.set(row.productId, [row.assetId]);
+    }
+  }
+  return byProduct;
+}
 
 /** Drizzle adapter for ProductRepositoryPort — explicit SQL-first joins (readable `EXPLAIN ANALYZE`) with integer money passthrough, and the seam for a future cache-aside layer. */
 @Injectable()
@@ -148,8 +175,10 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
             prices.currency,
           );
 
+        const images = await loadImageAssetIds(tx, ids);
+
         // Reorder assembled products to match the page order from the id query.
-        const byId = new Map(assembleProducts(rows).map((product) => [product.id, product]));
+        const byId = new Map(assembleProducts(rows, images).map((product) => [product.id, product]));
         const items = ids.map((id) => byId.get(id)).filter((product): product is Product => product !== undefined);
 
         return { items, total };
@@ -184,7 +213,13 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
         prices.currency,
       );
 
-    return assembleProducts(rows)[0] ?? null;
+    // Which product won is only known after assembly (id-precedence above), and the images query
+    // needs that id — so assemble twice rather than fetch images for every candidate.
+    const product = assembleProducts(rows)[0];
+    if (!product) {
+      return null;
+    }
+    return assembleProducts(rows, await loadImageAssetIds(this.db, [product.id]))[0] ?? null;
   }
 
   // Neither this read nor `findManySkuViews` filters on ACTIVE: a SKU whose product was archived

@@ -1,6 +1,16 @@
 import { Product } from '../../domain/entities';
-import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../ports';
+import type { FindManyActiveCriteria, FindManyActiveResult, MediaQueryPort, ProductRepositoryPort } from '../ports';
 import { ListProductsUseCase } from './list-products.use-case';
+
+class MockMediaQuery implements MediaQueryPort {
+  urls = new Map<string, string>();
+  lastArg?: string[];
+
+  resolveUrls(assetIds: string[]): Promise<Map<string, string>> {
+    this.lastArg = assetIds;
+    return Promise.resolve(this.urls);
+  }
+}
 
 class MockProductRepository implements ProductRepositoryPort {
   manyResult: FindManyActiveResult = { items: [], total: 0 };
@@ -29,13 +39,19 @@ function product(id: string): Product {
   return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], new Date(0));
 }
 
+function productWithImages(id: string, imageAssetIds: string[]): Product {
+  return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], new Date(0), imageAssetIds);
+}
+
 describe('ListProductsUseCase', () => {
   let repo: MockProductRepository;
+  let media: MockMediaQuery;
   let useCase: ListProductsUseCase;
 
   beforeEach(() => {
     repo = new MockProductRepository();
-    useCase = new ListProductsUseCase(repo);
+    media = new MockMediaQuery();
+    useCase = new ListProductsUseCase(repo, media);
   });
 
   it('computes totalPages by ceiling(total / pageSize)', async () => {
@@ -81,5 +97,13 @@ describe('ListProductsUseCase', () => {
       categorySlug: 'electronics',
       q: 'phone',
     });
+  });
+
+  it('resolves the whole page of image assets in one call', async () => {
+    repo.manyResult = { items: [productWithImages('a', ['x']), productWithImages('b', ['y', 'z'])], total: 2 };
+
+    await useCase.execute({ page: 1, pageSize: 20 });
+
+    expect(media.lastArg).toEqual(['x', 'y', 'z']);
   });
 });

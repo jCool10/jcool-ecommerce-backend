@@ -10,6 +10,7 @@ function build({ breakerRejects = false }: { breakerRejects?: boolean } = {}) {
     url: 'smtp://mail.test:1025',
     from: 'shop@test.local',
     breaker: { run },
+    timeoutMs: 10_000,
     transporter: { sendMail },
   });
   return { transport, sendMail, run };

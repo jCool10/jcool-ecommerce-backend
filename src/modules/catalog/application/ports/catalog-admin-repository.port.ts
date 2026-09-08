@@ -1,4 +1,4 @@
-import type { AdminProduct, Category, Price, ProductStatus, Sku } from '../../domain/entities';
+import type { AdminProduct, Category, Price, ProductImage, ProductStatus, Sku } from '../../domain/entities';
 
 // Write-side port for the admin paths, separate from the read-only ProductRepositoryPort
 // (CQRS-lite); the service owns 404/409 decisions, the adapter owns the atomic mutation (23505 → 409).
@@ -44,6 +44,12 @@ export interface SetPriceData {
   amountMinor: number;
 }
 
+export interface AttachImageData {
+  assetId: string;
+  position?: number;
+  alt?: string | null;
+}
+
 export interface CatalogAdminRepositoryPort {
   // ----- Category -----
   findCategoryById(id: string): Promise<Category | null>;
@@ -67,6 +73,20 @@ export interface CatalogAdminRepositoryPort {
   createSku(productId: string, data: CreateSkuData): Promise<Sku>;
   updateSku(id: string, data: UpdateSkuData): Promise<Sku | null>;
   archiveSku(id: string): Promise<Sku | null>;
+
+  // ----- Product images -----
+  /**
+   * Image rows in display order. No `tx` parameter anywhere here: the adapter opens its own
+   * transaction and claims the asset from Media inside it, so the link row and the asset's status
+   * commit together or not at all.
+   */
+  listImages(productId: string): Promise<ProductImage[]>;
+  /** Link an asset to the product and claim it in Media. Duplicate (product, asset) → 409. */
+  attachImage(productId: string, data: AttachImageData): Promise<ProductImage>;
+  /** Unlink and release the asset back to Media; null if no such image on that product. */
+  detachImage(productId: string, imageId: string): Promise<ProductImage | null>;
+  /** Rewrite positions from the given order. Null when `imageIds` is not exactly the product's set. */
+  reorderImages(productId: string, imageIds: string[]): Promise<ProductImage[] | null>;
 
   // ----- Price -----
   /** Upsert the (variant, currency) price — set or replace the current amount. */

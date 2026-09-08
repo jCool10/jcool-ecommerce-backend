@@ -1,8 +1,10 @@
 import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { MediaAssetUnavailableError } from '@modules/media/application/public/media-facade.port';
 import { Slug } from '../../domain/slug.vo';
-import type { AdminProduct, Category, Price, Sku } from '../../domain/entities';
+import type { AdminProduct, Category, Price, ProductImage, Sku } from '../../domain/entities';
 import { toSearchableProduct } from '../catalog-search.mapper';
 import {
+  type AttachImageData,
   CATALOG_ADMIN_REPOSITORY,
   CATALOG_SEARCH,
   PRODUCT_REPOSITORY,
@@ -105,10 +107,7 @@ export class CatalogAdminService {
   // ----- Sku (product variant) -----
 
   async createSku(productId: string, data: CreateSkuData): Promise<Sku> {
-    const product = await this.repo.findProductById(productId);
-    if (!product) {
-      throw new NotFoundException(`Product not found: ${productId}`);
-    }
+    await this.assertProductExists(productId);
     const created = await this.repo.createSku(productId, data);
     await this.syncSearchDocument(created.productId);
     return created;
@@ -132,6 +131,50 @@ export class CatalogAdminService {
     return archived;
   }
 
+  // ----- Product images -----
+
+  /**
+   * Images are not indexed, so none of these syncs the search document: a search hit renders from
+   * the document's own fields, and adding an image to one would make every attach a reindex.
+   */
+  async listProductImages(productId: string): Promise<ProductImage[]> {
+    await this.assertProductExists(productId);
+    return this.repo.listImages(productId);
+  }
+
+  async attachProductImage(productId: string, data: AttachImageData): Promise<ProductImage> {
+    await this.assertProductExists(productId);
+    try {
+      return await this.repo.attachImage(productId, data);
+    } catch (error) {
+      // The asset is missing, still uploading, or already attached elsewhere — a client mistake
+      // about state, not about this request's shape.
+      if (error instanceof MediaAssetUnavailableError) {
+        throw new ConflictException(`Image asset is not available to attach: ${error.assetId}`);
+      }
+      throw error;
+    }
+  }
+
+  async detachProductImage(productId: string, imageId: string): Promise<ProductImage> {
+    const detached = await this.repo.detachImage(productId, imageId);
+    if (!detached) {
+      throw new NotFoundException(`Image not found on product ${productId}: ${imageId}`);
+    }
+    return detached;
+  }
+
+  async reorderProductImages(productId: string, imageIds: string[]): Promise<ProductImage[]> {
+    await this.assertProductExists(productId);
+    const reordered = await this.repo.reorderImages(productId, imageIds);
+    // A partial order would silently leave the omitted images wherever they were, so the whole set
+    // is required and a mismatch is refused rather than half-applied.
+    if (!reordered) {
+      throw new ConflictException('Image order must list every image on the product exactly once');
+    }
+    return reordered;
+  }
+
   // ----- Price -----
 
   async setPrice(skuId: string, data: { amountMinor: number; currency?: string }): Promise<Price> {
@@ -150,6 +193,12 @@ export class CatalogAdminService {
 
   // A product may only reference a live category; this can't catch a status-only PATCH
   // or archive/publish race, so the public read filters archived categories independently.
+  private async assertProductExists(productId: string): Promise<void> {
+    if (!(await this.repo.findProductById(productId))) {
+      throw new NotFoundException(`Product not found: ${productId}`);
+    }
+  }
+
   private async assertCategoryUsable(categoryId: string): Promise<void> {
     const category = await this.repo.findCategoryById(categoryId);
     if (!category || category.archivedAt !== null) {

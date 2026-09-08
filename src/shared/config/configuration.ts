@@ -275,6 +275,33 @@ export default () => ({
     // Undefined → keyless engine, which the engine permits only outside its production mode.
     apiKey: process.env.SEARCH_API_KEY,
   },
+  storage: {
+    // Presence of the whole group is the switch, like SMTP_URL: set → a real bucket, unset → the
+    // media routes fail loudly and everything else boots (and a boot failure in production).
+    endpoint: process.env.STORAGE_ENDPOINT,
+    bucket: process.env.STORAGE_BUCKET,
+    accessKeyId: process.env.STORAGE_ACCESS_KEY_ID,
+    secretAccessKey: process.env.STORAGE_SECRET_ACCESS_KEY,
+    // R2 ignores the region but the SDK signs with it, so "auto" is the value R2 documents.
+    region: process.env.STORAGE_REGION ?? 'auto',
+    // Set → stable public URLs served by a bucket domain or CDN; unset → a presigned GET per read.
+    publicBaseUrl: process.env.STORAGE_PUBLIC_BASE_URL,
+    // Lifetime of a presigned upload URL, and of a read URL where there is no public base. It caps
+    // how long an admin has to push bytes, so the window an abandoned upload can occupy is bounded.
+    presignTtlSec: parseIntOr(process.env.STORAGE_PRESIGN_TTL_SEC, 900),
+  },
+  media: {
+    // How long an asset may sit at PENDING before the sweep reclaims it. Longer than the presign
+    // TTL on purpose: the URL must die before the row does, or a sweep and an upload can overlap.
+    uploadTtlSec: parseIntOr(process.env.MEDIA_UPLOAD_TTL_SEC, 3600),
+    // How long an uploaded-but-unattached asset survives. Never null: an asset without an expiry is
+    // one the sweep can never select, so it would outlive the product it was uploaded for.
+    readyTtlSec: parseIntOr(process.env.MEDIA_READY_TTL_SEC, 86_400),
+    // Enforced at `complete`, by HEAD — a v4 signature pins Content-Length to an exact value, not a
+    // ceiling, so the bucket cannot refuse an oversized PUT. What it does bound is the blast radius:
+    // an oversized object is refused a place in the catalog and reclaimed by the sweep.
+    maxBytes: parseIntOr(process.env.MEDIA_MAX_BYTES, 5 * 1024 * 1024),
+  },
   resilience: {
     // Circuit breakers around calls that leave the process (currently the payment gateway).
     breaker: {

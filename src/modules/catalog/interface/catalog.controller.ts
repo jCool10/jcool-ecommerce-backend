@@ -32,7 +32,7 @@ export class CatalogController {
       q: query.q,
     });
     return {
-      items: result.items.map((product) => ProductResponseDto.fromEntity(product)),
+      items: result.items.map((product) => ProductResponseDto.fromEntity(product, result.imageUrls)),
       total: result.total,
       page: result.page,
       pageSize: result.pageSize,
@@ -67,7 +67,7 @@ export class CatalogController {
   @ApiOkResponse({ type: ProductResponseDto })
   @ApiNotFoundResponse({ description: 'Product not found or not ACTIVE' })
   async detail(@Param('idOrSlug') idOrSlug: string): Promise<ProductResponseDto> {
-    const product = await this.getProductDetail.execute(idOrSlug);
-    return ProductResponseDto.fromEntity(product);
+    const { product, imageUrls } = await this.getProductDetail.execute(idOrSlug);
+    return ProductResponseDto.fromEntity(product, imageUrls);
   }
 }

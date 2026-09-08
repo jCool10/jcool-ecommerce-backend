@@ -22,6 +22,7 @@ function build() {
   const retentionRowsInc = vi.fn();
   const retentionDurationObserve = vi.fn();
   const retentionFailureInc = vi.fn();
+  const mediaBytesInc = vi.fn();
   const rebuildObserve = vi.fn();
   const breakerStateSet = vi.fn();
   const breakerTransitionInc = vi.fn();
@@ -47,6 +48,7 @@ function build() {
     { inc: retentionRowsInc } as unknown as Counter<string>,
     { observe: retentionDurationObserve } as unknown as Histogram<string>,
     { inc: retentionFailureInc } as unknown as Counter<string>,
+    { inc: mediaBytesInc } as unknown as Counter<string>,
     { observe: rebuildObserve } as unknown as Histogram<string>,
     { set: breakerStateSet } as unknown as Gauge<string>,
     { inc: breakerTransitionInc } as unknown as Counter<string>,
@@ -73,6 +75,7 @@ function build() {
     retentionRowsInc,
     retentionDurationObserve,
     retentionFailureInc,
+    mediaBytesInc,
     rebuildObserve,
     breakerStateSet,
     breakerTransitionInc,
@@ -170,6 +173,20 @@ describe('BusinessMetrics', () => {
     const { metrics, mailFailureInc } = build();
     metrics.recordMailSendFailure('order_paid');
     expect(mailFailureInc).toHaveBeenCalledWith({ kind: 'order_paid' });
+  });
+
+  it('counts bytes the media sweep gave back', () => {
+    const { metrics, mediaBytesInc } = build();
+    metrics.recordMediaBytesReclaimed(2048);
+    expect(mediaBytesInc).toHaveBeenCalledWith(2048);
+  });
+
+  // An asset whose size was never recorded reports 0, and a counter incremented by 0 only adds a
+  // sample that says nothing.
+  it('ignores a zero-byte reclaim', () => {
+    const { metrics, mediaBytesInc } = build();
+    metrics.recordMediaBytesReclaimed(0);
+    expect(mediaBytesInc).not.toHaveBeenCalled();
   });
 
   it('observes a cache rebuild in seconds', () => {

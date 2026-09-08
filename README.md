@@ -43,6 +43,7 @@
     - [Auth — `/auth`](#auth--auth)
     - [Catalog (public) — `/products`](#catalog-public--products)
     - [Catalog admin — `/admin` (RBAC `ADMIN`)](#catalog-admin--admin-rbac-admin)
+    - [Media admin — `/admin/media` (RBAC `ADMIN`)](#media-admin--adminmedia-rbac-admin)
     - [Inventory admin — `/admin/inventory` (RBAC `ADMIN`)](#inventory-admin--admininventory-rbac-admin)
     - [Order admin — `/admin/orders` (RBAC `ADMIN`)](#order-admin--adminorders-rbac-admin)
     - [Cart — `/cart`](#cart--cart-bearer)
@@ -100,6 +101,7 @@ Currently implemented:
 - **Catalog**
   - Public read paths: list products (paginated) and product detail by id or slug.
   - Admin write paths (RBAC `ADMIN`): full CRUD for categories, products, and SKUs, plus price management, with soft-delete support.
+  - **Product images** attach a Media asset to a product in **one transaction**: the link row and Media's claim on the asset commit or roll back together, so a failed claim leaves no half-attached image. Public responses carry `images[]` (asset id + a URL resolved after the cache).
   - **Redis cache-aside** on both read paths, wired as a decorator behind the repository port — controllers, use cases and domain are unaware. Every admin write bumps a generation counter embedded in the cache keys, so the whole cached generation is invalidated in `O(1)` and the next read refills; `CATALOG_CACHE_TTL_SEC` bounds staleness if an invalidation is ever missed. Postgres stays the source of truth: a Redis outage degrades a cached read to a fall-through rather than an error, and shows up as `catalog_cache_operations_total{result="error"}`. Note the request as a whole is not Redis-free — the global rate-limit guard runs first and is Redis-backed with no fall-through of its own.
 - **Cart**
   - Per-user shopping cart (one active cart per user): add (upsert-accumulate on a repeat SKU), update quantity, remove a line, view, and clear — every mutation returns the full cart.
@@ -115,6 +117,12 @@ Currently implemented:
   - **Stock reservations** behind a published `StockReservation` port: Order calls `reserve(tx, …)` inside its own checkout transaction, so the hold and the order commit or roll back together — a shortfall leaves no order at all.
   - Two interchangeable concurrency strategies under one port, selected by `INVENTORY_LOCK_STRATEGY`: **pessimistic** (`SELECT … FOR UPDATE`) and **optimistic** (version CAS with bounded retry + jittered backoff). A genuine shortfall never consumes a retry — only a lost version race does.
   - Holds carry a TTL (`INVENTORY_RESERVATION_TTL`); an unpaid hold past its deadline is reclaimed by the reservation sweep, which expires the order and releases the stock in one transaction.
+- **Media**
+  - **Direct-to-bucket uploads**: `POST /admin/media/uploads` reserves a row and returns a presigned `PUT`; the client writes to the bucket and confirms with `POST /admin/media/uploads/:id/complete`. The process never holds a byte of the file, so a large upload costs it no memory and no request slot.
+  - The signature covers the **content type**, so the bucket itself refuses a mismatched `PUT` — the type is fixed at signing time, from a server-side allowlist (raster images only; SVG is excluded because it is executable XML). It cannot cover a size *ceiling* — a v4 signature pins `Content-Length` to one exact value — so the limit is enforced at `complete`, against what the bucket reports rather than what the client claimed.
+  - **A lifecycle, not a delete button**: `PENDING → READY → ATTACHED → DETACHED`, plus a `SWEEPING` state that has an inbound edge and no outbound one. Everything except `ATTACHED` carries an `expires_at`, and a sweep reclaims what nothing ever claimed — abandoned uploads, oversized rejects, and images taken off a product.
+  - **Catalog stores asset ids, never URLs.** The URL is resolved on the way out, *after* the cache read, which is what lets a short-lived signed URL be served from a long-lived cached product.
+  - Storage is switched on by the presence of `STORAGE_*` — no separate flag. Unconfigured, every storage call rejects and **production refuses to boot**, exactly like `SMTP_URL`.
 - **Payment**
   - Checkout sessions through a `PaymentGatewayPort` — Stripe is the coded adapter; a fake signer adapter implements the same port so the webhook path is exercised in e2e without Stripe's signing key.
   - **Webhook sink** with HMAC-SHA256 signature verification and a timestamp tolerance window (replay defense), plus a `webhook_events` table that dedups a redelivered event before it can settle an order twice.
@@ -124,13 +132,13 @@ Currently implemented:
   - **Sharding-ready user ids** (see [Design notes](#design-notes)): every user-context id is a **UUIDv8** (RFC 9562 §5.8) carrying a 12-bit routing bucket derived by **HMAC** from the same normalized email the `UNIQUE(email)` index sees — a future `users` shard split routes from the id alone, with no lookup table, and email uniqueness survives the split. HMAC rather than a plain hash because `users.id` is public: an unkeyed digest would turn every published id into an offline email-confirmation oracle. Token rows copy the bucket out of their owner's id, so a user and everything they own land on the same shard. `IDENTITY_BUCKET_KEY` keys the HMAC and is **permanent — never rotate it**; its fingerprint is auto-pinned in the database on first boot and a later boot under a different key is refused. A `CHECK` on the version+variant nibbles of the four user-context primary keys rejects a non-v8 id from **any** writer, raw SQL included. The generator is **single-writer** — see the replica gate under [Docker](#docker).
   - **Security headers** via `helmet` (HSTS, `X-Content-Type-Options: nosniff`, frameguard, no `X-Powered-By`) and a **configurable CORS** allow-list (off by default — same-origin only; opt in via `CORS_ORIGINS`).
   - **OpenAPI / Swagger** docs, config-gated (on in dev, off in prod unless enabled).
-  - **Retention sweeps** on one hourly timer, one per table, isolated per sweep so a broken table cannot cost the other six their tick. Every window is sized by what still has to be able to **retry** against the row: an unpublished outbox row is never collected at any age, a `COMPLETED` idempotency key survives until its TTL because it is the response a retry replays, an inbox claim must outlive the queue's redelivery horizon (**boot fails** if it does not, since a swept claim turns a retry into a second effect), and a revoked refresh token outlives an expired one because it is what reuse detection matches against. `reservations` is deliberately excluded — that is the reservation sweep's state machine, not retention. Consequently `queue:replay-dlq` now asks the `inbox` before replaying, and refuses a message it cannot prove was never applied.
+  - **Retention sweeps** on one hourly timer, one per table, isolated per sweep so a broken table cannot cost the others their tick. Every window is sized by what still has to be able to **retry** against the row: an unpublished outbox row is never collected at any age, a `COMPLETED` idempotency key survives until its TTL because it is the response a retry replays, an inbox claim must outlive the queue's redelivery horizon (**boot fails** if it does not, since a swept claim turns a retry into a second effect), and a revoked refresh token outlives an expired one because it is what reuse detection matches against. `reservations` is deliberately excluded — that is the reservation sweep's state machine, not retention. Consequently `queue:replay-dlq` now asks the `inbox` before replaying, and refuses a message it cannot prove was never applied.
   - **Liveness / readiness** health checks (Terminus) probing Postgres and Redis.
   - **Fail-fast config**: the environment schema is validated at boot; a missing or invalid var crashes the process immediately.
   - Global validation pipe (whitelist + reject unknown fields) and a unified HTTP exception filter.
   - Graceful shutdown hooks (drains the Postgres pool on `SIGTERM`/`SIGINT`).
 
-All six bounded contexts listed under [Architecture](#bounded-contexts) are implemented; nothing
+All seven bounded contexts listed under [Architecture](#bounded-contexts) are implemented; nothing
 below is a stub. What is deliberately *not* here — shipping addresses, tax, discounts, fulfilment
 states, product variants beyond the SKU, user profiles — is cut on purpose, not pending.
 
@@ -149,6 +157,7 @@ into each other's repositories.
 | **Cart**      | Per-session shopping cart                    | Transient state, not the transaction source      |
 | **Order**     | Order lifecycle, checkout orchestration      | Order is the transaction source of truth         |
 | **Payment**   | Payment initiation, webhooks, reconciliation | No double-charge (idempotency)                   |
+| **Media**     | Uploaded objects, their lifecycle, reclaim   | Bytes are never deleted while something points at them |
 | **User/Auth** | Registration, login, sessions, RBAC          | Refresh-token rotation; role-based authorization |
 
 ### Per-context layering (Clean Architecture)
@@ -208,6 +217,7 @@ src/
 │   ├── cart/                    # Per-user scratch cart (live Catalog pricing)
 │   ├── order/                   # Order + state machine (price snapshot, checkout in one tx)
 │   ├── inventory/               # Stock levels + reservations (pessimistic | optimistic)
+│   ├── media/                   # Presigned uploads, asset lifecycle, reclaim sweep
 │   └── payment/                 # Gateway sessions, webhook sink, reconciliation sweep
 └── shared/
     ├── kernel/                  # Framework-free DDD building blocks
@@ -220,7 +230,8 @@ src/
     ├── resilience/              # Circuit-breaker factory
     ├── infrastructure/
     │   ├── database/            # Drizzle module, schema barrel, migrations, seed
-    │   └── redis/               # Redis module + service
+    │   ├── redis/               # Redis module + service
+    │   └── storage/             # S3-compatible object storage port + adapter
     └── interface/filters/       # Global HTTP exception filter
 test/                            # e2e config, Testcontainers setup, load mixes
 ```
@@ -405,19 +416,22 @@ declares has a row here — the tables are grouped by the config namespace each 
 | `RESERVATION_SWEEP_BATCH_SIZE`  |    No    | `50`    | Reservation rows per tick (1–500) — each distinct order costs a finalize transaction                              |
 | `RESERVATION_SWEEP_GRACE_SEC`   |    No    | `900`   | Extra age past a hold's expiry before this sweep claims it, so the gateway-driven reconcile always gets there first |
 
-**`retention`** — one hourly timer driving seven independent table sweeps. Every window is sized by
+**`retention`** — one hourly timer driving eight independent table sweeps. Every window is sized by
 what still has to be able to **retry** against the row, never by disk; shortening one loses a
 guarantee, not history. Two are enforced floors rather than preferences: `RETENTION_INBOX_DAYS` must
 outlive the queue's 7-day failed-job retention or a redelivery applies its effect twice (**the app
 refuses to boot** below it), and a revoked refresh token is kept far longer than an expired one
 because it is what reuse detection matches against. `reservations` is deliberately **not** swept —
 those rows are released by the reservation-expiry sweep above, which is a state machine, not
-retention. See [RUNBOOK — Retention sweeps](./RUNBOOK.md#retention-sweeps) for the full rule table,
-the horizon arithmetic, and the measured query plans.
+retention. The eighth sweep, `media:assets`, takes its windows from `MEDIA_UPLOAD_TTL_SEC` /
+`MEDIA_READY_TTL_SEC` below rather than from a `RETENTION_*` var — those are asset lifetimes, written
+onto the row at upload, not a policy applied later. It is also the only sweep that deletes something
+outside Postgres. See [RUNBOOK — Retention sweeps](./RUNBOOK.md#retention-sweeps) for the full rule
+table, the horizon arithmetic, and the measured query plans.
 
 | Variable                            | Required | Default   | Description                                                                                            |
 | ----------------------------------- | :------: | --------- | ------------------------------------------------------------------------------------------------------ |
-| `RETENTION_ENABLED`                 |    No    | `true`    | Kill-switch for all seven sweeps (off for e2e, which drives them directly)                             |
+| `RETENTION_ENABLED`                 |    No    | `true`    | Kill-switch for all eight sweeps (off for e2e, which drives them directly)                             |
 | `RETENTION_INTERVAL_MS`             |    No    | `3600000` | Tick period (min 1000) — this reclaims a backlog, it does not keep up with a request                    |
 | `RETENTION_BATCH_SIZE`              |    No    | `500`     | Rows DELETEd per sweep per tick (1–10000); a sweep that fills its batch every tick warns                |
 | `RETENTION_SWEEP_TIMEOUT_MS`        |    No    | `30000`   | How long the scheduler waits for one sweep (min 100). Ends the wait, not the DELETE                     |
@@ -449,6 +463,23 @@ the horizon arithmetic, and the measured query plans.
 | `SMTP_URL`        | In prod  | — (log sink)  | SMTP connection URL. Its presence is the switch, like `SENTRY_DSN`. Unset, mail is logged (envelope only) — and **production refuses to boot** |
 | `MAIL_FROM`       | With SMTP | —            | Envelope sender. Required whenever `SMTP_URL` is set; missing it fails the boot                                                 |
 | `MAIL_TIMEOUT_MS` |    No    |    `10000`    | Timeout for one send (100–25000). Separate from `BREAKER_TIMEOUT_MS` — a mail server's healthy latency is nothing like a gateway's. Capped below BullMQ's 30s job lock, which the order-confirmation send runs inside |
+
+**`storage` · `media`** — the first four are one group: set them together, or leave all four unset.
+Their presence is the switch (like `SMTP_URL`); unset, every storage call rejects and **production
+refuses to boot**.
+
+| Variable                     | Required  | Default        | Description                                                                                                                       |
+| ---------------------------- | :-------: | -------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `STORAGE_ENDPOINT`           | In prod   | — (off)        | S3-compatible endpoint (MinIO locally, R2 in production)                                                                           |
+| `STORAGE_BUCKET`             | With endpoint | —          | Bucket name                                                                                                                        |
+| `STORAGE_ACCESS_KEY_ID`      | With endpoint | —          | Access key                                                                                                                         |
+| `STORAGE_SECRET_ACCESS_KEY`  | With endpoint | —          | Secret key                                                                                                                         |
+| `STORAGE_REGION`             |    No     | `auto`         | R2 ignores it, but the SDK still signs with it — `auto` is the value R2 documents                                                  |
+| `STORAGE_PUBLIC_BASE_URL`    |    No     | — (presign)    | Bucket domain or CDN in front of it. Set → stable public URLs; unset → a presigned GET per read                                     |
+| `STORAGE_PRESIGN_TTL_SEC`    |    No     | `900`          | Lifetime of a presigned URL. Bounds how long an admin has to push bytes — and so the window an abandoned upload can occupy         |
+| `MEDIA_UPLOAD_TTL_SEC`       |    No     | `3600`         | How long an asset may sit at `PENDING`. Must stay **above** `STORAGE_PRESIGN_TTL_SEC` — the URL has to die before the row, or the sweep reclaims a row whose upload URL still works and the PUT that follows leaves an object nothing references. **Boot fails** on a violation |
+| `MEDIA_READY_TTL_SEC`        |    No     | `86400`        | How long an uploaded-but-unattached asset survives, and the expiry a detached one gets back. Never null — an asset with no expiry can never be selected by the sweep |
+| `MEDIA_MAX_BYTES`            |    No     | `5242880`      | Size ceiling, enforced at `complete` by HEAD. A v4 signature pins `Content-Length` to one exact value rather than a maximum, so the bucket itself cannot refuse an oversized PUT |
 
 **`resilience.breaker` · `inventory`**
 
@@ -526,6 +557,27 @@ the `x-csrf-token` header.
 | `PATCH`  | `/admin/skus/:id`                 | Update SKU           |
 | `DELETE` | `/admin/skus/:id`                 | Delete SKU           |
 | `PUT`    | `/admin/skus/:skuId/price`        | Set SKU price        |
+| `GET`    | `/admin/products/:productId/images` | List a product's images, in display order |
+| `POST`   | `/admin/products/:productId/images` | Attach a `READY` media asset (`409` if it is not attachable, or already on this product) |
+| `DELETE` | `/admin/products/:productId/images/:imageId` | Detach (`204`). A hard delete of the link row — the asset becomes reclaimable, the bytes go when a sweep takes them |
+| `PATCH`  | `/admin/products/:productId/images` | Reorder. The body must list **every** image on the product exactly once (`409` otherwise), so no image is left at a stale position |
+
+`GET /products/:idOrSlug` and `GET /products` carry `images[]` as `{ assetId, url }`. The **id** is
+what is stored and cached; the URL is resolved per response and may be short-lived — do not persist
+it. An id whose asset has since gone is dropped rather than rendered as a broken image.
+
+### Media admin — `/admin/media` (RBAC `ADMIN`)
+
+Two calls with a direct-to-bucket `PUT` in between. Admin-only: anyone who can ask for a signed URL
+can write to the bucket for as long as it lasts.
+
+| Method | Path                                  | Description                                                                                     |
+| ------ | ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `POST` | `/admin/media/uploads`                | Reserve an asset and return a presigned `PUT` + the exact headers to send (`400` outside the image allowlist) |
+| `POST` | `/admin/media/uploads/:assetId/complete` | Confirm the bytes landed (`204`). `404` if no such asset; `409` if nothing was uploaded, the object is over `MEDIA_MAX_BYTES`, or the asset already moved on |
+
+A rejected `complete` leaves the asset `PENDING` on purpose — the sweep then reclaims both the row
+and whatever is in the bucket, so a refusal costs no storage.
 
 ### Inventory admin — `/admin/inventory` (RBAC `ADMIN`)
 
@@ -687,6 +739,7 @@ is the separate type-check gate.
 | `npm run search:reindex`      | Rebuild the Meilisearch index from Postgres                                                   |
 | `npm run queue:replay-dlq`    | Inspect the dead-letter queue; `-- --apply` to replay (`:prod` twin runs from `dist/`)        |
 | `npm run identity:verify`     | Scan every user row for an id that does not route to its email's bucket                       |
+| `npm run storage:verify`      | Reconcile bucket against `media_assets` both ways — orphan objects, and `ATTACHED` rows whose object is gone (`:prod` twin runs from `dist/`) |
 | `npm run load:baseline`       | k6 baseline mix (`load:register:write` / `load:register:dup` for the registration mixes)      |
 
 ## Docker
@@ -710,8 +763,16 @@ docker compose down -v
 ```
 
 Inside the Compose network the app reaches services by name (`postgres:5432`,
-`redis:6379`, `mailpit:1025`); from the host, use the mapped ports (`5433`,
-`6380`, and `8025` for Mailpit's web inbox).
+`redis:6379`, `mailpit:1025`, `minio:9000`); from the host, use the mapped ports (`5433`,
+`6380`, `8025` for Mailpit's web inbox, and `STORAGE_HOST_PORT`/`STORAGE_CONSOLE_HOST_PORT`
+— `9000`/`9001` by default — for MinIO's API and console).
+
+A one-shot `minio-init` creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh
+`docker compose up` has a bucket before the first upload. The presigned URLs the app hands out are
+signed against `STORAGE_ENDPOINT`, which inside the network is `http://minio:9000` — unreachable from
+the host, and not rewritable, since the host name is part of what was signed. `STORAGE_PUBLIC_BASE_URL`
+does not help: it only shapes **read** URLs. To upload from a host tool, run the app outside Compose
+against `localhost:${STORAGE_HOST_PORT}`.
 
 > **Replica gate — run exactly one app instance.** The id generator holds a fixed node id for the
 > whole fleet, so two replicas mint the same `(timestamp, node, sequence)` triples. What that costs
@@ -855,6 +916,34 @@ non-v8 id on decode, and the only writer is the app. A `CHECK` on the version an
 the four user-context primary keys would close that to raw SQL as well; it is not there today, and
 the honest reason is that nothing writes those tables but this process.
 
+### Media lifecycle is stock reservation, applied to bytes
+
+An upload has the same shape as a stock hold: something is committed to before it is known whether
+the thing that asked for it will complete. So it is modelled the same way — `PENDING → READY →
+ATTACHED → DETACHED`, with `expires_at` on every state but `ATTACHED`, and a sweep that reclaims
+whatever has expired. An asset with no expiry is one no sweep can ever select, which is exactly the
+guarantee `ATTACHED` needs and exactly the leak every other state must not have.
+
+The bytes never travel through the API. `POST /admin/media/uploads` reserves a row and returns a
+presigned `PUT`; the browser writes straight to the bucket; `complete` confirms it landed. The
+signature covers `Content-Type`, so the bucket refuses any other type with a `403` before a byte is
+stored — but **not** size: a v4 signature pins `Content-Length` to one exact value rather than a
+ceiling, so `MEDIA_MAX_BYTES` can only be checked afterwards, by HEAD at `complete`. An oversized
+object is therefore refused a place in the catalog and left for the sweep. That is also why a
+rejected `complete` leaves the row `PENDING` rather than tidying up inline: the sweep already deletes
+exactly that, and a second cleanup path is a second thing to get wrong.
+
+The sweep deletes **the object first, then the row**. A crash between the two leaves an orphan row
+whose object is gone — re-scannable, and deleting an absent object is a no-op. The other order leaves
+bytes nobody has a pointer to: unfindable, and paid for indefinitely. `npm run storage:verify`
+reconciles both directions and names which of the two it found, because the answers differ: an orphan
+object costs money, while an `ATTACHED` row with no object is a broken image on a live page.
+
+Catalog stores **asset ids, never URLs**. A presigned URL outlives its cache entry by minutes and the
+entry by hours, so the URL is resolved after the cache read, per response — one batched call for a
+whole page. Attaching an image and claiming the asset commit in one transaction, always taking
+`product_images` before `media_assets`, so two concurrent edits of the same asset cannot deadlock.
+
 ### Observability, and why the core cannot see it
 
 - **Logs** are the join key. One `requestId` per request via `nestjs-cls` + `AsyncLocalStorage`,
@@ -891,8 +980,9 @@ added before the first breaking change is a prefix that only ever costs typing.
 
 [`RUNBOOK.md`](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express:
 rebuilding the search index, backup/restore (including what happens if a dump is restored into a
-database pinned to a different `IDENTITY_BUCKET_KEY` fingerprint), and replaying the dead-letter
-queue.
+database pinned to a different `IDENTITY_BUCKET_KEY` fingerprint), replaying the dead-letter queue,
+and reconciling the object bucket against `media_assets` — the one pair of stores a database backup
+cannot put back in agreement.
 
 ## Roadmap
 

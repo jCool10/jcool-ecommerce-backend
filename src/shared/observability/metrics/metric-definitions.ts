@@ -91,6 +91,12 @@ export const RETENTION_SWEEP_DURATION_SECONDS = 'retention_sweep_duration_second
 // nothing and a sweep that cannot run look identical from the rows counter alone.
 export const RETENTION_SWEEP_FAILURES_TOTAL = 'retention_sweep_failures_total';
 
+// --- Media ---
+// Bytes the media sweep gave back to the bucket. Rows are already counted by the retention sweep;
+// this is the number a storage bill is read against, and the two diverge whenever a few very large
+// objects are what actually accumulated.
+export const MEDIA_BYTES_RECLAIMED_TOTAL = 'media_bytes_reclaimed_total';
+
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
 // across 1–150ms, where every route's p95/p99 sits; the 0.25s boundary is the latency-SLO
@@ -212,8 +218,12 @@ export const METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: RETENTION_SWEEP_FAILURES_TOTAL,
-    help: 'Retention sweeps that threw or exceeded their timeout, by sweep. Failures are isolated per sweep, so this rising on one label says nothing about the other six.',
+    help: 'Retention sweeps that threw or exceeded their timeout, by sweep. Failures are isolated per sweep, so this rising on one label says nothing about the others.',
     labelNames: ['sweep'],
+  }),
+  makeCounterProvider({
+    name: MEDIA_BYTES_RECLAIMED_TOTAL,
+    help: 'Bytes the media sweep deleted from the bucket. Pairs with retention_rows_deleted_total{sweep="media:assets"}: rows say how many uploads were abandoned, this says what they cost.',
   }),
   makeHistogramProvider({
     name: CACHE_REBUILD_DURATION_SECONDS,

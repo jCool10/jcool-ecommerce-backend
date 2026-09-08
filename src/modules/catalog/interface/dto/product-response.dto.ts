@@ -26,6 +26,14 @@ export class VariantResponseDto {
   prices!: PriceResponseDto[];
 }
 
+export class ProductImageResponseDto {
+  @ApiProperty({ description: 'Media asset id — stable, unlike the URL below' })
+  assetId!: string;
+
+  @ApiProperty({ description: 'Readable URL; may be presigned and short-lived, so do not persist it' })
+  url!: string;
+}
+
 export class CategoryResponseDto {
   @ApiProperty()
   slug!: string;
@@ -56,10 +64,13 @@ export class ProductResponseDto {
   @ApiProperty({ type: [VariantResponseDto] })
   variants!: VariantResponseDto[];
 
+  @ApiProperty({ type: [ProductImageResponseDto], description: 'Images in display order' })
+  images!: ProductImageResponseDto[];
+
   @ApiProperty({ type: String, format: 'date-time' })
   createdAt!: string;
 
-  static fromEntity(product: Product): ProductResponseDto {
+  static fromEntity(product: Product, imageUrls: Map<string, string>): ProductResponseDto {
     const dto = new ProductResponseDto();
     dto.id = product.id;
     dto.name = product.name;
@@ -79,6 +90,11 @@ export class ProductResponseDto {
         amountMinor: price.amountMinor,
       })),
     }));
+    // An id whose asset is gone is dropped rather than rendered as a broken image.
+    dto.images = product.imageAssetIds.flatMap((assetId) => {
+      const url = imageUrls.get(assetId);
+      return url ? [{ assetId, url }] : [];
+    });
     dto.createdAt = product.createdAt.toISOString();
     return dto;
   }

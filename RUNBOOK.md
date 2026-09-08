@@ -16,6 +16,7 @@ Conventions used below:
 - [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key)
 - [Backup and restore](#backup-and-restore)
 - [Rebuild the search index](#rebuild-the-search-index)
+- [Reconcile the bucket against `media_assets`](#reconcile-the-bucket-against-media_assets)
 - [Replay the dead-letter queue](#replay-the-dead-letter-queue)
 - [Retention sweeps](#retention-sweeps)
 - [A refund is owed](#a-refund-is-owed)
@@ -145,6 +146,58 @@ a shape change to the indexed document needs this run by hand afterwards.
 
 ---
 
+## Reconcile the bucket against `media_assets`
+
+Stores that must agree and cannot all be kept in one transaction. Three ways they can disagree:
+
+```bash
+# local — needs DATABASE_URL and the four STORAGE_* settings
+npm run storage:verify
+
+# narrow the scan
+npm run storage:verify -- --prefix media/ --limit 5000
+
+# container — the compiled twin, since `tsx` is a devDependency and is not installed there
+npm run storage:verify:prod
+```
+
+**Read-only. It deletes nothing**, and that is deliberate: what to do differs per direction, and
+neither answer is safe for a script to guess. It exits `1` when anything is found, so a scheduled run
+fails loudly.
+
+| Finding | Means | Do |
+| ------- | ----- | -- |
+| **orphan object** — bytes in the bucket no row points at | Storage being paid for with nothing left that could ever reference it. Expected *transiently*: the sweep deletes the object before the row, so a crash between the two shows up here | Re-run after the next sweep tick. Still there → delete the object by hand; no row means nothing can reference it |
+| **missing object** — an `ATTACHED` row whose object is gone | A product is rendering a broken image **right now**, and bytes were deleted while something still pointed at them. Never expected | Detach the image (`DELETE /admin/products/:productId/images/:imageId`) so the page stops breaking, then re-upload. Find out what deleted it — the sweep cannot select an `ATTACHED` row |
+| **dangling link** — a `product_images` row whose `media_assets` row is gone | There is no FK between them (separate contexts), and the read path *hides* this: an asset id that resolves to no URL is dropped from the response rather than rendered broken | Detach the image, then re-upload. The product visibly loses an image, but nothing anywhere raises an error about it — this table is the only place it is reported |
+
+It boots no Nest context at all — it needs only Postgres and the bucket, and it is most useful when
+the app is what is suspect.
+
+### CORS, content sniffing and downloads are bucket configuration, not app code
+
+The app signs `Content-Type` on upload and stores only what the allowlist permits, so nothing else
+can be written *through* it. What it does **not** control is anything the browser does directly
+against the bucket. Three settings belong on the bucket or the CDN in front of it, and the first one
+is not optional:
+
+- **CORS**, allowing `PUT` from the admin origin with `Content-Type` among the permitted request
+  headers — that header is the whole of what the preflight has to clear, since the signature travels
+  in the query string and no `Authorization` header is sent. Without it the design fails in exactly
+  one environment: `curl` uploads fine, the browser's preflight is refused, and "the client writes
+  straight to the bucket" is false in the only place it matters. Nothing in this repo provisions it —
+  set it when the bucket is created.
+- **`X-Content-Type-Options: nosniff`** — without it a browser may sniff past the stored
+  `Content-Type`, and a file that was uploaded as an image but parses as markup can execute on the
+  bucket's origin.
+- **`Content-Disposition: attachment`** (or a bucket domain isolated from the app's) — so a direct
+  object URL downloads rather than renders in a context that shares an origin with anything.
+
+None of the three can be enforced from this codebase; they belong in the bucket/CDN policy, and the
+last two are why `STORAGE_PUBLIC_BASE_URL` should point at a domain that hosts nothing else.
+
+---
+
 ## Replay the dead-letter queue
 
 A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail. **Nothing
@@ -219,9 +272,9 @@ check is not optional, so a replay cannot be performed while the database is dow
 
 ## Retention sweeps
 
-One timer (`RETENTION_INTERVAL_MS`, hourly by default) drives seven independent sweeps, each
+One timer (`RETENTION_INTERVAL_MS`, hourly by default) drives eight independent sweeps, each
 reclaiming one table. Failures, timeouts and the "still running" guard are **per sweep**: one broken
-table cannot cost the other six their tick.
+table cannot cost the others their tick.
 
 Every window is sized by **what still has to be able to retry against the row**, never by disk.
 Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say
@@ -236,6 +289,14 @@ only during an incident.
 | `auth-tokens:email-verification` | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
 | `auth-tokens:password-reset` | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
 | `auth-tokens:refresh` | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
+| `media:assets` | `media_assets` **and the objects behind them** | `expires_at` past, or a `SWEEPING` claim older than `RETENTION_SWEEP_TIMEOUT_MS` | **Anything `ATTACHED`** — those rows have no `expires_at` at all, so no query the sweep can write will match them | `MEDIA_UPLOAD_TTL_SEC` (3600) / `MEDIA_READY_TTL_SEC` (86400) |
+
+`media:assets` is the only sweep that deletes something outside Postgres, and the only one whose work
+is not undoable by restoring a backup. It deletes **the object first, then the row**: a crash between
+the two leaves a row whose object is gone, which the next pass re-scans and finishes (deleting an
+absent object is a no-op). The reverse order would leave bytes nothing points at — unfindable and
+billed forever. If a pass dies mid-flight the claim is left at `SWEEPING`, and a claim older than the
+sweep's own timeout is assumed dead and picked up again.
 
 `reservations` is deliberately **not** in this list. Those rows are released by the reservation
 expiry sweep, which is a state machine driving stock back to available — not retention.
@@ -272,7 +333,8 @@ and the 30-day floor above would be fiction for every token that had ever been r
 | Signal | Means |
 | ------ | ----- |
 | `retention_rows_deleted_total{sweep}` flat | Either nothing to collect **or** the sweep is not running. The failure counter is what tells the two apart |
-| `retention_sweep_failures_total{sweep}` rising | That one table is not being reclaimed. Per label — it says nothing about the other six |
+| `retention_sweep_failures_total{sweep}` rising | That one table is not being reclaimed. Per label — it says nothing about the others |
+| `media_assets_sweeping` above zero and staying there | The media sweep is claiming rows but its bucket deletes are failing. The objects behind those rows are still being paid for; check storage credentials and endpoint reachability |
 | `retention sweep filled its batch` (warn) | The batch is a cap, so a full one means there was more to give. Once is a backlog being worked off; every tick forever means rows arrive faster than this reclaims them and the table grows *despite* the sweep. Raise `RETENTION_BATCH_SIZE`, shorten the window, or shorten the interval |
 | `previous retention sweep still running` (warn) | One sweep is exceeding `RETENTION_SWEEP_TIMEOUT_MS`. The timeout ends the *wait*, not the DELETE, so the statement is still holding locks somewhere |
 

@@ -31,5 +31,11 @@ export class Product {
     public readonly category: ProductCategory,
     public readonly variants: ProductVariant[],
     public readonly createdAt: Date,
+    /**
+     * Image assets in display order — ids only, never URLs. Catalog does not know where the bytes
+     * live, and a resolved URL can expire, so keeping ids here is what lets this whole aggregate be
+     * cached safely.
+     */
+    public readonly imageAssetIds: string[] = [],
   ) {}
 }

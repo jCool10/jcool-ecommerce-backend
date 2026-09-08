@@ -1,5 +1,6 @@
 // Barrel: Catalog interface DTOs. Import siblings inside this folder by file (avoid cycles).
 export * from './admin-catalog.response.dto';
+export * from './attach-product-image.dto';
 export * from './create-category.dto';
 export * from './create-product.dto';
 export * from './create-sku.dto';

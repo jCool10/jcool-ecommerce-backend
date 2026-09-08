@@ -1,10 +1,12 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
-import { and, count, eq, ne, sql } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
+import { and, asc, count, eq, max, ne, sql } from 'drizzle-orm';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Money } from '@shared/kernel';
-import { categories, prices, productVariants, products } from './schema/catalog.schema';
-import type { AdminProduct, Category, Price, Sku } from '../domain/entities';
+import { MEDIA_FACADE, type MediaFacade } from '@modules/media/application/public/media-facade.port';
+import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
+import type { AdminProduct, Category, Price, ProductImage, Sku } from '../domain/entities';
 import type {
+  AttachImageData,
   CatalogAdminRepositoryPort,
   CreateCategoryData,
   CreateProductData,
@@ -36,7 +38,10 @@ function isUniqueViolation(error: unknown): boolean {
 /** Drizzle adapter for the Catalog admin write paths — create/update returns the persisted row as a flat domain record; update/archive returns `null` when the id matches no row (the service maps that to 404). */
 @Injectable()
 export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(MEDIA_FACADE) private readonly media: MediaFacade,
+  ) {}
 
   // Translate a unique-constraint hit into a 409; anything else propagates.
   private async guardUnique<T>(op: () => Promise<T>, conflictMessage: string): Promise<T> {
@@ -187,6 +192,94 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     return row ? toSku(row) : null;
   }
 
+  // ----- Product images -----
+
+  listImages(productId: string): Promise<ProductImage[]> {
+    return this.readImages(this.db, productId);
+  }
+
+  /**
+   * The link row and Media's claim on the asset commit together. Row first, then the claim, in every
+   * one of these three: taking `product_images` before `media_assets` everywhere is what keeps two
+   * concurrent edits of the same asset from deadlocking on each other's locks.
+   */
+  async attachImage(productId: string, data: AttachImageData): Promise<ProductImage> {
+    return this.db.transaction(async (tx) => {
+      const position = data.position ?? (await this.nextPosition(tx, productId));
+      const [row] = await this.guardUnique(
+        () =>
+          tx
+            .insert(productImages)
+            .values({ productId, assetId: data.assetId, position, alt: data.alt ?? null })
+            .returning(),
+        'Image already attached to this product',
+      );
+      await this.media.attach(tx, data.assetId);
+      return toProductImage(row);
+    });
+  }
+
+  async detachImage(productId: string, imageId: string): Promise<ProductImage | null> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .delete(productImages)
+        .where(and(eq(productImages.id, imageId), eq(productImages.productId, productId)))
+        .returning();
+      if (!row) {
+        return null;
+      }
+      await this.media.detach(tx, row.assetId);
+      return toProductImage(row);
+    });
+  }
+
+  async reorderImages(productId: string, imageIds: string[]): Promise<ProductImage[] | null> {
+    return this.db.transaction(async (tx) => {
+      // Locked before the check so two reorders, or a reorder and a detach, cannot interleave and
+      // half-apply each other's order. It does not block a concurrent *insert* — no gap lock — but
+      // that costs at most a duplicate position, which `ORDER BY position, id` breaks deterministically.
+      const current = await tx
+        .select({ id: productImages.id })
+        .from(productImages)
+        .where(eq(productImages.productId, productId))
+        .for('update');
+
+      const known = new Set(current.map((row) => row.id));
+      const requested = new Set(imageIds);
+      if (requested.size !== imageIds.length || known.size !== requested.size) {
+        return null;
+      }
+      for (const id of requested) {
+        if (!known.has(id)) {
+          return null;
+        }
+      }
+
+      for (const [index, id] of imageIds.entries()) {
+        await tx.update(productImages).set({ position: index }).where(eq(productImages.id, id));
+      }
+      return this.readImages(tx, productId);
+    });
+  }
+
+  private async readImages(db: DrizzleDB | DrizzleTx, productId: string): Promise<ProductImage[]> {
+    const rows = await db
+      .select()
+      .from(productImages)
+      .where(eq(productImages.productId, productId))
+      .orderBy(asc(productImages.position), asc(productImages.id));
+    return rows.map(toProductImage);
+  }
+
+  // Append past the current last slot. Gaps are fine — only the relative order is meaningful.
+  private async nextPosition(tx: DrizzleTx, productId: string): Promise<number> {
+    const [row] = await tx
+      .select({ value: max(productImages.position) })
+      .from(productImages)
+      .where(eq(productImages.productId, productId));
+    return (row?.value ?? -1) + 1;
+  }
+
   // ----- Price -----
 
   async setPrice(variantId: string, data: SetPriceData): Promise<Price> {
@@ -228,6 +321,17 @@ function toProduct(row: typeof products.$inferSelect): AdminProduct {
     description: row.description,
     status: row.status,
     categoryId: row.categoryId,
+    createdAt: row.createdAt,
+  };
+}
+
+function toProductImage(row: typeof productImages.$inferSelect): ProductImage {
+  return {
+    id: row.id,
+    productId: row.productId,
+    assetId: row.assetId,
+    position: row.position,
+    alt: row.alt,
     createdAt: row.createdAt,
   };
 }
