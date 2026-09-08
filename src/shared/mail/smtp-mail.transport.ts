@@ -11,6 +11,8 @@ export interface SmtpMailOptions {
   /** Envelope sender for every message this transport sends. */
   from: string;
   breaker: OutboundCall;
+  /** Budget for each socket phase. Required: nodemailer's own defaults run to ten minutes. */
+  timeoutMs: number;
   /** Test seam: a nodemailer-shaped transporter, so the send path is covered without a server. */
   transporter?: Pick<Transporter, 'sendMail'>;
 }
@@ -27,7 +29,18 @@ export class SmtpMailTransport implements MailTransportPort {
   private readonly breaker: OutboundCall;
 
   constructor(options: SmtpMailOptions) {
-    this.transporter = options.transporter ?? createTransport(options.url);
+    // Per phase, not per send: the breaker bounds what the caller waits for, these bound what the
+    // socket holds. Without them a relay that accepts the connection and then stops talking keeps
+    // the socket alive long after the breaker gave up on it — a timeout cannot cancel a request
+    // already on the wire.
+    this.transporter =
+      options.transporter ??
+      createTransport({
+        url: options.url,
+        connectionTimeout: options.timeoutMs,
+        greetingTimeout: options.timeoutMs,
+        socketTimeout: options.timeoutMs,
+      });
     this.from = options.from;
     this.breaker = options.breaker;
   }
