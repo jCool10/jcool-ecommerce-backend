@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CacheModule } from '@shared/cache';
-import { CATALOG_ADMIN_REPOSITORY, CATALOG_SEARCH, PRODUCT_REPOSITORY } from './application/ports';
+import { MediaModule } from '@modules/media/media.module';
+import { CATALOG_ADMIN_REPOSITORY, CATALOG_SEARCH, MEDIA_QUERY, PRODUCT_REPOSITORY } from './application/ports';
 import { CATALOG_SKU_QUERY } from './application/public/catalog-sku-query.port';
 import { CatalogAdminService } from './application/services/catalog-admin.service';
 import { CatalogSkuQueryService } from './application/services/catalog-sku-query.service';
@@ -10,6 +11,7 @@ import {
   CachingProductRepository,
   DrizzleCatalogAdminRepository,
   DrizzleProductRepository,
+  MediaQueryAdapter,
   MeilisearchCatalogSearch,
   SearchIndexBootstrap,
 } from './infrastructure';
@@ -27,7 +29,8 @@ import { CatalogController } from './interface/catalog.controller';
  * invalidates them. Everything above the port — controllers, use cases, domain — is unaware.
  */
 @Module({
-  imports: [CacheModule],
+  // MediaModule for `MEDIA_FACADE` only — image bytes and their lifecycle stay entirely over there.
+  imports: [CacheModule, MediaModule],
   controllers: [CatalogController, AdminCatalogController],
   providers: [
     ListProductsUseCase,
@@ -40,6 +43,7 @@ import { CatalogController } from './interface/catalog.controller';
     { provide: CATALOG_ADMIN_REPOSITORY, useClass: CachingCatalogAdminRepository },
     { provide: CATALOG_SKU_QUERY, useClass: CatalogSkuQueryService },
     { provide: CATALOG_SEARCH, useClass: MeilisearchCatalogSearch },
+    { provide: MEDIA_QUERY, useClass: MediaQueryAdapter },
     SearchIndexBootstrap,
   ],
   exports: [CATALOG_SKU_QUERY],

@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import type { FindManyActiveCriteria } from '../application/ports';
 import { UUID_PATTERN } from './drizzle-product.repository';
 
-// `v1` is the cached payload's shape version — bump it alongside a snapshot change so a rolling
-// deploy can never decode an old snapshot into a new shape.
-const NAMESPACE = 'catalog:v1';
+// The trailing `vN` is the cached payload's shape version — bump it alongside a snapshot change so
+// a rolling deploy can never decode an old snapshot into a new shape. v2 added `imageAssetIds`.
+const NAMESPACE = 'catalog:v2';
 
 /**
  * Generation counter mixed into every catalog key. One INCR after any admin write makes the

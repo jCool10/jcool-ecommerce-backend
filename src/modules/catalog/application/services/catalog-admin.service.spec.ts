@@ -69,6 +69,10 @@ describe('CatalogAdminService', () => {
       createSku: vi.fn(),
       updateSku: vi.fn(),
       archiveSku: vi.fn(),
+      listImages: vi.fn(),
+      attachImage: vi.fn(),
+      detachImage: vi.fn(),
+      reorderImages: vi.fn(),
       setPrice: vi.fn(),
     };
   }

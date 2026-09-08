@@ -14,6 +14,9 @@ const MUTATIONS = [
   'createSku',
   'updateSku',
   'archiveSku',
+  'attachImage',
+  'detachImage',
+  'reorderImages',
   'setPrice',
 ] as const;
 
@@ -22,6 +25,7 @@ const PASSTHROUGH_READS = [
   'countActiveProductsInCategory',
   'findProductById',
   'findSkuById',
+  'listImages',
 ] as const;
 
 type AsyncMock = Mock<(...args: unknown[]) => Promise<unknown>>;

@@ -84,6 +84,31 @@ export const productVariants = pgTable(
   (t) => [index('idx_variants_product').on(t.productId)],
 );
 
+// A product's images, in display order. `assetId` deliberately carries NO foreign key to Media's
+// table: the boundary between contexts is kept at the app layer, as with `orderId`/`variantId`
+// elsewhere. Catalog stores the id and never a URL — resolving one is Media's job, and it happens
+// after the cache is read so an expiring URL can never be cached.
+export const productImages = pgTable(
+  'product_images',
+  {
+    id: id(),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => products.id),
+    assetId: uuid('asset_id').notNull(),
+    position: integer('position').notNull().default(0),
+    alt: text('alt'),
+    ...stamps,
+  },
+  (t) => [
+    // Supplies the read path's `WHERE product_id = ? ORDER BY position`.
+    index('idx_product_images_product_position').on(t.productId, t.position),
+    // One asset appears at most once on a product: a second row would attach an already-ATTACHED
+    // asset, which the state machine refuses anyway — this makes the database say so too.
+    uniqueIndex('uq_product_images_product_asset').on(t.productId, t.assetId),
+  ],
+);
+
 export const prices = pgTable(
   'prices',
   {

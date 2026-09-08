@@ -31,8 +31,14 @@ interface ProductAcc {
   variants: Map<string, VariantAcc>;
 }
 
-/** Collapse flattened join rows into Product entities, deduping variants and prices by id; product order = first-seen, so the query's ORDER BY controls it. */
-export function assembleProducts(rows: ProductFlatRow[]): Product[] {
+/**
+ * Collapse flattened join rows into Product entities, deduping variants and prices by id; product
+ * order = first-seen, so the query's ORDER BY controls it.
+ *
+ * Images arrive as a separate map rather than another join: a product with 3 variants and 4 images
+ * would otherwise come back as 12 rows, and every price would be counted three times over.
+ */
+export function assembleProducts(rows: ProductFlatRow[], imagesByProduct?: Map<string, string[]>): Product[] {
   const acc = new Map<string, ProductAcc>();
 
   for (const row of rows) {
@@ -85,6 +91,7 @@ export function assembleProducts(rows: ProductFlatRow[]): Product[] {
       { slug: product.row.categorySlug, name: product.row.categoryName },
       variants,
       product.row.productCreatedAt,
+      imagesByProduct?.get(product.row.productId) ?? [],
     );
   });
 }

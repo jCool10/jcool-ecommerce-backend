@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { CacheService } from '@shared/cache';
-import type { AdminProduct, Category, Price, Sku } from '../domain/entities';
+import type { AdminProduct, Category, Price, ProductImage, Sku } from '../domain/entities';
 import type {
+  AttachImageData,
   CatalogAdminRepositoryPort,
   CreateCategoryData,
   CreateProductData,
@@ -86,6 +87,24 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
 
   archiveSku(id: string): Promise<Sku | null> {
     return this.invalidatingWrite(() => this.source.archiveSku(id));
+  }
+
+  // ----- Product images -----
+
+  listImages(productId: string): Promise<ProductImage[]> {
+    return this.source.listImages(productId);
+  }
+
+  attachImage(productId: string, data: AttachImageData): Promise<ProductImage> {
+    return this.invalidatingWrite(() => this.source.attachImage(productId, data));
+  }
+
+  detachImage(productId: string, imageId: string): Promise<ProductImage | null> {
+    return this.invalidatingWrite(() => this.source.detachImage(productId, imageId));
+  }
+
+  reorderImages(productId: string, imageIds: string[]): Promise<ProductImage[] | null> {
+    return this.invalidatingWrite(() => this.source.reorderImages(productId, imageIds));
   }
 
   // ----- Price -----

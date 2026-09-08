@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { PRODUCT_STATUSES, type AdminProduct, type Category, type Price, type Sku } from '../../domain/entities';
+import {
+  PRODUCT_STATUSES,
+  type AdminProduct,
+  type Category,
+  type Price,
+  type ProductImage,
+  type Sku,
+} from '../../domain/entities';
 
 // Response shapes for the admin write paths, always mapped via `fromEntity` so DB
 // internals never leak. `archivedAt` is a nullable ISO string (null = active).
@@ -97,6 +104,37 @@ export class AdminSkuResponseDto {
     dto.productId = sku.productId;
     dto.archivedAt = sku.archivedAt ? sku.archivedAt.toISOString() : null;
     dto.createdAt = sku.createdAt.toISOString();
+    return dto;
+  }
+}
+
+export class AdminProductImageResponseDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  productId!: string;
+
+  @ApiProperty()
+  assetId!: string;
+
+  @ApiProperty({ description: 'Display slot, ascending' })
+  position!: number;
+
+  @ApiProperty({ type: String, nullable: true })
+  alt!: string | null;
+
+  @ApiProperty({ type: String, format: 'date-time' })
+  createdAt!: string;
+
+  static fromEntity(image: ProductImage): AdminProductImageResponseDto {
+    const dto = new AdminProductImageResponseDto();
+    dto.id = image.id;
+    dto.productId = image.productId;
+    dto.assetId = image.assetId;
+    dto.position = image.position;
+    dto.alt = image.alt;
+    dto.createdAt = image.createdAt.toISOString();
     return dto;
   }
 }

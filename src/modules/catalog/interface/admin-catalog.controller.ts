@@ -1,10 +1,23 @@
-import { Body, Controller, Delete, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Put,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiTags,
@@ -15,11 +28,14 @@ import { CatalogAdminService } from '../application/services/catalog-admin.servi
 import {
   AdminCategoryResponseDto,
   AdminPriceResponseDto,
+  AdminProductImageResponseDto,
   AdminProductResponseDto,
   AdminSkuResponseDto,
+  AttachProductImageDto,
   CreateCategoryDto,
   CreateProductDto,
   CreateSkuDto,
+  ReorderProductImagesDto,
   SetPriceDto,
   UpdateCategoryDto,
   UpdateProductDto,
@@ -122,6 +138,54 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'SKU not found' })
   async deleteSku(@Param('id', ParseUUIDPipe) id: string): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.archiveSku(id));
+  }
+
+  // ----- Product images -----
+
+  @Get('products/:productId/images')
+  @ApiOkResponse({ type: [AdminProductImageResponseDto] })
+  @ApiNotFoundResponse({ description: 'Product not found' })
+  async listProductImages(
+    @Param('productId', ParseUUIDPipe) productId: string,
+  ): Promise<AdminProductImageResponseDto[]> {
+    const images = await this.admin.listProductImages(productId);
+    return images.map((image) => AdminProductImageResponseDto.fromEntity(image));
+  }
+
+  @Post('products/:productId/images')
+  @ApiCreatedResponse({ type: AdminProductImageResponseDto })
+  @ApiNotFoundResponse({ description: 'Product not found' })
+  @ApiConflictResponse({ description: 'Asset already attached, or not in a state that can be attached' })
+  async attachProductImage(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Body() dto: AttachProductImageDto,
+  ): Promise<AdminProductImageResponseDto> {
+    return AdminProductImageResponseDto.fromEntity(await this.admin.attachProductImage(productId, dto));
+  }
+
+  // Unlike the archives above, this one is a hard delete of the link row: the asset itself survives
+  // as DETACHED until a sweep reclaims it.
+  @Delete('products/:productId/images/:imageId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse({ description: 'Image detached; the asset becomes reclaimable' })
+  @ApiNotFoundResponse({ description: 'Image not found on that product' })
+  async detachProductImage(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('imageId', ParseUUIDPipe) imageId: string,
+  ): Promise<void> {
+    await this.admin.detachProductImage(productId, imageId);
+  }
+
+  @Patch('products/:productId/images')
+  @ApiOkResponse({ type: [AdminProductImageResponseDto], description: 'Images in their new order' })
+  @ApiNotFoundResponse({ description: 'Product not found' })
+  @ApiConflictResponse({ description: 'The order must list every image on the product exactly once' })
+  async reorderProductImages(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Body() dto: ReorderProductImagesDto,
+  ): Promise<AdminProductImageResponseDto[]> {
+    const images = await this.admin.reorderProductImages(productId, dto.imageIds);
+    return images.map((image) => AdminProductImageResponseDto.fromEntity(image));
   }
 
   // ----- Price -----

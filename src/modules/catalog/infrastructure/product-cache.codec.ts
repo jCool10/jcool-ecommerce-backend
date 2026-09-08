@@ -21,6 +21,7 @@ export interface ProductSnapshot {
   category: { slug: string; name: string };
   variants: { id: string; sku: string; name: string; prices: { amountMinor: number; currency: string }[] }[];
   createdAt: string;
+  imageAssetIds: string[];
 }
 
 export interface ProductListSnapshot {
@@ -43,6 +44,8 @@ export function toProductSnapshot(product: Product): ProductSnapshot {
       prices: variant.prices.map((price) => ({ amountMinor: price.amountMinor, currency: price.currency })),
     })),
     createdAt: product.createdAt.toISOString(),
+    // Ids, not URLs: a presigned URL outlives this snapshot by minutes, the entry by hours.
+    imageAssetIds: [...product.imageAssetIds],
   };
 }
 
@@ -121,6 +124,7 @@ export function fromProductSnapshot(snapshot: unknown): Product {
     { slug: asString(category.slug, 'category.slug'), name: asString(category.name, 'category.name') },
     variants,
     createdAt,
+    asArray(raw.imageAssetIds, 'imageAssetIds').map((entry) => asString(entry, 'imageAssetIds[]')),
   );
 }
 

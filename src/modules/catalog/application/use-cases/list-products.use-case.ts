@@ -1,6 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Product } from '../../domain/entities';
-import { type FindManyActiveCriteria, PRODUCT_REPOSITORY, type ProductRepositoryPort } from '../ports';
+import {
+  type FindManyActiveCriteria,
+  MEDIA_QUERY,
+  PRODUCT_REPOSITORY,
+  type MediaQueryPort,
+  type ProductRepositoryPort,
+} from '../ports';
 
 export interface ListProductsResult {
   items: Product[];
@@ -8,6 +14,8 @@ export interface ListProductsResult {
   page: number;
   pageSize: number;
   totalPages: number;
+  /** assetId → URL for the whole page, resolved in one call rather than one per product. */
+  imageUrls: Map<string, string>;
 }
 
 // List ACTIVE products (paginated + filtered). Owns the pagination math; the
@@ -17,6 +25,8 @@ export class ListProductsUseCase {
   constructor(
     @Inject(PRODUCT_REPOSITORY)
     private readonly products: ProductRepositoryPort,
+    @Inject(MEDIA_QUERY)
+    private readonly media: MediaQueryPort,
   ) {}
 
   async execute(criteria: FindManyActiveCriteria): Promise<ListProductsResult> {
@@ -28,6 +38,7 @@ export class ListProductsUseCase {
       page: criteria.page,
       pageSize: criteria.pageSize,
       totalPages,
+      imageUrls: await this.media.resolveUrls(items.flatMap((product) => product.imageAssetIds)),
     };
   }
 }
