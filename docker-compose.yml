@@ -1,9 +1,8 @@
 # Deterministic host ports (5433/6380) avoid clashes with any host-installed Postgres/Redis and
 # prevent port auto-increment / ghost processes.
 #
-# All credentials/ports come from `.env` (gitignored) — no secrets are hardcoded here. Copy
-# `.env.example` → `.env` first: the `app` service reads it via `env_file`, so a missing `.env` fails
-# `up` fast (clearer than a later env-validation crash inside the container).
+# Copy `.env.example` → `.env` first: the `app` service reads it via `env_file`, so a missing `.env`
+# fails `up` fast (clearer than a later env-validation crash inside the container).
 #
 # To trace/scrape the app container under `--profile observability`, set OTEL_ENABLED=true +
 # METRICS_TOKEN in .env and provision infra/prometheus/secrets/metrics-token to match.
@@ -180,8 +179,6 @@ services:
       start_period: 10s
     networks:
       - jcool-net
-
-  # Every observability UI below binds to 127.0.0.1 only — no service is exposed on all interfaces.
 
   # Receives OTLP from the app, redacts PII, forwards to Jaeger. Distroless (no shell) → no
   # healthcheck; started, not waited on.

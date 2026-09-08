@@ -14,16 +14,13 @@ import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Fixed, valid UUIDs — variant_id / order_id are uuid columns.
 const SKU_A = '11111111-1111-4111-8111-111111111111';
 const SKU_B = '22222222-2222-4222-8222-222222222222';
 const ORDER_1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-// One-thread behavior of the pessimistic (SELECT ... FOR UPDATE) reserve over real
-// Postgres. The concurrent race that proves the lock actually serializes writers is
-// Phase 5; here we pin the single-caller contract: hold updates reserved/version and
-// writes a HELD row, a shortfall throws and rolls back, repeats are idempotent, a
-// multi-line hold is all-or-nothing, and the DB CHECK is the last line of defense.
+// One-thread behavior of the pessimistic (SELECT ... FOR UPDATE) reserve over real Postgres. The
+// concurrent race that proves the lock actually serializes writers is checkout-oversell.e2e-spec.ts;
+// here only the single-caller contract is pinned.
 describe('Inventory pessimistic reserve (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -72,7 +69,7 @@ describe('Inventory pessimistic reserve (integration, real Postgres)', () => {
 
     const stock = await readStock(SKU_A);
     expect(stock.quantityReserved).toBe(3);
-    expect(stock.quantityOnHand - stock.quantityReserved).toBe(7); // available
+    expect(stock.quantityOnHand - stock.quantityReserved).toBe(7);
     expect(stock.version).toBe(1);
 
     const rows = await reservationsFor(ORDER_1, SKU_A);
@@ -80,7 +77,7 @@ describe('Inventory pessimistic reserve (integration, real Postgres)', () => {
     expect(rows[0].status).toBe('HELD');
     expect(rows[0].quantity).toBe(3);
     expect(rows[0].expiresAt).not.toBeNull();
-    expect(rows[0].expiresAt!.getTime()).toBeGreaterThan(Date.now()); // TTL stamped ahead
+    expect(rows[0].expiresAt!.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('holds the last units exactly: onHand=5, reserve 5 → available 0, HELD', async () => {

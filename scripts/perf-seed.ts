@@ -1,17 +1,11 @@
 /**
- * Catalog + cart seeder at a scale where the Postgres planner has a real choice:
- *   SCALE=20000 CART_LINES=30 npm run db:seed:perf
- *   npm run db:seed:perf -- --clean
+ * Catalog + cart seeder at a scale where the Postgres planner has a real choice: below a few hundred
+ * rows a Seq Scan is always cheapest, so anything measured against the demo seed is an artifact.
+ * Prefixed natural keys + ON CONFLICT DO NOTHING mean a re-run tops up and `--clean` can never take
+ * a real product with it.
  *
- * Below a few hundred rows a Seq Scan is always the cheapest plan, so every "improvement" measured
- * against the demo seed is an artifact. Rows carry deterministic natural keys (`perf-*` slugs,
- * `PERF-*` SKUs) and insert ON CONFLICT DO NOTHING, so a re-run tops up; that same prefix is all
- * `--clean` deletes, so synthetic rows can never take a real product with them.
- *
- * `--clean` does NOT remove what a load run against that data produces — orders, reservations,
- * outbox rows, the throwaway accounts k6 registers itself. Reservations have no FK to the variants
- * being deleted, so any left behind point at ids a re-seed will never mint again; for a true reset
- * use `docker compose down -v` followed by `npm run db:migrate`.
+ * `--clean` does NOT remove what a load run produces — orders, reservations, outbox rows, the
+ * accounts k6 registers. For a true reset: `docker compose down -v` then `npm run db:migrate`.
  *
  * Leaves Redis alone: the public read path is cached behind a generation counter only an admin write
  * bumps, so an app already serving pre-seed pages keeps serving them — the final log line says how.
@@ -187,7 +181,6 @@ async function seedPricesAndStock(db: Db, variantIds: readonly string[]): Promis
 
   const stockRows = variantIds.map((variantId) => ({ variantId, quantityOnHand: STOCK_ON_HAND }));
   for (const chunk of chunks(stockRows, CHUNK)) {
-    // Never clobbers a live count or its reserved holds — a re-run only fills gaps.
     await db.insert(stockLevels).values(chunk).onConflictDoNothing();
   }
 }

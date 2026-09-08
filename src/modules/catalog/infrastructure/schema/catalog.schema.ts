@@ -53,6 +53,12 @@ export const products = pgTable(
     index('idx_products_active_created')
       .on(t.createdAt.desc().nullsFirst(), t.id.desc().nullsFirst())
       .where(sql`${t.status} = 'ACTIVE'`),
+    // Serves the reindex scan, which seeks the primary key ascending. Without it that scan falls to
+    // `products_pkey` and re-checks `status` on every heap tuple, so a catalog dominated by
+    // DRAFT/ARCHIVED rows costs a full-table walk per rebuild.
+    index('idx_products_active_id')
+      .on(t.id)
+      .where(sql`${t.status} = 'ACTIVE'`),
     // Only reachable when the query binds `category_id` itself, not when it filters the category
     // across the join. The trailing `id` covers the id-page projection.
     index('idx_products_category_active_created')

@@ -38,9 +38,6 @@ export interface StockRepositoryPort {
   /** HELD → RELEASED, dropping only `reserved`. Guarded on HELD, so a re-run is a no-op. */
   releaseReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
 
-  /** Null when the SKU has no stock row. */
-  getStockView(variantId: string): Promise<StockView | null>;
-
   /** Distinct orders holding HELD stock past `expiredBefore`, oldest expiry first. */
   findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]>;
 }

@@ -1,10 +1,7 @@
 /**
- * Cross-process trace propagation demo:
- *   npx tsx scripts/trace-harness.ts          # 3 spans share ONE traceId
- *   npx tsx scripts/trace-harness.ts --break   # drop the inject → trace splits in two
- *
- * Two in-process spans stand in for the two processes, over the app's real inject/extract helpers
- * and a self-contained ConsoleSpanExporter, so it needs no Collector.
+ * Cross-process trace propagation demo: `npx tsx scripts/trace-harness.ts`, `--break` to drop the
+ * inject. Two in-process spans stand in for the two processes, over the app's real inject/extract
+ * helpers and a self-contained ConsoleSpanExporter, so it needs no Collector.
  */
 import { SpanKind, context, propagation, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
@@ -36,8 +33,8 @@ async function main(): Promise<void> {
     server.end();
   });
 
-  // The consumer rebuilds the parent context from the carrier; with no traceparent (--break) it
-  // starts a brand-new, disconnected trace.
+  // With no traceparent (--break) the extract yields an empty context and the consumer starts a
+  // brand-new, disconnected trace.
   const parentContext = extractTraceContext(carrier);
   context.with(parentContext, () => {
     tracer.startActiveSpan('CONSUMER order.placed', { kind: SpanKind.CONSUMER }, (consumer) => {

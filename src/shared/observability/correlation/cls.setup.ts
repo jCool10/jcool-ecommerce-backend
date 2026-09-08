@@ -16,7 +16,7 @@ function resolveRequestId(req: Request): string {
 }
 
 /**
- * Import FIRST in AppModule, before the pino logger, so every downstream log shares one requestId.
+ * Import ahead of the pino logger in AppModule, so every downstream log shares one requestId.
  */
 export const clsModuleOptions: ClsModuleOptions = {
   global: true,

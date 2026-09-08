@@ -18,8 +18,6 @@ import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Pinned rather than inherited from the developer's .env, so the guarded scrape below behaves the
-// same on every machine.
 const METRICS_TOKEN = 'e2e-consumer-metrics-token';
 const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
 const ORDER_ID = '0198f0d8-1111-7000-8000-000000000001';
@@ -162,8 +160,8 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
       .set('Authorization', `Bearer ${METRICS_TOKEN}`)
       .expect(200);
 
-    // Presence, not value: counters accumulate across the tests in this file, so only a delta would
-    // be meaningful.
+    // Presence, not value: these counters accumulate across the file's tests, so only a delta would
+    // mean anything.
     expect(text).toContain('messaging_consume_total{event_type="order.placed",result="processed"}');
     expect(text).toContain('messaging_consume_total{event_type="order.placed",result="duplicate"}');
   });

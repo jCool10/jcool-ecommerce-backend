@@ -56,7 +56,6 @@ export class Money extends ValueObject<MoneyProps> {
     return Money.of(this.amountMinor * qtyInt, this.currency);
   }
 
-  /** -1 / 0 / 1, like a comparator. */
   compare(other: Money): number {
     this.assertSameCurrency(other);
     if (this.amountMinor < other.amountMinor) return -1;

@@ -22,8 +22,14 @@ function job(eventType: string, payload: Record<string, unknown> = { orderId: OR
   };
 }
 
-function build(status: 'finalized' | 'noop' | 'ignored' | 'not_found' = 'finalized', orderStatus?: string) {
-  const execute = vi.fn().mockResolvedValue({ status, order: orderStatus ? { status: orderStatus } : undefined });
+function build(
+  status: 'finalized' | 'noop' | 'ignored' | 'not_found' = 'finalized',
+  orderStatus?: string,
+  reportFinalized?: () => void,
+) {
+  const execute = vi
+    .fn()
+    .mockResolvedValue({ status, order: orderStatus ? { status: orderStatus } : undefined, reportFinalized });
   const error = vi.fn();
   const info = vi.fn();
   const recordRefundOwed = vi.fn();
@@ -115,6 +121,26 @@ describe('PaymentEventsHandler', () => {
       expect.objectContaining({ orderId: ORDER_ID, status: 'EXPIRED' }),
       'payment settled for an order that was already in a terminal state',
     );
+  });
+
+  // The settlement lives in the consumer's transaction, so its counters and audit line may only run
+  // once that has committed — which is what returning them as a post-commit effect buys.
+  it('defers the finalize reporting to after the consumer commits', async () => {
+    const report = vi.fn();
+    const { handler } = build('finalized', undefined, report);
+
+    const effect = await handler.settle(job('payment.succeeded'), tx);
+
+    expect(report).not.toHaveBeenCalled();
+    expect(effect).toBeTypeOf('function');
+    await effect?.();
+    expect(report).toHaveBeenCalledOnce();
+  });
+
+  it('returns no post-commit effect for a settlement that moved nothing', async () => {
+    const { handler } = build('noop');
+
+    await expect(handler.settle(job('payment.succeeded'), tx)).resolves.toBeUndefined();
   });
 
   it('records a failed payment onto an already-terminal order without alarm', async () => {

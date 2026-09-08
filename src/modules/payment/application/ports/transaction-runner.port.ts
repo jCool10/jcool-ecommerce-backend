@@ -5,6 +5,5 @@ import type { DrizzleTx } from '@shared/infrastructure/database';
 export const TRANSACTION_RUNNER = Symbol('TRANSACTION_RUNNER');
 
 export interface TransactionRunnerPort {
-  /** Run `work` inside a single transaction; commit on resolve, roll back on throw. */
   run<T>(work: (tx: DrizzleTx) => Promise<T>): Promise<T>;
 }

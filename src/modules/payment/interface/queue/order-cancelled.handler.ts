@@ -15,6 +15,8 @@ export class OrderCancelledHandler {
 
   async close(job: DomainEventJob, tx: DrizzleTx): Promise<void> {
     const orderId = job.payload.orderId;
+    // Permanent: the payload will be identical on every redelivery, and a guessed orderId would
+    // expire the wrong buyer's session.
     if (typeof orderId !== 'string') {
       throw new PermanentError(`Unusable order cancellation event "${job.eventType}"`);
     }

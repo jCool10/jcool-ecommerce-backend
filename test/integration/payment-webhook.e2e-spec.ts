@@ -157,7 +157,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     expect(first.status).toBe(200);
     expect(first.body).toEqual({ status: 'processed' });
     expect(second.status).toBe(200);
-    expect(second.body).toEqual({ status: 'duplicate' }); // no second apply
+    expect(second.body).toEqual({ status: 'duplicate' });
 
     expect(await webhookRows()).toHaveLength(1);
     expect((await paymentRow(paymentId)).status).toBe('SUCCEEDED');

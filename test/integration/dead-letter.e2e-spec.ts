@@ -58,9 +58,8 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   const inboxRows = () => db.select().from(schema.inbox);
   const deadLetters = () => dlq.getJobs(['waiting', 'prioritized']) as Promise<Job<DeadLetterJob>[]>;
 
-  // The replay CLI's own lookup, against the same table the worker writes its claim into. Passing a
-  // fake here would prove only that the guard agrees with itself; the whole question is whether it
-  // reads the row the consumer actually wrote.
+  // The replay CLI's own lookup, against the same table the worker writes its claim into: the
+  // question is whether the guard reads the row the consumer actually wrote.
   const inboxLookup = async (id: string): Promise<Date | null> => {
     const [row] = await db
       .select({ processedAt: schema.inbox.processedAt })
@@ -142,7 +141,6 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     await publish(job());
     await publish(job({ outboxId: messageId(2) }));
 
-    // The point of a dead-letter queue: head-of-line blocking is what happens without one.
     await vi.waitFor(async () => expect(await inboxRows()).toHaveLength(1), { timeout: 15_000, interval: 50 });
     expect((await inboxRows())[0].messageId).toBe(messageId(2));
 

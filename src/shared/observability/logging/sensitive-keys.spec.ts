@@ -20,7 +20,7 @@ describe('isSensitiveKey', () => {
     expect(isSensitiveKey('name')).toBe(false);
   });
 
-  it('keeps email out of the shared list (audit logs deliberately retain it — ADR-0013)', () => {
+  it('keeps email out of the shared list — audit logs deliberately retain it', () => {
     expect(SENSITIVE_KEYS).not.toContain('email');
   });
 });

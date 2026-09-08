@@ -1,7 +1,8 @@
-import { ArgumentsHost, BadRequestException } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, NotFoundException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
 import { ClockStalledError } from '@shared/identity/identity.errors';
+import { DomainError } from '@shared/kernel/domain-error';
 import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,16 +18,28 @@ const captureException = vi.mocked(Sentry.captureException);
 // so getActiveTraceId() returns undefined (traceId absent, as in a no-tracing test run).
 const cls = { isActive: () => true, getId: () => 'req-1', get: () => undefined } as unknown as ClsService;
 const config = { get: () => 'test' } as unknown as ConfigService; // app.env !== 'development' → JSON branch
-const logger = { error: vi.fn(), warn: vi.fn() } as unknown as PinoLogger;
+const logWarn = vi.fn();
+const logger = { error: vi.fn(), warn: logWarn } as unknown as PinoLogger;
 
-function makeHost(method = 'GET', url = '/debug/boom') {
+// `routePath`/`baseUrl` let a test drive the concrete url and the matched template apart, which is
+// the divergence the route log field has to resolve in favour of the template. `routePath: null`
+// models an unmatched request — Express leaves `req.route` unset, which is every 404.
+function makeHost(method = 'GET', url = '/debug/boom', routePath?: string | null, baseUrl = '') {
   const response = {
     setHeader: vi.fn(),
     getHeader: vi.fn(() => undefined),
     status: vi.fn(() => response),
     json: vi.fn(),
   };
-  const request = { method, url, path: url, route: { path: url }, headers: {} };
+  const path = url.split('?')[0];
+  const request = {
+    method,
+    url,
+    path,
+    baseUrl,
+    headers: {},
+    ...(routePath === null ? {} : { route: { path: routePath ?? path } }),
+  };
   const host = {
     switchToHttp: () => ({ getResponse: () => response, getRequest: () => request }),
   } as unknown as ArgumentsHost;
@@ -54,6 +67,12 @@ describe('HttpExceptionFilter — Sentry reporting', () => {
 
     expect(captureException).not.toHaveBeenCalled();
   });
+
+  it('does NOT report a DomainError — a broken business rule is a client error, not a handler bug', () => {
+    filter.catch(new DomainError('Email is not a valid address'), makeHost('POST', '/auth/register').host);
+
+    expect(captureException).not.toHaveBeenCalled();
+  });
 });
 
 describe('HttpExceptionFilter — status mapping', () => {
@@ -68,6 +87,17 @@ describe('HttpExceptionFilter — status mapping', () => {
     // Retryable, so the client is told to retry rather than handed the blanket 5xx mask.
     expect(response.json).toHaveBeenCalledWith(
       expect.objectContaining({ statusCode: 503, message: 'Service unavailable' }),
+    );
+  });
+
+  it('answers 422 for a DomainError and keeps its rule message', () => {
+    const { host, response } = makeHost('POST', '/auth/register');
+
+    filter.catch(new DomainError('Email is not a valid address'), host);
+
+    expect(response.status).toHaveBeenCalledWith(422);
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 422, message: 'Email is not a valid address' }),
     );
   });
 
@@ -89,5 +119,42 @@ describe('HttpExceptionFilter — status mapping', () => {
 
     expect(response.status).toHaveBeenCalledWith(400);
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, message: 'bad' }));
+  });
+});
+
+describe('HttpExceptionFilter — log fields', () => {
+  const filter = new HttpExceptionFilter(logger, cls, config);
+
+  beforeEach(() => logWarn.mockClear());
+
+  // Nest registers every route on the root Express app with its fully-composed path, so a matched
+  // request carries `route.path = '/orders/:orderId'` and an empty `baseUrl` — not a per-controller
+  // sub-router. Driving it any other way would assert a request shape Express never builds.
+  it('logs the route template, so error buckets join the success line and no query string is logged', () => {
+    const { host, response } = makeHost('GET', '/orders/01H8XYZ?expand=items', '/orders/:orderId');
+
+    filter.catch(new BadRequestException('bad'), host);
+
+    expect(logWarn).toHaveBeenCalledWith(expect.objectContaining({ route: '/orders/:orderId' }), 'request rejected');
+    // The envelope still echoes the concrete url the client asked for.
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ path: '/orders/01H8XYZ?expand=items' }));
+  });
+
+  // The branch every unmatched-route 404 takes, and the filter's most-logged path.
+  it('falls back to the query-free path when no route matched, rather than the raw url', () => {
+    const { host } = makeHost('GET', '/nope/whatever?x=1', null);
+
+    filter.catch(new NotFoundException(), host);
+
+    expect(logWarn).toHaveBeenCalledWith(expect.objectContaining({ route: '/nope/whatever' }), 'request rejected');
+  });
+
+  it('keeps the stack of a DomainError on the warn line, since it gets no Sentry event', () => {
+    const domainError = new DomainError('Email is not a valid address');
+    const { host } = makeHost('POST', '/auth/register');
+
+    filter.catch(domainError, host);
+
+    expect(logWarn).toHaveBeenCalledWith(expect.objectContaining({ err: domainError }), 'request rejected');
   });
 });

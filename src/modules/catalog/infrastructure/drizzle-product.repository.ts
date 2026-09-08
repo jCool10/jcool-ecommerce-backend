@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
 import type { Product, ProductStatus } from '../domain/entities';
@@ -7,8 +7,9 @@ import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPor
 import type { SkuView } from '../application/public/catalog-sku-query.port';
 import { assembleProducts } from './product-row.mapper';
 
-// The SKU view reads the price in this currency only, so a SKU priced solely in another currency
-// reads as unpriced — acceptable while VND is the sole currency.
+// Must match the schema default (prices.currency) and the admin write default: the SKU view reads
+// the price in this currency only, so a divergence silently makes every SKU read as unpriced rather
+// than erroring. Acceptable while VND is the sole currency.
 const DEFAULT_CURRENCY = 'VND';
 
 // Must stay structurally identical to ProductFlatRow; the projection is untyped, so a drift here
@@ -176,6 +177,50 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
         const items = ids.map((id) => byId.get(id)).filter((product): product is Product => product !== undefined);
 
         return { items, total };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+
+  async findActiveAfter(afterId: string | null, limit: number): Promise<Product[]> {
+    return this.db.transaction(
+      async (tx) => {
+        const conditions: SQL[] = [eq(products.status, 'ACTIVE'), isNull(categories.archivedAt)];
+        if (afterId) {
+          // Seeks the primary key, not `created_at`: a timestamp cursor can only travel as a
+          // millisecond-precision JS Date, which lands before the microseconds Postgres stored and
+          // re-serves every row inside that millisecond.
+          conditions.push(gt(products.id, afterId));
+        }
+        const where = and(...conditions);
+
+        const idRows = await tx
+          .select({ id: products.id })
+          .from(products)
+          .innerJoin(categories, eq(products.categoryId, categories.id))
+          .where(where)
+          .orderBy(asc(products.id))
+          .limit(limit);
+        const ids = idRows.map((row) => row.id);
+        if (ids.length === 0) {
+          return [];
+        }
+
+        const rows = await tx
+          .select(flatColumns)
+          .from(products)
+          .innerJoin(categories, eq(products.categoryId, categories.id))
+          .leftJoin(
+            productVariants,
+            and(eq(productVariants.productId, products.id), isNull(productVariants.archivedAt)),
+          )
+          .leftJoin(prices, eq(prices.variantId, productVariants.id))
+          .where(inArray(products.id, ids))
+          .orderBy(asc(products.id), productVariants.createdAt, productVariants.id, prices.currency);
+
+        const images = await loadImageAssetIds(tx, ids);
+        const byId = new Map(assembleProducts(rows, images).map((product) => [product.id, product]));
+        return ids.map((id) => byId.get(id)).filter((product): product is Product => product !== undefined);
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );

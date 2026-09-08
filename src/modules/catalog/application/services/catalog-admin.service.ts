@@ -7,7 +7,7 @@ import {
   type AttachImageData,
   CATALOG_ADMIN_REPOSITORY,
   CATALOG_SEARCH,
-  PRODUCT_REPOSITORY,
+  PRODUCT_SOURCE_REPOSITORY,
   type CatalogAdminRepositoryPort,
   type CatalogSearchPort,
   type CreateCategoryData,
@@ -33,7 +33,7 @@ export class CatalogAdminService {
   constructor(
     @Inject(CATALOG_ADMIN_REPOSITORY)
     private readonly repo: CatalogAdminRepositoryPort,
-    @Inject(PRODUCT_REPOSITORY)
+    @Inject(PRODUCT_SOURCE_REPOSITORY)
     private readonly products: ProductRepositoryPort,
     @Inject(CATALOG_SEARCH)
     private readonly search: CatalogSearchPort,
@@ -59,17 +59,19 @@ export class CatalogAdminService {
   }
 
   async archiveCategory(id: string): Promise<Category> {
-    const activeProducts = await this.repo.countActiveProductsInCategory(id);
-    if (activeProducts > 0) {
+    const { category, blocked } = await this.repo.archiveCategoryIfEmpty(id);
+    if (blocked) {
       throw new ConflictException('Category still has active products');
     }
-    const archived = await this.repo.archiveCategory(id);
-    if (!archived) {
+    if (!category) {
       throw new NotFoundException(`Category not found: ${id}`);
     }
-    // No search sync: the guard above already proved no live product references this category, so
-    // nothing indexed can be affected.
-    return archived;
+    // No search sync: the archive's row lock serializes against the product writes that name this
+    // category (a create, and a categoryId move), so none of those can commit behind the count. A
+    // status-only PATCH names no category and takes no lock, so a product can still be activated
+    // under an archived category; the public read's `categories.archived_at IS NULL` filter — not
+    // anything here — is what keeps that product out of the results.
+    return category;
   }
 
   async createProduct(data: CreateProductData): Promise<AdminProduct> {
@@ -185,8 +187,9 @@ export class CatalogAdminService {
     }
   }
 
-  // A product may only reference a live category; this cannot catch a status-only PATCH or an
-  // archive/publish race, so the public read filters archived categories independently.
+  // A cheap pre-check that answers 404 before any write is attempted; the adapter re-checks the
+  // category under a row lock, which is what holds the rule against a concurrent archive. Neither
+  // runs for a status-only PATCH, which names no category.
   private async assertCategoryUsable(categoryId: string): Promise<void> {
     const category = await this.repo.findCategoryById(categoryId);
     if (!category || category.archivedAt !== null) {

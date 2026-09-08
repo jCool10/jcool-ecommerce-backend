@@ -1,7 +1,13 @@
 import { Module } from '@nestjs/common';
 import { CacheModule } from '@shared/cache';
 import { MediaModule } from '@modules/media/media.module';
-import { CATALOG_ADMIN_REPOSITORY, CATALOG_SEARCH, MEDIA_QUERY, PRODUCT_REPOSITORY } from './application/ports';
+import {
+  CATALOG_ADMIN_REPOSITORY,
+  CATALOG_SEARCH,
+  MEDIA_QUERY,
+  PRODUCT_REPOSITORY,
+  PRODUCT_SOURCE_REPOSITORY,
+} from './application/ports';
 import { CATALOG_SKU_QUERY } from './application/public/catalog-sku-query.port';
 import { CatalogAdminService } from './application/services/catalog-admin.service';
 import { CatalogSkuQueryService } from './application/services/catalog-sku-query.service';
@@ -36,6 +42,7 @@ import { CatalogController } from './interface/catalog.controller';
     DrizzleProductRepository,
     DrizzleCatalogAdminRepository,
     { provide: PRODUCT_REPOSITORY, useClass: CachingProductRepository },
+    { provide: PRODUCT_SOURCE_REPOSITORY, useExisting: DrizzleProductRepository },
     { provide: CATALOG_ADMIN_REPOSITORY, useClass: CachingCatalogAdminRepository },
     { provide: CATALOG_SKU_QUERY, useClass: CatalogSkuQueryService },
     { provide: CATALOG_SEARCH, useClass: MeilisearchCatalogSearch },

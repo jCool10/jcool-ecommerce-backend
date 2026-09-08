@@ -9,7 +9,9 @@ import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/
  * Deleting bytes cannot be undone, so the claim is committed first: one statement moves a batch to
  * SWEEPING before the bucket is touched, or an attach committing mid-pass leaves a live product
  * pointing at nothing. Then object first, row second — a crash between them leaves a SWEEPING row
- * the next pass finds again, and deleting an absent object is a no-op.
+ * the next pass finds again, and deleting an absent object is a no-op. The `status = SWEEPING` guard
+ * on the row DELETE is not a substitute: it protects the row, and does nothing for the object
+ * already deleted from the bucket.
  */
 @Injectable()
 export class SweepAbandonedAssetsUseCase implements RetentionSweep, OnModuleInit {

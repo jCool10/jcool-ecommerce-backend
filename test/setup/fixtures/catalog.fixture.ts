@@ -49,10 +49,7 @@ export async function createTestCategory(app: INestApplication, name = 'Test Cat
 // has products — and a category with products is the case worth testing.
 export async function archiveTestCategory(app: INestApplication, categoryId: string): Promise<void> {
   const db = app.get<DrizzleDB>(DRIZZLE);
-  await db
-    .update(schema.categories)
-    .set({ archivedAt: new Date() })
-    .where(eq(schema.categories.id, categoryId));
+  await db.update(schema.categories).set({ archivedAt: new Date() }).where(eq(schema.categories.id, categoryId));
 }
 
 export async function createTestProduct(app: INestApplication, options: TestProductOptions = {}): Promise<TestProduct> {

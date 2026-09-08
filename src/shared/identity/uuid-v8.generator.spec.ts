@@ -131,7 +131,7 @@ describe('uuid-v8 generator', () => {
         if (fields.tsMs === START_MS && fields.bucket === BUCKET) fieldsIntact++;
 
         const index = (fields.nodeId << 12) | fields.sequence;
-        const mask = 1 << (index % 8);
+        const mask = 1 << index % 8;
         if ((seen[index >>> 3] & mask) === 0) {
           seen[index >>> 3] |= mask;
           distinct++;

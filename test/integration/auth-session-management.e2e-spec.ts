@@ -78,7 +78,6 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
         .send({ currentPassword: 'not-my-password', newPassword })
         .expect(401);
 
-      // Unchanged: the original password still authenticates.
       await request(app.getHttpServer()).post('/auth/login').send({ email: user.email, password }).expect(200);
     });
 

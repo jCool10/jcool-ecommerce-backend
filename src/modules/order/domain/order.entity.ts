@@ -9,7 +9,10 @@ import { OrderExpiredEvent } from './events/order-expired.event';
 import { OrderCancelledEvent } from './events/order-cancelled.event';
 
 export type FinalizeOutcome =
-  typeof OrderStatus.PAID | typeof OrderStatus.FAILED | typeof OrderStatus.EXPIRED | typeof OrderStatus.CANCELLED;
+  | typeof OrderStatus.PAID
+  | typeof OrderStatus.FAILED
+  | typeof OrderStatus.EXPIRED
+  | typeof OrderStatus.CANCELLED;
 
 export type OrderFinalizedEvent = OrderPaidEvent | OrderFailedEvent | OrderExpiredEvent | OrderCancelledEvent;
 

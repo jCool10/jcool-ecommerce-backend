@@ -20,8 +20,7 @@ const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 /**
  * Cart and Order price a whole cart through Catalog's published port in ONE read. Neither claim is
  * visible from a response body alone: that the read really collapses to a single query, and that
- * every per-line semantic survives the fold — including the ones that used to ride on array position
- * (which line sets the cart's currency) and on a missing entry (a SKU that left Catalog).
+ * every per-line semantic survives the fold — including the ones that used to ride on array position.
  */
 describe('Batch SKU view (integration, real Postgres + Redis)', () => {
   let app: INestApplication;

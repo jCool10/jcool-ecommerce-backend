@@ -38,12 +38,14 @@ export const mediaAssets = pgTable(
     ...stamps,
   },
   (t) => [
-    // Partial, so it stays proportional to what is reclaimable rather than to every asset uploaded.
+    // Serves the expiry branch of the sweep's claim — keep this status set identical to
+    // `RECLAIMABLE_STATUSES`, whose literals here are invisible to a grep for that constant. Partial,
+    // so it stays proportional to what is reclaimable rather than to every asset uploaded.
     index('idx_media_assets_reclaimable_expires_at')
       .on(t.expiresAt)
       .where(sql`${t.status} in ('PENDING', 'READY', 'DETACHED')`),
-    // The other half of the sweep's queue: a claimed row has no expiry to sort by, and a crash
-    // mid-claim leaves one behind to be found again.
+    // The claim's other branch: SWEEPING is excluded above, and this one filters on updated_at, so a
+    // crash mid-claim is found again. Neither branch orders, so there is no oldest-first drain.
     index('idx_media_assets_sweeping_updated_at')
       .on(t.updatedAt)
       .where(sql`${t.status} = 'SWEEPING'`),

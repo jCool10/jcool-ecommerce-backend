@@ -7,7 +7,10 @@ import { PaymentStatus } from './payment-status';
 interface Transition {
   from: PaymentStatus;
   to: PaymentStatus;
-  /** false = declared but rejected at runtime. */
+  /**
+   * Declared edges default to wired; a future refund/chargeback edge lands here as a flag flip,
+   * not a restructure. false = declared but rejected at runtime.
+   */
   wired: boolean;
 }
 

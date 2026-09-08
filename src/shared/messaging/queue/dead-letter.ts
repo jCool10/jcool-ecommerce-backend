@@ -69,6 +69,7 @@ export class DeadLetterRouter {
     } catch (caught: unknown) {
       // Best effort by construction — one more write to the Redis that just failed us. The main
       // queue keeps the failed job for a week, so a lost move costs visibility, not the message.
+      // Logged at error because a swallowed move is only ever noticed by a human reading this line.
       this.logger.error(
         { context: LOG_CONTEXT, err: caught, eventType: job.name, messageId, reason },
         `failed to move a domain event to the dead-letter queue: ${caught instanceof Error ? caught.message : String(caught)}`,

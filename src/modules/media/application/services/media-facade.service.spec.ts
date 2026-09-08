@@ -65,6 +65,18 @@ describe('MediaFacadeService', () => {
     expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + READY_TTL_SEC * 1000);
   });
 
+  it('accepts a give-back of an asset whose row is gone, so the caller can drop the dangling link', async () => {
+    ctx.detach.mockRejectedValue(new MediaAssetNotFoundError('a'));
+
+    await expect(ctx.facade.detach(TX, 'a')).resolves.toBeUndefined();
+  });
+
+  it('refuses a give-back the state machine rejects', async () => {
+    ctx.detach.mockRejectedValue(new AssetTransitionError(AssetStatus.SWEEPING, AssetStatus.DETACHED));
+
+    await expect(ctx.facade.detach(TX, 'a')).rejects.toBeInstanceOf(MediaAssetUnavailableError);
+  });
+
   it.each([
     ['a missing asset', new MediaAssetNotFoundError('a')],
     ['an asset the sweep already claimed', new AssetTransitionError(AssetStatus.SWEEPING, AssetStatus.ATTACHED)],

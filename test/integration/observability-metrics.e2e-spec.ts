@@ -28,7 +28,7 @@ describe('Metrics endpoint (integration)', () => {
     await request(app.getHttpServer()).get('/metrics').set('Authorization', 'Bearer wrong').expect(404);
   });
 
-  it('exposes default + RED + business metrics with the correct token (DoD-14, DoD-6)', async () => {
+  it('exposes default + RED + business metrics with the correct token', async () => {
     const res = await request(app.getHttpServer())
       .get('/metrics')
       .set('Authorization', `Bearer ${METRICS_TOKEN}`)

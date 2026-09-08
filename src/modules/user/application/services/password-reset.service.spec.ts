@@ -47,8 +47,11 @@ class MockTokenRepo implements PasswordResetTokenRepositoryPort {
 }
 
 class MockUserRepo implements Partial<UserRepositoryPort> {
+  constructor(private readonly trace: string[]) {}
+
   updated: Array<{ userId: string; passwordHash: string }> = [];
   updatePassword(userId: string, passwordHash: string): Promise<void> {
+    this.trace.push('updatePassword');
     this.updated.push({ userId, passwordHash });
     return Promise.resolve();
   }
@@ -64,8 +67,11 @@ class MockHasher implements PasswordHasherPort {
 }
 
 class MockSessions {
+  constructor(private readonly trace: string[]) {}
+
   revokedAll: string[] = [];
   revokeAll(userId: string): Promise<void> {
+    this.trace.push('revokeAll');
     this.revokedAll.push(userId);
     return Promise.resolve();
   }
@@ -92,6 +98,7 @@ class MockAudit implements AuthAuditPort {
 const config = { getOrThrow: () => TTL } as unknown as ConfigService;
 
 describe('PasswordResetService', () => {
+  let trace: string[];
   let tokens: MockTokenRepo;
   let users: MockUserRepo;
   let hasher: MockHasher;
@@ -101,10 +108,11 @@ describe('PasswordResetService', () => {
   let service: PasswordResetService;
 
   beforeEach(() => {
+    trace = [];
     tokens = new MockTokenRepo();
-    users = new MockUserRepo();
+    users = new MockUserRepo(trace);
     hasher = new MockHasher();
-    sessions = new MockSessions();
+    sessions = new MockSessions(trace);
     mailer = new MockMailer();
     audit = new MockAudit();
     service = new PasswordResetService(
@@ -160,6 +168,15 @@ describe('PasswordResetService', () => {
       expect(users.updated).toEqual([{ userId: 'u7', passwordHash: 'hashed:new-password' }]);
       expect(sessions.revokedAll).toEqual(['u7']);
       expect(result).toEqual({ userId: 'u7' });
+    });
+
+    // The pair is not transactional, so the safe failure direction is the old password with no sessions.
+    it('revokes every session before writing the new hash', async () => {
+      tokens.consumeResult = { status: 'consumed', userId: 'u7' };
+
+      await service.reset('raw-token', 'new-password');
+
+      expect(trace).toEqual(['revokeAll', 'updatePassword']);
     });
 
     it('throws 400 and changes nothing on an invalid/expired/used token', async () => {

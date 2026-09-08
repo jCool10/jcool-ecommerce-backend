@@ -7,6 +7,7 @@ import { METRIC_PROVIDERS } from './metric-definitions';
 import { MetricsController } from './metrics.controller';
 import { MetricsTokenGuard } from './metrics.guard';
 import { METRICS } from './metrics.port';
+import { TelemetryFlushService } from '../telemetry-flush.service';
 
 // Guarded so a second import is idempotent instead of throwing "already registered": e2e builds
 // several Nest apps in one process.
@@ -19,6 +20,9 @@ if (!register.getSingleMetric('process_cpu_seconds_total')) {
   controllers: [MetricsController],
   providers: [
     MetricsTokenGuard,
+    // Hosted here because this is the observability module the root module already imports; it only
+    // needs to be instantiated somewhere global so Nest calls its shutdown hook.
+    TelemetryFlushService,
     ...METRIC_PROVIDERS,
     { provide: METRICS, useClass: BusinessMetrics },
     { provide: APP_INTERCEPTOR, useClass: HttpMetricsInterceptor },

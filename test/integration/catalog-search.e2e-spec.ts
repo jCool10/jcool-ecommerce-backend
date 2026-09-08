@@ -228,7 +228,6 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
       expect(first.totalPages).toBe(2);
       expect(first.items).toHaveLength(2);
       expect(second.items).toHaveLength(1);
-      // Distinct pages, not the same page twice.
       expect(first.items.map((hit) => hit.id)).not.toContain(second.items[0].id);
     });
   });

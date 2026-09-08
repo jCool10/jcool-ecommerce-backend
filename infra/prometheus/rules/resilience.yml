@@ -31,7 +31,8 @@ groups:
       # counted as its fault. A config fault therefore shows up as a checkout error rate with a
       # closed breaker, so do not read a quiet CircuitBreakerOpen as "payments are fine".
 
-      # Threshold is a placeholder over the ~21 req/s baseline in runbook §3 — one rejection per
+      # Threshold is a placeholder over the ~21 req/s k6 baseline recorded in slo-burn-rate.yml's
+      # header — one rejection per
       # second on a single route is far more than a well-behaved client produces. The tier is what
       # makes it actionable: `default`/`account` is anonymous flooding or one NAT'd office, `user` is
       # a single authenticated account misbehaving.

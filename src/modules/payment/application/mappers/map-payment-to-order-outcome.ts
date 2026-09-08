@@ -1,4 +1,4 @@
-import type { FinalizeOutcome } from '@modules/order/application/use-cases';
+import type { FinalizeOutcome } from '@modules/order/application/public/order-finalization.port';
 import { PaymentStatus } from '../../domain/payment-status';
 
 /**

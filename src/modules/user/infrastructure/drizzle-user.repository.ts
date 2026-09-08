@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { IdentityService } from '@shared/identity';
-import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { users } from './schema/user.schema';
 import { User } from '../domain/entities/user.entity';
 import type { CreateUserInput, UserRepositoryPort } from '../application/ports';
@@ -38,8 +38,9 @@ export class DrizzleUserRepository implements UserRepositoryPort {
     return rows[0] ? toDomain(rows[0]) : null;
   }
 
-  async findById(id: string): Promise<User | null> {
-    const rows = await this.db.select().from(users).where(eq(users.id, id)).limit(1);
+  async findById(id: string, tx?: DrizzleTx): Promise<User | null> {
+    const executor = tx ?? this.db;
+    const rows = await executor.select().from(users).where(eq(users.id, id)).limit(1);
     return rows[0] ? toDomain(rows[0]) : null;
   }
 
@@ -58,8 +59,13 @@ export class DrizzleUserRepository implements UserRepositoryPort {
     return row ? toDomain(row) : null;
   }
 
+  // First verification wins: the IS NULL guard makes a repeat call a true no-op, so the stamp keeps
+  // recording when the address was verified rather than when it was last clicked.
   async markEmailVerified(userId: string): Promise<void> {
-    await this.db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, userId));
+    await this.db
+      .update(users)
+      .set({ emailVerifiedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.emailVerifiedAt)));
   }
 
   async updatePassword(userId: string, passwordHash: string): Promise<void> {

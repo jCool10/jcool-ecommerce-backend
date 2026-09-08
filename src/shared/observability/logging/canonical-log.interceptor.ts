@@ -51,16 +51,26 @@ export class CanonicalLogInterceptor implements NestInterceptor {
         const dbQueries = getDbQueryCount(this.cls);
 
         if (this.devPretty) {
-          this.logger.info(
-            formatDevRequestLine({
-              method: request.method,
-              route,
-              statusCode,
-              durationMs,
-              contentLength: response.getHeader('content-length'),
-              dbQueries,
-            }),
-          );
+          // content-length is set when Nest serializes the body, after this chain unwinds, so the
+          // size is readable no earlier than 'finish'. 'close' is the backstop — an aborted response
+          // never finishes, and a dropped request is one a developer needs to see; first fire wins.
+          let logged = false;
+          const logRequestLine = (): void => {
+            if (logged) return;
+            logged = true;
+            this.logger.info(
+              formatDevRequestLine({
+                method: request.method,
+                route,
+                statusCode,
+                durationMs,
+                contentLength: response.getHeader('content-length'),
+                dbQueries,
+              }),
+            );
+          };
+          response.once('finish', logRequestLine);
+          response.once('close', logRequestLine);
           return;
         }
 

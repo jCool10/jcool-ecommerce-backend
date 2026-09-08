@@ -58,6 +58,28 @@ describe('verifyStripeStyle', () => {
     }
   });
 
+  // Signing-secret rotation: the sender signs one body under every active secret and sends them all,
+  // so the valid one may sit anywhere among them.
+  it.each([
+    ['first', (valid: string, other: string) => `${valid},${other}`],
+    ['last', (valid: string, other: string) => `${other},${valid}`],
+  ])('accepts a header carrying several v1 signatures when ours is %s', (_position, arrange) => {
+    const raw = body();
+    const validSig = signStripeStyle(SECRET, NOW, raw).split('v1=')[1];
+    const header = `t=${NOW},${arrange(`v1=${validSig}`, `v1=${'0'.repeat(64)}`)}`;
+    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
+      'valid',
+    );
+  });
+
+  it('still rejects when a multi-signature header carries no signature of ours', () => {
+    const raw = body();
+    const header = `t=${NOW},v1=${'0'.repeat(64)},v1=${'z'.repeat(64)}`;
+    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
+      'invalid_signature',
+    );
+  });
+
   it('rejects a validly-signed but stale timestamp as expired_timestamp (replay defense)', () => {
     const staleTs = NOW - TOLERANCE - 1;
     const raw = body();

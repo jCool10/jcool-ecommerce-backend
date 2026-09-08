@@ -47,18 +47,25 @@ export class FinalizeOrderUseCase {
       return result; // a duplicate or a conflict moved nothing, so no saga step is counted
     }
 
-    const { orderId, outcome, reason } = input;
-    // Recorded when the unit returns, which under `join` is before the caller's transaction commits.
-    // A caller that rolls back after this leaves the counter one high and — the heavier claim — the
-    // line below asserting an end state the database never reached; the redelivery then counts again.
+    // Owning the transaction means settle() has already committed. Under `join` the caller commits
+    // later and therefore owns the reporting: emitting here would leave the counter one high and the
+    // audit line asserting an end state the database never reached if that caller rolls back.
+    if (!join) {
+      this.reportFinalized(input);
+      return result;
+    }
+
+    return { ...result, reportFinalized: () => this.reportFinalized(input) };
+  }
+
+  /** The finalize step, its compensation, and the one audit line. Run ONLY after the commit. */
+  private reportFinalized({ orderId, outcome, reason }: FinalizeInput): void {
     this.metrics.recordSagaStep('finalize', 'success');
     if (outcome !== OrderStatus.PAID) {
       this.metrics.recordCompensation(COMPENSATION_TRIGGER[outcome]);
     }
     // The only log here that says an order actually reached its end state.
     this.logger.info({ context: LOG_CONTEXT, orderId, outcome, reason }, 'order finalized');
-
-    return result;
   }
 
   private async settle(

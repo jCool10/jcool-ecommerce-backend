@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { PermanentError } from '@shared/messaging/errors';
-import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import type { DomainEventJob, PostCommitEffect } from '@shared/messaging/queue/domain-event.job';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { FinalizeOrderUseCase, type FinalizeOutcome } from '../../application/use-cases';
 
@@ -32,7 +32,7 @@ export class PaymentEventsHandler {
     private readonly logger: PinoLogger,
   ) {}
 
-  async settle(job: DomainEventJob, tx: DrizzleTx): Promise<void> {
+  async settle(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect | void> {
     const outcome = OUTCOME_BY_EVENT[job.eventType];
     const orderId = job.payload.orderId;
     // Permanent, not retryable: a payload this shape will be identical on every redelivery, and a
@@ -66,6 +66,13 @@ export class PaymentEventsHandler {
         { context: LOG_CONTEXT, orderId, eventType: job.eventType, status: result.order?.status },
         'payment settled for an order that was already in a terminal state',
       );
+    }
+
+    // The settlement is written to the consumer's transaction, so it only becomes true once that
+    // commits — the finalize hands back its counters and audit line for this consumer to run then.
+    const report = result.reportFinalized;
+    if (report) {
+      return () => Promise.resolve(report());
     }
   }
 }

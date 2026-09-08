@@ -1,3 +1,5 @@
+// A second published cross-context surface alongside `CatalogFacade` (per `.dependency-cruiser.cjs`);
+// returns a plain snapshot, never a domain entity or a row.
 export const CATALOG_SKU_QUERY = Symbol('CATALOG_SKU_QUERY');
 
 export interface SkuView {

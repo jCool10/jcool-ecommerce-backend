@@ -21,8 +21,9 @@ function reason(error: unknown): string {
  * with: a wrong key mints ids into buckets their emails do not hash to, and nothing reads a bucket
  * until a shard split, so the damage surfaces years later. The canary runs before the pin even
  * though the pin is stronger, because the pin *writes* — pinning first on a database that already
- * holds rows would record a wrong key as the reference every later boot is held to. Both fail open
- * on an unreachable database, and fail closed only on a disagreement actually read back.
+ * holds rows would record a wrong key as the reference every later boot is held to. The canary is
+ * blind to a key wrong from row 1 — both sides then hash under it and agree — which is what the pin
+ * catches. Both fail open on an unreachable database, closed only on a disagreement read back.
  */
 @Injectable()
 export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {

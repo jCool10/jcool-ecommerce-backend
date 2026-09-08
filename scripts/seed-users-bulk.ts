@@ -6,10 +6,9 @@ import { normalizeEmail, type NormalizedEmail } from '../src/shared/kernel/norma
 
 // Grows `users` and its unique-email index to a target row count WITHOUT going through the API, so
 // the benchmark can read index size / cache residency / autovacuum behavior at scale. Every row
-// shares one email prefix, so `--clean` can delete only synthetic rows and never a real account.
+// shares one email prefix, so `--clean` can never delete a real account.
 //
-// Batched multi-row INSERT rather than COPY, to avoid a pg-copy-streams dependency; fast enough at
-// the scales actually run. The tuple generator already emits COPY-ready rows if that changes.
+// Batched multi-row INSERT rather than COPY, to avoid a pg-copy-streams dependency.
 //
 // Ids are written over raw SQL, so nothing in the type system ties these rows to the app's minting
 // path — derive them the same way or the version-nibble CHECK on `users.id` rejects the batch.
@@ -64,8 +63,6 @@ async function clean(pool: Pool): Promise<void> {
 async function main(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL is required to run the bulk seeder');
-  // Destructive throwaway tooling (bulk INSERT + `--clean` DELETE): refuse to touch a
-  // production DB even if DATABASE_URL is mispointed.
   if (process.env.NODE_ENV === 'production') {
     throw new Error('seed-users-bulk refuses to run with NODE_ENV=production (writes/deletes throwaway rows)');
   }

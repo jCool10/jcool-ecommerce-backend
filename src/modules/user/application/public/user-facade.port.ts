@@ -1,3 +1,6 @@
+// Type-only, from the tokens file rather than the barrel: importing the barrel would pull the
+// runtime drizzle module into the application layer.
+import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { Role } from '@shared/rbac';
 
 /**
@@ -13,5 +16,9 @@ export interface UserSummary {
 }
 
 export interface UserFacade {
-  getUserSummary(id: string): Promise<UserSummary | null>;
+  /**
+   * Pass `tx` when calling from inside a unit of work — a consumer transaction holds a pool
+   * connection for its whole life, so a second one taken here competes with it for the pool.
+   */
+  getUserSummary(id: string, tx?: DrizzleTx): Promise<UserSummary | null>;
 }

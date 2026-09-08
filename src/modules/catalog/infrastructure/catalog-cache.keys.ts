@@ -19,7 +19,10 @@ const NAMESPACE = 'catalog:v2';
 export const CATALOG_CACHE_VERSION_KEY = `${NAMESPACE}:ver`;
 
 export function productDetailKey(version: number, idOrSlug: string): string {
-  return `${NAMESPACE}:${version}:product:${normalizeIdOrSlug(idOrSlug)}`;
+  // Hashed for the same reason `q` is below: the path segment is free-form user text, so it is
+  // unbounded in length and can carry the `:` that shapes the key (and the `:lock` suffix the
+  // single-flight lock appends to it).
+  return `${NAMESPACE}:${version}:product:${digestOf(normalizeIdOrSlug(idOrSlug))}`;
 }
 
 export function productListKey(version: number, criteria: FindManyActiveCriteria): string {
@@ -36,8 +39,11 @@ export function productListKey(version: number, criteria: FindManyActiveCriteria
 
   // Hashed, not interpolated: `q` is free-form user text, so it is unbounded in length and can
   // carry the `:` that shapes the key.
-  const digest = createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex').slice(0, 32);
-  return `${NAMESPACE}:${version}:list:${digest}`;
+  return `${NAMESPACE}:${version}:list:${digestOf(JSON.stringify(fingerprint))}`;
+}
+
+function digestOf(input: string): string {
+  return createHash('sha256').update(input).digest('hex').slice(0, 32);
 }
 
 /**

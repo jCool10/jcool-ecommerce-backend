@@ -68,9 +68,12 @@ export class PasswordResetService {
     }
 
     const passwordHash = await this.hasher.hash(newPassword);
-    await this.users.updatePassword(outcome.userId, passwordHash);
-    // A reset is a compromise response, so every session goes, not just the current one.
+    // A reset is a compromise response, so every session goes. Revoking first fails safe: a crash
+    // leaves the old password with the sessions gone, never the reverse. Still open — the attacker
+    // holds that old password, and a login racing the window INSERTs a refresh family after
+    // revokeAllForUser has passed, which no later write revokes. Closing it needs one transaction.
     await this.sessions.revokeAll(outcome.userId);
+    await this.users.updatePassword(outcome.userId, passwordHash);
 
     return { userId: outcome.userId };
   }

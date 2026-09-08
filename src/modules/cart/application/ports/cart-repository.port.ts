@@ -9,7 +9,10 @@ export interface CartRepositoryPort {
 
   findItems(cartId: string): Promise<CartItem[]>;
 
-  /** Accumulates onto an existing line — one row per SKU. */
+  /**
+   * Accumulates onto an existing line — one row per SKU. Lossy at the ceiling: the stored line
+   * quantity is clamped to MAX_LINE_QUANTITY, so an add can persist less than it asked for.
+   */
   addItem(cartId: string, skuId: string, quantity: number): Promise<void>;
 
   /** False when the SKU is not in the cart. */

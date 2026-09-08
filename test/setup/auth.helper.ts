@@ -10,10 +10,7 @@ export interface Credentials {
   password: string;
 }
 
-/**
- * A logged-in session as the client sees it: access token from the body, refresh + CSRF from
- * cookies. `setCookies` is the raw Set-Cookie array to replay on refresh/logout.
- */
+/** `setCookies` is the raw Set-Cookie array, to be replayed on refresh/logout. */
 export interface Session {
   accessToken: string;
   expiresIn: number;

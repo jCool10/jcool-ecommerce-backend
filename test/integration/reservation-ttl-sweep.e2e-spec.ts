@@ -93,7 +93,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
       .select()
       .from(schema.outbox)
       .where(eq(schema.outbox.aggregateId, orderId))
-      // The UUIDv7 id breaks the tie: `created_at` is transaction start time, not statement time.
+      // `created_at` is transaction start time, so rows written together tie; the UUIDv7 id breaks it.
       .orderBy(desc(schema.outbox.createdAt), desc(schema.outbox.id));
     expect(row.eventType).toBe('order.expired');
     return {
@@ -250,8 +250,6 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
       expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
     });
 
-    // The whole reason this rides the queue: retry until the gateway answers. A failed consume must
-    // leave the payment untouched, so the redelivery closes the session for real.
     it('fails the consume and writes nothing when the gateway refuses', async () => {
       vi.spyOn(gateway, 'expireSession').mockRejectedValue(new Error('gateway unreachable'));
       const { orderId } = await lapsedOrder();
@@ -260,7 +258,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
       await expect(processor.process(await expiryJob(orderId))).rejects.toThrow('gateway unreachable');
 
       expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.PENDING);
-      // The inbox claim rolled back with it — otherwise the redelivery would find it consumed.
+      // The inbox claim rolled back too — otherwise the redelivery would find it already consumed.
       expect(await db.select().from(schema.inbox)).toHaveLength(0);
     });
 

@@ -2,9 +2,7 @@ import 'dotenv/config';
 import { Pool } from 'pg';
 
 // Postgres-side metric capture for the register-uniqueness benchmark; run after a seed and/or a k6
-// load pass. pg_stat_statements is queried when present but is NOT enabled on the default docker
-// image (it needs `shared_preload_libraries=pg_stat_statements` + a restart); everything else here
-// reads always-on catalog views.
+// load pass.
 
 function bytesToMb(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
@@ -122,10 +120,10 @@ async function main(): Promise<void> {
       pgss,
       '',
       '=== escalation gate reading ===',
-      `B-bloom  (Phase 4): ${indexResident ? 'CLOSED' : 'watch'} — email index ${bytesToMb(emailIndexBytes)} vs shared_buffers ${bytesToMb(sharedBuffersBytes)}. ` +
+      `B-bloom    : ${indexResident ? 'CLOSED' : 'watch'} — email index ${bytesToMb(emailIndexBytes)} vs shared_buffers ${bytesToMb(sharedBuffersBytes)}. ` +
         `Bloom only helps once the index stops being RAM-resident AND duplicate INSERT traffic is material.`,
-      `B-partition (Phase 5): CLOSED at this scale — single-table maintenance triggers near ~300–500M rows / index > RAM (current rows ${rowCount.toLocaleString()}).`,
-      `C-shard  (Phase 6): CLOSED at this scale — single-primary write/storage ceiling near ~1B+ rows.`,
+      `B-partition: CLOSED at this scale — single-table maintenance triggers near ~300–500M rows / index > RAM (current rows ${rowCount.toLocaleString()}).`,
+      `C-shard    : CLOSED at this scale — single-primary write/storage ceiling near ~1B+ rows.`,
     ];
     console.log(lines.join('\n'));
   } finally {

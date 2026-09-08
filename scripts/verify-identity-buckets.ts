@@ -4,8 +4,8 @@
  *
  * The boot canary samples one row; this reads all of them, answering what a sample cannot: does this
  * database agree with a freshly provisioned key, and how many rows did a drift hit. Only `users` —
- * token routing follows the owner's `user_id`, so a misrouted user is the whole finding. Read-only,
- * and exits non-zero on disagreement so it can gate a deploy.
+ * token routing follows the owner's `user_id`, so a misrouted user is the whole finding. Exits
+ * non-zero on disagreement so it can gate a deploy.
  */
 import 'dotenv/config';
 import { Pool } from 'pg';

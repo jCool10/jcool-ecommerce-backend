@@ -2,13 +2,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { canTransition } from '../../domain/payment-state-machine';
-import type { Payment } from '../../domain/payment.entity';
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from '../ports/payment-gateway.port';
 import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';
 import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
+import { chargeMatchesPayment } from '../mappers/charge-matches-payment';
 import { mapEventToOutcome } from '../mappers/map-event-to-outcome';
-import { readCheckoutSession, type CheckoutSessionFacts } from '../mappers/read-checkout-session';
+import { readCheckoutSession } from '../mappers/read-checkout-session';
 import { toSettledOutboxRecord } from '../payment-outbox.mapper';
 
 /**
@@ -154,18 +154,4 @@ export class ProcessWebhookEventUseCase {
       };
     });
   }
-}
-
-/**
- * A divergence is never retryable: it means this session is not the one this payment was for — a
- * mislinked or reused handle, or a snapshot bug — so applying it would settle an order against the
- * wrong money. Absent fields count as a divergence; on the money path, no proof is not proof.
- */
-function chargeMatchesPayment(payment: Payment, facts: CheckoutSessionFacts): boolean {
-  return (
-    facts.amountMinor === payment.amountMinor &&
-    facts.currency !== undefined &&
-    // Stripe sends ISO-4217 lowercase; `Payment.currency` is normalized upper at construction.
-    facts.currency.toUpperCase() === payment.currency
-  );
 }

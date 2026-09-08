@@ -6,10 +6,9 @@ import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Rate limiting is off in the default harness (shared loopback IP would make
-// every suite flaky), so this suite opts in explicitly and boots its own app
-// with THROTTLE_ENABLED='true'. Emails are unique per run so a leftover Redis
-// block from a previous run (15-min TTL) can't affect a fresh account bucket.
+// Rate limiting is off in the default harness (the shared loopback IP would make every suite
+// flaky), so this suite opts in explicitly. Emails are unique per run so a leftover Redis block
+// from a previous run (15-min TTL) can't affect a fresh account bucket.
 describe('Auth rate limiting (integration, real Redis)', () => {
   let app: INestApplication;
   let pool: Pool;

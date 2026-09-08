@@ -1,6 +1,6 @@
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
-import type { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
+import type { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { HandlePaymentWebhookUseCase } from './handle-payment-webhook.use-case';

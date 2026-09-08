@@ -25,7 +25,7 @@ export interface UpdatePaymentStatusOptions {
 export interface PaymentRepositoryPort {
   create(payment: Payment, tx?: DrizzleTx): Promise<Payment>;
 
-  /** The latest payment for an order (newest first). */
+  /** The latest payment for an order — a retried checkout leaves older rows behind. */
   findByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment | null>;
 
   findByProviderSessionId(providerSessionId: string, tx?: DrizzleTx): Promise<Payment | null>;

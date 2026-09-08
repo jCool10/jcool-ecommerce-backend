@@ -5,7 +5,8 @@ import { PaymentGatewayError } from '../../application/ports/payment-gateway.por
  * A 4xx is Stripe answering — a rejected amount, a stale handle, a key we got wrong — and answering
  * means the service is up. Counted against the breaker, a run of unpayable orders would open the
  * circuit on a working gateway and take checkout down for everyone else. 429 is the exception: it is
- * Stripe asking us to send less, which is what an open circuit does.
+ * Stripe asking us to send less, which is what an open circuit does. A transport failure carries no
+ * status at all and is the plainest outage signal there is — hence the default.
  */
 export function isStripeUnavailable(error: unknown): boolean {
   const cause = error instanceof PaymentGatewayError ? error.cause : error;

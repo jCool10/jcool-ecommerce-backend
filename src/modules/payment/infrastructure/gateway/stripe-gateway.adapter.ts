@@ -17,6 +17,10 @@ import { isSessionNotOpen } from './stripe-fault-classification';
 // Stripe's minimum, against a 24h default. The backstop for every session no path here manages to
 // close; it clears the 15-minute stock hold and the reconcile threshold with room to spare.
 const SESSION_LIFETIME_SEC = 30 * 60;
+// Stripe validates the sent value against ITS clock at receipt, not ours at build time: a network
+// hop, an SDK retry of this same body, or slight negative skew would otherwise land under the
+// 30-minute minimum and 400. The backstop only has a lower bound, so extra seconds cost nothing.
+const EXPIRY_CLOCK_MARGIN_SEC = 120;
 
 export interface StripeGatewayOptions {
   webhookSecret?: string;
@@ -103,7 +107,7 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
           cancel_url: this.cancelUrl,
           client_reference_id: input.orderId,
           metadata: { order_id: input.orderId },
-          expires_at: Math.floor(Date.now() / 1000) + SESSION_LIFETIME_SEC,
+          expires_at: Math.floor(Date.now() / 1000) + SESSION_LIFETIME_SEC + EXPIRY_CLOCK_MARGIN_SEC,
         },
         input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
       );
@@ -131,7 +135,12 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
 
     try {
       const session = await this.stripe.checkout.sessions.retrieve(ref);
-      return { status: mapSessionStatus(session), intentId: extractIntentId(session) };
+      return {
+        status: mapSessionStatus(session),
+        intentId: extractIntentId(session),
+        amountMinor: session.amount_total ?? undefined,
+        currency: session.currency ?? undefined,
+      };
     } catch (error) {
       // An unrecognised handle is an answer, not an outage. Every other fault throws, so an outage
       // is never read as "not paid" and used to expire a settled order.

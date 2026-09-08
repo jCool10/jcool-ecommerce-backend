@@ -17,8 +17,8 @@ interface IndexSettings {
 }
 
 // Attribute order in searchableAttributes IS the relevance priority: a match in `name` outranks one
-// in `description`. Ranking rules are deliberately left unset so an engine upgrade's tuning carries
-// over.
+// in `description`, honoured by the engine's default ranking rules (attributeRank is one of them).
+// Rules are deliberately left unset so an engine upgrade's tuning carries over.
 export const PRODUCTS_INDEX_SETTINGS: IndexSettings = {
   searchableAttributes: ['name', 'skus', 'categoryName', 'description'],
   filterableAttributes: ['categorySlug', 'status', 'currency'],

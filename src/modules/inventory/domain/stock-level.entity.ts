@@ -2,8 +2,10 @@ import { assertInteger, assertNonEmpty } from '@shared/kernel';
 import { InsufficientStockError } from './errors/insufficient-stock.error';
 
 /**
- * `available = onHand − reserved` is derived, never stored. `reserve()` guards the mutation, but
- * the concurrency mechanism that reads-and-writes it safely is the repository's job.
+ * A pure read/derivation model for a SKU's stock (`available = onHand − reserved`, never stored).
+ * NOT on the write path: "never oversell" is enforced in StockRepository — the row lock or CAS
+ * predicate, backed by the `ck_stock_no_oversell` CHECK. Changing `reserve()` here changes nothing
+ * about reservation behaviour.
  */
 export class StockLevel {
   private constructor(

@@ -18,8 +18,8 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
 
 | | |
 | --- | --- |
-| **Scale** | 7 bounded contexts · 545 TypeScript files · 22 tables · 20 committed migrations · 53 HTTP routes |
-| **Tests** | 1,091 unit tests (150 files, hermetic) + 59 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers |
+| **Scale** | 7 bounded contexts · 559 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
+| **Tests** | 1,161 unit tests (160 files, hermetic) + 60 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `npm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
@@ -140,7 +140,9 @@ interface  ──▶  application  ──▶  domain          (framework-free, n
 
 `npm run arch:check` (dependency-cruiser, 7 error-severity rules) fails the build when `domain`
 imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one
-context reaches into another's internals, or when `domain`/`application` import **any** telemetry
+context reaches into another for anything but its `application/public` surface — internal use cases
+included, which is the crossing a boundary rule usually forgets — or when `domain`/`application`
+import **any** telemetry
 package. That last rule is mechanical because the leak is easy: the observability barrel transitively
 pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity.
 ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no
@@ -170,7 +172,7 @@ src/
     ├── identity/            # UUIDv8 generator/codec, HMAC email buckets
     ├── rbac/  health/  mail/  retention/  resilience/  interface/
 test/
-├── integration/             # 59 e2e suites on real infrastructure (Testcontainers)
+├── integration/             # 60 e2e suites on real infrastructure (Testcontainers)
 ├── setup/                   # global setup, app factory, fixtures, per-suite side containers
 └── load/                    # k6 mixes
 infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector
@@ -279,7 +281,7 @@ Tear down including volumes: `docker compose down -v`.
 
 Environment is validated **once at startup** and the process refuses to boot on anything invalid —
 a missing secret is a crash, not a runtime surprise. `.env.example` is the complete, commented
-reference for all ~97 variables; these are the ones without a default:
+reference for all ~105 variables; these are the ones without a default:
 
 | Variable | Notes |
 | --- | --- |
@@ -288,6 +290,7 @@ reference for all ~97 variables; these are the ones without a default:
 | `REDIS_URL` | Shared by cache, throttler, denylist and BullMQ |
 | `JWT_ACCESS_SECRET` | min 32 chars; production refuses to boot on a shorter one |
 | `IDENTITY_BUCKET_KEY` | HMAC key for id routing buckets. **Permanent** — the DB pins its fingerprint on first boot and refuses a later boot under a different key. See [RUNBOOK.md](./RUNBOOK.md) |
+| `STRIPE_SUCCESS_URL` | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
 
 Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY`
 (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`,
@@ -307,7 +310,8 @@ No global prefix; routes are served at the root. The always-current contract is 
 **Applies to every route unless noted:** `401` without a valid access token, `403` on an `ADMIN`
 route without the role (and on a CSRF failure), `429` when throttled, `400` when a request body
 carries an unknown property — the global `ValidationPipe` runs with `whitelist` and
-`forbidNonWhitelisted`. Every error answers with one envelope:
+`forbidNonWhitelisted` — and `422` when a value passes DTO validation but breaks a domain rule
+(`Email`, `Slug`, `Money`, the state machines). Every error answers with one envelope:
 
 ```json
 { "statusCode": 409, "path": "/orders", "timestamp": "…", "requestId": "…", "traceId": "…", "message": "…" }
@@ -427,9 +431,9 @@ development and test.
 Two tiers, kept separate on purpose.
 
 ```bash
-npm test           # 1,091 unit tests, 150 files — hermetic, no Docker
+npm test           # 1,161 unit tests, 160 files — hermetic, no Docker
 npm run test:cov   # same, with the coverage floor CI enforces
-npm run test:e2e   # 59 integration suites — requires Docker
+npm run test:e2e   # 60 integration suites, 504 tests — requires Docker
 ```
 
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated
@@ -518,7 +522,9 @@ which covers what the internal gate cannot see: domain, TLS, edge routing.
 
 **Shutdown** is staged: `SIGTERM` flips `/health/ready` to `503` and holds for
 `SHUTDOWN_GRACE_PERIOD_MS` so a load balancer drains this instance, the HTTP server closes, and only
-then do the pg pool and Redis client drain.
+then do the pg pool and Redis client drain and the telemetry buffers flush. The flush runs the OTel
+and Sentry exports concurrently under a fixed ceiling, so a collector dying in the same rollout
+delays the exit by a bounded amount instead of the exporter's own timeout.
 
 ---
 
@@ -542,8 +548,19 @@ Stated plainly, because a reviewer will find them anyway.
   and the token tables store only hashes. Putting the token in an outbox payload would write it to
   Postgres in plaintext.
 - **Context extraction is bounded work, not free.** One edge would have to change: Payment settles
-  through Order's `FinalizeOrderUseCase` inside a shared transaction. Across a process boundary that
-  becomes a saga step.
+  through Order's published `order-finalization.port` inside a shared transaction. The surface is
+  already the only thing that crosses, so extraction is a transport change — across a process
+  boundary that call becomes a saga step.
+- **A money mismatch parks an order forever.** If the gateway reports a paid session whose charge
+  does not match the recorded payment, reconcile refuses to settle it (guessing would move a buyer's
+  money against the wrong order) and a `PAID` probe never ages into `EXPIRED`. The order stays
+  `PENDING` with its stock still held, re-probed every tick, and logs `stuck: true` once past twice
+  the TTL. Because the sweep reads oldest-first, enough of these would starve newer orders out of the
+  batch. Resolving it properly needs a terminal `NEEDS_REVIEW` state that leaves the sweep's queue.
+- **A password change has a race the ordering cannot close.** Sessions are revoked before the new
+  hash is written, so a crash between the two fails safe. But a login that verified the old password
+  can insert its refresh-token family just after the revoke `UPDATE` has passed, and no later write
+  to the user row reaches it. Closing it needs both writes in one transaction.
 - **No `CHECK` on the id layout.** Version and variant nibbles are validated in the codec on decode;
   a raw-SQL writer is not blocked at the database. The honest reason is that nothing writes those
   tables but this process.

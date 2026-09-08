@@ -76,7 +76,6 @@ describe('Payment webhook → order finalization (integration, real Postgres)', 
       orderId,
       sessionId: pay.body.providerSessionId as string,
       variantId,
-      // A settling event has to report the charge we actually recorded, exactly as the gateway would.
       charge: { amountMinor: recorded.amountMinor, currency: recorded.currency },
     };
   }
@@ -119,7 +118,7 @@ describe('Payment webhook → order finalization (integration, real Postgres)', 
     expect((await readOrder(orderId)).status).toBe('PAID');
     expect((await readReservation(orderId, variantId)).status).toBe('COMMITTED');
     const stock = await readStock(variantId);
-    expect(stock.quantityOnHand).toBe(STOCK - 1); // committed for real
+    expect(stock.quantityOnHand).toBe(STOCK - 1);
     expect(stock.quantityReserved).toBe(0);
     expect((await readOrder(orderId)).paymentRef).toBe('pi_e2e');
   });
@@ -134,7 +133,6 @@ describe('Payment webhook → order finalization (integration, real Postgres)', 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'skipped' });
     expect((await readOrder(orderId)).status).toBe('PENDING');
-    // The hold survives: still the buyer's stock, still not theirs to keep.
     expect((await readReservation(orderId, variantId)).status).toBe('HELD');
     const stock = await readStock(variantId);
     expect(stock.quantityOnHand).toBe(STOCK);
@@ -207,7 +205,7 @@ describe('Payment webhook → order finalization (integration, real Postgres)', 
   });
 
   it('failed webhook finalizes the order FAILED and releases the hold', async () => {
-    const { orderId, sessionId, variantId, charge } = await openPayment();
+    const { orderId, sessionId, variantId } = await openPayment();
 
     const res = await postWebhook(expired(sessionId, 'evt_fail_1'));
 
@@ -221,7 +219,6 @@ describe('Payment webhook → order finalization (integration, real Postgres)', 
   it('webhook for an unknown session (arrived before the order) acks 2xx and finalizes nothing', async () => {
     const { orderId } = await openPayment();
 
-    // No local payment for this handle, so the charge is never compared — the lookup misses first.
     const res = await postWebhook(paid('cs_orphan_session', { amountMinor: 1, currency: 'VND' }, 'evt_orphan'));
 
     expect(res.status).toBe(200);
@@ -230,7 +227,7 @@ describe('Payment webhook → order finalization (integration, real Postgres)', 
   });
 
   it('out-of-scope event type (refund) acks 2xx and leaves the order PENDING', async () => {
-    const { orderId, sessionId, charge } = await openPayment();
+    const { orderId, sessionId } = await openPayment();
 
     const res = await postWebhook(
       signWebhook({

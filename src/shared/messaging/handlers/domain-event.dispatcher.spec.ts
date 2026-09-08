@@ -64,12 +64,14 @@ describe('DomainEventDispatcher', () => {
   );
 
   // The caller owns when it runs, and that is after the transaction this dispatch is inside commits.
+  // The address lookup itself is handed the consumer tx, so composing the mail joins the connection
+  // this job already holds rather than checking out a second one.
   it('returns the buyer confirmation from order.paid without sending it', async () => {
     const { dispatcher, prepare, sendMail } = build();
 
     const effect = await dispatcher.dispatch(job('order.paid'), tx);
 
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.paid' }));
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.paid' }), tx);
     expect(sendMail).not.toHaveBeenCalled();
     expect(effect).toBe(sendMail);
   });

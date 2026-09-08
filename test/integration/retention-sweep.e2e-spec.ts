@@ -34,8 +34,7 @@ const WINDOWS = {
 /**
  * Every test inserts a row on each side of the boundary and asserts on the SURVIVOR: each of these
  * tables exists to make some retry safe, so over-collecting produces a correct-looking app that
- * fails only under retry. Sweeps are driven directly, not through the timer — `RETENTION_ENABLED`
- * is off for every e2e app, and a tick firing mid-assertion would delete the row under test.
+ * fails only under retry. Sweeps are driven directly — a timer tick would delete the row under test.
  */
 describe('Retention sweeps (integration, real Postgres)', () => {
   let app: INestApplication;

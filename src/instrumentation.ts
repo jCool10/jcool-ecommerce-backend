@@ -7,32 +7,37 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { scrubPii } from './shared/observability/error-tracking/scrub-pii';
-
-// A positive fraction turns on Sentry performance spans; 0/absent → errors only. Mapped to undefined
-// (not literal 0) on purpose: an explicit 0 still flips Sentry's own http-span instrumentation on
-// (hasSpansEnabled), which would duplicate our OTel http.server spans in Jaeger.
-function resolveTracesSampleRate(raw: string | undefined): number | undefined {
-  const rate = Number(raw);
-  return Number.isFinite(rate) && rate > 0 ? rate : undefined;
-}
+import type { TelemetryFlushGlobal } from './shared/observability/telemetry-flush.service';
 
 const sentryEnabled = Boolean(process.env.SENTRY_DSN);
 
 // Init Sentry BEFORE the OTel SDK (and before Nest) so its http patch and event-context-trace hook
-// are in place first. skipOpenTelemetrySetup reuses the OTel SDK below instead of letting Sentry
-// build its own, which would double-init and break/duplicate spans.
+// are in place first. skipOpenTelemetrySetup stops it building a second SDK, so Sentry receives
+// errors only — hence deliberately no performance-sampling knob: a rate cannot reach unseen spans.
 if (sentryEnabled) {
-  const tracesSampleRate = resolveTracesSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV,
     skipOpenTelemetrySetup: true,
-    ...(tracesSampleRate !== undefined ? { tracesSampleRate } : {}),
     // Our OTel SDK owns span emission and W3C propagation; keep Sentry from emitting its own
-    // http.server spans or injecting sentry-trace headers even if the sample rate is later raised.
+    // http.server spans or injecting sentry-trace headers.
     integrations: [Sentry.httpIntegration({ spans: false, tracePropagation: false })],
     beforeSend: scrubPii,
   });
+}
+
+// Nest holds the signal until the flush resolves, and a blackholed OTLP endpoint (the collector
+// terminating in the same rollout) costs the exporter's 10s timeout plus Sentry's 2s — on top of a
+// 5s readiness grace, enough to turn a clean exit into a SIGKILL. A healthy flush needs milliseconds.
+const FLUSH_TIMEOUT_MS = 3000;
+
+// Awaited by TelemetryFlushService from Nest's onApplicationShutdown, never on the signal itself:
+// the process keeps serving through the readiness grace period, and shutting the exporter down at
+// the start of that window drops exactly the traces and errors a rollout needs.
+function publishTelemetryFlush(flush: () => Promise<void>): void {
+  // unref'd so the ceiling itself never holds the event loop open once the flush has won the race.
+  (globalThis as TelemetryFlushGlobal).__flushTelemetry = () =>
+    Promise.race([flush(), new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS).unref())]);
 }
 
 if (process.env.OTEL_ENABLED === 'true') {
@@ -43,9 +48,9 @@ if (process.env.OTEL_ENABLED === 'true') {
     resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: serviceName }),
     traceExporter: new OTLPTraceExporter({ url: `${endpoint}/v1/traces` }),
     // Sentry's context manager is a strict superset of AsyncLocalStorage: it adds Sentry scopes (so
-    // error events pick up the active traceId) then delegates to normal OTel propagation. The
-    // sampler and propagator stay on the OTel defaults: SentrySampler would drop every span at rate
-    // 0 and starve the Jaeger export, and SentryPropagator would replace the W3C traceparent.
+    // error events pick up the active traceId) then delegates to normal OTel propagation. It is the
+    // only piece of Sentry's tracing pipeline wired in — a Sentry span processor and sampler would
+    // fight the OTel sampler and the W3C propagation seam this export depends on.
     ...(sentryEnabled ? { contextManager: new Sentry.SentryContextManager() } : {}),
     instrumentations: [
       getNodeAutoInstrumentations({
@@ -63,19 +68,18 @@ if (process.env.OTEL_ENABLED === 'true') {
 
   sdk.start();
 
-  // Nest (enableShutdownHooks) owns process exit, so don't call process.exit() here — it would race
-  // the pool/Redis drain.
-  const flush = (): void => {
-    void sdk.shutdown().catch(() => undefined);
-    if (sentryEnabled) void Sentry.flush(2000).catch(() => undefined);
-  };
-  process.once('SIGTERM', flush);
-  process.once('SIGINT', flush);
+  publishTelemetryFlush(async () => {
+    // Concurrent, not chained: the ceiling below races the whole closure, so awaiting the OTLP
+    // shutdown first would spend the entire budget on a dead collector and never reach Sentry —
+    // losing the errors from the drain window. Neither flush depends on the other's ordering.
+    await Promise.all([
+      sdk.shutdown().catch(() => undefined),
+      sentryEnabled ? Sentry.flush(2000).catch(() => undefined) : Promise.resolve(),
+    ]);
+  });
 } else if (sentryEnabled) {
   // Sentry on, OTel off: errors are captured without trace linkage — degraded, not broken.
-  const flush = (): void => {
-    void Sentry.flush(2000).catch(() => undefined);
-  };
-  process.once('SIGTERM', flush);
-  process.once('SIGINT', flush);
+  publishTelemetryFlush(async () => {
+    await Sentry.flush(2000).catch(() => undefined);
+  });
 }

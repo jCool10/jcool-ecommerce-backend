@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { USER_FACADE, type UserFacade } from '@modules/user/application/public/user-facade.port';
+import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@shared/mail/mail-transport.port';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob, PostCommitEffect } from '@shared/messaging/queue/domain-event.job';
@@ -22,7 +23,7 @@ export class OrderPaidMailHandler {
     private readonly logger: PinoLogger,
   ) {}
 
-  async prepare(job: DomainEventJob): Promise<PostCommitEffect> {
+  async prepare(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect> {
     const { orderId, userId } = job.payload;
     // Permanent: the payload is byte-identical on every redelivery, so retrying changes nothing.
     if (typeof orderId !== 'string' || typeof userId !== 'string') {
@@ -30,8 +31,9 @@ export class OrderPaidMailHandler {
     }
 
     // The event deliberately carries no email address: the outbox is jsonb in Postgres, and a
-    // deleted account must not leave its address behind in it.
-    const user = await this.users.getUserSummary(userId);
+    // deleted account must not leave its address behind in it. Read on the consumer's own
+    // transaction — a second pool connection here would compete with the one this job already holds.
+    const user = await this.users.getUserSummary(userId, tx);
     if (!user) {
       throw new PermanentError(`order.paid for order ${orderId} names a user that no longer exists`);
     }

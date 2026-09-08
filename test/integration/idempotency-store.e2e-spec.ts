@@ -18,11 +18,9 @@ const REQUEST_HASH = 'a'.repeat(64);
 const scopeOf = (userId: string) => `user:${userId}`;
 const inDays = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
-// Repository contract for the idempotency-key store on real Postgres. Proves the DB-level
-// invariants Phases 2/3 lean on: the unique (scope, key) index is the concurrency backstop
-// (dup INSERT loses instead of throwing), a COMPLETED row replays its stored response, the
-// store is per-user, markCompleted enlists in a caller's transaction, and expired rows are
-// reclaimable. The repo is built directly (no request wiring yet — that lands in Phase 2).
+// Repository contract for the idempotency-key store on real Postgres: the DB-level invariants the
+// wired route leans on — the unique (scope, key) index as the concurrency backstop (a duplicate
+// INSERT loses instead of throwing), and markCompleted enlisting in a caller's transaction.
 describe('Idempotency-key store (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;

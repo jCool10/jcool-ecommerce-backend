@@ -1,7 +1,6 @@
-# Prometheus scrape config for the local observability stack (wired into docker-compose in
-# Phase 5). Scrapes the API's guarded /metrics with a bearer token read from a file (never
-# inlined). SLO recording + burn-rate rules live in rules/. Numbers here (SLO targets) are
-# qualitative until k6 in Phase 6 (DoD-19).
+# Prometheus scrape config for the local observability stack. Scrapes the API's guarded /metrics
+# with a bearer token read from a file, never inlined. SLO recording + burn-rate rules live in
+# rules/; their targets are derived from the k6 baseline recorded there.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -16,8 +15,8 @@ scrape_configs:
 
   - job_name: jcool-api
     metrics_path: /metrics
-    # Token match or the endpoint answers 404 (ADR-0018). File-based so the secret is
-    # mounted, not committed. Provision it in Phase 5's compose (e.g. a Docker secret).
+    # The token must match or /metrics answers 404 — an unauthenticated scraper cannot even
+    # confirm the endpoint exists. File-based so the secret is mounted, never committed.
     authorization:
       type: Bearer
       credentials_file: /etc/prometheus/secrets/metrics-token

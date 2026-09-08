@@ -17,8 +17,7 @@ const USER_LIMIT = ORDER_THROTTLE[USER_THROTTLER].limit;
 // Syntactically valid so the route's ParseUUIDPipe passes it through to a real 404.
 const ABSENT_ORDER_ID = '00000000-0000-4000-8000-000000000000';
 
-// Rate limiting is off in the default harness (the shared loopback IP would make every suite
-// flaky), so this suite opts in explicitly and boots its own app with THROTTLE_ENABLED='true'.
+// Rate limiting is off in the default harness, so this suite opts in explicitly with its own app.
 describe('Rate limiting on sensitive endpoints (integration, real Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -85,10 +84,7 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
   it('caps one account at the cancel endpoint', async () => {
     const dave = await createTestUser(app);
     const cancel = (): request.Test =>
-      request(app.getHttpServer())
-        .post(`/orders/${ABSENT_ORDER_ID}/cancel`)
-        .set(authHeader(dave.accessToken))
-        .send();
+      request(app.getHttpServer()).post(`/orders/${ABSENT_ORDER_ID}/cancel`).set(authHeader(dave.accessToken)).send();
 
     for (let attempt = 0; attempt < USER_LIMIT; attempt++) {
       expect((await cancel()).status).toBe(404);

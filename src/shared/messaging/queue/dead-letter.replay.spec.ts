@@ -80,11 +80,14 @@ describe('replayDeadLetters', () => {
     expect(add).not.toHaveBeenCalled();
     expect(dlqJob.remove).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ replayed: 0, skipped: 1 });
+    // The parking reason rides along: it is the diagnosis the operator must act on before replaying,
+    // and the summary is the only place the CLI can show it from.
     expect(summary.outcomes[0]).toEqual({
       messageId: ID_A,
       eventType: 'order.placed',
       status: 'skipped',
       detail: 'dry run',
+      failedReason: 'database unavailable',
     });
   });
 

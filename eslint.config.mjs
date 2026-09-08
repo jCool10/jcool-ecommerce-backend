@@ -33,9 +33,21 @@ export default tseslint.config(
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
-      // No inline overrides: options come solely from .prettierrc, so `eslint --fix` and
-      // `prettier --write` never fight.
+      // Options come solely from .prettierrc, so `eslint --fix` and `prettier --write` never fight.
       'prettier/prettier': 'error',
+    },
+  },
+  // `INestApplication.getHttpServer()` is typed `any`, so every supertest call in the e2e tier trips
+  // the unsafe-* family. Relaxed here only; the correctness rules stay on — an un-awaited supertest
+  // request is never sent, and the spec goes green having asserted nothing.
+  {
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
     },
   },
   // Id generation must stay synchronous: an await between reading the clock and stamping the sequence
@@ -67,8 +79,7 @@ export default tseslint.config(
   },
   // An id from a general-purpose generator carries no routing bucket, and nothing notices until a
   // shard split. Not a global ban: `jti`/`familyId` have no bucket and stay on uuidv7, and specs must
-  // be able to mint a non-v8 id to prove it is rejected. All of `scripts/`, because scripts reach the
-  // table over raw SQL.
+  // be able to mint a non-v8 id to prove it is rejected. `scripts/` is in because it inserts over raw SQL.
   {
     files: [
       'src/modules/user/infrastructure/**/*.ts',

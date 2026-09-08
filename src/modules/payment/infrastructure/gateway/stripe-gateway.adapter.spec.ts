@@ -115,16 +115,19 @@ describe('StripeGatewayAdapter', () => {
     });
 
     // Anything this service fails to close stays payable until the gateway's own clock runs out, so
-    // that clock is set to the shortest Stripe accepts rather than its 24h default.
-    it('caps the session lifetime at 30 minutes rather than taking the provider default', async () => {
+    // that clock is set just above the shortest Stripe accepts rather than its 24h default. Strictly
+    // above: Stripe checks the value against its own clock, which our latency and skew cannot reach.
+    it("sets the session lifetime past Stripe's 30-minute minimum rather than exactly at it", async () => {
       const create = vi.fn().mockResolvedValue({ id: 'cs_test_ttl', url: null });
       const before = Math.floor(Date.now() / 1000);
 
       await liveAdapter(create).createSession({ orderId: 'o', amountMinor: 1, currency: 'USD' });
 
+      // The whole margin, not merely "more than the minimum": the adapter reads its own clock after
+      // `before`, so a bare `>` would also pass on a crossed second with no margin at all.
       const [params] = create.mock.calls[0] as [Stripe.Checkout.SessionCreateParams];
-      expect(params.expires_at).toBeGreaterThanOrEqual(before + 30 * 60);
-      expect(params.expires_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 30 * 60);
+      expect(params.expires_at).toBeGreaterThanOrEqual(before + 30 * 60 + 120);
+      expect(params.expires_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 30 * 60 + 120);
     });
 
     it('maps a null hosted url to an undefined redirectUrl', async () => {
@@ -202,6 +205,23 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
       await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toEqual({
         status: 'PAID',
         intentId: 'pi_1',
+      });
+    });
+
+    // The sweep settles only against a charge that matches the payment row, so the probe has to
+    // carry the session's money, not just its verdict.
+    it('carries the charge the session holds', async () => {
+      const retrieve = vi.fn().mockResolvedValue({
+        payment_status: 'paid',
+        status: 'complete',
+        payment_intent: 'pi_1',
+        amount_total: 150_000,
+        currency: 'vnd',
+      });
+
+      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toMatchObject({
+        amountMinor: 150_000,
+        currency: 'vnd',
       });
     });
 

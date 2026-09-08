@@ -141,6 +141,13 @@
       "when": 1788794688937,
       "tag": "0019_sad_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788884519027,
+      "tag": "0020_misty_thaddeus_ross",
+      "breakpoints": true
     }
   ]
 }

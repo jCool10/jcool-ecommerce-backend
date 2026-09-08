@@ -38,8 +38,7 @@ export async function createTestApp(
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
   // Background drivers forced off so nothing runs behind a test's back — a tick firing mid-assertion
-  // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Suites
-  // drive them directly, or re-enable one via `envOverrides`, applied below. Assigned
+  // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Assigned
   // unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's .env into
   // process.env, so from the second app onwards `??=` would inherit an untracked local file. The
   // bucket key must also be identical across apps, or a user's id and its token ids split buckets.

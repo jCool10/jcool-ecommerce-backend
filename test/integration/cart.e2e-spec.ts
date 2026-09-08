@@ -15,10 +15,9 @@ import { createTestApp } from '../setup/test-app.factory';
 // (unknown SKU on add, absent line on patch) without a text→uuid cast 500.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
-// Black-box HTTP tests for the Cart context over real Postgres + Redis. Proves
-// the senior-signal behaviors: upsert accumulation, per-user isolation, and a
-// subtotal built from LIVE Catalog prices (cart never freezes a price) — read
-// only through Catalog's published port.
+// Black-box HTTP tests for the Cart context over real Postgres + Redis. The subtotal is built from
+// LIVE Catalog prices — a cart never freezes a price — and Catalog is read only through its
+// published port.
 describe('Cart (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -90,7 +89,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(2);
-      expect(res.body.subtotalMinor).toBe(199_000 * 2 + 50_000); // 448_000
+      expect(res.body.subtotalMinor).toBe(199_000 * 2 + 50_000);
       expect(res.body.currency).toBe('VND');
     });
   });
@@ -199,7 +198,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
     it('returns 404 when the SKU is not in the cart', async () => {
       const token = await newUser();
-      const { variantId } = await createTestProduct(app); // created but never added
+      const { variantId } = await createTestProduct(app);
 
       const res = await request(server())
         .patch(`/cart/items/${variantId}`)
@@ -268,7 +267,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
       const { productId, variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
 
-      await archiveProduct(productId); // product archived after it was added
+      await archiveProduct(productId);
 
       const res = await request(server()).get('/cart').set(authHeader(token));
 
@@ -290,7 +289,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
       const resB = await request(server()).get('/cart').set(authHeader(tokenB));
 
       expect(resA.body.items).toHaveLength(1);
-      expect(resB.body.items).toEqual([]); // user B sees an empty cart
+      expect(resB.body.items).toEqual([]);
     });
   });
 });
