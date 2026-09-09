@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
+import { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { mapPaymentToOrderOutcome } from '../mappers/map-payment-to-order-outcome';

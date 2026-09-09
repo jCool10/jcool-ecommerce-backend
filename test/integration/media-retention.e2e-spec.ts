@@ -27,9 +27,8 @@ const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * MINU
 
 /**
  * Reclaiming bytes cannot be undone, so these tests are about what the sweep must NOT take: anything
- * attached, anything not yet expired, and anything another transaction is claiming. The order the
- * sweep works in — claim, then object, then row — is what makes an interrupted pass safe, and the
- * crash cases below are the reason it is that way round rather than the obvious one.
+ * attached, not yet expired, or being claimed by another transaction. The order the sweep works in —
+ * claim, then object, then row — is what makes an interrupted pass safe, and the crash cases say why.
  */
 describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   let storage: StartedObjectStorage;

@@ -17,9 +17,8 @@ async function waitForReady(app: INestApplication, attempts = 50): Promise<void>
 }
 
 // Proves the shutdown-aware readiness wiring end-to-end: /health/ready flips to 503 once the
-// process begins draining, while /health/live stays 200 (a draining process is still alive).
-// Uses the real Nest lifecycle hook (ShutdownService.beforeApplicationShutdown) instead of a
-// real OS signal so the assertion is deterministic. Live SIGTERM drain = deferred DoD-17 runbook.
+// process begins draining, while /health/live stays 200 (a draining process is still alive). Uses
+// the real Nest lifecycle hook rather than an OS signal, so the assertion is deterministic.
 describe('Health — shutdown-aware readiness (real Postgres + Redis)', () => {
   let app: INestApplication;
 

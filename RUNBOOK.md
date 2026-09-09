@@ -17,6 +17,7 @@ Conventions used below:
 - [Backup and restore](#backup-and-restore)
 - [Rebuild the search index](#rebuild-the-search-index)
 - [Reconcile the bucket against `media_assets`](#reconcile-the-bucket-against-media_assets)
+- [Outbox relay is not draining](#outbox-relay-is-not-draining)
 - [Replay the dead-letter queue](#replay-the-dead-letter-queue)
 - [Retention sweeps](#retention-sweeps)
 - [A refund is owed](#a-refund-is-owed)
@@ -167,7 +168,7 @@ fails loudly.
 
 | Finding | Means | Do |
 | ------- | ----- | -- |
-| **orphan object** — bytes in the bucket no row points at | Storage being paid for with nothing left that could ever reference it. Expected *transiently*: the sweep deletes the object before the row, so a crash between the two shows up here | Re-run after the next sweep tick. Still there → delete the object by hand; no row means nothing can reference it |
+| **orphan object** — bytes in the bucket no row points at | Storage being paid for with nothing left that could ever reference it. Either a `PUT` that landed after its row was swept, or bytes written to the bucket outside the app. **Not** a crashed sweep: that deletes the object first and the row second, so it leaves a `SWEEPING` row whose object is gone — a state this tool does not report at all | Delete the object by hand; no row exists for a sweep to ever claim it, so re-running changes nothing. It is not a scan artefact either — candidates are re-read against the database before being reported |
 | **missing object** — an `ATTACHED` row whose object is gone | A product is rendering a broken image **right now**, and bytes were deleted while something still pointed at them. Never expected | Detach the image (`DELETE /admin/products/:productId/images/:imageId`) so the page stops breaking, then re-upload. Find out what deleted it — the sweep cannot select an `ATTACHED` row |
 | **dangling link** — a `product_images` row whose `media_assets` row is gone | There is no FK between them (separate contexts), and the read path *hides* this: an asset id that resolves to no URL is dropped from the response rather than rendered broken | Detach the image, then re-upload. The product visibly loses an image, but nothing anywhere raises an error about it — this table is the only place it is reported |
 
@@ -195,6 +196,35 @@ is not optional:
 
 None of the three can be enforced from this codebase; they belong in the bucket/CDN policy, and the
 last two are why `STORAGE_PUBLIC_BASE_URL` should point at a domain that hosts nothing else.
+
+---
+
+## Outbox relay is not draining
+
+`OutboxMessageStale` pages on `outbox_oldest_age_seconds > 60`. The gauge is an **age**, so one row
+that can never publish pins it forever and looks identical to a relay that stopped — but the two
+need opposite responses. `attempts` is what separates them:
+
+```sql
+-- local — the oldest unpublished rows and how often each has been refused
+SELECT id, event_type, attempts, created_at
+FROM outbox
+WHERE published_at IS NULL
+ORDER BY created_at, id
+LIMIT 20;
+```
+
+- **`attempts` climbing on one row while others publish** — that row is poison, and the backlog
+  behind it is moving. The relay only charges an attempt when something else in the same tick got
+  through, so a non-zero count is proof the queue itself is healthy. Fix the payload or the handler;
+  the row keeps its place in line meanwhile.
+- **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not
+  running (`QUEUE_ENABLED`, the worker process) or Redis is refusing every publish. Check
+  `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked
+  through, not an outage.
+
+A row here has **not** been dead-lettered — it was never delivered at all, so
+[replay](#replay-the-dead-letter-queue) does not apply to it and there is nothing to re-admit.
 
 ---
 
@@ -241,8 +271,8 @@ server may be keeping claims for seven — re-admitting precisely the replays th
 refuse. The window in force is echoed in the header the command prints; check it matches the
 deployment before `--apply`.
 
-What replay **cannot** fix in any case is the reason the message failed. Read the printed
-`failedReason` and deploy the fix first, or the same messages come straight back.
+What replay **cannot** fix in any case is the reason the message failed. Each line prints it as
+`[parked: <reason>]`; deploy the fix first, or the same messages come straight back.
 
 ```bash
 # local — dry run is the default, because this puts real traffic back on a live queue

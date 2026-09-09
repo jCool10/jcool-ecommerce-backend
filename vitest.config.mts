@@ -14,8 +14,7 @@ export default defineConfig({
       // Real uuid v7 is timestamp+random; the deterministic double keeps unit runs reproducible
       // (exact values are never asserted). e2e uses the real one.
       uuid: fileURLToPath(new URL('./test/mocks/uuid.js', import.meta.url)),
-      // Duplicated from tsconfig paths because SWC/Vite do not read tsconfig. Prefixes are disjoint
-      // under rollup-alias word-boundary matching, so the order here is cosmetic.
+      // Duplicated from tsconfig paths because SWC/Vite do not read tsconfig.
       '@modules': fileURLToPath(new URL('./src/modules', import.meta.url)),
       '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)),
       '@': fileURLToPath(new URL('./src', import.meta.url)),

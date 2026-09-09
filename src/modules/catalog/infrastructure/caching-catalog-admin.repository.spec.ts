@@ -7,7 +7,7 @@ import type { DrizzleCatalogAdminRepository } from './drizzle-catalog-admin.repo
 const MUTATIONS = [
   'createCategory',
   'updateCategory',
-  'archiveCategory',
+  'archiveCategoryIfEmpty',
   'createProduct',
   'updateProduct',
   'archiveProduct',
@@ -20,13 +20,7 @@ const MUTATIONS = [
   'setPrice',
 ] as const;
 
-const PASSTHROUGH_READS = [
-  'findCategoryById',
-  'countActiveProductsInCategory',
-  'findProductById',
-  'findSkuById',
-  'listImages',
-] as const;
+const PASSTHROUGH_READS = ['findCategoryById', 'findProductById', 'findSkuById', 'listImages'] as const;
 
 type AsyncMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 
@@ -37,6 +31,8 @@ function build() {
       vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ id: 'x' }),
     ]),
   ) as Record<string, AsyncMock>;
+  // The archive answers with an outcome rather than a row: a refusal is not a missing category.
+  source.archiveCategoryIfEmpty.mockResolvedValue({ category: { id: 'x' }, blocked: false });
   const bumpCounter = vi.fn<(key: string) => Promise<void>>().mockResolvedValue(undefined);
   const repo = new CachingCatalogAdminRepository(
     source as unknown as DrizzleCatalogAdminRepository,
@@ -54,8 +50,9 @@ describe('CachingCatalogAdminRepository', () => {
     ctx = build();
   });
 
+  // A non-empty payload throughout: the update methods treat an all-undefined patch as a no-op.
   it.each(MUTATIONS)('bumps the catalog generation after %s commits', async (mutation) => {
-    await (ctx.repo[mutation] as (...args: unknown[]) => Promise<unknown>)('id', {});
+    await (ctx.repo[mutation] as (...args: unknown[]) => Promise<unknown>)('id', { name: 'x' });
 
     expect(ctx.source[mutation]).toHaveBeenCalled();
     expect(ctx.bumpCounter).toHaveBeenCalledExactlyOnceWith(CATALOG_CACHE_VERSION_KEY);
@@ -75,6 +72,30 @@ describe('CachingCatalogAdminRepository', () => {
     );
 
     expect(implemented.filter((name) => !declared.has(name))).toEqual([]);
+  });
+
+  // The adapter degrades a patch with nothing defined into a plain read, which returns the existing
+  // row — so a non-null result alone must not be read as "something changed".
+  it.each([
+    ['updateProduct', {}],
+    ['updateCategory', { name: undefined }],
+    ['updateSku', {}],
+  ] as const)('does not bump when %s carries no field to write', async (mutation, patch) => {
+    await (ctx.repo[mutation] as (...args: unknown[]) => Promise<unknown>)('id', patch);
+
+    expect(ctx.source[mutation]).toHaveBeenCalled();
+    expect(ctx.bumpCounter).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['blocked by a live product', { category: null, blocked: true }],
+    ['an unknown id', { category: null, blocked: false }],
+  ])('does not bump when the category archive is refused by %s', async (_label, outcome) => {
+    ctx.source.archiveCategoryIfEmpty.mockResolvedValue(outcome);
+
+    await ctx.repo.archiveCategoryIfEmpty('cat1');
+
+    expect(ctx.bumpCounter).not.toHaveBeenCalled();
   });
 
   it('does not bump when the id was unknown and nothing changed', async () => {

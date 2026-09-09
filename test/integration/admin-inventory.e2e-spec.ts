@@ -72,7 +72,6 @@ describe('Admin inventory (integration, real Postgres)', () => {
   });
 
   describe('PUT /admin/inventory/:variantId', () => {
-    // The upsert branch: a SKU created by Catalog has no stock row until someone states one.
     it('creates a valid stock row for a SKU that has never had one', async () => {
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       expect(await readStock(app, variantId)).toBeUndefined();

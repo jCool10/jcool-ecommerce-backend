@@ -15,10 +15,9 @@ import { createTestApp } from '../setup/test-app.factory';
 
 const FIXED_KEY = '5c3f2b1a-9d8e-4c7b-8a6f-1e2d3c4b5a69';
 
-// Wired-route contract for the idempotency layer on POST /orders over real Postgres: the header is
-// mandatory (400 without a valid UUID), and a sequential retry with the SAME key replays the first
-// order instead of creating a second. The concurrent-race and reclaim proofs live in the
-// concurrency spec; the interceptor's per-branch logic is unit-tested separately.
+// Wired-route contract for the idempotency layer on POST /orders over real Postgres. The
+// concurrent-race and reclaim proofs live in the concurrency spec; the interceptor's per-branch
+// logic is unit-tested separately.
 describe('Idempotency on POST /orders (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;

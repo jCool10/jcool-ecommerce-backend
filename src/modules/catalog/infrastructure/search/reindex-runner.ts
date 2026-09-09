@@ -20,15 +20,18 @@ export async function reindexAll(
   await search.ensureIndex();
   if (options.reset) await search.resetIndex();
 
-  let page = 1;
+  // Keyset, not offset: each page is its own snapshot, so a product archived behind the cursor
+  // mid-run would shift every later row up one offset and one of them would never be read. The
+  // cursor is the id alone — carrying a timestamp costs precision the seek needs to advance.
+  let cursor: string | null = null;
   let indexed = 0;
   for (;;) {
-    const { items, total } = await repo.findManyActive({ page, pageSize: PAGE_SIZE });
+    const items = await repo.findActiveAfter(cursor, PAGE_SIZE);
     if (items.length === 0) break;
     await search.bulkIndex(items.map(toSearchableProduct));
     indexed += items.length;
-    if (indexed >= total) break;
-    page += 1;
+    cursor = items[items.length - 1].id;
+    if (items.length < PAGE_SIZE) break;
   }
   return indexed;
 }

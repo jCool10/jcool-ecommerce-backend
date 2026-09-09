@@ -17,10 +17,9 @@ import { createTestApp } from '../setup/test-app.factory';
 // order id) without a text→uuid cast 500.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
-// Black-box HTTP tests for the Order context over real Postgres + Redis. Proves the senior-signal
-// behaviors: POST /orders is the ATOMIC CHECKOUT — snapshot the cart, hold stock, and go PENDING in
-// one transaction (price is FROZEN, the transactional source of truth), and per-user isolation.
-// Cart, Catalog, and Inventory are reached only through their published ports.
+// Black-box HTTP tests for the Order context over real Postgres + Redis. POST /orders is the atomic
+// checkout: snapshot the cart, hold stock, and go PENDING in one transaction, freezing the price as
+// the transactional source of truth. Cart, Catalog, and Inventory are reached only through ports.
 describe('Order (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -90,7 +89,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       expect(res.body.currency).toBe('VND');
       expect(res.body.placedAt).not.toBeNull();
       expect(res.body.items).toHaveLength(2);
-      expect(res.body.totalAmountMinor).toBe(199_000 * 2 + 50_000); // 448_000
+      expect(res.body.totalAmountMinor).toBe(199_000 * 2 + 50_000);
       const lineA = res.body.items.find((i: { skuId: string }) => i.skuId === a.variantId);
       expect(lineA).toMatchObject({
         skuId: a.variantId,
@@ -113,7 +112,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const { productId, variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await addToCart(token, variantId, 1);
 
-      await archiveProduct(productId); // product becomes non-sellable after it was carted
+      await archiveProduct(productId);
 
       const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
@@ -207,7 +206,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.items[0].unitPriceMinor).toBe(100_000); // frozen, not the new 150_000
-      expect(res.body.totalAmountMinor).toBe(200_000); // total is stable
+      expect(res.body.totalAmountMinor).toBe(200_000);
     });
   });
 

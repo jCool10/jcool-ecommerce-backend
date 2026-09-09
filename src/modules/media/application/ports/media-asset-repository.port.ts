@@ -28,7 +28,11 @@ export interface MediaAssetRepositoryPort {
   /** Deletes a row this sweep claimed. False when something else already removed it. */
   deleteClaimed(id: string): Promise<boolean>;
 
-  /** READY → ATTACHED inside the caller's `tx`, so it commits or rolls back with the row pointing at it. */
+  /**
+   * READY → ATTACHED inside the caller's `tx`, so it commits or rolls back with the row pointing at it.
+   * Must lock the row before checking status: a sweep claim racing this then either waits and skips,
+   * or wins and leaves a status this refuses.
+   */
   attach(tx: DrizzleTx, id: string): Promise<void>;
 
   /** ATTACHED → DETACHED inside the caller's `tx`, restoring the expiry that makes it reclaimable. */

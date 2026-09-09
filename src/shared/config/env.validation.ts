@@ -4,7 +4,6 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
-  IsNumber,
   IsOptional,
   IsString,
   Max,
@@ -189,13 +188,6 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   SENTRY_DSN?: string;
 
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(1)
-  SENTRY_TRACES_SAMPLE_RATE?: number;
-
   // Plain string, not @IsUrl, so localhost and other non-TLD hosts validate.
   @IsOptional()
   @IsString()
@@ -206,7 +198,6 @@ export class EnvironmentVariables {
   @IsBooleanString()
   COOKIE_SECURE?: string;
 
-  // Comma-separated allow-list.
   @IsOptional()
   @IsString()
   CORS_ORIGINS?: string;
@@ -526,19 +517,13 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   INVENTORY_RESERVATION_TTL?: string;
 
-  // Capped so a misconfig can't blow up the 2^attempt backoff and pin the stock row's write-lock.
+  // Capped so a misconfig can't spin the CAS loop while it pins the stock row's write-lock.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   @Max(10)
   INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  INVENTORY_OPTIMISTIC_BACKOFF_MS?: number;
 
   @IsOptional()
   @IsEnum(PaymentProvider)
@@ -562,8 +547,8 @@ export class EnvironmentVariables {
   @MinLength(8)
   STRIPE_SECRET_KEY?: string;
 
-  // String, not @IsUrl: the success default carries Stripe's {CHECKOUT_SESSION_ID} brace template,
-  // which strict URL validation would reject.
+  // String, not @IsUrl: the operator's value carries Stripe's {CHECKOUT_SESSION_ID} brace
+  // template, which strict URL validation would reject.
   @IsOptional()
   @IsString()
   STRIPE_SUCCESS_URL?: string;

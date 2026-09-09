@@ -7,15 +7,49 @@ import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { CanonicalLogInterceptor } from './canonical-log.interceptor';
 
-function httpContext(controller: object, handler: () => void, statusCode: number): ExecutionContext {
+// Express sets content-length while serializing the body, i.e. after the interceptor chain unwinds
+// — so the stub exposes the header only once the response has actually been written.
+function httpContext(
+  controller: object,
+  handler: () => void,
+  statusCode: number,
+): { context: ExecutionContext; finishResponse: () => void; abortResponse: () => void } {
   const request = { method: 'GET', path: '/concrete' };
-  const response = { statusCode, getHeader: () => '431' };
-  return {
+  const listeners = new Map<string, Array<() => void>>();
+  let bodySent = false;
+  // Faithful to `once`: a listener is dropped as it fires, so a later event cannot re-run it.
+  const emit = (event: string): void => {
+    const fired = listeners.get(event) ?? [];
+    listeners.delete(event);
+    for (const listener of fired) listener();
+  };
+  const response = {
+    statusCode,
+    getHeader: (name: string): string | undefined => (bodySent && name === 'content-length' ? '431' : undefined),
+    once: (event: string, listener: () => void): void => {
+      const existing = listeners.get(event);
+      if (existing) existing.push(listener);
+      else listeners.set(event, [listener]);
+    },
+  };
+  const context = {
     getType: () => 'http',
     switchToHttp: () => ({ getRequest: () => request, getResponse: () => response }),
     getClass: () => controller,
     getHandler: () => handler,
   } as unknown as ExecutionContext;
+
+  return {
+    context,
+    // Node emits 'close' after 'finish' on a response that completed normally, so the stub does too.
+    finishResponse: (): void => {
+      bodySent = true;
+      emit('finish');
+      emit('close');
+    },
+    // A connection dropped mid-flight: 'close' alone, and content-length was never set.
+    abortResponse: (): void => emit('close'),
+  };
 }
 
 function configFor(env: string): ConfigService {
@@ -50,8 +84,9 @@ describe('CanonicalLogInterceptor', () => {
     );
 
     const next = { handle: () => of({ id: 'abc' }) } as unknown as CallHandler;
+    const { context } = httpContext(controller, handler, 200);
     await new Promise<void>((resolve) => {
-      interceptor.intercept(httpContext(controller, handler, 200), next).subscribe({ complete: () => resolve() });
+      interceptor.intercept(context, next).subscribe({ complete: () => resolve() });
     });
 
     expect(info).toHaveBeenCalledTimes(1);
@@ -79,9 +114,14 @@ describe('CanonicalLogInterceptor', () => {
     );
 
     const next = { handle: () => of({ id: 'abc' }) } as unknown as CallHandler;
+    const { context, finishResponse } = httpContext(controller, handler, 200);
     await new Promise<void>((resolve) => {
-      interceptor.intercept(httpContext(controller, handler, 200), next).subscribe({ complete: () => resolve() });
+      interceptor.intercept(context, next).subscribe({ complete: () => resolve() });
     });
+
+    // The size field is only knowable once the body has been written.
+    expect(info).not.toHaveBeenCalled();
+    finishResponse();
 
     expect(info).toHaveBeenCalledTimes(1);
     const [line, second] = info.mock.calls[0];
@@ -94,6 +134,33 @@ describe('CanonicalLogInterceptor', () => {
     expect(text).toContain('200');
     expect(text).toContain(' ms - 431');
     expect(text).toContain('db=3');
+  });
+
+  it('still logs the dev line when the connection is aborted before the body is written', async () => {
+    const info = vi.fn<(objOrMsg: unknown, msg?: string) => void>();
+    const logger = { info } as unknown as PinoLogger;
+    const controller = class ProductsController {};
+    const handler = function findOne(): void {};
+    const interceptor = new CanonicalLogInterceptor(
+      logger,
+      clsStub(),
+      reflectorFor(controller, 'products', ':idOrSlug'),
+      configFor('development'),
+    );
+
+    const next = { handle: () => of({ id: 'abc' }) } as unknown as CallHandler;
+    const { context, abortResponse } = httpContext(controller, handler, 200);
+    await new Promise<void>((resolve) => {
+      interceptor.intercept(context, next).subscribe({ complete: () => resolve() });
+    });
+
+    abortResponse();
+
+    expect(info).toHaveBeenCalledTimes(1);
+    const text = info.mock.calls[0][0] as string;
+    expect(text).toContain('GET /products/:idOrSlug ');
+    // Size renders as `-`: the body never reached the socket, so there is no content-length.
+    expect(text).toContain(' ms - -');
   });
 
   it('does not log for health-probe routes (noise from orchestrator liveness/readiness)', async () => {
@@ -109,8 +176,9 @@ describe('CanonicalLogInterceptor', () => {
     );
 
     const next = { handle: () => of({ status: 'ok' }) } as unknown as CallHandler;
+    const { context } = httpContext(controller, handler, 200);
     await new Promise<void>((resolve) => {
-      interceptor.intercept(httpContext(controller, handler, 200), next).subscribe({ complete: () => resolve() });
+      interceptor.intercept(context, next).subscribe({ complete: () => resolve() });
     });
 
     expect(info).not.toHaveBeenCalled();

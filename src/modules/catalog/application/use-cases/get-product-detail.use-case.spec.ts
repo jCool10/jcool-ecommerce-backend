@@ -21,6 +21,10 @@ class MockProductRepository implements ProductRepositoryPort {
     return Promise.resolve({ items: [], total: 0 });
   }
 
+  findActiveAfter(): Promise<Product[]> {
+    return Promise.resolve([]);
+  }
+
   findActiveByIdOrSlug(idOrSlug: string): Promise<Product | null> {
     this.lastArg = idOrSlug;
     return Promise.resolve(this.detailResult);

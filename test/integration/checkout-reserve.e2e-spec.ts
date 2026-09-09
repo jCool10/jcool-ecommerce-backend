@@ -13,11 +13,9 @@ import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Single-thread proof that POST /orders holds stock in the SAME transaction as order creation:
-// enough stock → 201 PENDING + HELD reservations; a short line rolls the WHOLE checkout back — NO
-// order is persisted, no stock held, no orphan reservation (atomic order↔stock↔idempotency). The
-// default lock strategy (pessimistic) drives this; the optimistic path and the concurrent
-// "exactly one wins" race are covered separately (repo + concurrency specs).
+// Single-thread proof that POST /orders holds stock in the SAME transaction as order creation, so a
+// short line rolls the WHOLE checkout back — no order, no hold, no orphan reservation. Runs on the
+// default (pessimistic) strategy; the optimistic path and the concurrent race are covered elsewhere.
 describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -118,7 +116,7 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
     const token = await newUser();
     const a = await createTestProduct(app, { priceMinor: 100_000 });
     const b = await createTestProduct(app, { priceMinor: 50_000 });
-    await seedStock(app, a.variantId, 5); // plenty
+    await seedStock(app, a.variantId, 5);
     await seedStock(app, b.variantId, 1); // short: the order needs 2
     await addToCart(token, a.variantId, 2);
     await addToCart(token, b.variantId, 2);
@@ -135,7 +133,6 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
     expect(await stockOf(a.variantId)).toEqual({ onHand: 5, reserved: 0 });
     expect(await stockOf(b.variantId)).toEqual({ onHand: 1, reserved: 0 });
 
-    // No reservation rows for either SKU.
     const reservations = await db
       .select({ id: schema.reservations.id })
       .from(schema.reservations)

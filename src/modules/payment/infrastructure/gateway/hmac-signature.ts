@@ -14,23 +14,25 @@ export function signStripeStyle(secret: string, timestampSec: number, rawBody: B
 
 interface ParsedHeader {
   timestamp: number;
-  signature: string;
+  signatures: string[];
 }
 
+// A header may carry several v1 signatures — that is how a rotating endpoint signs one body under
+// every active secret — so all of them are kept and any match accepts.
 function parseHeader(header: string | undefined): ParsedHeader | null {
   if (!header) return null;
   let timestamp: number | undefined;
-  let signature: string | undefined;
+  const signatures: string[] = [];
   for (const part of header.split(',')) {
     const eq = part.indexOf('=');
     if (eq === -1) continue;
     const key = part.slice(0, eq).trim();
     const value = part.slice(eq + 1).trim();
     if (key === 't' && value !== '') timestamp = Number(value);
-    else if (key === 'v1' && value !== '') signature = value;
+    else if (key === 'v1' && value !== '') signatures.push(value);
   }
-  if (timestamp === undefined || !Number.isFinite(timestamp) || !signature) return null;
-  return { timestamp, signature };
+  if (timestamp === undefined || !Number.isFinite(timestamp) || signatures.length === 0) return null;
+  return { timestamp, signatures };
 }
 
 // Decode first and compare BYTE lengths: comparing hex-string lengths instead would let a malformed
@@ -57,7 +59,7 @@ export function verifyStripeStyle(params: {
 
   const raw = typeof params.rawBody === 'string' ? params.rawBody : params.rawBody.toString('utf8');
   const expected = createHmac(SIGNATURE_ALGORITHM, params.secret).update(`${parsed.timestamp}.${raw}`).digest('hex');
-  if (!signaturesMatch(expected, parsed.signature)) return 'invalid_signature';
+  if (!parsed.signatures.some((provided) => signaturesMatch(expected, provided))) return 'invalid_signature';
 
   // Timestamp is now authenticated (it is inside the signed payload), so it can be trusted for
   // replay defense: reject anything outside the tolerance window in either direction.

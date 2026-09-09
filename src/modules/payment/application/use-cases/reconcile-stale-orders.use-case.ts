@@ -1,14 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
+import { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import type { Payment } from '../../domain/payment.entity';
 import { ORDER_READ_PORT, type OrderReadPort, type StalePendingOrderView } from '../ports/order-read.port';
 import { PAYMENT_GATEWAY, type GatewayPaymentStatus, type PaymentGatewayPort } from '../ports/payment-gateway.port';
 import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';
+import { chargeMatchesPayment } from '../mappers/charge-matches-payment';
 import { mapGatewayStatusToOutcome, type GatewayOutcome } from '../mappers/map-gateway-status-to-outcome';
 
 const LOG_CONTEXT = 'ReconcileStaleOrders';
+
+// Shared by both ways an order can stop converging, so one log query catches them together.
+const STUCK_PREFIX = 'reconcile still cannot settle an order long past its TTL — stock stays held';
 
 const PAYMENT_STATUS_FOR: Record<GatewayOutcome, PaymentStatus> = {
   PAID: PaymentStatus.SUCCEEDED,
@@ -80,16 +84,13 @@ export class ReconcileStaleOrdersUseCase {
 
     for (const order of stale) {
       try {
-        summary[await this.settleOne(order, expiredBefore)] += 1;
+        summary[await this.settleOne(order, expiredBefore, stuckBefore)] += 1;
       } catch (error) {
         summary.errors += 1;
         const message = error instanceof Error ? error.message : String(error);
         if (order.placedAt < stuckBefore) {
           // Deliberately not expired blind: guessing would charge a buyer for a deleted order.
-          this.logger.error(
-            { context: LOG_CONTEXT, orderId: order.id, stuck: true },
-            `reconcile still cannot settle an order long past its TTL — stock stays held: ${message}`,
-          );
+          this.logger.error({ context: LOG_CONTEXT, orderId: order.id, stuck: true }, `${STUCK_PREFIX}: ${message}`);
         } else {
           this.logger.warn({ context: LOG_CONTEXT, orderId: order.id }, `reconcile failed for order: ${message}`);
         }
@@ -99,7 +100,7 @@ export class ReconcileStaleOrdersUseCase {
     return summary;
   }
 
-  private async settleOne(order: StalePendingOrderView, expiredBefore: Date): Promise<OrderOutcome> {
+  private async settleOne(order: StalePendingOrderView, expiredBefore: Date, stuckBefore: Date): Promise<OrderOutcome> {
     const payment = await this.payments.findByOrderId(order.id);
     // No payment row = a session was never opened, so there is nothing to ask; only the TTL applies.
     const probe: GatewayPaymentStatus = payment
@@ -133,6 +134,28 @@ export class ReconcileStaleOrdersUseCase {
         );
         return 'raced';
       }
+    }
+
+    if (outcome === 'PAID' && payment && !chargeMatchesPayment(payment, probe)) {
+      // A PAID probe never ages into EXPIRED, so this order re-probes on every tick forever. Raise
+      // the throw path's alarm past the boundary or the loop stays silent.
+      const stuck = order.placedAt < stuckBefore;
+      this.logger.error(
+        {
+          context: LOG_CONTEXT,
+          orderId: order.id,
+          paymentId: payment.id,
+          ...(stuck ? { stuck: true } : {}),
+          expectedMinor: payment.amountMinor,
+          expectedCurrency: payment.currency,
+          actualMinor: probe.amountMinor,
+          actualCurrency: probe.currency,
+        },
+        stuck
+          ? `${STUCK_PREFIX}: the gateway reports a paid session whose charge does not match the recorded payment`
+          : 'gateway reports a paid session whose charge does not match the recorded payment — left unsettled for manual review',
+      );
+      return 'unresolved';
     }
 
     if (payment && payment.id !== null) {

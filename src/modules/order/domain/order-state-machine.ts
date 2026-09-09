@@ -10,7 +10,6 @@ import { OrderStatus } from './order-status';
 interface Transition {
   from: OrderStatus;
   to: OrderStatus;
-  /** false = declared but rejected at runtime. */
   wired: boolean;
 }
 

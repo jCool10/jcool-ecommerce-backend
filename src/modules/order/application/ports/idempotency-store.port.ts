@@ -50,8 +50,11 @@ export interface IdempotencyStorePort {
 
   /**
    * Freeze the result: status → COMPLETED with the response to replay. Pass `tx` to join the
-   * checkout transaction so the key commits atomically with the order + reservation; omit it
-   * to run standalone (e.g. caching a business 4xx that has no order).
+   * checkout transaction so the key commits atomically with the order + reservation; omit it to run
+   * standalone — the crash-reclaim heal, which points the key at an order an earlier attempt already
+   * committed, outside any transaction. Only a committed success is ever frozen: a thrown handler
+   * result drops the IN_PROGRESS row instead (see IdempotencyInterceptor), so a business 4xx must
+   * never be cached here or the client could never fix and retry the request.
    */
   markCompleted(input: MarkCompletedInput, tx?: DrizzleTx): Promise<void>;
 

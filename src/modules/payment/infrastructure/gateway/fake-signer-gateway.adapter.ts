@@ -21,6 +21,7 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
   readonly provider = 'stripe';
   private readonly statuses = new Map<string, GatewayStatus>();
   private readonly intents = new Map<string, string>();
+  private readonly charges = new Map<string, { amountMinor: number; currency: string }>();
   private readonly unreachable = new Set<string>();
   private readonly unexpirable = new Set<string>();
   private readonly expired = new Set<string>();
@@ -35,8 +36,11 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
   }
 
   createSession(input: CreateSessionInput): Promise<GatewaySession> {
-    void input;
     const sessionId = `cs_fake_${uuidv7().replace(/-/g, '')}`;
+    // Remembered so a later status probe reports the charge this session holds — the sweep settles
+    // only against money that matches the payment row. Lowercased because that is what Stripe echoes
+    // back; storing it verbatim would leave the money guard's case-folding unexercised end to end.
+    this.charges.set(sessionId, { amountMinor: input.amountMinor, currency: input.currency.toLowerCase() });
     return Promise.resolve({
       providerSessionId: sessionId,
       redirectUrl: `https://fake.gateway.test/pay/${sessionId}`,
@@ -77,7 +81,11 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
       return Promise.reject(new PaymentGatewayError(`fake gateway unreachable for ${ref}`));
     }
     // Unstaged handles read UNKNOWN, as a real gateway answers for one it never issued.
-    return Promise.resolve({ status: this.statuses.get(ref) ?? 'UNKNOWN', intentId: this.intents.get(ref) ?? null });
+    return Promise.resolve({
+      status: this.statuses.get(ref) ?? 'UNKNOWN',
+      intentId: this.intents.get(ref) ?? null,
+      ...this.charges.get(ref),
+    });
   }
 
   expireSession(ref: string): Promise<ExpireSessionOutcome> {

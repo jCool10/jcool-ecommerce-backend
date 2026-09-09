@@ -2,6 +2,7 @@ import { Money } from '@shared/kernel';
 
 // Pure domain — no framework/DB imports.
 
+// Single source for the status vocabulary — DTOs @IsIn / enumerate this, never re-literal it.
 // Mirrors the Drizzle `product_status` pgEnum.
 export const PRODUCT_STATUSES = ['DRAFT', 'ACTIVE', 'ARCHIVED'] as const;
 

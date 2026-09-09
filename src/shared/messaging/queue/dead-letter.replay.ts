@@ -8,6 +8,8 @@ export interface ReplayOutcome {
   status: 'replayed' | 'skipped';
   /** Why it was skipped, for the operator reading the summary. */
   detail?: string;
+  /** Why the message was parked, straight off the envelope — the diagnosis a replay cannot fix. */
+  failedReason?: string;
 }
 
 export interface ReplaySummary {
@@ -96,7 +98,12 @@ async function replayOne(
   }
 
   const messageId = job.data.outboxId;
-  const outcome: ReplayOutcome = { messageId, eventType: job.data.eventType, status: 'skipped' };
+  const outcome: ReplayOutcome = {
+    messageId,
+    eventType: job.data.eventType,
+    status: 'skipped',
+    failedReason: job.data.failedReason,
+  };
 
   // Branch 1. Not overridable: a claim means the effect already happened.
   const appliedAt = await inboxLookup(messageId);

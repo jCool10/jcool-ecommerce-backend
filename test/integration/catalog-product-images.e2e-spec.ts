@@ -16,11 +16,9 @@ import { createTestApp } from '../setup/test-app.factory';
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
 /**
- * Product images across the Catalog↔Media boundary. Catalog stores asset ids and nothing else — the
- * URL is resolved on the way out, after the cache, which is what lets a short-lived signed URL be
- * served from a long-lived cached product.
- *
- * The state machine is the other half: an asset may be attached exactly once, and only from READY.
+ * Catalog stores asset ids and nothing else — the URL is resolved on the way out, after the cache,
+ * which is what lets a short-lived signed URL be served from a long-lived cached product. An asset
+ * may be attached exactly once, and only from READY.
  */
 describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
   let storage: StartedObjectStorage;

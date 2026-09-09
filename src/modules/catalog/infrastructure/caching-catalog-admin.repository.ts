@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { CacheService } from '@shared/cache';
 import type { AdminProduct, Category, Price, ProductImage, Sku } from '../domain/entities';
 import type {
+  ArchiveCategoryResult,
   AttachImageData,
   CatalogAdminRepositoryPort,
   CreateCategoryData,
@@ -37,15 +38,16 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   updateCategory(id: string, data: UpdateCategoryData): Promise<Category | null> {
-    return this.invalidatingWrite(() => this.source.updateCategory(id, data));
+    return this.invalidatingWrite(() => this.source.updateCategory(id, data), hasPatch(data));
   }
 
-  archiveCategory(id: string): Promise<Category | null> {
-    return this.invalidatingWrite(() => this.source.archiveCategory(id));
-  }
-
-  countActiveProductsInCategory(categoryId: string): Promise<number> {
-    return this.source.countActiveProductsInCategory(categoryId);
+  // A blocked or unknown archive wrote nothing, so the cached generation is still accurate.
+  async archiveCategoryIfEmpty(id: string): Promise<ArchiveCategoryResult> {
+    const result = await this.source.archiveCategoryIfEmpty(id);
+    if (result.category !== null) {
+      await this.cache.bumpCounter(CATALOG_CACHE_VERSION_KEY);
+    }
+    return result;
   }
 
   findProductById(id: string): Promise<AdminProduct | null> {
@@ -57,7 +59,7 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   updateProduct(id: string, data: UpdateProductData): Promise<AdminProduct | null> {
-    return this.invalidatingWrite(() => this.source.updateProduct(id, data));
+    return this.invalidatingWrite(() => this.source.updateProduct(id, data), hasPatch(data));
   }
 
   archiveProduct(id: string): Promise<AdminProduct | null> {
@@ -73,7 +75,7 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   updateSku(id: string, data: UpdateSkuData): Promise<Sku | null> {
-    return this.invalidatingWrite(() => this.source.updateSku(id, data));
+    return this.invalidatingWrite(() => this.source.updateSku(id, data), hasPatch(data));
   }
 
   archiveSku(id: string): Promise<Sku | null> {
@@ -102,11 +104,17 @@ export class CachingCatalogAdminRepository implements CatalogAdminRepositoryPort
 
   // A null result means the id was unknown and nothing changed, so the cached generation is still
   // accurate — a 404 must not cold-start the whole catalog cache.
-  private async invalidatingWrite<T>(write: () => Promise<T>): Promise<T> {
+  private async invalidatingWrite<T>(write: () => Promise<T>, mutates = true): Promise<T> {
     const result = await write();
-    if (result !== null) {
+    if (mutates && result !== null) {
       await this.cache.bumpCounter(CATALOG_CACHE_VERSION_KEY);
     }
     return result;
   }
+}
+
+// An update carrying no defined field is degraded to a plain read by the adapter, so the cached
+// generation is still accurate. Values, not keys: a DTO instance can own a key holding `undefined`.
+function hasPatch(data: object): boolean {
+  return Object.values(data).some((value) => value !== undefined);
 }

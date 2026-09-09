@@ -73,6 +73,12 @@ export class CachingProductRepository implements ProductRepositoryPort {
     );
   }
 
+  // Required by the port but never reached: the reindex backstop resolves the uncached adapter
+  // directly, because a rebuild has to read the source of truth.
+  findActiveAfter(afterId: string | null, limit: number): Promise<Product[]> {
+    return this.source.findActiveAfter(afterId, limit);
+  }
+
   // Deliberately uncached: Cart prices a line off these reads and Order snapshots the price it
   // charges from them, where a stale price or isActive is a wrong order, not a slow one.
   findSkuView(skuId: string): Promise<SkuView | null> {

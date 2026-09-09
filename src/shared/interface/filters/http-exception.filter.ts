@@ -7,6 +7,7 @@ import { PinoLogger } from 'nestjs-pino';
 // The error module, never the barrel: a status mapping must not pull the generator into this
 // filter's import graph.
 import { ClockStalledError } from '@shared/identity/identity.errors';
+import { DomainError } from '@shared/kernel/domain-error';
 import {
   REQUEST_ID_HEADER,
   formatDevRequestLine,
@@ -19,6 +20,7 @@ import {
 // Plain numbers so comparisons don't mix enum/number (no-unsafe-enum-comparison).
 const SERVER_ERROR_MIN: number = HttpStatus.INTERNAL_SERVER_ERROR;
 const SERVICE_UNAVAILABLE: number = HttpStatus.SERVICE_UNAVAILABLE;
+const UNPROCESSABLE_ENTITY: number = HttpStatus.UNPROCESSABLE_ENTITY;
 
 // pino `context` label; passed per-call because the base PinoLogger is a shared singleton.
 const LOG_CONTEXT = 'HttpExceptionFilter';
@@ -53,11 +55,18 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     const method = request.method;
-    const route = request.url;
+    // The low-cardinality TEMPLATE, matching what the canonical log line and the RED metrics label
+    // carry — `request.url` would bucket per id and drop a query string into the log. Nest composes
+    // the full path onto the root app, so `route.path` is already the template; it is unset only on
+    // an unmatched request, where 404s fall back to the query-free path.
+    const route = (request.route as { path?: string } | undefined)?.path ?? request.path;
     const durationMs = getRequestDurationMs(this.cls);
     const dbQueries = getDbQueryCount(this.cls);
     const isServerError = status >= SERVER_ERROR_MIN;
     const err = isServerError ? (exception instanceof Error ? exception : new Error(String(exception))) : undefined;
+    // A DomainError gets no Sentry event, but a defensive guard that fires is still a bug: keep its
+    // stack on the warn line, because the route alone cannot say which guard deep in the model threw.
+    const warnErr = !isServerError && exception instanceof DomainError ? exception : undefined;
 
     if (this.devPretty) {
       const line = formatDevRequestLine({
@@ -70,6 +79,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       });
       // 5xx still carries the stack (as an object) so the pretty console prints it below the line.
       if (isServerError) this.logger.error({ err }, line);
+      else if (warnErr) this.logger.warn({ err: warnErr }, line);
       else this.logger.warn(line);
     } else {
       const logFields = {
@@ -81,7 +91,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         'db.queries': dbQueries,
       };
       if (isServerError) this.logger.error({ ...logFields, err }, 'request failed');
-      else this.logger.warn(logFields, 'request rejected');
+      else this.logger.warn(warnErr ? { ...logFields, err: warnErr } : logFields, 'request rejected');
     }
 
     // Separate from requestId; only present when tracing is on. Added to the envelope only —
@@ -92,13 +102,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // unset. traceId/spanId land natively via the context manager; the tags make them searchable.
     if (isServerError && err) {
       try {
-        const routeTemplate = (request.route as { path?: string } | undefined)?.path;
         Sentry.captureException(err, {
           tags: {
             request_id: requestId,
             trace_id: traceId,
-            // Route template (low-cardinality, no query PII); falls back to the pathname.
-            route: `${method} ${routeTemplate ?? request.path}`,
+            // Same value the log line carries, so the two cannot drift.
+            route: `${method} ${route}`,
           },
         });
       } catch {
@@ -133,6 +142,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (exception instanceof ClockStalledError) {
       return SERVICE_UNAVAILABLE;
     }
+    // A business-rule breach is a client error, not a handler bug — 422, and never Sentry-reported.
+    if (exception instanceof DomainError) {
+      return UNPROCESSABLE_ENTITY;
+    }
     return SERVER_ERROR_MIN;
   }
 
@@ -150,6 +163,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
       // Nest wraps validation errors as { statusCode, message, error }.
       const nested = (payload as { message?: unknown }).message;
       return nested ?? payload;
+    }
+
+    // A DomainError message is echoed verbatim, so it is part of the client contract: authors must
+    // never interpolate a secret, an internal identifier, or raw request data into one.
+    if (exception instanceof DomainError) {
+      return exception.message;
     }
 
     return 'Unexpected error';

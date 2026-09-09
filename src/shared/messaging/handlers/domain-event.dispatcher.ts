@@ -35,9 +35,9 @@ export class DomainEventDispatcher {
       // is still owed, which is why order.paid hands back an effect instead of sending inline.
       [
         'order.paid',
-        async (job) => {
+        async (job, tx) => {
           await orderEvents.record(job);
-          return orderPaidMail.prepare(job);
+          return orderPaidMail.prepare(job, tx);
         },
       ],
       ['order.failed', (job) => orderEvents.record(job)],

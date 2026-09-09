@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { CartItem } from '../domain/cart-item.entity';
 import type { CartRepositoryPort } from '../application/ports/cart-repository.port';
+import { MAX_LINE_QUANTITY } from '../cart.constants';
 import { cartItems, carts } from './schema/cart.schema';
 
 // Accumulate-on-add is a single upsert on the (cartId, skuId) unique index — race-safe without a
@@ -52,10 +53,14 @@ export class DrizzleCartRepository implements CartRepositoryPort {
     await this.db
       .insert(cartItems)
       .values({ cartId, skuId, quantity })
-      // $onUpdate doesn't fire on a conflict SET, so bump updated_at by hand.
+      // $onUpdate doesn't fire on a conflict SET, so bump updated_at by hand. LEAST applies the
+      // MAX_LINE_QUANTITY ceiling inside the same statement, so the cap stays race-safe.
       .onConflictDoUpdate({
         target: [cartItems.cartId, cartItems.skuId],
-        set: { quantity: sql`${cartItems.quantity} + ${quantity}`, updatedAt: new Date() },
+        set: {
+          quantity: sql`LEAST(${cartItems.quantity} + ${quantity}, ${MAX_LINE_QUANTITY})`,
+          updatedAt: new Date(),
+        },
       });
   }
 

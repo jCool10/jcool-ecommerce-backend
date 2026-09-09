@@ -12,7 +12,6 @@ import type {
   ReserveLine,
   StockRepositoryPort,
   StockResolveResult,
-  StockView,
 } from '../application/ports/stock-repository.port';
 import { reservations, stockLevels } from './schema/inventory.schema';
 
@@ -20,7 +19,6 @@ import { reservations, stockLevels } from './schema/inventory.schema';
 export class StockRepository implements StockRepositoryPort {
   private readonly reservationTtlMs: number;
   private readonly maxRetries: number;
-  private readonly backoffMs: number;
 
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
@@ -28,7 +26,6 @@ export class StockRepository implements StockRepositoryPort {
   ) {
     this.reservationTtlMs = durationToMs(config.getOrThrow<string>('inventory.reservationTtl'));
     this.maxRetries = config.getOrThrow<number>('inventory.optimisticMaxRetries');
-    this.backoffMs = config.getOrThrow<number>('inventory.optimisticBackoffMs');
   }
 
   async reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
@@ -99,7 +96,10 @@ export class StockRepository implements StockRepositoryPort {
 
   // Hold one SKU via compare-and-swap: read the current version unlocked, then UPDATE only
   // if that version and the available quantity still hold. Zero rows means either a real
-  // shortfall (throw, no retry) or a concurrent version bump (retry with backoff+jitter).
+  // shortfall (throw, no retry) or a concurrent version bump (retry at once).
+  // The retry never backs off: under READ COMMITTED a lost CAS is only visible once the
+  // conflicting writer has committed and dropped its row lock, so sleeping relieves no
+  // contention while extending the write locks this transaction already holds on earlier lines.
   private async casReserve(tx: DrizzleTx, variantId: string, quantity: number): Promise<void> {
     for (let attempt = 0; ; attempt++) {
       const [row] = await tx
@@ -147,7 +147,6 @@ export class StockRepository implements StockRepositoryPort {
       if (attempt >= this.maxRetries) {
         throw new ReservationConflictError(variantId);
       }
-      await this.sleep(this.backoffMs * 2 ** attempt + this.jitter());
     }
   }
 
@@ -223,18 +222,6 @@ export class StockRepository implements StockRepositoryPort {
     return { applied: true, alreadyResolved: false, count };
   }
 
-  async getStockView(variantId: string): Promise<StockView | null> {
-    const [row] = await this.db
-      .select({ onHand: stockLevels.quantityOnHand, reserved: stockLevels.quantityReserved })
-      .from(stockLevels)
-      .where(eq(stockLevels.variantId, variantId))
-      .limit(1);
-    if (!row) {
-      return null;
-    }
-    return { onHand: row.onHand, reserved: row.reserved, available: row.onHand - row.reserved };
-  }
-
   async findExpiredHolds({ expiredBefore, limit }: ExpiredHoldQuery): Promise<ExpiredHold[]> {
     // `SKIP LOCKED` steps over holds a finalize is already resolving instead of queueing behind its
     // row lock; the lock itself lasts only this statement, so it dedupes nothing beyond that — the
@@ -262,14 +249,5 @@ export class StockRepository implements StockRepositoryPort {
 
   private computeExpiry(): Date {
     return new Date(Date.now() + this.reservationTtlMs);
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  // Random spread on the backoff so contending retries don't resynchronize into a storm.
-  private jitter(): number {
-    return Math.random() * this.backoffMs;
   }
 }

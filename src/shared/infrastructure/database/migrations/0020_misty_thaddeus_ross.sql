@@ -1,0 +1,1 @@
+CREATE INDEX "idx_products_active_id" ON "products" USING btree ("id") WHERE "products"."status" = 'ACTIVE';

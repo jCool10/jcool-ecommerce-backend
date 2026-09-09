@@ -31,7 +31,8 @@ export class WebhookController {
   constructor(private readonly handleWebhook: HandlePaymentWebhookUseCase) {}
 
   @Public()
-  // Both tiers must be named — bare `@SkipThrottle()` skips only `default`, leaving `account`.
+  // Both tiers must be named — bare `@SkipThrottle()` skips only `default`, leaving `account`. The
+  // `user` tier is charged only by UserThrottlerGuard, which this @Public() route does not carry.
   @SkipThrottle({ [DEFAULT_THROTTLER]: true, [ACCOUNT_THROTTLER]: true })
   @Post('payment')
   @HttpCode(HttpStatus.OK)

@@ -1,4 +1,3 @@
-// Architecture boundary rules for the modular monolith: `npm run arch:check` (also wired into CI).
 module.exports = {
   forbidden: [
     {
@@ -8,8 +7,12 @@ module.exports = {
         'A bounded context may reach another context only through its application/public surface — never its domain, infrastructure, or schema.',
       from: { path: '^src/modules/([^/]+)/' },
       to: {
-        path: '^src/modules/[^/]+/(domain|infrastructure)/',
-        pathNot: '^src/modules/$1/',
+        // `application` is in the list on purpose: without it a context could import another's
+        // internal use cases and call the rule green. Same context is always fine; across contexts
+        // only application/public is. One alternation string, not an array — `$1` group
+        // interpolation is only documented for the scalar form.
+        path: '^src/modules/[^/]+/(domain|infrastructure|application)/',
+        pathNot: '^(src/modules/$1/|src/modules/[^/]+/application/public/)',
       },
     },
     {

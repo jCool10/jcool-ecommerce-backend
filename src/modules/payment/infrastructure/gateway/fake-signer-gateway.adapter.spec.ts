@@ -54,6 +54,21 @@ describe('FakeSignerGatewayAdapter', () => {
     expect(session.redirectUrl).toContain(session.providerSessionId);
   });
 
+  // The sweep settles a paid session only against money matching the payment row, so the double has
+  // to answer with the charge it was asked to collect — in the lowercase Stripe answers with, or
+  // every probe here would skip the guard's case-folding that production always goes through.
+  it('reports the charge of a session it issued, lowercased as the real gateway echoes it', async () => {
+    const gateway = new FakeSignerGatewayAdapter(SECRET);
+    const session = await gateway.createSession({ orderId: 'o1', amountMinor: 150_000, currency: 'VND' });
+    gateway.setPaymentStatus(session.providerSessionId, 'PAID');
+
+    await expect(gateway.getPaymentStatus(session.providerSessionId)).resolves.toMatchObject({
+      status: 'PAID',
+      amountMinor: 150_000,
+      currency: 'vnd',
+    });
+  });
+
   describe('expireSession', () => {
     it('closes an open session and records it as no longer payable', async () => {
       const gateway = new FakeSignerGatewayAdapter(SECRET);

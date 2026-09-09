@@ -6,10 +6,9 @@ import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Proves the register write path is race-free: the unique email index — not a
-// check-then-insert pre-check — is the sole uniqueness guarantee. Concurrent
-// identical signups must resolve to exactly one 201 and clean 409s, never a 500
-// from an unhandled Postgres 23505. Over real Postgres + Redis.
+// The register write path is race-free because the unique email index — not a check-then-insert
+// pre-check — is the sole uniqueness guarantee: concurrent identical signups resolve to exactly one
+// 201 and clean 409s, never a 500 from an unhandled Postgres 23505.
 describe('Register email uniqueness under concurrency (integration)', () => {
   let app: INestApplication;
   let pool: Pool;

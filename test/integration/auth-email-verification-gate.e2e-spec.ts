@@ -7,9 +7,8 @@ import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// The verified-email login gate is off in the default harness, so this suite
-// opts in explicitly and boots its own app with AUTH_REQUIRE_VERIFIED_EMAIL='true'
-// to prove enforcement (403 for unverified, 200 once verified).
+// The verified-email login gate is off in the default harness, so this suite opts in explicitly
+// and boots its own app with AUTH_REQUIRE_VERIFIED_EMAIL='true'.
 describe('Auth verified-email login gate (integration)', () => {
   let app: INestApplication;
   let pool: Pool;

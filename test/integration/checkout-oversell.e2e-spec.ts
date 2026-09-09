@@ -45,7 +45,6 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
 
   const server = () => app.getHttpServer();
 
-  // Checkout isolates by user, so each buyer races alone.
   async function buyerFor(skuId: string, quantity: number): Promise<string> {
     const { accessToken } = await createTestUser(app);
     await request(server()).post('/cart/items').set(authHeader(accessToken)).send({ skuId, quantity }).expect(200);
@@ -103,7 +102,6 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     expect(statuses.filter((s) => s === 409)).toHaveLength(CONTENDERS - K);
 
     const stock = await getStockView(app, variantId);
-    // available pinned to exactly 0 (never negative) — no oversell even with K units contended.
     expect(stock).toEqual({ onHand: K, reserved: K, available: 0 });
     expect(await countHeldReservations(app, variantId)).toBe(K);
     expect(await orderLineCount(variantId)).toBe(K);

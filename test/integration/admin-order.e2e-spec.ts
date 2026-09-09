@@ -43,7 +43,7 @@ describe('Admin orders (integration, real Postgres)', () => {
 
   const asAdmin = (path: string): request.Test => request(server()).get(path).set(authHeader(adminToken));
 
-  /** One buyer, one PENDING order. Returns both so a test can check the user-scoped filter. */
+  /** Returns the buyer's userId as well, so a test can exercise the user-scoped filter. */
   async function placeOrder(quantity = 1): Promise<{ token: string; orderId: string; userId: string }> {
     const token = await buyerWithCart(app, variantId, quantity);
     const orderId = (await checkout(app, token).expect(201)).body.id as string;

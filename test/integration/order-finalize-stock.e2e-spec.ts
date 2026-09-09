@@ -13,7 +13,6 @@ import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Fixed valid UUIDs — order_id / variant_id are uuid columns.
 const USER_ID = '00000000-0000-4000-8000-0000000000aa';
 const SKU = '11111111-1111-4111-8111-111111111111';
 const SKU_B = '22222222-2222-4222-8222-222222222222';

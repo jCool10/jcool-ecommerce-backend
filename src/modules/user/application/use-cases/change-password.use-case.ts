@@ -29,7 +29,11 @@ export class ChangePasswordUseCase {
     }
 
     const passwordHash = await this.hasher.hash(input.newPassword);
-    await this.users.updatePassword(user.id, passwordHash);
+    // Not atomic, so ordered to fail safe: a crash between them leaves the old password with every
+    // session gone, never the reverse. Still open — the old password verifies until the second write,
+    // and a login racing it INSERTs a refresh family after revokeAllForUser has already passed, so no
+    // later write to the users row revokes it. Closing that needs both writes in one transaction.
     await this.sessions.revokeAll(user.id);
+    await this.users.updatePassword(user.id, passwordHash);
   }
 }

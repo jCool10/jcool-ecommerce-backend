@@ -1,5 +1,5 @@
 // Duplicate / insert-probe mix — every request re-registers an ALREADY-seeded
-// email, so all should return 409. After the Phase 1 pure insert-on-conflict there
+// email, so all should return 409. Registration is a pure insert-on-conflict, so there
 // is NO existence SELECT to measure; what actually costs DB work on a duplicate is
 // the unique-index probe every `INSERT ... ON CONFLICT` performs and the redundant
 // INSERT attempt. This mix isolates that cost — the real signal the B-bloom gate

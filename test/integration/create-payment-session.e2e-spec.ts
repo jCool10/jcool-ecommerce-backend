@@ -15,9 +15,8 @@ import { createTestApp } from '../setup/test-app.factory';
 
 const ABSENT_ORDER_UUID = '00000000-0000-4000-8000-000000000000';
 
-// Black-box HTTP tests for POST /orders/:id/pay over real Postgres. Proves session creation snapshots
-// the order total into a single PENDING Payment and that the ownership / not-payable / already-active
-// guards return the right codes — the "never double-charge" entry point, before any webhook lands.
+// POST /orders/:id/pay over real Postgres: session creation snapshots the order total into a single
+// PENDING Payment. This is the "never double-charge" entry point, before any webhook lands.
 describe('Create payment session (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -128,7 +127,7 @@ describe('Create payment session (integration, real Postgres)', () => {
   it('rejects paying a non-PENDING order (409, no payment)', async () => {
     const token = await newUser();
     const { orderId } = await createPendingOrder(token);
-    // Move the order out of PENDING directly (Order finalize is a later week); pay must refuse.
+    // Moved out of PENDING by a direct write rather than through finalize; pay must still refuse.
     await db.update(schema.orders).set({ status: 'CANCELLED' }).where(eq(schema.orders.id, orderId));
 
     const res = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token));

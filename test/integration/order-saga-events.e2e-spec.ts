@@ -14,7 +14,7 @@ import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-eve
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import {
-  auditM2Invariants,
+  auditLedgerInvariants,
   placeAndOpenSession,
   postWebhook,
   readOrder,
@@ -34,8 +34,7 @@ const QUANTITY = 2;
 /**
  * Order settles itself from Payment's event instead of from an in-process call a crash can swallow.
  * The webhook still finalizes directly for latency, so most assertions here are about the event
- * arriving at an order that is ALREADY settled and costing nothing — and about the one case where
- * the direct call never happened and the event is all that is left.
+ * reaching an ALREADY settled order and costing nothing — and about the case where it is all there is.
  */
 describe('Payment settlement events → order saga (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -127,8 +126,7 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     expect(await outboxRows('payment.succeeded')).toHaveLength(1);
   });
 
-  // The reason the event exists at all. Everything else in this suite is the happy path arriving at
-  // an order the webhook already settled.
+  // The reason the event exists at all.
   it('settles the order from the event alone when the in-process finalize is lost', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     const killed = vi
@@ -151,7 +149,7 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     expect(stock.quantityOnHand).toBe(ON_HAND - QUANTITY);
     expect(stock.quantityReserved).toBe(0);
 
-    const audit = await auditM2Invariants(app, { [sku.variantId]: ON_HAND });
+    const audit = await auditLedgerInvariants(app, { [sku.variantId]: ON_HAND });
     expect(audit).toMatchObject({ orders: 1, pending: [], violations: [] });
   });
 

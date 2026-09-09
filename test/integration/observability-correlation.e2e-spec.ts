@@ -20,7 +20,7 @@ describe('Correlation id (integration)', () => {
     await app.close();
   });
 
-  it('returns a generated x-request-id header when the client sends none (DoD-4)', async () => {
+  it('returns a generated x-request-id header when the client sends none', async () => {
     const res = await request(server).get('/health/live').expect(200);
     const id = res.headers['x-request-id'];
     expect(typeof id).toBe('string');
@@ -33,15 +33,13 @@ describe('Correlation id (integration)', () => {
     expect(res.headers['x-request-id']).toBe(supplied);
   });
 
-  it('keeps each concurrent request on its own id — the ALS context never leaks (DoD-3)', async () => {
+  it('keeps each concurrent request on its own id — the ALS context never leaks', async () => {
     const suppliedIds = Array.from({ length: 8 }, (_v, i) => `concurrent-${i}`);
 
     const responses = await Promise.all(
       suppliedIds.map((id) => request(server).get('/health/live').set('x-request-id', id)),
     );
 
-    // Every response must carry back exactly the id its own request sent — a leak would
-    // surface as a response echoing a sibling request's id.
     responses.forEach((res, i) => {
       expect(res.status).toBe(200);
       expect(res.headers['x-request-id']).toBe(suppliedIds[i]);
@@ -51,7 +49,7 @@ describe('Correlation id (integration)', () => {
   it('generates a distinct id per request when several arrive concurrently without one', async () => {
     const responses = await Promise.all(Array.from({ length: 8 }, () => request(server).get('/health/live')));
 
-    const ids = responses.map((res) => res.headers['x-request-id'] as string);
+    const ids = responses.map((res) => res.headers['x-request-id']);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -60,7 +58,7 @@ describe('Correlation id (integration)', () => {
     // exception-filter enrichment path.
     const res = await request(server).post('/auth/register').send({}).expect(400);
 
-    const headerId = res.headers['x-request-id'] as string;
+    const headerId = res.headers['x-request-id'];
     expect(typeof headerId).toBe('string');
     expect(res.body.requestId).toBe(headerId);
     // Backward-compat: the pre-existing envelope fields must still be present.
@@ -75,7 +73,7 @@ describe('Correlation id (integration)', () => {
     // stays masked + correlated. Live Sentry delivery is verified separately with a real DSN.
     const res = await request(server).get('/debug/boom').expect(500);
 
-    const headerId = res.headers['x-request-id'] as string;
+    const headerId = res.headers['x-request-id'];
     expect(res.body.requestId).toBe(headerId);
     expect(res.body).toMatchObject({ statusCode: 500, path: '/debug/boom', message: 'Internal server error' });
     // The real error message must never leak to the client.

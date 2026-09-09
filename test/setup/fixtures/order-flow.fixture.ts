@@ -123,10 +123,10 @@ export async function readStock(app: INestApplication, variantId: string) {
   return row;
 }
 
-export interface M2AuditReport {
+export interface LedgerAuditReport {
   /** Asserted by callers so an audit over an empty DB can never read as "everything is fine". */
   orders: number;
-  /** Orders still awaiting an outcome — the M2 acceptance requires this empty at rest. */
+  /** Orders still awaiting an outcome; a settled ledger has none left at rest. */
   pending: string[];
   /** One line per invariant breach; empty means money, stock, and status agree. */
   violations: string[];
@@ -137,10 +137,10 @@ export interface M2AuditReport {
  * (variantId → the on-hand the test seeded) turns the on-hand check from "not negative" into the
  * exact "seeded minus committed" equality.
  */
-export async function auditM2Invariants(
+export async function auditLedgerInvariants(
   app: INestApplication,
   seededOnHand: Record<string, number> = {},
-): Promise<M2AuditReport> {
+): Promise<LedgerAuditReport> {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const [orders, reservations, payments, stock] = await Promise.all([
     db.select().from(schema.orders),

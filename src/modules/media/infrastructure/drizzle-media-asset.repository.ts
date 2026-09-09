@@ -51,7 +51,9 @@ export class DrizzleMediaAssetRepository implements MediaAssetRepositoryPort {
     // Repeating `eligible` on the UPDATE itself is load-bearing. Under READ COMMITTED an UPDATE that
     // blocks on a concurrent writer rechecks its own WHERE against the row the winner committed —
     // but the subquery keeps the statement's original snapshot, so `id IN (…)` alone would still
-    // match an attach that just committed and delete its bytes out from under the product.
+    // match an attach that just committed and delete its bytes out from under the product. It also
+    // re-reads `expires_at`: an upload confirmed while this statement waited is READY — still a
+    // reclaimable status — and only its extended expiry keeps it out of the claim.
     return this.db
       .update(mediaAssets)
       .set({ status: AssetStatus.SWEEPING, updatedAt: new Date() })

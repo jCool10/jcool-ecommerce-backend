@@ -102,8 +102,7 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   it('rolls the appended row back when the caller’s transaction fails after the append', async () => {
     // The REAL writer, in a transaction that succeeds through the append and then fails. This is the
     // only test that can catch `append` opening a transaction of its own: such a writer would commit
-    // this row independently, and the outbox would carry an event for work that never happened —
-    // the phantom half of the dual-write bug. A test that stubs the writer out cannot see that.
+    // this row independently, and the outbox would carry an event for work that never happened.
     const writer = app.get<OutboxWriterPort>(OUTBOX_WRITER);
     const record: OutboxRecord = {
       aggregateType: 'Order',
@@ -148,8 +147,7 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
 
 // The other direction: a writer that FAILS must take the whole checkout down with it, so an event
 // the system could not record is never silently skipped in favour of a placed order. The writer is
-// stubbed here, so this suite says nothing about whether the real one opens its own transaction —
-// that is proved above.
+// stubbed here, so this says nothing about the real one opening its own transaction — proved above.
 describe('Outbox append failure rolls back the checkout (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;

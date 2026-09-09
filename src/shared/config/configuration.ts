@@ -17,13 +17,6 @@ function intEnv(raw: string | undefined, fallback: number): number {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
-// Returns undefined, never literal 0, so callers can omit the key: an explicit 0 turns Sentry's own
-// http spans on and duplicates our OTel spans (see instrumentation.ts).
-function parseTracesSampleRate(raw: string | undefined): number | undefined {
-  const rate = Number(raw);
-  return Number.isFinite(rate) && rate > 0 ? rate : undefined;
-}
-
 // parseInt that falls back on absent/empty/non-numeric input. Without the guard the empty-string→NaN
 // env gotcha registers a 0ms interval or silently disables the window the value was there to bound.
 function parseIntOr(raw: string | undefined, fallback: number): number {
@@ -71,7 +64,6 @@ export default () => ({
     enabled: Boolean(process.env.SENTRY_DSN),
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV,
-    tracesSampleRate: parseTracesSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE),
   },
   database: {
     url: process.env.DATABASE_URL,
@@ -100,7 +92,9 @@ export default () => ({
     // Deliveries before a message is dead-lettered, the first included. Capped at 10 in the env
     // schema: the backoff below doubles, so the tail grows faster than the count suggests. Eight
     // spans roughly two minutes, which an order expiry needs — past it the session that can still
-    // charge for a released order stays open until someone replays the dead letter.
+    // charge for a released order stays open until someone replays the dead letter. That figure
+    // holds only because the gateway handlers fail fast under the breaker; with BREAKER_ENABLED=false
+    // the attempts wait out the provider SDK and the ladder stretches well past it.
     consumerAttempts: parseIntOr(process.env.QUEUE_CONSUMER_ATTEMPTS, 8),
     // First retry delay; each further one doubles it. 1s through 64s at the defaults — long enough
     // to ride out a restart or a provider outage, short enough that a poison message reaches the
@@ -163,10 +157,10 @@ export default () => ({
     // Unset → the adapter stays on its network-free coded path (fabricated cs_...). Set to
     // sk_test_.../sk_live_... to create real Checkout Sessions a webhook can settle.
     secretKey: process.env.STRIPE_SECRET_KEY,
-    // success_url is mandatory for a live session; {CHECKOUT_SESSION_ID} is Stripe's own
-    // placeholder, expanded on redirect.
-    successUrl:
-      process.env.STRIPE_SUCCESS_URL ?? 'http://localhost:3000/payments/success?session_id={CHECKOUT_SESSION_ID}',
+    // No default: an unset var stays undefined and trips the adapter's live-key fail-fast, so a
+    // missing success URL is caught at boot instead of on a real buyer's post-charge redirect. The
+    // cancel default below is not guarded that way, but it is reached before any money moves.
+    successUrl: process.env.STRIPE_SUCCESS_URL,
     cancelUrl: process.env.STRIPE_CANCEL_URL ?? 'http://localhost:3000/payments/cancel',
   },
   reconcile: {
@@ -300,9 +294,8 @@ export default () => ({
     // an unpaid hold from.
     reservationTtl: process.env.INVENTORY_RESERVATION_TTL ?? '15m',
     // Re-CAS attempts after losing a version race before giving up with a 409 (0 = never retry).
-    // Real shortfalls never consume a retry.
-    optimisticMaxRetries: parseInt(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES ?? '3', 10),
-    // Base backoff between optimistic retries; grows 2^attempt and gets random jitter.
-    optimisticBackoffMs: parseInt(process.env.INVENTORY_OPTIMISTIC_BACKOFF_MS ?? '20', 10),
+    // Real shortfalls never consume a retry. A NaN budget would leave the CAS loop unbounded, so
+    // this must never fall through to a bare parseInt.
+    optimisticMaxRetries: parseIntOr(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES, 3),
   },
 });

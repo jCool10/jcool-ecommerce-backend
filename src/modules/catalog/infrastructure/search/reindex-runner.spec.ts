@@ -1,32 +1,56 @@
-import type {
-  CatalogSearchPort,
-  FindManyActiveCriteria,
-  ProductRepositoryPort,
-  SearchableProduct,
-} from '../../application/ports';
+import type { CatalogSearchPort, ProductRepositoryPort, SearchableProduct } from '../../application/ports';
 import { Product } from '../../domain/entities';
 import { reindexAll } from './reindex-runner';
 
-function product(id: string): Product {
-  return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], new Date(0));
+// More reads than any fixture here needs: a cursor that fails to advance would page forever, and a
+// thrown error names that better than a hung run does.
+const RUNAWAY_READS = 20;
+
+function product(id: string, createdAt: Date): Product {
+  return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], createdAt);
 }
 
-function repositoryOf(total: number): { repo: ProductRepositoryPort; pagesRead: FindManyActiveCriteria[] } {
-  const pagesRead: FindManyActiveCriteria[] = [];
-  const all = Array.from({ length: total }, (_, i) => product(`p${i}`));
+interface FakeRepository {
+  repo: ProductRepositoryPort;
+  cursorsRead: (string | null)[];
+  /** Leaves the ACTIVE set mid-run, the way an archive would. */
+  drop: (id: string) => void;
+  /** Runs once a page has been read, so a test can mutate the set between pages. */
+  hooks: { afterPage?: () => void };
+}
+
+function repositoryOf(total: number): FakeRepository {
+  const cursorsRead: (string | null)[] = [];
+  const hooks: { afterPage?: () => void } = {};
+  // Zero-padded so the id order the scan follows is the insertion order the assertions read, the way
+  // a uuidv7 sorts by creation time.
+  const all = Array.from({ length: total }, (_, i) => product(`p${String(i).padStart(4, '0')}`, new Date(i * 1_000)));
 
   const repo = {
-    findManyActive: (criteria: FindManyActiveCriteria) => {
-      pagesRead.push(criteria);
-      const start = (criteria.page - 1) * criteria.pageSize;
-      return Promise.resolve({ items: all.slice(start, start + criteria.pageSize), total });
+    findManyActive: () => Promise.resolve({ items: [], total: 0 }),
+    findActiveAfter: (afterId: string | null, limit: number) => {
+      cursorsRead.push(afterId);
+      if (cursorsRead.length > RUNAWAY_READS) {
+        throw new Error(`scan did not terminate after ${RUNAWAY_READS} reads`);
+      }
+      const page = (afterId === null ? [...all] : all.filter((candidate) => candidate.id > afterId)).slice(0, limit);
+      hooks.afterPage?.();
+      return Promise.resolve(page);
     },
     findActiveByIdOrSlug: () => Promise.resolve(null),
     findSkuView: () => Promise.resolve(null),
     findManySkuViews: () => Promise.resolve([]),
   } satisfies ProductRepositoryPort;
 
-  return { repo, pagesRead };
+  return {
+    repo,
+    cursorsRead,
+    hooks,
+    drop: (id: string) => {
+      const index = all.findIndex((candidate) => candidate.id === id);
+      if (index >= 0) all.splice(index, 1);
+    },
+  };
 }
 
 function searchSpy(): { search: CatalogSearchPort; calls: string[]; indexed: SearchableProduct[] } {
@@ -85,7 +109,7 @@ describe('reindexAll', () => {
   });
 
   it('pages through a catalog larger than one read and indexes every product once', async () => {
-    const { repo, pagesRead } = repositoryOf(1_100);
+    const { repo, cursorsRead } = repositoryOf(1_100);
     const { search, indexed } = searchSpy();
 
     const count = await reindexAll(repo, search);
@@ -93,16 +117,41 @@ describe('reindexAll', () => {
     expect(count).toBe(1_100);
     expect(indexed.map((doc) => doc.id)).toHaveLength(1_100);
     expect(new Set(indexed.map((doc) => doc.id)).size).toBe(1_100);
-    expect(pagesRead.map((criteria) => criteria.page)).toEqual([1, 2, 3]);
+    // Each page seeks from the previous page's last row instead of counting rows skipped.
+    expect(cursorsRead).toEqual([null, 'p0499', 'p0999']);
   });
 
-  it('stops at the reported total instead of asking for a page past the end', async () => {
-    const { repo, pagesRead } = repositoryOf(500);
+  it('stops at the first short page instead of asking for another', async () => {
+    const { repo, cursorsRead } = repositoryOf(300);
     const { search } = searchSpy();
 
     await reindexAll(repo, search);
 
-    expect(pagesRead).toHaveLength(1);
+    expect(cursorsRead).toHaveLength(1);
+  });
+
+  // Without a total to stop on, a catalog that ends on a full page costs exactly one empty read.
+  it('confirms the end with a single read when the last page is full', async () => {
+    const { repo, cursorsRead } = repositoryOf(500);
+    const { search } = searchSpy();
+
+    expect(await reindexAll(repo, search)).toBe(500);
+    expect(cursorsRead).toHaveLength(2);
+  });
+
+  it('still indexes every surviving product when one leaves the ACTIVE set mid-run', async () => {
+    const { repo, drop, hooks } = repositoryOf(600);
+    const { search, indexed } = searchSpy();
+    // Archived out of the page already read, which under offset paging shifted p0500 past the scan.
+    hooks.afterPage = () => {
+      hooks.afterPage = undefined;
+      drop('p0000');
+    };
+
+    await reindexAll(repo, search);
+
+    const survivors = Array.from({ length: 599 }, (_, i) => `p${String(i + 1).padStart(4, '0')}`);
+    expect(indexed.map((doc) => doc.id)).toEqual(expect.arrayContaining(survivors));
   });
 
   it('reports nothing indexed for an empty catalog', async () => {

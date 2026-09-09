@@ -1,19 +1,20 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsInt, IsUUID, Max, Min } from 'class-validator';
-
-// Per-line quantity cap: keeps a request-supplied `quantity` well inside int4 and JS safe-integer
-// range, so out-of-range input is a clean 400 at the edge instead of a Postgres overflow
-// surfacing as a 500.
-const MAX_QUANTITY = 10_000;
+import { MAX_LINE_QUANTITY } from '../../cart.constants';
 
 export class AddCartItemDto {
   @ApiProperty({ format: 'uuid', description: 'Product-variant id (SKU) to add' })
   @IsUUID()
   skuId!: string;
 
-  @ApiProperty({ example: 1, minimum: 1, maximum: MAX_QUANTITY, description: 'Units to add (integer 1..10000)' })
+  @ApiProperty({
+    example: 1,
+    minimum: 1,
+    maximum: MAX_LINE_QUANTITY,
+    description: `Units to add (integer 1..${MAX_LINE_QUANTITY}). Adds accumulate, and the line is clamped at ${MAX_LINE_QUANTITY}.`,
+  })
   @IsInt()
   @Min(1)
-  @Max(MAX_QUANTITY)
+  @Max(MAX_LINE_QUANTITY)
   quantity!: number;
 }

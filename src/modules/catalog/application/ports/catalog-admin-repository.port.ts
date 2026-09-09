@@ -49,15 +49,25 @@ export interface AttachImageData {
   alt?: string | null;
 }
 
+export interface ArchiveCategoryResult {
+  /** Null when the id is unknown or the archive was blocked. */
+  category: Category | null;
+  /** A non-archived (DRAFT or ACTIVE) product still references the category, so nothing was archived. */
+  blocked: boolean;
+}
+
 export interface CatalogAdminRepositoryPort {
   findCategoryById(id: string): Promise<Category | null>;
   createCategory(data: CreateCategoryData): Promise<Category>;
   /** Empty patch = no-op fetch. */
   updateCategory(id: string, data: UpdateCategoryData): Promise<Category | null>;
-  /** Idempotent soft-delete — keeps the first archivedAt. */
-  archiveCategory(id: string): Promise<Category | null>;
-  /** "Active" here means non-archived: DRAFT or ACTIVE. */
-  countActiveProductsInCategory(categoryId: string): Promise<number>;
+  /**
+   * Checks for live products and archives in one transaction, holding a lock on the category row
+   * that conflicts with the one every product write takes on the category it names — a guard split
+   * across two statements would let a product commit under a category being archived. Idempotent
+   * soft-delete: keeps the first archivedAt.
+   */
+  archiveCategoryIfEmpty(id: string): Promise<ArchiveCategoryResult>;
 
   findProductById(id: string): Promise<AdminProduct | null>;
   createProduct(data: CreateProductData): Promise<AdminProduct>;

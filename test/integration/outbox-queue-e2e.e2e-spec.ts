@@ -34,9 +34,8 @@ const seedRow = (index: number, overrides: Record<string, unknown> = {}) => ({
 
 /**
  * The hops themselves have their own suites (outbox-append, outbox-relay, consumer-idempotency,
- * dead-letter). This one is about the telemetry that has to be true at each hop: a backlog gauge
- * that reads the table rather than a constant, a publish counter that moves before the backlog
- * does, and one trace id from the producer through Redis to the effect.
+ * dead-letter). This one is about the telemetry that has to be true at each hop, and one trace id
+ * from the producer through Redis to the effect.
  */
 describe('Outbox → queue → consumer, end to end (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -288,8 +287,6 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
       expect(names).toContain('order.place');
       expect(names).toContain('outbox.publish');
       expect(names).toContain('consume:order.placed');
-      // The whole point: one trace id. Three ids means three disconnected traces in Jaeger and no
-      // way to answer "what did this request cause".
       expect(new Set(spans.map((span) => span.spanContext().traceId))).toEqual(new Set([producerTraceId]));
     });
 

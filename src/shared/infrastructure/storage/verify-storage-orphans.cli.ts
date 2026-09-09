@@ -5,8 +5,11 @@
  *
  * Three ways the stores can disagree, in increasing order of seriousness:
  *
- *   orphan object — bytes no row points at. Expected transiently: a sweep deletes the object before
- *   the row, so a crash between the two shows up here until the next pass.
+ *   orphan object — bytes no row points at: a PUT that landed after its row was swept, or anything
+ *   written to the bucket outside the app. NOT a crashed sweep — that deletes the object first and
+ *   the row second, so it leaves a SWEEPING row whose object is gone, which is invisible here (the
+ *   key is still in `knownKeys`, and only ATTACHED rows are HEAD-ed). Nor is it this scan's own
+ *   snapshot window: candidates are re-read against the database before being reported.
  *
  *   missing object — an ATTACHED row whose object is gone: a product is rendering a broken image
  *   right now.
@@ -25,7 +28,7 @@ import 'dotenv/config';
 import { HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { eq, isNull } from 'drizzle-orm';
+import { eq, inArray, isNull } from 'drizzle-orm';
 import configuration from '@shared/config/configuration';
 import { mediaAssets, productImages } from '@shared/infrastructure/database/schema';
 
@@ -34,6 +37,9 @@ const DEFAULT_LIMIT = 10_000;
 // HEAD is one round trip per row; a handful in flight keeps a large catalog from taking minutes
 // without turning the check itself into a load test.
 const HEAD_CONCURRENCY = 8;
+// Caps one re-check statement: it binds a parameter per candidate, and a bucket listing can hand
+// over more candidates than Postgres accepts in a single statement.
+const RECHECK_CHUNK = 1000;
 
 function argValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -71,7 +77,7 @@ async function main(): Promise<void> {
     const knownKeys = new Set(rows.map((row) => row.storageKey));
 
     // Bucket → database. Paged: ListObjectsV2 caps at 1000 keys per response regardless of MaxKeys.
-    const orphanObjects: string[] = [];
+    let orphanObjects: string[] = [];
     let scanned = 0;
     let continuationToken: string | undefined;
     do {
@@ -85,6 +91,22 @@ async function main(): Promise<void> {
       }
       continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (continuationToken && scanned < limit);
+
+    if (orphanObjects.length > 0) {
+      // The row snapshot predates the listing, and an upload inserts its row before it PUTs, so a key
+      // that appeared mid-scan is absent from `knownKeys` while being a healthy PENDING asset. Re-read
+      // just the candidates before calling any of them an orphan.
+      const nowKnown = new Set<string>();
+      for (let offset = 0; offset < orphanObjects.length; offset += RECHECK_CHUNK) {
+        const chunk = orphanObjects.slice(offset, offset + RECHECK_CHUNK);
+        const rechecked = await db
+          .select({ storageKey: mediaAssets.storageKey })
+          .from(mediaAssets)
+          .where(inArray(mediaAssets.storageKey, chunk));
+        for (const row of rechecked) nowKnown.add(row.storageKey);
+      }
+      orphanObjects = orphanObjects.filter((key) => !nowKnown.has(key));
+    }
 
     // Database → bucket, for the state where a missing object is user-visible. A PENDING row with
     // no object is the normal case (the upload was never made), not a discrepancy.

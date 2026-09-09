@@ -14,7 +14,6 @@ import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Fixed, valid UUIDs — variant_id / order_id are uuid columns.
 const SKU_A = '11111111-1111-4111-8111-111111111111';
 const SKU_B = '22222222-2222-4222-8222-222222222222';
 const ORDER_1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -79,7 +78,7 @@ describe('Inventory optimistic reserve (integration, real Postgres)', () => {
     expect(rows[0].status).toBe('HELD');
     expect(rows[0].quantity).toBe(3);
     expect(rows[0].expiresAt).not.toBeNull();
-    expect(rows[0].expiresAt!.getTime()).toBeGreaterThan(Date.now()); // TTL stamped ahead
+    expect(rows[0].expiresAt!.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('holds the last units exactly: onHand=5, reserve 5 → available 0, HELD', async () => {

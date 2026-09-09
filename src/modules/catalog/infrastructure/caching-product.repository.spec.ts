@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ConfigService } from '@nestjs/config';
 import { SwrCacheService, type CacheService, type SingleFlightLock } from '@shared/cache';
 import { Money } from '@shared/kernel';
@@ -21,6 +22,13 @@ const CONFIG: Record<string, number> = {
 };
 
 const HARD_TTL_MS = 90_000;
+
+// Rebuilt here rather than called from `catalog-cache.keys`: asserting against the same helper the
+// code under test called would hold for any implementation of it, a constant included. `lookup` is
+// what the key generator is expected to have already normalized (uuids folded to lower case).
+function detailKey(version: number, lookup: string): string {
+  return `catalog:v2:${version}:product:${createHash('sha256').update(lookup).digest('hex').slice(0, 32)}`;
+}
 
 function buildProduct(slug = 'headphones'): Product {
   return new Product(
@@ -103,7 +111,7 @@ describe('CachingProductRepository', () => {
       expect(result).toBe(product);
       expect(ctx.recordCatalogCacheOperation).toHaveBeenCalledWith('miss');
       expect(ctx.cache.writeMs).toHaveBeenCalledWith(
-        expect.stringContaining(':product:headphones'),
+        detailKey(0, 'headphones'),
         expect.objectContaining({ data: toProductSnapshot(product) }),
         HARD_TTL_MS,
       );
@@ -140,7 +148,7 @@ describe('CachingProductRepository', () => {
       finishRebuild(renamed);
       await flushBackgroundWork();
       expect(ctx.cache.writeMs).toHaveBeenCalledWith(
-        expect.stringContaining(':product:headphones'),
+        detailKey(0, 'headphones'),
         expect.objectContaining({ data: toProductSnapshot(renamed) }),
         HARD_TTL_MS,
       );
@@ -235,7 +243,21 @@ describe('CachingProductRepository', () => {
 
       const keys = ctx.cache.writeMs.mock.calls.map((call) => call[0] as string);
       expect(keys[0]).toBe(keys[1]);
-      expect(keys[0]).toContain(id);
+      expect(keys[0]).toBe(detailKey(0, id));
+    });
+
+    // The segment comes straight off the URL, and the single-flight lock appends `:lock` to whatever
+    // key it is given, so an unhashed one would let a caller name another entry's lock.
+    it('keeps the detail key bounded and free of the raw path segment', async () => {
+      ctx.source.findActiveByIdOrSlug.mockResolvedValue(buildProduct());
+      const hostile = `${'x'.repeat(4_000)}:lock`;
+
+      await ctx.repo.findActiveByIdOrSlug(hostile);
+
+      const key = ctx.cache.writeMs.mock.calls[0][0] as string;
+      expect(key).not.toContain(':lock');
+      expect(key).toBe(detailKey(0, hostile));
+      expect(key.length).toBeLessThan(80);
     });
 
     it('keeps slug case distinct — a slug is text, where case decides which product answers', async () => {

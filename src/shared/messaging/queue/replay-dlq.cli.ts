@@ -24,7 +24,12 @@ import { Pool } from 'pg';
 import configuration from '@shared/config/configuration';
 import { inbox } from '../inbox/schema/inbox.schema';
 import { replayDeadLetters, type InboxClaimLookup } from './dead-letter.replay';
-import { DOMAIN_EVENTS_CONSUMER, QUEUE_DOMAIN_EVENTS, QUEUE_DOMAIN_EVENTS_DLQ } from './queue.constants';
+import {
+  buildJobOptions,
+  DOMAIN_EVENTS_CONSUMER,
+  QUEUE_DOMAIN_EVENTS,
+  QUEUE_DOMAIN_EVENTS_DLQ,
+} from './queue.constants';
 
 const DAY_MS = 86_400_000;
 
@@ -38,8 +43,9 @@ async function main(): Promise<void> {
     throw new Error(`--limit must be a positive integer, got "${process.argv[limitArg + 1]}"`);
   }
 
-  // The app's own config factory, but read from THIS process's environment: a wrong prefix fails
-  // safe (empty queue), a wrong retention window does not — hence it is echoed in the header below.
+  // The app's own config factory, but read from THIS process's environment, so every value here can
+  // silently disagree with the deployment being repaired — the Redis it drains, the inbox it checks,
+  // the retention window, the retry policy it replays under. Only the window is echoed below.
   const { redis, queue, database, retention } = configuration();
   if (!redis.url) throw new Error('REDIS_URL is not set');
   if (!database.url) throw new Error('DATABASE_URL is not set — the inbox check cannot be skipped');
@@ -47,7 +53,16 @@ async function main(): Promise<void> {
 
   // maxRetriesPerRequest: null is BullMQ's requirement — it refuses a finite budget, not a preference.
   const connection = new Redis(redis.url, { maxRetriesPerRequest: null });
-  const domainEvents = new Queue(QUEUE_DOMAIN_EVENTS, { connection, prefix });
+  const domainEvents = new Queue(QUEUE_DOMAIN_EVENTS, {
+    connection,
+    prefix,
+    // BullMQ stamps these onto the job at add time, so a queue built without them replays with
+    // attempts: 0 — no retry budget on the one path where the message is known to have failed, and
+    // a failed record kept forever instead of expiring with the inbox claim that guards it.
+    defaultJobOptions: buildJobOptions(queue.consumerAttempts, queue.consumerBackoffMs),
+  });
+  // Still no defaults here, for the reason queue.providers.ts gives: nothing consumes the DLQ, so
+  // retention rules would delete the record it exists to keep.
   const dlq = new Queue(QUEUE_DOMAIN_EVENTS_DLQ, { connection, prefix });
 
   // One connection: this reads at most `limit` rows, one at a time, and then exits.
@@ -82,8 +97,12 @@ async function main(): Promise<void> {
       console.log('dead-letter queue is empty');
     }
     for (const outcome of summary.outcomes) {
+      // The diagnosis the header tells the operator to act on before replaying; Redis is the only
+      // other place it exists, and this tool runs precisely when the app is what is broken. Labelled
+      // because on a `replayed` line an unlabelled reason reads as a failure that just happened.
+      const reason = outcome.failedReason ? ` [parked: ${outcome.failedReason}]` : '';
       const detail = outcome.detail ? ` — ${outcome.detail}` : '';
-      console.log(`${outcome.status.padEnd(8)} ${outcome.eventType.padEnd(16)} ${outcome.messageId}${detail}`);
+      console.log(`${outcome.status.padEnd(8)} ${outcome.eventType.padEnd(16)} ${outcome.messageId}${reason}${detail}`);
     }
     console.log(`\nreplayed: ${summary.replayed}   skipped: ${summary.skipped}`);
     if (!apply && summary.outcomes.length > 0) {

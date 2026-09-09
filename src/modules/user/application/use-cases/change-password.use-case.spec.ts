@@ -16,6 +16,8 @@ class MockHasher implements PasswordHasherPort {
 }
 
 class MockUserRepo implements Partial<UserRepositoryPort> {
+  constructor(private readonly trace: string[]) {}
+
   user: User | null = User.create({
     id: 'u1',
     email: 'user@test.local',
@@ -30,29 +32,35 @@ class MockUserRepo implements Partial<UserRepositoryPort> {
     return Promise.resolve(this.user);
   }
   updatePassword(userId: string, passwordHash: string): Promise<void> {
+    this.trace.push('updatePassword');
     this.updated.push({ userId, passwordHash });
     return Promise.resolve();
   }
 }
 
 class MockSessions {
+  constructor(private readonly trace: string[]) {}
+
   revokedAllFor: string[] = [];
   revokeAll(userId: string): Promise<void> {
+    this.trace.push('revokeAll');
     this.revokedAllFor.push(userId);
     return Promise.resolve();
   }
 }
 
 describe('ChangePasswordUseCase', () => {
+  let trace: string[];
   let users: MockUserRepo;
   let hasher: MockHasher;
   let sessions: MockSessions;
   let useCase: ChangePasswordUseCase;
 
   beforeEach(() => {
-    users = new MockUserRepo();
+    trace = [];
+    users = new MockUserRepo(trace);
     hasher = new MockHasher();
-    sessions = new MockSessions();
+    sessions = new MockSessions(trace);
     useCase = new ChangePasswordUseCase(
       users as unknown as UserRepositoryPort,
       hasher,
@@ -65,6 +73,13 @@ describe('ChangePasswordUseCase', () => {
 
     expect(users.updated).toEqual([{ userId: 'u1', passwordHash: 'hashed:new-password' }]);
     expect(sessions.revokedAllFor).toEqual(['u1']);
+  });
+
+  // The pair is not transactional, so the safe failure direction is the old password with no sessions.
+  it('revokes every session before writing the new hash', async () => {
+    await useCase.execute({ userId: 'u1', currentPassword: 'old-pw', newPassword: 'new-password' });
+
+    expect(trace).toEqual(['revokeAll', 'updatePassword']);
   });
 
   it('rejects a wrong current password with 401 and changes nothing', async () => {

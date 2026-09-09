@@ -34,10 +34,13 @@ export interface GatewayPaymentStatus {
   /** Carried with the status because a sweep-settled payment has no webhook to record it, and a
    * later refund or dispute needs the handle. */
   intentId?: string | null;
+  /** The money this session actually holds. Carried so a sweep can prove a PAID verdict is for the
+   * charge on the payment row, the same proof the webhook path demands before settling. */
+  amountMinor?: number;
+  currency?: string;
 }
 
 export type ExpireSessionOutcome =
-  /** This call closed it. */
   | 'expired'
   /** Already unpayable — expired, or never issued. Nothing happened and nothing is owed. */
   | 'already_closed'

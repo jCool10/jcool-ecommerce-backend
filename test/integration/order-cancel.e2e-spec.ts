@@ -117,7 +117,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
     });
 
     // A client that lost the first response must be able to retry without being told it did
-    // something wrong. Nothing about the order moves the second time.
+    // something wrong.
     it('answers a repeated cancel the same way, releasing the stock only once', async () => {
       const token = await buyerWithCart(app, sku.variantId, QUANTITY);
       const orderId = (await checkout(app, token).expect(201)).body.id as string;
@@ -211,8 +211,6 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       expect(refundOwed).not.toHaveBeenCalled();
     });
 
-    // The redelivery that follows a consume which closed the session and then rolled back: the
-    // gateway reports the session already closed, which is exactly what this needed.
     it('finishes the write on a redelivery whose session an earlier attempt already closed', async () => {
       const { orderId, sessionId } = await cancelledOrderWithSession();
       const job = await cancelledJob(orderId);
@@ -264,8 +262,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       expect((await readStock(app, sku.variantId)).quantityReserved).toBe(0);
     });
 
-    // The durable half of the same webhook. It re-runs the same finalize through the queue, lands on
-    // the same terminal order, and is counted under its own source.
+    // The durable half of the same webhook: finalize re-run through the queue, counted separately.
     it('raises it from the settlement event too, so a lost webhook still alarms', async () => {
       const order = await placeAndOpenSession(app, sku, QUANTITY);
       await cancel(order.token, order.orderId).expect(200);

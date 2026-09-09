@@ -23,15 +23,22 @@ function order(status: OrderStatus, userId = OWNER): Order {
   });
 }
 
-function build(found: Order | null) {
+function build(found: Order | null, reportFinalized?: () => void) {
   const findByIdForUpdate = vi.fn().mockResolvedValue(found);
+  // Stands in for the COMMIT so a test can tell what ran inside the transaction from what ran after.
+  const commit = vi.fn();
   const repo = {
-    withTransaction: vi.fn(<T>(fn: (tx: DrizzleTx) => Promise<T>) => fn({} as DrizzleTx)),
+    withTransaction: vi.fn(async <T>(fn: (tx: DrizzleTx) => Promise<T>) => {
+      const outcome = await fn({} as DrizzleTx);
+      commit();
+      return outcome;
+    }),
     findByIdForUpdate,
   } as unknown as OrderRepositoryPort;
   const execute = vi.fn().mockImplementation(({ reason }: { reason: string }) =>
     Promise.resolve({
       status: 'finalized',
+      reportFinalized,
       order: Order.rehydrate({
         id: ORDER_ID,
         userId: OWNER,
@@ -45,7 +52,7 @@ function build(found: Order | null) {
     }),
   );
   const useCase = new CancelOrderUseCase(repo, { execute } as unknown as FinalizeOrderUseCase);
-  return { useCase, finalize: execute, findByIdForUpdate };
+  return { useCase, finalize: execute, findByIdForUpdate, commit };
 }
 
 describe('CancelOrderUseCase', () => {
@@ -71,6 +78,18 @@ describe('CancelOrderUseCase', () => {
     // The order was read under a lock and the finalize was handed that same handle — otherwise the
     // order could settle some other way between the ownership check and the cancel.
     expect(finalize.mock.calls[0][1]).toBe(findByIdForUpdate.mock.calls[0][1]);
+  });
+
+  // The finalize joined this transaction, so its counters and audit line describe nothing real until
+  // the commit — a rollback after them would leave the metrics claiming a cancel that never landed.
+  it('runs the finalize reporting only after the transaction commits', async () => {
+    const report = vi.fn();
+    const { useCase, commit } = build(order(OrderStatus.PENDING), report);
+
+    await useCase.cancelOwn(ORDER_ID, OWNER);
+
+    expect(report).toHaveBeenCalledOnce();
+    expect(report.mock.invocationCallOrder[0]).toBeGreaterThan(commit.mock.invocationCallOrder[0]);
   });
 
   it('records an admin force-cancel under its own audit reason', async () => {

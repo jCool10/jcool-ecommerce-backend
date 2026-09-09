@@ -16,7 +16,7 @@ import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-eve
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import {
-  auditM2Invariants,
+  auditLedgerInvariants,
   placeAndOpenSession,
   postWebhook,
   readOrder,
@@ -36,10 +36,10 @@ const QUANTITY = 2;
 const SWEEP_ALL = { graceSec: 0, batchSize: 50 };
 
 /**
- * Each case leaves the database in the exact state one interruption produces, then runs what a
- * restarted service does unattended and reads the WHOLE ledger back — asserting one order's row
- * would pass on a state that leaked stock somewhere else. A real SIGKILL mid-transaction is not
- * reproducible in a test, so the interruption is injected at the boundary it would land on.
+ * Each case leaves the database in the state one interruption produces, then runs what a restarted
+ * service does unattended and reads the WHOLE ledger back — asserting one order's row would pass on
+ * a state that leaked stock elsewhere. A real SIGKILL mid-transaction is not reproducible in a test,
+ * so the interruption is injected at the boundary it would land on.
  */
 describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -125,7 +125,11 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   }
 
   async function expectLedgerConverged(orders: number): Promise<void> {
-    expect(await auditM2Invariants(app, { [sku.variantId]: STOCK })).toEqual({ orders, pending: [], violations: [] });
+    expect(await auditLedgerInvariants(app, { [sku.variantId]: STOCK })).toEqual({
+      orders,
+      pending: [],
+      violations: [],
+    });
   }
 
   /** Interrupt the finalizing transaction at its last write, leaving the payment side already committed. */
@@ -251,7 +255,6 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     await expectLedgerConverged(1);
   });
 
-  // The claim the whole design is for, over a batch rather than one order.
   it('converges a batch cut at three different points at once', async () => {
     const paid = await placeAndOpenSession(app, sku, QUANTITY);
     const failed = await placeAndOpenSession(app, sku, QUANTITY);

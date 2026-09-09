@@ -31,4 +31,9 @@ export interface FinalizeResult {
   order?: Order;
   /** Present only on `finalized`, produced exactly once — the same event appended to the outbox. */
   event?: OrderFinalizedEvent;
+  /**
+   * Present only on a `finalized` that joined the caller's transaction: the saga counters and the
+   * audit line, which the caller must run after ITS commit and never before.
+   */
+  reportFinalized?: () => void;
 }

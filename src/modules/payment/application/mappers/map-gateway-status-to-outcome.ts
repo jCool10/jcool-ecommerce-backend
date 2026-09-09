@@ -1,4 +1,4 @@
-import type { FinalizeOutcome } from '@modules/order/application/use-cases';
+import type { FinalizeOutcome } from '@modules/order/application/public/order-finalization.port';
 import type { GatewayStatus } from '../ports/payment-gateway.port';
 
 /** Cancelling is a user/admin decision about the order, never something a gateway can report. */

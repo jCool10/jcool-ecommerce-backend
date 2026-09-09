@@ -33,8 +33,8 @@ export class CancelOrderUseCase {
     return this.cancel(orderId, 'admin:cancel');
   }
 
-  private cancel(orderId: string, reason: string, authorize?: (order: Order) => void): Promise<OrderView> {
-    return this.repo.withTransaction(async (tx: DrizzleTx) => {
+  private async cancel(orderId: string, reason: string, authorize?: (order: Order) => void): Promise<OrderView> {
+    const { view, report } = await this.repo.withTransaction<CancelOutcome>(async (tx: DrizzleTx) => {
       const order = await this.repo.findByIdForUpdate(orderId, tx);
       if (!order) {
         throw new NotFoundException(`Order not found: ${orderId}`);
@@ -44,7 +44,7 @@ export class CancelOrderUseCase {
       // Re-cancelling is the same request answered again, not a conflict: a client that lost the
       // first response must be able to retry it.
       if (order.status === OrderStatus.CANCELLED) {
-        return toView(order);
+        return { view: toView(order) };
       }
       // Everything else refuses, PAID included — unwinding that is a refund, which this shop
       // does not do.
@@ -54,11 +54,21 @@ export class CancelOrderUseCase {
 
       const result = await this.finalize.execute({ orderId, outcome: OrderStatus.CANCELLED, reason }, tx);
       if (result.status === 'finalized' || result.status === 'noop') {
-        return toView(result.order as Order);
+        return { view: toView(result.order as Order), report: result.reportFinalized };
       }
       // Unreachable while the row lock holds, but if the finalize refuses anyway, answer from its
       // view of the order rather than the stale one above.
       throw new ConflictException(`Order cannot be cancelled in status ${result.order?.status ?? 'UNKNOWN'}`);
     });
+
+    // The finalize joined the transaction above, so its counters and audit line only describe
+    // something that happened once that transaction has committed.
+    report?.();
+    return view;
   }
+}
+
+interface CancelOutcome {
+  view: OrderView;
+  report?: () => void;
 }

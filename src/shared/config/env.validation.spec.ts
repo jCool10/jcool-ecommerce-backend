@@ -34,3 +34,12 @@ describe('env validation — IDENTITY_BUCKET_KEY', () => {
     expect(() => validate({ ...BASE_ENV, IDENTITY_BUCKET_KEY: 'a'.repeat(32) })).not.toThrow();
   });
 });
+
+describe('env validation — retired inventory backoff key', () => {
+  // validateSync runs without forbidNonWhitelisted, so an undeclared key is ignored while a
+  // declared one can still fail a boot. Nothing reads this key any more, so it must stay undeclared
+  // or a deployment that still carries it is the only thing the schema can reject.
+  it('ignores a stale INVENTORY_OPTIMISTIC_BACKOFF_MS instead of refusing to boot', () => {
+    expect(() => validate({ ...BASE_ENV, INVENTORY_OPTIMISTIC_BACKOFF_MS: 'not-a-number' })).not.toThrow();
+  });
+});

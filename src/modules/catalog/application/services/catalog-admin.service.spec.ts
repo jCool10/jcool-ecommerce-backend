@@ -56,8 +56,7 @@ describe('CatalogAdminService', () => {
       findCategoryById: vi.fn(),
       createCategory: vi.fn(),
       updateCategory: vi.fn(),
-      archiveCategory: vi.fn(),
-      countActiveProductsInCategory: vi.fn(),
+      archiveCategoryIfEmpty: vi.fn(),
       findProductById: vi.fn(),
       createProduct: vi.fn(),
       updateProduct: vi.fn(),
@@ -89,6 +88,7 @@ describe('CatalogAdminService', () => {
       // Default: nothing publicly visible, so a mutation's write-through resolves to a delete
       // unless a test says the product is ACTIVE.
       findActiveByIdOrSlug: vi.fn().mockResolvedValue(null),
+      findActiveAfter: vi.fn(),
       findSkuView: vi.fn(),
       findManySkuViews: vi.fn(),
     };
@@ -149,20 +149,17 @@ describe('CatalogAdminService', () => {
 
   describe('archiveCategory', () => {
     it('rejects with 409 when the category still has active products', async () => {
-      repo.countActiveProductsInCategory.mockResolvedValue(2);
+      repo.archiveCategoryIfEmpty.mockResolvedValue({ category: null, blocked: true });
       await expect(service.archiveCategory('cat1')).rejects.toBeInstanceOf(ConflictException);
-      expect(repo.archiveCategory).not.toHaveBeenCalled();
     });
 
     it('archives when no active products remain', async () => {
-      repo.countActiveProductsInCategory.mockResolvedValue(0);
-      repo.archiveCategory.mockResolvedValue(category({ archivedAt: now }));
+      repo.archiveCategoryIfEmpty.mockResolvedValue({ category: category({ archivedAt: now }), blocked: false });
       await expect(service.archiveCategory('cat1')).resolves.toEqual(category({ archivedAt: now }));
     });
 
     it('rejects with 404 when the category id is unknown', async () => {
-      repo.countActiveProductsInCategory.mockResolvedValue(0);
-      repo.archiveCategory.mockResolvedValue(null);
+      repo.archiveCategoryIfEmpty.mockResolvedValue({ category: null, blocked: false });
       await expect(service.archiveCategory('missing')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
@@ -306,8 +303,7 @@ describe('CatalogAdminService', () => {
     });
 
     it('leaves the index alone when a category archive is allowed through', async () => {
-      repo.countActiveProductsInCategory.mockResolvedValue(0);
-      repo.archiveCategory.mockResolvedValue(category({ archivedAt: now }));
+      repo.archiveCategoryIfEmpty.mockResolvedValue({ category: category({ archivedAt: now }), blocked: false });
 
       await service.archiveCategory('cat1');
 

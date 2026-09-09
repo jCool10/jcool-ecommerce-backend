@@ -1,5 +1,6 @@
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
+import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { OrderStatus } from '../../domain/order-status';
@@ -9,6 +10,7 @@ import type { FinalizeResult } from './finalize-order.types';
 import { FinalizeOrderUseCase } from './finalize-order.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000001';
+const CALLER_TX = Symbol('tx') as unknown as DrizzleTx;
 
 function build(withTransaction: () => Promise<FinalizeResult>) {
   const recordSagaStep = vi.fn();
@@ -50,5 +52,41 @@ describe('FinalizeOrderUseCase', () => {
     expect(recordSagaStep).not.toHaveBeenCalled();
     expect(recordCompensation).not.toHaveBeenCalled();
     expect(logger.info).not.toHaveBeenCalled();
+  });
+
+  // A joined caller commits later, so reporting before its commit would describe an end state the
+  // database may never reach.
+  it('reports nothing itself when it joined a caller transaction, and hands the reporting back', async () => {
+    const { useCase, recordSagaStep, recordCompensation, logger } = build(() =>
+      Promise.resolve({ status: 'finalized' } as FinalizeResult),
+    );
+
+    const result = await useCase.execute({ orderId: ORDER_ID, outcome: OrderStatus.CANCELLED }, CALLER_TX);
+
+    expect(recordSagaStep).not.toHaveBeenCalled();
+    expect(recordCompensation).not.toHaveBeenCalled();
+    expect(logger.info).not.toHaveBeenCalled();
+
+    result.reportFinalized?.();
+
+    expect(recordSagaStep).toHaveBeenCalledExactlyOnceWith('finalize', 'success');
+    expect(recordCompensation).toHaveBeenCalledExactlyOnceWith('cancelled');
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ orderId: ORDER_ID, outcome: OrderStatus.CANCELLED }),
+      'order finalized',
+    );
+  });
+
+  it('reports immediately when it owned the transaction, with nothing left for the caller to run', async () => {
+    const { useCase, recordSagaStep, recordCompensation, logger } = build(() =>
+      Promise.resolve({ status: 'finalized' } as FinalizeResult),
+    );
+
+    const result = await useCase.execute({ orderId: ORDER_ID, outcome: OrderStatus.PAID });
+
+    expect(result.reportFinalized).toBeUndefined();
+    expect(recordSagaStep).toHaveBeenCalledExactlyOnceWith('finalize', 'success');
+    expect(recordCompensation).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledOnce();
   });
 });

@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, eq, max, ne, sql } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Money } from '@shared/kernel';
@@ -6,6 +6,7 @@ import { MEDIA_FACADE, type MediaFacade } from '@modules/media/application/publi
 import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
 import type { AdminProduct, Category, Price, ProductImage, Sku } from '../domain/entities';
 import type {
+  ArchiveCategoryResult,
   AttachImageData,
   CatalogAdminRepositoryPort,
   CreateCategoryData,
@@ -85,22 +86,48 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     return row ? toCategory(row) : null;
   }
 
-  async archiveCategory(id: string): Promise<Category | null> {
-    // COALESCE keeps the first timestamp → re-archiving is idempotent.
-    const [row] = await this.db
-      .update(categories)
-      .set({ archivedAt: sql`coalesce(${categories.archivedAt}, now())` })
-      .where(eq(categories.id, id))
-      .returning();
-    return row ? toCategory(row) : null;
+  async archiveCategoryIfEmpty(id: string): Promise<ArchiveCategoryResult> {
+    return this.db.transaction(async (tx) => {
+      // The lock is the guard: it conflicts with the FOR SHARE every product write takes on its
+      // category, so a product cannot commit between the count below and the archive.
+      const [locked] = await tx
+        .select({ id: categories.id })
+        .from(categories)
+        .where(eq(categories.id, id))
+        .for('update');
+      if (!locked) {
+        return { category: null, blocked: false };
+      }
+
+      const [counted] = await tx
+        .select({ value: count() })
+        .from(products)
+        .where(and(eq(products.categoryId, id), ne(products.status, 'ARCHIVED')));
+      if ((counted?.value ?? 0) > 0) {
+        return { category: null, blocked: true };
+      }
+
+      // COALESCE keeps the first timestamp → re-archiving is idempotent.
+      const [row] = await tx
+        .update(categories)
+        .set({ archivedAt: sql`coalesce(${categories.archivedAt}, now())` })
+        .where(eq(categories.id, id))
+        .returning();
+      return { category: row ? toCategory(row) : null, blocked: false };
+    });
   }
 
-  async countActiveProductsInCategory(categoryId: string): Promise<number> {
-    const [row] = await this.db
-      .select({ value: count() })
-      .from(products)
-      .where(and(eq(products.categoryId, categoryId), ne(products.status, 'ARCHIVED')));
-    return row?.value ?? 0;
+  // FOR SHARE rather than a plain read: it conflicts with the archive's FOR UPDATE, so of two
+  // concurrent writers one always sees the other's committed state.
+  private async lockLiveCategory(tx: DrizzleTx, categoryId: string): Promise<void> {
+    const [row] = await tx
+      .select({ archivedAt: categories.archivedAt })
+      .from(categories)
+      .where(eq(categories.id, categoryId))
+      .for('share');
+    if (!row || row.archivedAt !== null) {
+      throw new NotFoundException(`Category not found: ${categoryId}`);
+    }
   }
 
   async findProductById(id: string): Promise<AdminProduct | null> {
@@ -109,21 +136,24 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   async createProduct(data: CreateProductData): Promise<AdminProduct> {
-    const [row] = await this.guardUnique(
-      () =>
-        this.db
-          .insert(products)
-          .values({
-            name: data.name,
-            slug: data.slug,
-            description: data.description ?? null,
-            status: data.status ?? 'DRAFT',
-            categoryId: data.categoryId,
-          })
-          .returning(),
-      'Product slug already exists',
-    );
-    return toProduct(row);
+    return this.db.transaction(async (tx) => {
+      await this.lockLiveCategory(tx, data.categoryId);
+      const [row] = await this.guardUnique(
+        () =>
+          tx
+            .insert(products)
+            .values({
+              name: data.name,
+              slug: data.slug,
+              description: data.description ?? null,
+              status: data.status ?? 'DRAFT',
+              categoryId: data.categoryId,
+            })
+            .returning(),
+        'Product slug already exists',
+      );
+      return toProduct(row);
+    });
   }
 
   async updateProduct(id: string, data: UpdateProductData): Promise<AdminProduct | null> {
@@ -136,11 +166,17 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     if (Object.keys(patch).length === 0) {
       return this.findProductById(id);
     }
-    const [row] = await this.guardUnique(
-      () => this.db.update(products).set(patch).where(eq(products.id, id)).returning(),
-      'Product slug already exists',
-    );
-    return row ? toProduct(row) : null;
+    const movedTo = patch.categoryId;
+    return this.db.transaction(async (tx) => {
+      if (movedTo !== undefined) {
+        await this.lockLiveCategory(tx, movedTo);
+      }
+      const [row] = await this.guardUnique(
+        () => tx.update(products).set(patch).where(eq(products.id, id)).returning(),
+        'Product slug already exists',
+      );
+      return row ? toProduct(row) : null;
+    });
   }
 
   async archiveProduct(id: string): Promise<AdminProduct | null> {

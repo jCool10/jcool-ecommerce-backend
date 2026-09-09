@@ -25,6 +25,10 @@ class MockProductRepository implements ProductRepositoryPort {
     return Promise.resolve(null);
   }
 
+  findActiveAfter(): Promise<Product[]> {
+    return Promise.resolve([]);
+  }
+
   findSkuView(): Promise<null> {
     return Promise.resolve(null);
   }

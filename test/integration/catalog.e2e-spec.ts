@@ -15,8 +15,6 @@ import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Black-box HTTP tests for the Catalog context: public read (list pagination +
-// detail) and admin CRUD (RBAC + DTO validation) over real Postgres + Redis.
 describe('Catalog (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -119,7 +117,6 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(page1.body.items).toHaveLength(10);
       expect(page2.body.items).toHaveLength(5);
 
-      // Union of both pages == every seeded product, with no duplicates.
       const seen = [...page1.body.items, ...page2.body.items].map((p: { id: string }) => p.id);
       expect(new Set(seen).size).toBe(15);
       expect(new Set(seen)).toEqual(new Set(productIds));
@@ -265,7 +262,6 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(updated.status).toBe(200);
       expect(updated.body.name).toBe('Published Book');
 
-      // Resolves publicly while ACTIVE...
       await request(app.getHttpServer()).get(`/products/${productId}`).expect(200);
 
       const deleted = await request(app.getHttpServer())
@@ -274,7 +270,6 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(deleted.status).toBe(200);
       expect(deleted.body.status).toBe('ARCHIVED'); // soft-delete: archived + echoed, not removed
 
-      // ...and 404s once archived (dropped from the public surface).
       await request(app.getHttpServer()).get(`/products/${productId}`).expect(404);
     });
   });

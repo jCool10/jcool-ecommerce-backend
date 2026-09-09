@@ -38,12 +38,16 @@ export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
 export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
 export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
 
+// Sent after its transaction commits, so nothing retries it: every increment is one notification
+// the recipient will never receive.
 export const MAIL_SEND_FAILURES_TOTAL = 'mail_send_failures_total';
 
 export const RETENTION_ROWS_DELETED_TOTAL = 'retention_rows_deleted_total';
 export const RETENTION_SWEEP_DURATION_SECONDS = 'retention_sweep_duration_seconds';
 export const RETENTION_SWEEP_FAILURES_TOTAL = 'retention_sweep_failures_total';
 
+// Rows are already counted by the retention sweep; bytes is what those rows cost, and the two
+// diverge whenever a few very large objects are what actually accumulated.
 export const MEDIA_BYTES_RECLAIMED_TOTAL = 'media_bytes_reclaimed_total';
 
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
@@ -191,7 +195,7 @@ export const METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: CIRCUIT_BREAKER_CALLS_TOTAL,
-    help: 'Calls through a circuit breaker, by breaker and result (success/failure/timeout/rejected = refused while open/fallback = the degraded answer served instead).',
+    help: 'Calls through a circuit breaker, by breaker and result (success/failure/timeout/rejected = refused while open/fallback = the degraded answer served instead). failure and timeout are calls the downstream actually cost us; rejected are ones it never saw, so a rising rejected rate with no failures is the breaker working, not a new outage.',
     labelNames: ['breaker', 'result'],
   }),
   makeCounterProvider({

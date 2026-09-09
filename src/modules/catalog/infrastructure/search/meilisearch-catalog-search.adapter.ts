@@ -18,6 +18,8 @@ import {
 const HIGHLIGHT_PRE_TAG = '<em>';
 const HIGHLIGHT_POST_TAG = '</em>';
 
+// Caps one addDocuments payload: bulkIndex takes an unbounded array, so a caller may hand over far
+// more than the reindexer's page size.
 const BULK_INDEX_CHUNK = 1000;
 
 // Only ACTIVE products are ever indexed, but a delete that failed while the engine was unreachable

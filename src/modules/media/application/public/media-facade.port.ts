@@ -27,6 +27,10 @@ export interface MediaFacade {
   /** Claims the asset inside the caller's `tx`, so it commits or rolls back with the row that references it. */
   attach(tx: DrizzleTx, assetId: string): Promise<void>;
 
-  /** Gives the asset back inside the caller's `tx`; from here a sweep may reclaim it. */
+  /**
+   * Gives the asset back inside the caller's `tx`; from here a sweep may reclaim it. An asset whose
+   * row is already gone is instead a no-op — nothing is left to reclaim — so the caller can still
+   * delete a link row that dangles.
+   */
   detach(tx: DrizzleTx, assetId: string): Promise<void>;
 }

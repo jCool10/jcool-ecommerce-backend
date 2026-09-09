@@ -46,6 +46,9 @@ export class MediaFacadeService implements MediaFacade {
       // transaction would hold a connection across the network, so the bytes go when the sweep does.
       await this.repository.detach(tx, assetId, new Date(Date.now() + this.readyTtlSec * 1000));
     } catch (error) {
+      // Nothing left to give back, and dropping the link row is exactly the repair for an asset whose
+      // row is already gone. The lookup found no row rather than failing, so the caller's tx commits.
+      if (error instanceof MediaAssetNotFoundError) return;
       throw this.translate(error, assetId);
     }
   }

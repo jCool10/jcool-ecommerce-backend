@@ -1,6 +1,6 @@
 import type { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FinalizeOrderUseCase, FinalizeResult } from '@modules/order/application/use-cases';
+import type { FinalizeOrderUseCase, FinalizeResult } from '@modules/order/application/public/order-finalization.port';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import type { OrderReadPort, StalePendingOrderView } from '../ports/order-read.port';
@@ -28,6 +28,10 @@ function orderId(n: number): string {
   return `aaaaaaaa-aaaa-4aaa-8aaa-00000000000${n}`;
 }
 
+// What a gateway reports for a session opened for `pendingPayment`: the same money, in the
+// lowercase the providers send.
+const MATCHING_CHARGE = { amountMinor: 150_000, currency: 'vnd' };
+
 function pendingPayment(
   id: string,
   order: string,
@@ -51,6 +55,8 @@ interface Scenario {
   payments?: Record<string, Payment | null>;
   gateway?: Record<string, GatewayStatus>;
   gatewayIntents?: Record<string, string>;
+  /** Per-session charge the gateway reports; unlisted sessions report the payment's own money. */
+  gatewayCharges?: Record<string, { amountMinor?: number; currency?: string }>;
   gatewayThrows?: string[];
   expireThrows?: string[];
   /** Per-session refusal outcome; anything unlisted expires cleanly. */
@@ -70,7 +76,11 @@ function build(scenario: Scenario = {}) {
   );
   const getPaymentStatus = vi.fn((ref: string) => {
     if (scenario.gatewayThrows?.includes(ref)) return Promise.reject(new Error('gateway unreachable'));
-    return Promise.resolve({ status: scenario.gateway?.[ref] ?? 'UNKNOWN', intentId: scenario.gatewayIntents?.[ref] });
+    return Promise.resolve({
+      status: scenario.gateway?.[ref] ?? 'UNKNOWN',
+      intentId: scenario.gatewayIntents?.[ref],
+      ...(scenario.gatewayCharges?.[ref] ?? MATCHING_CHARGE),
+    });
   });
   const expireSession = vi.fn((ref: string) => {
     if (scenario.expireThrows?.includes(ref)) return Promise.reject(new Error('session not expirable'));
@@ -158,6 +168,55 @@ describe('ReconcileStaleOrdersUseCase', () => {
       providerIntentId: 'pi_from_gateway',
     });
     expect(spies.finalizeExec).toHaveBeenCalledWith(expect.objectContaining({ paymentRef: 'pi_from_gateway' }));
+  });
+
+  // The refusal the webhook path already makes: a PAID session holding different money is not the
+  // one this payment was for, so settling it would pay an order out of someone else's charge.
+  it.each([
+    ['a different amount', { amountMinor: 149_000, currency: 'vnd' }],
+    ['a different currency', { amountMinor: 150_000, currency: 'usd' }],
+    ['no charge at all', {}],
+  ])('refuses to settle a paid session reporting %s', async (_case, charge) => {
+    const id = orderId(1);
+    const { useCase, spies } = build({
+      stale: [{ id, placedAt: FRESH }],
+      payments: { [id]: pendingPayment('p1', id) },
+      gateway: { [`cs_${id}`]: 'PAID' },
+      gatewayCharges: { [`cs_${id}`]: charge },
+    });
+
+    const summary = await useCase.execute(INPUT);
+
+    expect(spies.updateStatus).not.toHaveBeenCalled();
+    expect(spies.finalizeExec).not.toHaveBeenCalled();
+    expect(spies.error).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: id, paymentId: 'p1' }),
+      expect.stringContaining('does not match the recorded payment'),
+    );
+    // Still inside the stuck window: the refusal is real, the alarm is not yet due.
+    expect(spies.error).not.toHaveBeenCalledWith(expect.objectContaining({ stuck: true }), expect.any(String));
+    expect(summary).toEqual({ ...EMPTY_SUMMARY, scanned: 1, unresolved: 1 });
+  });
+
+  // A PAID probe never ages into EXPIRED, so a refused order re-probes every tick forever. Past the
+  // same boundary the throw path uses, that silent loop has to raise the same alarm.
+  it('escalates the money-mismatch refusal once the order is far past its TTL', async () => {
+    const id = orderId(1);
+    const { useCase, spies } = build({
+      stale: [{ id, placedAt: ANCIENT }],
+      payments: { [id]: pendingPayment('p1', id) },
+      gateway: { [`cs_${id}`]: 'PAID' },
+      gatewayCharges: { [`cs_${id}`]: { amountMinor: 149_000, currency: 'vnd' } },
+    });
+
+    const summary = await useCase.execute(INPUT);
+
+    expect(spies.error).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: id, paymentId: 'p1', stuck: true }),
+      expect.stringContaining('long past its TTL — stock stays held'),
+    );
+    expect(spies.finalizeExec).not.toHaveBeenCalled();
+    expect(summary).toEqual({ ...EMPTY_SUMMARY, scanned: 1, unresolved: 1 });
   });
 
   it('backs off when a webhook wins the payment race mid-sweep instead of overwriting it', async () => {

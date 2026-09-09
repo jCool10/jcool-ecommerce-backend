@@ -8,10 +8,9 @@
 # KNOWN LIMITATION (RED source = an APP_INTERCEPTOR). Nest runs guards BEFORE interceptors, so
 # requests rejected by a global guard (JwtAuthGuard 401, RolesGuard 403, throttler 429) or that
 # 5xx from *inside* a guard (e.g. the jwt denylist Redis lookup failing) are NOT counted in
-# http_requests_total — the availability numerator misses that class of outage. Acceptable for
-# the local, qualitative Phase 2 SLO; revisit in Phase 5 (alert wiring + health hardening): move
-# RED to a res.on('finish') hook or add a guard-origin counter in HttpExceptionFilter if the SLO
-# must cover all ingress. Note too: the recording rules below aggregate globally (single scrape
+# http_requests_total — the availability numerator misses that class of outage. To cover all
+# ingress, move RED to a res.on('finish') hook or add a guard-origin counter in
+# HttpExceptionFilter. Note too: the recording rules below aggregate globally (single scrape
 # job); add `by (job)` if a second job is ever scraped.
 groups:
   - name: http-slo-recordings
@@ -138,7 +137,8 @@ groups:
       # Age, not count, is the page — on a quiet shop a dead relay barely moves the count. The relay
       # polls every second, so a healthy oldest row is seconds old. Blind spot: a single permanently
       # refused row pins this gauge, and it keeps firing even though that row blocks nobody else, so
-      # check `attempts` (runbook §9) before treating it as a stalled relay.
+      # check the row's `attempts` before treating it as a stalled relay — a climbing count is one
+      # poisoned row, a flat 0 is a relay that never ran (RUNBOOK.md, "Outbox relay is not draining").
       - alert: OutboxMessageStale
         expr: outbox_oldest_age_seconds > 60
         for: 2m
