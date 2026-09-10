@@ -7,6 +7,7 @@ import { PinoLogger } from 'nestjs-pino';
 // The error module, never the barrel: a status mapping must not pull the generator into this
 // filter's import graph.
 import { ClockStalledError } from '@shared/identity/identity.errors';
+import { LeaseLostError } from '@shared/identity/lease/lease.errors';
 import { DomainError } from '@shared/kernel/domain-error';
 import {
   REQUEST_ID_HEADER,
@@ -140,6 +141,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // Transient host fault, not a handler bug — the caller may retry. Mapped here so every mint path
     // answers alike.
     if (exception instanceof ClockStalledError) {
+      return SERVICE_UNAVAILABLE;
+    }
+    // The node id this process was minting under belongs to someone else now. Refusing is the
+    // fail-stop the lease exists for; the process is already on its way out.
+    if (exception instanceof LeaseLostError) {
       return SERVICE_UNAVAILABLE;
     }
     // A business-rule breach is a client error, not a handler bug — 422, and never Sentry-reported.

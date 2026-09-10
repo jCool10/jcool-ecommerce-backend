@@ -4,8 +4,9 @@ Procedures an operator needs that the code cannot express on its own. Everything
 action with consequences — nothing in this file runs on a schedule.
 
 Two deployables ship from one image: **commerce-core** and **user-service**. They have separate
-Postgres instances and share one Redis. Which service a procedure runs against is stated wherever it
-matters; where it is not stated, the procedure is the same on both.
+Postgres instances and share one Redis, plus a third Postgres holding only user-service's node-id
+leases. Which service a procedure runs against is stated wherever it matters; where it is not stated,
+the procedure is the same on both.
 
 Conventions used below:
 
@@ -19,6 +20,7 @@ Conventions used below:
 ## Contents
 
 - [Two databases, one Redis](#two-databases-one-redis)
+- [A replica is stuck without a node id](#a-replica-is-stuck-without-a-node-id)
 - [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key)
 - [Rotate the JWT signing key](#rotate-the-jwt-signing-key)
 - [Sessions depend on Redis](#sessions-depend-on-redis)
@@ -74,6 +76,56 @@ stripped. What you are looking for is a prefix that should not be there:
 
 Two services on one Redis also means `FLUSHALL` is never a per-service action. It drops the catalog
 cache and every live session projection at once.
+
+---
+
+## A replica is stuck without a node id
+
+Every user-service process leases one of the 1023 node ids that make its minted ids unique, from the
+`node_leases` table in its own Postgres (`IDENTITY_LEASE_DATABASE_URL`). It renews three times per
+`IDENTITY_LEASE_TTL_SECONDS`. A process that cannot prove it still holds its node stops minting,
+answers `503` on anything that writes a user or a token, goes unready, and exits after three renewal
+intervals so the orchestrator replaces it. **Nothing here needs an operator in the normal case** —
+the value of this section is telling a real problem from that working correctly.
+
+Read the state before touching anything:
+
+```sql
+-- against IDENTITY_LEASE_DATABASE_URL
+SELECT service, node, holder, renewed_at, last_ts_ms,
+       lease_id IS NULL AS free,
+       now() - renewed_at AS since_renewal
+FROM node_leases
+WHERE service = 'user'
+ORDER BY node;
+```
+
+| Symptom | Reading | Action |
+| ------- | ------- | ------ |
+| `IdentityLeaseRenewalsFailing` | rows still fresh, one holder's `since_renewal` climbing | The lease Postgres or the route to it. Fix that; the replica recovers on its own if it does so inside the TTL |
+| `IdentityLeaseLost` | a node's `holder` changed | Fail-stop worked. Confirm the old container exited and a new one holds a different node. Ids minted on both sides of the steal may share a node — the reason this pages |
+| `IdentityLeaseNodeIdShared` | two replicas report one node in `identity_lease_node_id` | Fail-stop did **not** work. Stop the replica that is not the current `holder` immediately; every id it mints can collide |
+| Boot refused, `No node id available in the "user" pool` | every row held and fresh | The pool is smaller than the replica count. Raise `ID_SERVICE_POOLS` (`user:<size>`, max 1023) and redeploy |
+| Boot refused, `Node-id lease acquisition timed out` | table unreachable | The lease database is down. user-service **cannot** boot without it, by design — there is no safe id to mint without a node |
+
+A row whose holder is gone is not stuck: it becomes reclaimable once `renewed_at` is older than the
+TTL *and* `last_ts_ms` is more than `IDENTITY_LEASE_SKEW_MS` in the past. Wait that out rather than
+clearing it by hand. If a row must be freed early — a host that was destroyed and whose replacement
+cannot wait — clear the token, never the high-water mark:
+
+```sql
+UPDATE node_leases SET lease_id = NULL, holder = NULL, renewed_at = NULL
+WHERE service = 'user' AND node = $1;   -- last_ts_ms deliberately untouched
+```
+
+Deleting the row, or resetting `last_ts_ms` to 0, removes the guard that stops the next holder
+replaying milliseconds the last one already minted at — which is exactly the collision the lease
+exists to prevent. Rows are self-seeding, so a deleted row reappears empty on the next acquire and
+looks fine while carrying no history at all.
+
+**Never point `IDENTITY_LEASE_DATABASE_URL` at `USER_DATABASE_URL`.** They are separate so the lease
+stays writable when user-service's own database is the thing in trouble, and so the id service can
+later take over the connection without moving a row.
 
 ---
 
@@ -204,6 +256,11 @@ They are also not consistent with each other at any instant — no distributed s
 restore of both to the same wall-clock time can leave commerce-core holding an order for a user id
 user-service's dump does not have. Orders snapshot the buyer's email at checkout precisely so that
 row is still readable; treat the mismatch as expected, not as corruption.
+
+The lease database is the exception: it is **not** worth backing up. Its rows are live process state,
+self-seeding on the next acquire, and a restored `last_ts_ms` from an old dump would be lower than
+what was actually minted — a stale guard is worse than no row at all. Restore it by migrating an
+empty database.
 
 ### Back up
 
@@ -701,29 +758,37 @@ are the ordinary case of a buyer who simply never paid, and their sessions read 
 
 ## Apply migrations out of band
 
-Two journals, two commands, two databases — never one command for both. Each service runs its own as
-`preDeployCommand`, so the normal path needs no operator. Run one by hand only when a deploy failed
-*after* the image built but before migrations applied, or when restoring.
+Three journals, three commands, three databases — never one command for another's. commerce-core and
+user-service each run their own as `preDeployCommand`, so the normal path needs no operator. Run one
+by hand only when a deploy failed *after* the image built but before migrations applied, or when
+restoring.
 
 ```bash
 # container
-npm run db:migrate:prod        # commerce-core → DATABASE_URL,      apps/commerce-core/migrations
-npm run db:migrate:prod:user   # user-service  → USER_DATABASE_URL, apps/user/migrations
+npm run db:migrate:prod          # commerce-core → DATABASE_URL,                apps/commerce-core/migrations
+npm run db:migrate:prod:user     # user-service  → USER_DATABASE_URL,           apps/user/migrations
+npm run db:migrate:prod:leases   # node leases   → IDENTITY_LEASE_DATABASE_URL, libs/identity/src/lease/migrations
 ```
 
 ```bash
 # local — drizzle-kit, reads the per-app config
 npm run db:migrate
 npm run db:migrate:user
+npm run db:migrate:leases
 ```
 
-The compiled CLI takes the target as its argv (`migrate-cli.js commerce-core|user`) and picks the
-folder and connection variable from it, so there is no environment in which running the wrong one
+The lease journal belongs to no app — user-service reads the table but does not own it, and the id
+service will take it over unchanged — so it runs ahead of user-service's own deploy, not as part of
+it. A user-service instance cannot boot against a missing `node_leases` table.
+
+The compiled CLI takes the target as its argv (`migrate-cli.js commerce-core|user|leases`) and picks
+the folder and connection variable from it, so there is no environment in which running the wrong one
 silently applies the wrong journal: an unknown target, a missing URL, or a folder with zero `.sql`
 files each exits 1 with a named message. The zero-file check is the one that matters — drizzle would
 otherwise report "nothing pending" and exit 0, a green deploy onto an empty schema. In the image the
 paths are absolute (`MIGRATIONS_DIR=/app/migrations/commerce-core`,
-`USER_MIGRATIONS_DIR=/app/migrations/user`) because it ships no `src/` tree.
+`USER_MIGRATIONS_DIR=/app/migrations/user`, `LEASE_MIGRATIONS_DIR=/app/migrations/leases`) because it
+ships no `src/` tree.
 
 **Run exactly one migration process per database at a time.** `runMigrations()` takes no advisory
 lock, so two concurrent runs race on `__drizzle_migrations`. The two services never race with each

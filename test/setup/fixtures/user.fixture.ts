@@ -7,7 +7,7 @@ import { USER_REPOSITORY, type UserRepositoryPort } from '@user/modules/user/app
 import { AuthTokensService } from '@user/modules/user/application/services/auth-tokens.service';
 import { User } from '@user/modules/user/domain/entities/user.entity';
 import { authEpochKey } from '@shared/auth';
-import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '@shared/identity';
+import { IdentityService, UNLEASED_NODE_ID, UuidV8Generator } from '@shared/identity';
 import { RedisService } from '@shared/infrastructure/redis';
 import { durationToMs, normalizeEmail } from '@shared/kernel';
 import type { Role } from '@shared/rbac';
@@ -17,8 +17,10 @@ let seq = 0;
 
 // Built here rather than resolved from the app, for the same reason as `signer` below: commerce-core
 // has no IdentityModule after the split, and a minted user's id must still route like a real one.
-// A writer outside any app, so it takes the node id reserved for exactly that.
-const identity = new IdentityService(UuidV8Generator.create({ nodeId: SCRIPTS_NODE_ID }), E2E_IDENTITY_BUCKET_KEY);
+// It mints in the same process as a leased user-service, so it must not share that app's node id —
+// and it cannot lease one, being module-level and synchronous. UNLEASED_NODE_ID is outside every
+// pool by construction, which is the only id that stays safe here.
+const identity = new IdentityService(UuidV8Generator.create({ nodeId: UNLEASED_NODE_ID }), E2E_IDENTITY_BUCKET_KEY);
 
 // Stands in for the argon2 digest a real row would carry. Nothing verifies it: a minted user has no
 // password to present, and a suite that needs one uses createRealTestUser.

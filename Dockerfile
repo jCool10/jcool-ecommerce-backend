@@ -15,13 +15,16 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 # SWC emits .js only, so the migration .sql files never reach dist/ — copy them straight from the
-# builder. Both journals ship in one image because both apps do; the paths are absolute because this
-# image has no source tree to resolve against. Apply them as release commands (db:migrate:prod and
-# db:migrate:prod:user): a bad migration must stop the rollout, not crashloop the running version.
+# builder. All three journals ship in one image because both apps do, and the lease journal targets a
+# third database neither app owns; the paths are absolute because this image has no source tree to
+# resolve against. Apply them as release commands (db:migrate:prod, db:migrate:prod:user,
+# db:migrate:prod:leases): a bad migration must stop the rollout, not crashloop the running version.
 COPY --from=builder /app/apps/commerce-core/migrations ./migrations/commerce-core
 COPY --from=builder /app/apps/user/migrations ./migrations/user
+COPY --from=builder /app/libs/identity/src/lease/migrations ./migrations/leases
 ENV MIGRATIONS_DIR=/app/migrations/commerce-core
 ENV USER_MIGRATIONS_DIR=/app/migrations/user
+ENV LEASE_MIGRATIONS_DIR=/app/migrations/leases
 EXPOSE 3000 3001
 USER node
 # One image, two entry points: the default is commerce-core and user-service overrides the command

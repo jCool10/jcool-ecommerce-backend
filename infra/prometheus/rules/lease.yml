@@ -1,0 +1,39 @@
+# Alerts for the node-id lease. Uniqueness of every minted id rests on no two replicas holding the
+# same node, and none of these failures surfaces as an application error on its own — a fenced
+# process answers 503 and exits, and a lease that was never fenced stays silently wrong.
+groups:
+  - name: lease
+    rules:
+      # Fail-stop worked: the replica noticed the steal, stopped minting, and exits after the grace
+      # window. Still a page, because ids minted on both sides of the steal may already collide.
+      # Windowed increase rather than a held rate — a steal is one step, then silence.
+      - alert: IdentityLeaseLost
+        expr: sum by (job, instance) (increase(identity_lease_lost_total[10m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: 'A replica was fenced — its node id was taken'
+          description: '{{ $labels.instance }} lost its lease and stopped minting. Something let its renewals starve past the TTL — a paused container, a lease-DB outage, a clock jump — while another process claimed the node.'
+
+      # Fail-stop did NOT work: two replicas still publish the same node id well past the deadline
+      # that should have fenced one of them. `count_values` groups by the gauge's *value*, which is
+      # the only way to compare node ids across instances — the id is a value, not a label.
+      - alert: IdentityLeaseNodeIdShared
+        expr: 'count_values by (job) ("node", identity_lease_node_id) > 1'
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Two replicas are minting under node {{ $labels.node }}'
+          description: 'More than one process reports node {{ $labels.node }} and neither has fenced itself. Ids being written right now can collide. Stop the extra replica; the lease row in `node_leases` names the holder that should have kept it.'
+
+      # Transport failures alone never fence — only the send-anchored deadline does — so this is the
+      # warning that arrives before IdentityLeaseLost, not a duplicate of it.
+      - alert: IdentityLeaseRenewalsFailing
+        expr: sum by (job, instance) (increase(identity_lease_renewal_failure_total[10m])) > 5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Lease renewals are failing to reach Postgres'
+          description: '{{ $labels.instance }} keeps failing to renew its node lease. The lease is still held, but it is coasting on the deadline — if the failures outlast it the process fences itself and exits. Check the lease Postgres and its connection pool.'

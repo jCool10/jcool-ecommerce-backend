@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { readdirSync } from 'node:fs';
-import { MIGRATIONS_FOLDER, USER_MIGRATIONS_FOLDER, runMigrations } from './migrate';
+import { LEASE_MIGRATIONS_FOLDER, MIGRATIONS_FOLDER, USER_MIGRATIONS_FOLDER, runMigrations } from './migrate';
 
 // Separate from app bootstrap so a failed migration stops the rollout instead of crashlooping the
 // app and taking down the version that was serving fine. `dotenv` is loaded here, not in the
@@ -11,6 +11,7 @@ import { MIGRATIONS_FOLDER, USER_MIGRATIONS_FOLDER, runMigrations } from './migr
 const TARGETS = {
   'commerce-core': { folder: MIGRATIONS_FOLDER, urlVar: 'DATABASE_URL' },
   user: { folder: USER_MIGRATIONS_FOLDER, urlVar: 'USER_DATABASE_URL' },
+  leases: { folder: LEASE_MIGRATIONS_FOLDER, urlVar: 'IDENTITY_LEASE_DATABASE_URL' },
 } as const;
 
 // A migrations path that is wrong but still resolves to a readable directory makes drizzle report

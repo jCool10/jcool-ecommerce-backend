@@ -27,7 +27,7 @@ import * as schema from './database/schema';
  */
 @Module({
   imports: [
-    UserConfigModule,
+    UserConfigModule.forRoot(),
     ClsModule.forRoot(clsModuleOptions),
     ObservabilityLoggerModule,
     MetricsModule,

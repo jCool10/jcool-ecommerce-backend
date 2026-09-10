@@ -43,10 +43,13 @@ export enum PaymentProvider {
  * Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS.
  *
- * This is what **commerce-core** requires, and it is also the shared base — see
- * {@link UserEnvironmentVariables} for the three variables only the issuer needs. Unknown keys are
- * ignored rather than rejected: the e2e harness boots both apps in one process off one
- * `process.env`, so a schema that refused a foreign key would fail on its sibling's variables.
+ * The shared base: what both deployables need. Each app's own connection string lives on its own
+ * subclass — {@link CoreEnvironmentVariables}, {@link UserEnvironmentVariables} — because a required
+ * variable here is one every deployment must hold, including the one that has no use for it.
+ * Unknown keys are ignored rather than rejected: the e2e harness boots both apps in one process off
+ * one `process.env`, so a schema that refused a foreign key would fail on its sibling's variables.
+ * That sharing also means this file, not the harness, is where the separation is enforced — a leak
+ * here stays invisible until a container boots alone.
  */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
@@ -64,17 +67,6 @@ export class EnvironmentVariables {
   @IsInt()
   @Min(0)
   SHUTDOWN_GRACE_PERIOD_MS?: number;
-
-  @IsString()
-  @IsNotEmpty()
-  DATABASE_URL!: string;
-
-  // The production image sets this because it ships migrations/ without the src/ tree. Read by the
-  // migrate CLI outside Nest, declared here so a blank value fails the boot.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  MIGRATIONS_DIR?: string;
 
   // The timeouts allow 0, which opts back into pg's native behaviour (wait forever / never reap idle).
   @IsOptional()
@@ -647,6 +639,20 @@ export class EnvironmentVariables {
   ARGON2_PARALLELISM?: number;
 }
 
+/** What only **commerce-core** needs. Its database is not user-service's and never reachable from it. */
+export class CoreEnvironmentVariables extends EnvironmentVariables {
+  @IsString()
+  @IsNotEmpty()
+  DATABASE_URL!: string;
+
+  // The production image sets this because it ships migrations/ without the src/ tree. Read by the
+  // migrate CLI outside Nest, declared here so a blank value fails the boot.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  MIGRATIONS_DIR?: string;
+}
+
 /**
  * What only the **issuer** needs. commerce-core verifies tokens with the public key and mints no
  * bucketed ids, so requiring any of these there would be a deployment asking for a secret it must
@@ -658,6 +664,48 @@ export class UserEnvironmentVariables extends EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   USER_DATABASE_URL!: string;
+
+  // The user journal's twin of MIGRATIONS_DIR, read the same way — by the migrate CLI, outside Nest.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  USER_MIGRATIONS_DIR?: string;
+
+  // The node-id lease. Its own database, never this app's: setting it to USER_DATABASE_URL would
+  // make Phase 6 a data migration under a live fleet instead of a process change.
+  @IsString()
+  @IsNotEmpty()
+  IDENTITY_LEASE_DATABASE_URL!: string;
+
+  // Which pool to lease from. Validated against ID_SERVICE_POOLS at boot, because acquire seeds a
+  // pool on first contact and a typo would quietly mint its own.
+  @IsString()
+  @IsNotEmpty()
+  IDENTITY_LEASE_SERVICE!: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  ID_SERVICE_POOLS?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  LEASE_MIGRATIONS_DIR?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  IDENTITY_LEASE_TTL_SECONDS?: number;
+
+  // Lower bound, not a default: a skew under a second is indistinguishable from no guard at all on
+  // hosts whose clocks disagree.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1_000)
+  IDENTITY_LEASE_SKEW_MS?: number;
 
   // The signing half of the ES256 keypair. Never deployed to a verifier.
   @IsString()
@@ -696,8 +744,8 @@ function validateAgainst<T extends object>(schema: EnvClass<T>, config: Record<s
   return validated;
 }
 
-export function validate(config: Record<string, unknown>): EnvironmentVariables {
-  return validateAgainst(EnvironmentVariables, config);
+export function validate(config: Record<string, unknown>): CoreEnvironmentVariables {
+  return validateAgainst(CoreEnvironmentVariables, config);
 }
 
 export function validateUser(config: Record<string, unknown>): UserEnvironmentVariables {

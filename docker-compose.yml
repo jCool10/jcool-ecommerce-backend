@@ -175,6 +175,45 @@ services:
     networks:
       - jcool-net
 
+  # The lease's own Postgres, one phase before id-service exists. Starting it here is what makes
+  # Phase 6 a process change instead of a data migration under a fleet holding live leases.
+  postgres-id:
+    image: postgres:16-alpine
+    container_name: jcool-postgres-id
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_ID_HOST_PORT:-5435}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_ID_DB:-jcool_leases}
+    volumes:
+      - pgiddata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_ID_DB:-jcool_leases}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  leases-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jcool-leases-migrate
+    env_file:
+      - .env.user
+    environment:
+      NODE_ENV: production
+      IDENTITY_LEASE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-id:5432/${POSTGRES_ID_DB:-jcool_leases}?schema=public
+    command: ['npm', 'run', 'db:migrate:prod:leases']
+    depends_on:
+      postgres-id:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
   user-migrate:
     build:
       context: .
@@ -252,16 +291,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: jcool-user
+    # No container_name and a host port RANGE, not a single port: both would make the second
+    # container of `docker compose up --scale user=2` fail to start, and two replicas holding
+    # distinct leased node ids is the property this phase exists to demonstrate.
     restart: unless-stopped
     ports:
-      - "${USER_PORT:-3002}:3001"
+      - "${USER_PORT_RANGE:-3002-3003}:3001"
     env_file:
       - .env.user
     environment:
       NODE_ENV: production
       PORT: 3001
       USER_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-user:5432/${POSTGRES_USER_DB:-jcool_user}?schema=public
+      # Its own database, never USER_DATABASE_URL. Pointing this at the app's would undo the split
+      # a phase before it is even used.
+      IDENTITY_LEASE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-id:5432/${POSTGRES_ID_DB:-jcool_leases}?schema=public
+      IDENTITY_LEASE_SERVICE: user
       REDIS_URL: redis://redis:6379
       SMTP_URL: smtp://mailpit:1025
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
@@ -269,9 +314,13 @@ services:
     depends_on:
       postgres-user:
         condition: service_healthy
+      postgres-id:
+        condition: service_healthy
       redis:
         condition: service_healthy
       user-migrate:
+        condition: service_completed_successfully
+      leases-migrate:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -367,6 +416,7 @@ services:
 volumes:
   pgdata:
   pguserdata:
+  pgiddata:
   redisdata:
   meilidata:
   miniodata:

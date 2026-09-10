@@ -57,6 +57,7 @@ async function build(
   process.env.NODE_ENV = 'test';
   process.env.DATABASE_URL = inject('DATABASE_URL');
   process.env.USER_DATABASE_URL = inject('USER_DATABASE_URL');
+  process.env.IDENTITY_LEASE_DATABASE_URL = inject('IDENTITY_LEASE_DATABASE_URL');
   process.env.REDIS_URL = inject('REDIS_URL');
   // Normally already set by vitest-e2e.config.mts (env validation runs at import time); minted here
   // as well so an app built outside that config still boots.

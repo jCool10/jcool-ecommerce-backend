@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import * as argon2 from 'argon2';
 import { Pool } from 'pg';
-import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '@shared/identity';
+import { IdentityService, UuidV8Generator } from '@shared/identity';
+import { leaseNodeIdForScript } from '@shared/identity/lease/standalone-lease';
 import { normalizeEmail, type NormalizedEmail } from '@shared/kernel/normalize-email';
 
 // Grows `users` and its unique-email index to a target row count WITHOUT going through the API, so
@@ -24,12 +25,14 @@ function emailFor(i: number): NormalizedEmail {
   return normalizeEmail(`${EMAIL_PREFIX}${i}@${EMAIL_DOMAIN}`);
 }
 
-// The scripts node id keeps a seed run from colliding with a live app on the (ts, node, seq) triple.
-// The key must be the app's own — seeding under another writes misrouted ids no query notices.
-function identity(): IdentityService {
+// A leased node id keeps a seed run from colliding with a live app on the (ts, node, seq) triple —
+// from the `scripts` pool, so it can never narrow the fleet's. The key must be the app's own:
+// seeding under another writes misrouted ids no query notices.
+function identity(nodeId: number): { ids: IdentityService; generator: UuidV8Generator } {
   const bucketKey = process.env.IDENTITY_BUCKET_KEY;
   if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to mint user ids');
-  return new IdentityService(UuidV8Generator.create({ nodeId: SCRIPTS_NODE_ID }), bucketKey);
+  const generator = UuidV8Generator.create({ nodeId });
+  return { ids: new IdentityService(generator, bucketKey), generator };
 }
 
 function intArg(name: string, fallback: number): number {
@@ -70,6 +73,8 @@ async function main(): Promise<void> {
   const pool = new Pool({ connectionString, max: 4 });
   try {
     if (process.argv.includes('--clean')) {
+      // Cleaning mints nothing, so it takes no node id — one held here would narrow the pool for a
+      // concurrent run that does mint.
       await clean(pool);
       return;
     }
@@ -77,29 +82,39 @@ async function main(): Promise<void> {
     const count = intArg('count', 200_000);
     const batch = Math.max(1, Math.min(intArg('batch', 2_000), 20_000)); // ×3 params stays under pg's 65535 cap
     const hash = await argon2.hash(SEED_PASSWORD);
+    const lease = await leaseNodeIdForScript();
     // One generator for the whole run: a second would repeat this node's sequence values.
-    const ids = identity();
+    const { ids, generator } = identity(lease.node);
+    lease.attach(generator);
 
-    const startedAt = Date.now();
-    let inserted = 0;
-    for (let start = 0; start < count; start += batch) {
-      const size = Math.min(batch, count - start);
-      await insertBatch(pool, ids, hash, start, size);
-      inserted += size;
-      if (inserted % (batch * 20) === 0 || inserted === count) {
-        const secs = (Date.now() - startedAt) / 1000;
-        console.log(`  ${inserted}/${count} rows (${Math.round(inserted / Math.max(secs, 0.001))} rows/s)`);
-      }
+    try {
+      await seed(pool, ids, hash, count, batch);
+    } finally {
+      await lease.release();
     }
-    const secs = (Date.now() - startedAt) / 1000;
-    console.log(
-      `Bulk seed complete: ${inserted} synthetic users in ${secs.toFixed(1)}s ` +
-        `(${Math.round(inserted / Math.max(secs, 0.001))} rows/s). Prefix '${EMAIL_PREFIX}', domain '${EMAIL_DOMAIN}'.`,
-    );
-    console.log(`Clean up later with: npm run seed:users:bulk -- --clean`);
   } finally {
     await pool.end();
   }
+}
+
+async function seed(pool: Pool, ids: IdentityService, hash: string, count: number, batch: number): Promise<void> {
+  const startedAt = Date.now();
+  let inserted = 0;
+  for (let start = 0; start < count; start += batch) {
+    const size = Math.min(batch, count - start);
+    await insertBatch(pool, ids, hash, start, size);
+    inserted += size;
+    if (inserted % (batch * 20) === 0 || inserted === count) {
+      const secs = (Date.now() - startedAt) / 1000;
+      console.log(`  ${inserted}/${count} rows (${Math.round(inserted / Math.max(secs, 0.001))} rows/s)`);
+    }
+  }
+  const secs = (Date.now() - startedAt) / 1000;
+  console.log(
+    `Bulk seed complete: ${inserted} synthetic users in ${secs.toFixed(1)}s ` +
+      `(${Math.round(inserted / Math.max(secs, 0.001))} rows/s). Prefix '${EMAIL_PREFIX}', domain '${EMAIL_DOMAIN}'.`,
+  );
+  console.log(`Clean up later with: npm run seed:users:bulk -- --clean`);
 }
 
 void main().catch((error: unknown) => {

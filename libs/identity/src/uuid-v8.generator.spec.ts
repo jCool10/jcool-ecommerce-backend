@@ -1,5 +1,6 @@
 import { hrtime } from 'node:process';
 import { ClockStalledError } from './identity.errors';
+import { LeaseLostError } from './lease/lease.errors';
 import { NODE_COUNT, SEQUENCE_COUNT, decode } from './uuid-v8.codec';
 import { type IdentityClock, UuidV8Generator } from './uuid-v8.generator';
 
@@ -158,6 +159,66 @@ describe('uuid-v8 generator', () => {
     // this generator does not own that.
     expect(outOfOrder).toBe(0);
   }, 60_000);
+});
+
+// The node id is what makes ids unique across writers, and the lease is what makes the node id this
+// process's alone. Once the lease is gone the generator has no id it may safely stamp.
+describe('uuid-v8 generator under a lost lease', () => {
+  it('mints until it is fenced, then refuses', () => {
+    const generator = UuidV8Generator.createWithClock({ nodeId: 7, clock: fakeClock().clock });
+
+    expect(generator.isFenced).toBe(false);
+    expect(() => generator.generate(BUCKET)).not.toThrow();
+
+    generator.fence();
+
+    expect(generator.isFenced).toBe(true);
+    expect(() => generator.generate(BUCKET)).toThrow(LeaseLostError);
+  });
+
+  // One-way: there is no adopt-a-new-node path, so the process exits and a fresh one leases again.
+  it('stays fenced', () => {
+    const generator = UuidV8Generator.createWithClock({ nodeId: 7, clock: fakeClock().clock });
+    generator.fence();
+    generator.fence();
+
+    expect(() => generator.generate(BUCKET)).toThrow(LeaseLostError);
+    expect(generator.isFenced).toBe(true);
+  });
+
+  // Checked first and off a plain field, so the check costs no clock read and cannot drag the
+  // synchronous contract with it.
+  it('refuses before touching the clock', () => {
+    const fake = fakeClock();
+    const generator = UuidV8Generator.createWithClock({ nodeId: 7, clock: fake.clock });
+    generator.generate(BUCKET);
+    const readsBefore = fake.spinReadCount();
+    const lastMs = generator.lastMs;
+
+    expect(() => generator.generate(BUCKET)).not.toThrow();
+    generator.fence();
+    expect(() => generator.generate(BUCKET)).toThrow(LeaseLostError);
+
+    // Nothing advanced: the refused mint neither consumed a millisecond nor spun.
+    expect(generator.lastMs).toBe(lastMs);
+    expect(fake.spinReadCount()).toBe(readsBefore);
+  });
+
+  // What the holder reports on every renewal and on release, so the next holder's reclaim guard has
+  // the real high-water mark rather than one a renewal interval old.
+  it('reports the highest millisecond it minted at', () => {
+    const fake = fakeClock();
+    const generator = UuidV8Generator.createWithClock({ nodeId: 7, clock: fake.clock });
+
+    expect(generator.lastMs).toBe(0);
+
+    generator.generate(BUCKET);
+    expect(generator.lastMs).toBe(START_MS);
+
+    fake.advance(5);
+    generator.generate(BUCKET);
+    expect(generator.lastMs).toBe(START_MS + 5);
+  });
 });
 
 describe('uuid-v8 generator clock', () => {

@@ -17,7 +17,7 @@ import { reindexAll } from './reindex-runner';
 // `inject` array): tsx compiles with esbuild, which emits no decorator metadata, so a dependency
 // inferred from a constructor's parameter type arrives as undefined and only fails at runtime.
 @Module({
-  imports: [ConfigModule, ClsModule.forRoot({ global: true }), DrizzleModule.forRoot(schema)],
+  imports: [ConfigModule.forRoot(), ClsModule.forRoot({ global: true }), DrizzleModule.forRoot(schema)],
   providers: [DrizzleProductRepository, MeilisearchCatalogSearch],
 })
 class ReindexContext {}

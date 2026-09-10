@@ -26,10 +26,16 @@ scrape_configs:
     static_configs:
       - targets: ['commerce-core:3000']
 
+  # DNS discovery, not a static target: the service scales, and compose resolves `user` to every
+  # replica's address. A static target would round-robin to one of them per scrape, so two replicas
+  # holding distinct leased node ids would look like one flapping between them.
   - job_name: jcool-user
     metrics_path: /metrics
     authorization:
       type: Bearer
       credentials_file: /etc/prometheus/secrets/metrics-token
-    static_configs:
-      - targets: ['user:3001']
+    dns_sd_configs:
+      - names: ['user']
+        type: A
+        port: 3001
+        refresh_interval: 15s

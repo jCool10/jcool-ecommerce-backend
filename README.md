@@ -279,6 +279,7 @@ The parts worth reading the code for. Each row names the file to open.
 | Problem | Approach | Where |
 | --- | --- | --- |
 | **Sharding-ready user ids** | Every user-context id is a UUIDv8 (RFC 9562 §5.8) laid out `48 ts_ms │ 4 ver │ 12 bucket │ 2 var │ 10 node │ 12 seq │ 40 random`. The 12-bit routing bucket is `HMAC(IDENTITY_BUCKET_KEY, normalized_email) mod 4096` — derived from the same normalized email the `UNIQUE(email)` index sees, so a future shard split routes from the id alone, with no lookup table, and email uniqueness survives it | `shared/identity/uuid-v8.generator.ts` |
+| **Replica-safe minting** | The 10-bit node field is what keeps two replicas' ids apart, so each process **leases** one from a Postgres table of its own and renews three times per TTL. A process that cannot prove it still holds its node stops minting rather than mint under an id someone else now owns: `503`, readiness red, then exit. Fail-stop, because a duplicated node produces no error, no failed insert and no metric of its own | `shared/identity/lease/lease-holder.ts` |
 | **Why HMAC, not a hash** | `users.id` is public. An unkeyed digest would turn every published id into an offline oracle for "does this address have an account here". The key is **permanent**: the database pins its fingerprint on first boot and refuses a later boot under a different key | `modules/user/infrastructure/identity-bucket-key.verifier.ts` |
 | **Money** | Integer minor units (VND đồng, USD cents) in a `Money` value object — never a float. Cross-currency operations throw rather than coerce. The order total is computed once from the lines and then persisted, never recomputed against a live price | `shared/kernel/money.vo.ts` |
 | **Media lifecycle as stock reservation** | An upload commits to something before knowing whether the caller will finish, so it is modelled like a stock hold: `PENDING → READY → ATTACHED → DETACHED`, plus `SWEEPING` as a terminal claim. `expires_at` is `NULL` in exactly one state (`ATTACHED`) — an asset no sweep can select is exactly what that state needs and exactly the leak every other state must not have | `modules/media/domain/asset-state-machine.ts` |
@@ -307,11 +308,12 @@ base64 < jwt-es256.pub | tr -d '\n'   # JWT_ES256_PUBLIC_KEY  → both files
 openssl rand -base64 48               # IDENTITY_BUCKET_KEY   → .env.user only
 
 # 4. infrastructure (the ports below are the host-mapped ones)
-docker compose up -d postgres postgres-user redis meilisearch mailpit minio minio-init
+docker compose up -d postgres postgres-user postgres-id redis meilisearch mailpit minio minio-init
 
-# 5. schema + sample data — two journals, two databases
+# 5. schema + sample data — three journals, three databases
 npm run db:migrate
 npm run db:migrate:user
+npm run db:migrate:leases
 npm run db:seed
 
 # 6. run both services (separate terminals)
@@ -357,6 +359,8 @@ references. The variables without a default:
 | `NODE_ENV` | both | `development` \| `test` \| `production` |
 | `DATABASE_URL` | commerce-core | Postgres connection string |
 | `USER_DATABASE_URL` | user | Its own Postgres — a separate instance, not a schema |
+| `IDENTITY_LEASE_DATABASE_URL` | user | A third Postgres holding only `node_leases`. Separate so the lease stays writable when user-service's own database is what's in trouble |
+| `IDENTITY_LEASE_SERVICE` | user | Which pool to lease a node id from (`user`). Must name a pool in `ID_SERVICE_POOLS`, or the app refuses to boot |
 | `REDIS_URL` | both | One instance. commerce-core owns the catalog cache and BullMQ; user-service writes the two `auth:*` keys core reads. Nothing else is shared — [RUNBOOK.md](./RUNBOOK.md) has the full key census |
 | `JWT_ES256_PRIVATE_KEY` | user | PEM or base64 PEM. Signs access tokens — the issuer alone holds it |
 | `JWT_ES256_PUBLIC_KEY` | both | PEM or base64 PEM. All a verifier needs |
@@ -515,13 +519,13 @@ npm run test:e2e   # 64 integration suites, 521 tests — requires Docker
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated
   ids are stable within a run.
 - **Integration** (`test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB
-  mocking. A single `globalSetup` boots **Postgres + Redis** once per run, creates **two databases**
-  in the one container, and applies both committed journals to them; the media, search and mail
+  mocking. A single `globalSetup` boots **Postgres + Redis** once per run, creates **three databases**
+  in the one container, and applies all three committed journals to them; the media, search and mail
   suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of
   `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises
   real S3, a real search engine and a real SMTP server.
 
-Two databases, two app factories: `createTestApp()` boots commerce-core, `createUserApp()` boots
+Two app databases, two app factories: `createTestApp()` boots commerce-core, `createUserApp()` boots
 user-service, and a suite gets exactly the one it needs. `test/integration/cross-app/` is the only
 place both run side by side — deliberately, because a composite module would prove the opposite of
 what those tests claim.
@@ -618,12 +622,14 @@ delays the exit by a bounded amount instead of the exporter's own timeout.
 
 Stated plainly, because a reviewer will find them anyway.
 
-- **Run exactly one app instance.** The id generator holds a fixed node id for the whole fleet, so
-  two replicas mint the same `(timestamp, node, sequence)` triples. Ids stay *unique* — 40 random
-  bits see to that, and no insert fails — but the ordered per-writer sequence is lost on the four
-  User-context tables. The real problem is that **nothing detects it**: no error, no metric, no
-  failed insert. `railway.json` sets `numReplicas: 1`, but its `overlapSeconds: 20` means every
-  rollout runs two instances for ~20s by design. Lifting this properly needs a node-id lease.
+- **A node-id lease is now what makes replicas safe, and it fails stopped.** Each user-service
+  process leases a distinct node id from its own Postgres (`node_leases`) and renews three times per
+  TTL; a process that cannot prove it still holds its node stops minting, answers `503`, goes unready
+  and exits so the orchestrator replaces it. That removes the old "run exactly one instance" limit —
+  including the ~20s overlap `railway.json` schedules on every rollout — but replaces it with a hard
+  dependency: user-service cannot boot while the lease database is unreachable, where it previously
+  started and minted anyway. That is the intended trade, since there is no safe id to mint without a
+  node. `ID_SERVICE_POOLS` caps how many replicas can hold one at a time.
 - **Order confirmation mail is at-most-once.** Applied exactly once in the database, attempted at
   most once outside it, and on failure counted (`mail_send_failures_total`) rather than retried —
   because a retry would roll back the inbox claim and, under a breaker timeout that abandons the wait
@@ -675,7 +681,8 @@ Stated plainly, because a reviewer will find them anyway.
 | `alerts:check` · `alerts:test` | Prometheus rules parse · and fire (and clear) on the timelines they claim to |
 | `test` · `test:cov` · `test:e2e` | Unit · unit with the coverage floor · integration (needs Docker) |
 | `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | commerce-core's Drizzle workflow (`:prod` runs the compiled CLI — the image's release command) |
-| `db:generate:user` · `db:migrate:user` · `db:migrate:prod:user` · `db:studio:user` | The same journal workflow for user-service. Two configs, two `_journal.json`, two databases — never one command for both |
+| `db:generate:user` · `db:migrate:user` · `db:migrate:prod:user` · `db:studio:user` | The same journal workflow for user-service. Separate config, separate `_journal.json`, separate database — never one command for another's |
+| `db:generate:leases` · `db:migrate:leases` · `db:migrate:prod:leases` | The node-lease journal. Owned by no app: user-service reads the table, and the id service will take it over unchanged |
 | `search:reindex` | Rebuild the Meilisearch index from Postgres |
 | `queue:replay-dlq` | Inspect the dead-letter queue; `-- --apply` to replay (dry run is the default) |
 | `identity:verify` | Scan every user row for an id that does not route to its email's bucket. Reads `USER_DATABASE_URL` |
@@ -683,7 +690,7 @@ Stated plainly, because a reviewer will find them anyway.
 | `load:baseline` · `load:register:*` | k6 mixes |
 | `db:seed:perf` · `seed:users:bulk` · `db:metrics:users` | Planner-oriented perf seed · bulk identity seed · DB benchmark capture |
 
-`:prod` twins (`db:migrate:prod`, `db:migrate:prod:user`, `queue:replay-dlq:prod`,
+`:prod` twins (`db:migrate:prod`, `db:migrate:prod:user`, `db:migrate:prod:leases`, `queue:replay-dlq:prod`,
 `storage:verify:prod`) run the compiled CLI from `dist/`, because `tsx` is a devDependency and is not
 installed in the image.
 

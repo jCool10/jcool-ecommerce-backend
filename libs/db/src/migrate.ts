@@ -9,6 +9,8 @@ import { Pool } from 'pg';
 // One variable per journal: the two apps migrate independently and neither may name the other's.
 export const MIGRATIONS_FOLDER = process.env.MIGRATIONS_DIR ?? 'apps/commerce-core/migrations';
 export const USER_MIGRATIONS_FOLDER = process.env.USER_MIGRATIONS_DIR ?? 'apps/user/migrations';
+// The lease's journal is owned by a lib, not an app: the table moves process in Phase 6, not database.
+export const LEASE_MIGRATIONS_FOLDER = process.env.LEASE_MIGRATIONS_DIR ?? 'libs/identity/src/lease/migrations';
 
 // The folder is a parameter as well as an env var: the e2e harness migrates both journals in one
 // process, where a single MIGRATIONS_DIR could only name one of them.

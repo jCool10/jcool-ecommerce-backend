@@ -6,40 +6,50 @@ import { runMigrations } from '@shared/infrastructure/database/migrate';
 const POSTGRES_IMAGE = 'postgres:16-alpine';
 const REDIS_IMAGE = 'redis:7-alpine';
 
-// The two services own separate databases, but a second container would double the ~10s startup
-// and the memory for no extra isolation: separate databases in one Postgres share nothing a test
-// can observe — not a schema, not a connection, not a transaction.
+// Three owners, three databases, but one container: a second would double the ~10s startup and the
+// memory for no extra isolation — separate databases in one Postgres share nothing a test can
+// observe, not a schema, not a connection, not a transaction.
 const USER_DATABASE = 'user_service';
+const LEASE_DATABASE = 'node_leases';
 
 const CORE_MIGRATIONS = 'apps/commerce-core/migrations';
 const USER_MIGRATIONS = 'apps/user/migrations';
+const LEASE_MIGRATIONS = 'libs/identity/src/lease/migrations';
 
 declare module 'vitest' {
   interface ProvidedContext {
     DATABASE_URL: string;
     USER_DATABASE_URL: string;
+    IDENTITY_LEASE_DATABASE_URL: string;
     REDIS_URL: string;
   }
 }
 
-async function createUserDatabase(adminUrl: string): Promise<string> {
+async function createDatabases(adminUrl: string, names: readonly string[]): Promise<string[]> {
   const client = new Client({ connectionString: adminUrl });
   await client.connect();
   try {
-    await client.query(`CREATE DATABASE "${USER_DATABASE}"`);
+    for (const name of names) {
+      await client.query(`CREATE DATABASE "${name}"`);
+    }
   } finally {
     await client.end();
   }
-  const url = new URL(adminUrl);
-  url.pathname = `/${USER_DATABASE}`;
-  return url.toString();
+  return names.map((name) => {
+    const url = new URL(adminUrl);
+    url.pathname = `/${name}`;
+    return url.toString();
+  });
 }
 
 // Runs once per test:e2e in its own process; URLs reach workers via provide()/inject().
 export default async function setup({
   provide,
 }: {
-  provide: (key: 'DATABASE_URL' | 'USER_DATABASE_URL' | 'REDIS_URL', value: string) => void;
+  provide: (
+    key: 'DATABASE_URL' | 'USER_DATABASE_URL' | 'IDENTITY_LEASE_DATABASE_URL' | 'REDIS_URL',
+    value: string,
+  ) => void;
 }): Promise<() => Promise<void>> {
   // allSettled, not Promise.all: a one-sided failure must still expose the container that did
   // start, or it is orphaned.
@@ -62,13 +72,15 @@ export default async function setup({
 
   try {
     const databaseUrl = postgres.getConnectionUri();
-    const userDatabaseUrl = await createUserDatabase(databaseUrl);
+    const [userDatabaseUrl, leaseDatabaseUrl] = await createDatabases(databaseUrl, [USER_DATABASE, LEASE_DATABASE]);
     const redisUrl = redis.getConnectionUrl();
-    // Two journals, migrated independently — exactly as the two deploy steps do it.
+    // Three journals, migrated independently — exactly as the three deploy steps do it.
     await runMigrations(databaseUrl, CORE_MIGRATIONS);
     await runMigrations(userDatabaseUrl, USER_MIGRATIONS);
+    await runMigrations(leaseDatabaseUrl, LEASE_MIGRATIONS);
     provide('DATABASE_URL', databaseUrl);
     provide('USER_DATABASE_URL', userDatabaseUrl);
+    provide('IDENTITY_LEASE_DATABASE_URL', leaseDatabaseUrl);
     provide('REDIS_URL', redisUrl);
   } catch (error) {
     await Promise.allSettled([postgres.stop(), redis.stop()]);

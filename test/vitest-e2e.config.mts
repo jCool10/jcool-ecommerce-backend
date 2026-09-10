@@ -27,6 +27,11 @@ export default defineConfig({
       DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
       // The user app's env validation also runs at import time, and it requires its own URL.
       USER_DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
+      IDENTITY_LEASE_DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
+      IDENTITY_LEASE_SERVICE: 'user',
+      // Short so a suite asserting expiry does not wait 30s; still far above any statement here.
+      IDENTITY_LEASE_TTL_SECONDS: '6',
+      IDENTITY_LEASE_SKEW_MS: '1000',
       REDIS_URL: 'redis://127.0.0.1:6379',
       JWT_ES256_PRIVATE_KEY: jwtKeys.privateKey,
       JWT_ES256_PUBLIC_KEY: jwtKeys.publicKey,

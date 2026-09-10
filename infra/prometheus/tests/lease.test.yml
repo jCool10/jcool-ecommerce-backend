@@ -1,0 +1,80 @@
+# Rule unit tests for lease.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+#
+# Series carry the `job`/`instance` a real scrape attaches. The `user` job is DNS-discovered so each
+# replica is its own target — the shared-node test below only means anything because of that.
+rule_files:
+  - ../rules/lease.yml
+
+evaluation_interval: 15s
+
+tests:
+  # A steal: the counter steps once and flattens. Must fire on the step and clear on its own, which
+  # is what a windowed increase buys over a rate held `for`.
+  - interval: 1m
+    input_series:
+      - series: 'identity_lease_lost_total{job="jcool-user", instance="user:3001"}'
+        values: '0+0x5 1+0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: IdentityLeaseLost
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: IdentityLeaseLost
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: jcool-user
+              instance: user:3001
+            exp_annotations:
+              summary: 'A replica was fenced — its node id was taken'
+              description: 'user:3001 lost its lease and stopped minting. Something let its renewals starve past the TTL — a paused container, a lease-DB outage, a clock jump — while another process claimed the node.'
+      - eval_time: 25m
+        alertname: IdentityLeaseLost
+        exp_alerts: []
+
+  # Two replicas, one node. Distinct ids first — that is the healthy scaled state and must stay
+  # quiet — then 3002 starts reporting 3001's node without either fencing.
+  - interval: 1m
+    input_series:
+      - series: 'identity_lease_node_id{job="jcool-user", instance="user:3001"}'
+        values: '7+0x30'
+      - series: 'identity_lease_node_id{job="jcool-user", instance="user:3002"}'
+        values: '8+0x10 7+0x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: IdentityLeaseNodeIdShared
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: IdentityLeaseNodeIdShared
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: jcool-user
+              node: '7'
+            exp_annotations:
+              summary: 'Two replicas are minting under node 7'
+              description: 'More than one process reports node 7 and neither has fenced itself. Ids being written right now can collide. Stop the extra replica; the lease row in `node_leases` names the holder that should have kept it.'
+
+  # Renewals failing steadily at roughly one a minute. The hold has to outlast a short blip, so the
+  # quiet check sits inside it while the expression is already over threshold.
+  - interval: 1m
+    input_series:
+      - series: 'identity_lease_renewal_failure_total{job="jcool-user", instance="user:3001"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: IdentityLeaseRenewalsFailing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: IdentityLeaseRenewalsFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: IdentityLeaseRenewalsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              job: jcool-user
+              instance: user:3001
+            exp_annotations:
+              summary: 'Lease renewals are failing to reach Postgres'
+              description: 'user:3001 keeps failing to renew its node lease. The lease is still held, but it is coasting on the deadline — if the failures outlast it the process fences itself and exits. Check the lease Postgres and its connection pool.'

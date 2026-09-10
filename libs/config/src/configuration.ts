@@ -147,6 +147,16 @@ export default () => ({
   identity: {
     // No default, like jwtAccessSecret: the env schema requires it, so a boot reaching here has it.
     bucketKey: process.env.IDENTITY_BUCKET_KEY,
+    lease: {
+      // Presence is the switch: unset means no lease, which is only safe single-process.
+      databaseUrl: process.env.IDENTITY_LEASE_DATABASE_URL,
+      service: process.env.IDENTITY_LEASE_SERVICE,
+      pools: process.env.ID_SERVICE_POOLS ?? 'user:1023,scripts:1023',
+      ttlSeconds: parseIntOr(process.env.IDENTITY_LEASE_TTL_SECONDS, 30),
+      // Raise it if hosts are not NTP-synced; never lower it. Too small a skew silently reintroduces
+      // the overlapping-holder bug the lease exists to prevent.
+      skewMs: parseIntOr(process.env.IDENTITY_LEASE_SKEW_MS, 5_000),
+    },
   },
   mail: {
     // Presence is the switch, like SENTRY_DSN: set → real SMTP, unset → the log sink (and a refused

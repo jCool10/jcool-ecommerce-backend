@@ -20,7 +20,8 @@ import { CATALOG_CACHE_VERSION_KEY } from '@modules/catalog/infrastructure/catal
 import { cartItems, carts } from '@modules/cart/infrastructure/schema/cart.schema';
 import { stockLevels } from '@modules/inventory/infrastructure/schema/inventory.schema';
 import { users } from '@user/modules/user/infrastructure/schema/user.schema';
-import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '@shared/identity';
+import { IdentityService, UuidV8Generator } from '@shared/identity';
+import { leaseNodeIdForScript } from '@shared/identity/lease/standalone-lease';
 import { normalizeEmail } from '@shared/kernel/normalize-email';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
@@ -37,10 +38,19 @@ function perfUserPassword(): string {
 
 // Must be the app's own key: seeding under another writes an account whose id routes to a bucket its
 // email does not, which nothing notices until a shard split. Refuse rather than invent a default.
-function identity(): IdentityService {
+// Leased from the `scripts` pool for exactly the one mint below — a fixed node id could collide with
+// a live app on the (ts, node, seq) triple.
+async function mintPerfUserId(): Promise<string> {
   const bucketKey = process.env.IDENTITY_BUCKET_KEY;
   if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to mint the perf user id');
-  return new IdentityService(UuidV8Generator.create({ nodeId: SCRIPTS_NODE_ID }), bucketKey);
+  const lease = await leaseNodeIdForScript();
+  try {
+    const generator = UuidV8Generator.create({ nodeId: lease.node });
+    lease.attach(generator);
+    return new IdentityService(generator, bucketKey).mintUserId(PERF_USER_EMAIL);
+  } finally {
+    await lease.release();
+  }
 }
 
 const CATEGORY_COUNT = 20;
@@ -192,7 +202,7 @@ async function seedPerfUserCart(db: Db, userDb: Db, cartLines: number): Promise<
     await userDb
       .insert(users)
       .values({
-        id: identity().mintUserId(PERF_USER_EMAIL),
+        id: await mintPerfUserId(),
         email: PERF_USER_EMAIL,
         passwordHash,
         emailVerifiedAt: new Date(),

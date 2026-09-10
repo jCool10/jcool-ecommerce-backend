@@ -4,7 +4,12 @@ import { HealthCheck, HealthCheckResult, HealthCheckService } from '@nestjs/term
 import { SkipThrottle } from '@nestjs/throttler';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@shared/infrastructure/throttler';
 import { Public } from '@shared/rbac';
-import { DrizzleHealthIndicator, RedisHealthIndicator, ShutdownHealthIndicator } from './indicators';
+import {
+  DrizzleHealthIndicator,
+  LeaseHealthIndicator,
+  RedisHealthIndicator,
+  ShutdownHealthIndicator,
+} from './indicators';
 
 // Probes are unauthenticated and arrive on a schedule: a 429 would pull a healthy instance from
 // service, and every tier left active costs a Redis round-trip on the route whose whole job is to
@@ -20,6 +25,7 @@ export class HealthController {
     private readonly drizzle: DrizzleHealthIndicator,
     private readonly redis: RedisHealthIndicator,
     private readonly shutdown: ShutdownHealthIndicator,
+    private readonly lease: LeaseHealthIndicator,
   ) {}
 
   // Checks no dependency: a flaky DB/Redis must not make an orchestrator kill a healthy process.
@@ -41,6 +47,7 @@ export class HealthController {
       () => this.shutdown.isHealthy('shutdown'),
       () => this.drizzle.isHealthy('database'),
       () => this.redis.isHealthy('redis'),
+      () => this.lease.isHealthy('nodeLease'),
     ]);
   }
 }

@@ -1,6 +1,7 @@
 import { hrtime } from 'node:process';
 import { EntropyPool } from './entropy-pool';
 import { type ClockStallReason, ClockStalledError } from './identity.errors';
+import { LeaseLostError } from './lease/lease.errors';
 import { NODE_COUNT, RANDOM_BITS, SEQUENCE_COUNT, encode } from './uuid-v8.codec';
 
 const RANDOM_BYTES = RANDOM_BITS / 8;
@@ -41,7 +42,8 @@ const systemClock: IdentityClock = {
  */
 export class UuidV8Generator {
   private nodeIdValue: number;
-  private lastMs = 0;
+  private lastMsValue = 0;
+  private fenced = false;
   private sequence = 0;
   private offsetMs = 0;
   private stalls = 0;
@@ -84,15 +86,36 @@ export class UuidV8Generator {
     return this.stalls;
   }
 
+  /** Highest millisecond this generator has minted at. The reclaim guard compares against it, so a
+   * node is never re-leased while the previous holder's timeline could still overlap. */
+  get lastMs(): number {
+    return this.lastMsValue;
+  }
+
+  get isFenced(): boolean {
+    return this.fenced;
+  }
+
+  /** One-way. A fenced generator is never un-fenced: the process exits and boots a new one. */
+  fence(): void {
+    this.fenced = true;
+  }
+
   generate(bucket: number): string {
+    // First, and a plain field read — no clock call, no await, so the synchronous contract and the
+    // ESLint fence on this file both stand.
+    if (this.fenced) {
+      throw new LeaseLostError();
+    }
+
     let tsMs = this.now();
 
     // `<=`, not `===`: a regressing clock would otherwise take the fresh-millisecond branch, reset
     // the sequence and re-mint ids already emitted.
-    if (tsMs <= this.lastMs) {
-      tsMs = this.lastMs;
+    if (tsMs <= this.lastMsValue) {
+      tsMs = this.lastMsValue;
       if (this.sequence === SEQUENCE_COUNT - 1) {
-        tsMs = this.spinPast(this.lastMs);
+        tsMs = this.spinPast(this.lastMsValue);
         this.sequence = 0;
       } else {
         this.sequence++;
@@ -100,7 +123,7 @@ export class UuidV8Generator {
     } else {
       this.sequence = 0;
     }
-    this.lastMs = tsMs;
+    this.lastMsValue = tsMs;
 
     return encode({
       tsMs,

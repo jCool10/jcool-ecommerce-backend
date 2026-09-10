@@ -9,11 +9,21 @@ import { ID_CLOCK_DRIFT_MS, IDENTITY_CLOCK_PROVIDERS } from '@shared/observabili
 import { bucketForEmail } from './email-bucket';
 import { IdentityModule } from './identity.module';
 import { IdentityService } from './identity.service';
-import { APP_NODE_ID } from './node-ids';
+import { LEASE_PG_POOL } from './lease/lease-db.provider';
+import { NODE_ID_LEASE, type NodeIdLeasePort } from './lease/node-id-lease.port';
 import { bucketOf, decode } from './uuid-v8.codec';
 import { UuidV8Generator } from './uuid-v8.generator';
 
 const KEY = 'identity-module-spec-bucket-key-not-a-real-secret';
+const LEASED_NODE = 7;
+
+// The lease's own behaviour is covered by its unit and integration specs; here it only has to hand
+// out one node id, so the module's wiring can be asserted without a Postgres.
+const leases: NodeIdLeasePort = {
+  acquire: (service) => Promise.resolve({ service, node: LEASED_NODE, leaseId: 'identity-module-spec-lease' }),
+  renew: () => Promise.resolve(true),
+  release: () => Promise.resolve(),
+};
 
 // The shape UserModule and AuthModule have: two consumers each importing IdentityModule, which would
 // hand out two generators if the module were ever provided per importer.
@@ -50,17 +60,24 @@ async function driftSample(): Promise<string | undefined> {
 }
 
 function build(): Promise<INestApplication> {
-  return Test.createTestingModule({
-    // The shipped `configuration`, not a stub, so `identity.bucketKey` is proven spelled the same
-    // in both files.
-    imports: [
-      ConfigModule.forRoot({ load: [configuration], ignoreEnvFile: true, isGlobal: true }),
-      UserSideModule,
-      AuthSideModule,
-    ],
-  })
-    .compile()
-    .then((moduleRef) => moduleRef.createNestApplication().init());
+  return (
+    Test.createTestingModule({
+      // The shipped `configuration`, not a stub, so `identity.bucketKey` is proven spelled the same
+      // in both files.
+      imports: [
+        ConfigModule.forRoot({ load: [configuration], ignoreEnvFile: true, isGlobal: true }),
+        UserSideModule,
+        AuthSideModule,
+      ],
+    })
+      .overrideProvider(NODE_ID_LEASE)
+      .useValue(leases)
+      // The pool is never connected to, but the module closes it on shutdown.
+      .overrideProvider(LEASE_PG_POOL)
+      .useValue({ end: () => Promise.resolve(), on: () => undefined })
+      .compile()
+      .then((moduleRef) => moduleRef.createNestApplication().init())
+  );
 }
 
 describe('IdentityModule', () => {
@@ -70,6 +87,7 @@ describe('IdentityModule', () => {
   beforeEach(async () => {
     savedKey = process.env.IDENTITY_BUCKET_KEY;
     process.env.IDENTITY_BUCKET_KEY = KEY;
+    process.env.IDENTITY_LEASE_SERVICE = 'user';
     app = await build();
   });
 
@@ -89,10 +107,10 @@ describe('IdentityModule', () => {
     expect(user.identity).toBe(auth.identity);
   });
 
-  it('mints under the app node id', () => {
+  it('mints under the leased node id', () => {
     const id = app.get(UserSideWriter).identity.mintUserId(normalizeEmail('node@example.com'));
 
-    expect(decode(id).nodeId).toBe(APP_NODE_ID);
+    expect(decode(id).nodeId).toBe(LEASED_NODE);
   });
 
   it('buckets with the configured key', () => {

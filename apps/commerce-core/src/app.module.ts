@@ -30,7 +30,7 @@ import { CommerceMessagingModule } from './messaging/commerce-messaging.module';
 // instrumentation.ts. No user code: identity is a signed token this app verifies and never issues.
 @Module({
   imports: [
-    ConfigModule,
+    ConfigModule.forRoot(),
     ClsModule.forRoot(clsModuleOptions),
     ObservabilityLoggerModule,
     MetricsModule,
