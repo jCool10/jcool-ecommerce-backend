@@ -2,8 +2,8 @@ import 'dotenv/config';
 import { defineConfig } from 'drizzle-kit';
 
 export default defineConfig({
-  schema: './src/shared/infrastructure/database/schema/index.ts',
-  out: './src/shared/infrastructure/database/migrations',
+  schema: './apps/commerce-core/src/database/schema/index.ts',
+  out: './apps/commerce-core/migrations',
   dialect: 'postgresql',
   dbCredentials: {
     // Empty fallback so a missing DATABASE_URL fails loudly in drizzle-kit, not as a type error here.

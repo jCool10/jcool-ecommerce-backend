@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../../src/shared/infrastructure/database/schema';
+import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
 
 export interface SeededStock {
   variantId: string;

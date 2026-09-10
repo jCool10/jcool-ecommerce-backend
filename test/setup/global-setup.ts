@@ -1,6 +1,6 @@
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer } from '@testcontainers/redis';
-import { runMigrations } from '../../src/shared/infrastructure/database/migrate';
+import { runMigrations } from '@shared/infrastructure/database/migrate';
 
 const POSTGRES_IMAGE = 'postgres:16-alpine';
 const REDIS_IMAGE = 'redis:7-alpine';

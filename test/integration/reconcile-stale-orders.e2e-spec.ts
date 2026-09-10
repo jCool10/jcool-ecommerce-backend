@@ -3,16 +3,16 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { PAYMENT_GATEWAY } from '@modules/payment/application/ports/payment-gateway.port';
 import {
   PAYMENT_REPOSITORY,
   type PaymentRepositoryPort,
-} from '../../src/modules/payment/application/ports/payment-repository.port';
-import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
-import { ReconcileStaleOrdersUseCase } from '../../src/modules/payment/application/use-cases';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+} from '@modules/payment/application/ports/payment-repository.port';
+import { PaymentStatus } from '@modules/payment/domain/payment-status';
+import { ReconcileStaleOrdersUseCase } from '@modules/payment/application/use-cases';
+import { FakeSignerGatewayAdapter } from '@modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';

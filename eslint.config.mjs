@@ -55,9 +55,9 @@ export default tseslint.config(
   // `generate()` runs through; callers above it hold no clock state and are free to await.
   {
     files: [
-      'src/shared/identity/uuid-v8.generator.ts',
-      'src/shared/identity/entropy-pool.ts',
-      'src/shared/identity/uuid-v8.codec.ts',
+      'libs/identity/src/uuid-v8.generator.ts',
+      'libs/identity/src/entropy-pool.ts',
+      'libs/identity/src/uuid-v8.codec.ts',
     ],
     rules: {
       'no-restricted-syntax': [
@@ -82,8 +82,8 @@ export default tseslint.config(
   // be able to mint a non-v8 id to prove it is rejected. `scripts/` is in because it inserts over raw SQL.
   {
     files: [
-      'src/modules/user/infrastructure/**/*.ts',
-      'src/shared/identity/identity.service.ts',
+      'apps/*/src/modules/user/infrastructure/**/*.ts',
+      'libs/identity/src/identity.service.ts',
       'scripts/**/*.ts',
     ],
     ignores: ['**/*.spec.ts'],
@@ -113,7 +113,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/domain/**/*.ts'],
+    files: ['apps/**/domain/**/*.ts', 'libs/**/domain/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',

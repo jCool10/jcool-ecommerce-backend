@@ -1,8 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
 import request from 'supertest';
-import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../../src/shared/infrastructure/database/schema';
+import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
 import { authHeader } from '../auth.helper';
 import { idempotencyKeyHeader } from '../idempotency.helper';
 import {

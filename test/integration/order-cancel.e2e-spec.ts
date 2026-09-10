@@ -3,16 +3,16 @@ import { desc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { HandlePaymentWebhookUseCase } from '../../src/modules/payment/application/use-cases';
-import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { METRICS, type MetricsPort } from '../../src/shared/observability/metrics/metrics.port';
+import { OrderStatus } from '@modules/order/domain/order-status';
+import { PAYMENT_GATEWAY } from '@modules/payment/application/ports/payment-gateway.port';
+import { HandlePaymentWebhookUseCase } from '@modules/payment/application/use-cases';
+import { PaymentStatus } from '@modules/payment/domain/payment-status';
+import { FakeSignerGatewayAdapter } from '@modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { DomainEventProcessor } from '@shared/messaging/queue/domain-event.processor';
+import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { authHeader } from '../setup/auth.helper';
 import {
   buyerWithCart,

@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 

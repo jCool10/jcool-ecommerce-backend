@@ -1,10 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { ReconcileStaleOrdersUseCase } from '../../src/modules/payment/application/use-cases';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
+import { PAYMENT_GATEWAY } from '@modules/payment/application/ports/payment-gateway.port';
+import { ReconcileStaleOrdersUseCase } from '@modules/payment/application/use-cases';
+import { FakeSignerGatewayAdapter } from '@modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import {
   auditLedgerInvariants,
   buyerWithCart,

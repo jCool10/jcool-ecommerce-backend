@@ -3,13 +3,9 @@ import { asc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import {
-  OUTBOX_WRITER,
-  type OutboxRecord,
-  type OutboxWriterPort,
-} from '../../src/shared/messaging/outbox/outbox-writer.port';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { OUTBOX_WRITER, type OutboxRecord, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import {

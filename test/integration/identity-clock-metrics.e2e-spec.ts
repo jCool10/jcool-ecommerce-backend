@@ -1,8 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { UuidV8Generator } from '../../src/shared/identity';
-import { ID_CLOCK_DRIFT_MS } from '../../src/shared/observability/metrics/identity-clock.collector';
+import { UuidV8Generator } from '@shared/identity';
+import { ID_CLOCK_DRIFT_MS } from '@shared/observability/metrics/identity-clock.collector';
 import { createTestApp } from '../setup/test-app.factory';
 
 const METRICS_TOKEN = 'e2e-identity-clock-token-abcdef';

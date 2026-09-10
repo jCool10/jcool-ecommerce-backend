@@ -2,12 +2,12 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { FinalizeOrderUseCase } from '../../src/modules/order/application/use-cases';
-import { OrderPaidEvent } from '../../src/modules/order/domain/events/order-paid.event';
-import { OrderExpiredEvent } from '../../src/modules/order/domain/events/order-expired.event';
-import { OrderCancelledEvent } from '../../src/modules/order/domain/events/order-cancelled.event';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
+import { OrderPaidEvent } from '@modules/order/domain/events/order-paid.event';
+import { OrderExpiredEvent } from '@modules/order/domain/events/order-expired.event';
+import { OrderCancelledEvent } from '@modules/order/domain/events/order-cancelled.event';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 

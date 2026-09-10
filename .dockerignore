@@ -36,6 +36,6 @@ infra
 bruno
 k6
 
-# Not compiled into the image — tsconfig.build.json already excludes both.
+# Not compiled into the image — the build compiles `apps` and `libs` only.
 test
 scripts

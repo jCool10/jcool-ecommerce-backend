@@ -3,14 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { RedisService } from '@shared/infrastructure/redis';
 import {
   buildJobOptions,
   DOMAIN_EVENTS_QUEUE,
   QUEUE_CONNECTION,
   QUEUE_DOMAIN_EVENTS,
-} from '../../src/shared/messaging/queue/queue.constants';
-import { QueueLifecycle } from '../../src/shared/messaging/queue/queue.lifecycle';
+} from '@shared/messaging/queue/queue.constants';
+import { QueueLifecycle } from '@shared/messaging/queue/queue.lifecycle';
 import { createTestApp } from '../setup/test-app.factory';
 
 // The producer half of the queue over real Redis. Nothing consumes yet — a job added here stays

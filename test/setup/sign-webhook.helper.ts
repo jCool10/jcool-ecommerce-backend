@@ -1,4 +1,4 @@
-import { signStripeStyle } from '../../src/modules/payment/infrastructure/gateway/hmac-signature';
+import { signStripeStyle } from '@modules/payment/infrastructure/gateway/hmac-signature';
 
 // A real signature over a real body, not a self-mock: HMAC over the SAME raw bytes the test then
 // POSTs, using the shared `signStripeStyle`. The returned `rawBody` MUST be sent verbatim, or

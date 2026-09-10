@@ -20,7 +20,7 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
 | --- | --- |
 | **Scale** | 7 bounded contexts · 559 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
 | **Tests** | 1,161 unit tests (160 files, hermetic) + 60 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers |
-| **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `npm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
+| **Gates** | `lint` → `typecheck` → `arch:check` (9 boundary rules) → `npm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
 
@@ -138,39 +138,51 @@ interface  ──▶  application  ──▶  domain          (framework-free, n
                      └──── implements ─┴──── infrastructure   (Drizzle, Redis, S3, Stripe, SMTP)
 ```
 
-`npm run arch:check` (dependency-cruiser, 7 error-severity rules) fails the build when `domain`
+`npm run arch:check` (dependency-cruiser, 9 error-severity rules) fails the build when `domain`
 imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one
 context reaches into another for anything but its `application/public` surface — internal use cases
 included, which is the crossing a boundary rule usually forgets — or when `domain`/`application`
 import **any** telemetry
 package. That last rule is mechanical because the leak is easy: the observability barrel transitively
 pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity.
-ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no
+Two more hold the monorepo shape: a library may not import an app, and an app may not import another
+app. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no
 `uuid`/`randomUUID` in user infrastructure.
 
-Two composition roots are exempt from the "shared may not import a context" rule, because wiring
-contexts together is precisely their job: `shared/messaging` (registers context event handlers) and
-the schema barrel (collects every context's tables for the migrator).
+There are **no exemptions**. The two wirings that used to need one — the event dispatch table and the
+schema barrel — now live in the app and reach the libraries through a token instead:
+`DOMAIN_EVENT_DISPATCHER` / `EVENT_LABEL_REGISTRY` for the first, `DrizzleModule.forRoot(schema)` for
+the second. That inversion is what keeps the relay, the queue processor and the dead-letter router in
+a library no app owns.
 
 ### Project layout
 
+One deployable, laid out as `apps/` + `libs/` so a context can be lifted into its own service
+without a rewrite. One `package.json`, one lockfile, one runtime — the split is enforced by
+`arch:check`, not by package boundaries.
+
 ```
-src/
-├── main.ts                  # bootstrap: helmet, CORS, cookies, ValidationPipe, Swagger, shutdown hooks
-├── instrumentation.ts       # OTel + Sentry, preloaded via `node --import` before Nest boots
-├── app.module.ts
-├── modules/                 # bounded contexts — each: domain / application / infrastructure / interface
-│   ├── cart/  catalog/  inventory/  media/  order/  payment/  user/
-└── shared/
-    ├── kernel/              # framework-free DDD building blocks (Money, Entity, DomainError, Result)
-    ├── config/              # env validation (fail-fast) + typed config factory
-    ├── messaging/           # outbox, relay, BullMQ queue, inbox, DLQ + replay CLI
-    ├── observability/       # correlation, pino logging, OTel tracing, Prometheus metrics, Sentry
-    ├── infrastructure/      # pg pool + Drizzle, Redis, object storage, throttler, migrations
-    ├── cache/               # stale-while-revalidate cache + single-flight rebuild lock
-    ├── idempotency/         # request fingerprint + CLS carrier
-    ├── identity/            # UUIDv8 generator/codec, HMAC email buckets
-    ├── rbac/  health/  mail/  retention/  resilience/  interface/
+apps/
+└── commerce-core/
+    ├── migrations/          # drizzle-kit journal (the app owns its schema)
+    └── src/
+        ├── main.ts          # bootstrap: helmet, CORS, cookies, ValidationPipe, Swagger, shutdown hooks
+        ├── instrumentation.ts  # OTel + Sentry, preloaded via `node --import` before Nest boots
+        ├── app.module.ts
+        ├── modules/         # bounded contexts — each: domain / application / infrastructure / interface
+        │   ├── cart/  catalog/  inventory/  media/  order/  payment/  user/
+        ├── messaging/       # the dispatch table: which handler applies which event (app-owned)
+        ├── database/        # schema barrel (every context's tables) + seed
+        └── storage/         # bucket ↔ database reconciliation CLI
+libs/                        # shared by every app; may never import one back
+├── kernel/                  # framework-free DDD building blocks (Money, Entity, DomainError, Result)
+├── config/                  # env validation (fail-fast) + typed config factory
+├── messaging/               # outbox, relay, BullMQ queue, inbox, DLQ + replay CLI (transport only)
+├── observability/           # correlation, pino logging, OTel tracing, Prometheus metrics, Sentry
+├── db/  redis/  storage/    # pg pool + Drizzle, Redis + SWR cache, object storage
+├── identity/                # UUIDv8 generator/codec, HMAC email buckets
+├── platform/                # health, throttler, idempotency, retention, HTTP filters/controllers
+├── rbac/  mail/  resilience/
 test/
 ├── integration/             # 60 e2e suites on real infrastructure (Testcontainers)
 ├── setup/                   # global setup, app factory, fixtures, per-suite side containers
@@ -474,7 +486,7 @@ Three pillars plus error tracking, wired **around** the Clean Architecture core 
   `route` as a path template rather than a raw id (cardinality is a cost that only shows up later, in
   a Prometheus that has stopped being queryable), and business counters. Metric emission can never
   throw into a business flow: a telemetry failure must not become an order failure.
-- **Traces** — OpenTelemetry, off by default. The SDK loads via `node --import ./dist/instrumentation.js`
+- **Traces** — OpenTelemetry, off by default. The SDK loads via `node --import ./dist/apps/commerce-core/src/instrumentation.js`
   *before* Nest boots, so auto-instrumentation patches `http`/`express`/`pg`/`ioredis` before those
   modules are required.
 - **Errors** — Sentry, off unless `SENTRY_DSN` is set; it reuses the app's own OTel SDK
@@ -575,7 +587,7 @@ Stated plainly, because a reviewer will find them anyway.
 
 | Script | Purpose |
 | --- | --- |
-| `start:dev` · `start:prod` · `build` | Watch mode · compiled run (`node --import ./dist/instrumentation.js dist/main`) · Nest SWC build |
+| `start:dev` · `start:prod` · `build` | Watch mode · compiled run (`node --import ./dist/apps/commerce-core/src/instrumentation.js dist/apps/commerce-core/src/main`) · SWC compile of `apps` + `libs` |
 | `typecheck` · `lint` / `lint:check` · `format` | `tsc --noEmit` · ESLint with / without `--fix` · Prettier |
 | `arch:check` | dependency-cruiser boundary rules |
 | `alerts:check` · `alerts:test` | Prometheus rules parse · and fire (and clear) on the timelines they claim to |

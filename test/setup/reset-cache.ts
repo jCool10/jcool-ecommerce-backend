@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
-import { CacheService } from '../../src/shared/cache';
-import { CATALOG_CACHE_VERSION_KEY } from '../../src/modules/catalog/infrastructure/catalog-cache.keys';
+import { CacheService } from '@shared/cache';
+import { CATALOG_CACHE_VERSION_KEY } from '@modules/catalog/infrastructure/catalog-cache.keys';
 
 /**
  * `resetDatabase` truncates Postgres only, and fixtures insert straight through Drizzle (bypassing

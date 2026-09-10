@@ -37,7 +37,7 @@ to, and nothing reads a bucket until the split. The damage would surface years a
 caused it was lost.
 
 The application defends this on every boot, in two layers
-(`src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
+(`apps/commerce-core/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against
    the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use

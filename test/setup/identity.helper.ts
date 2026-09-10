@@ -1,5 +1,5 @@
-import { bucketForEmail } from '../../src/shared/identity';
-import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
+import { bucketForEmail } from '@shared/identity';
+import { normalizeEmail } from '@shared/kernel/normalize-email';
 
 // Duplicated as a literal in `vitest-e2e.config.mts`, which must satisfy env validation before any
 // module of this repo loads.

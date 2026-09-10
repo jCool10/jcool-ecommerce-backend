@@ -2,13 +2,10 @@ import type { INestApplication } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { FinalizeOrderUseCase } from '../../src/modules/order/application/use-cases';
-import {
-  STOCK_REPOSITORY,
-  type StockRepositoryPort,
-} from '../../src/modules/inventory/application/ports/stock-repository.port';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { FinalizeOrderUseCase } from '@modules/order/application/use-cases';
+import { STOCK_REPOSITORY, type StockRepositoryPort } from '@modules/inventory/application/ports/stock-repository.port';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';

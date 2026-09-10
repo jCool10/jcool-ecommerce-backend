@@ -2,12 +2,12 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
-import { PAYMENT_GATEWAY_BREAKER } from '../../src/modules/payment/infrastructure/gateway/breaker-payment-gateway.adapter';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { RedisService } from '../../src/shared/infrastructure/redis';
-import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '../../src/shared/infrastructure/throttler';
-import { CircuitBreakerFactory } from '../../src/shared/resilience';
+import { DrizzleProductRepository } from '@modules/catalog/infrastructure/drizzle-product.repository';
+import { PAYMENT_GATEWAY_BREAKER } from '@modules/payment/infrastructure/gateway/breaker-payment-gateway.adapter';
+import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
+import { RedisService } from '@shared/infrastructure/redis';
+import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '@shared/infrastructure/throttler';
+import { CircuitBreakerFactory } from '@shared/resilience';
 import { authHeader } from '../setup/auth.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import {

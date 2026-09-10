@@ -15,18 +15,13 @@ import * as argon2 from 'argon2';
 import { and, eq, inArray, like, notInArray, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import {
-  categories,
-  prices,
-  productVariants,
-  products,
-} from '../src/modules/catalog/infrastructure/schema/catalog.schema';
-import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/catalog/infrastructure/catalog-cache.keys';
-import { cartItems, carts } from '../src/modules/cart/infrastructure/schema/cart.schema';
-import { stockLevels } from '../src/modules/inventory/infrastructure/schema/inventory.schema';
-import { users } from '../src/modules/user/infrastructure/schema/user.schema';
-import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '../src/shared/identity';
-import { normalizeEmail } from '../src/shared/kernel/normalize-email';
+import { categories, prices, productVariants, products } from '@modules/catalog/infrastructure/schema/catalog.schema';
+import { CATALOG_CACHE_VERSION_KEY } from '@modules/catalog/infrastructure/catalog-cache.keys';
+import { cartItems, carts } from '@modules/cart/infrastructure/schema/cart.schema';
+import { stockLevels } from '@modules/inventory/infrastructure/schema/inventory.schema';
+import { users } from '@modules/user/infrastructure/schema/user.schema';
+import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '@shared/identity';
+import { normalizeEmail } from '@shared/kernel/normalize-email';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';

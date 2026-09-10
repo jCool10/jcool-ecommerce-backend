@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../../src/shared/infrastructure/database/schema';
+import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
 
 // Direct inserts (mirroring seed.ts) so a fixture doesn't depend on the write API.
 let seq = 0;

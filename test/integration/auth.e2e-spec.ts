@@ -6,17 +6,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMAIL_VERIFICATION_TOKEN_REPOSITORY,
   type EmailVerificationTokenRepositoryPort,
-} from '../../src/modules/user/application/ports/email-verification-token-repository.port';
+} from '@modules/user/application/ports/email-verification-token-repository.port';
 import {
   PASSWORD_RESET_TOKEN_REPOSITORY,
   type PasswordResetTokenRepositoryPort,
-} from '../../src/modules/user/application/ports/password-reset-token-repository.port';
-import { sha256Hex } from '../../src/modules/user/application/sha256-hex';
-import {
-  CSRF_TOKEN_COOKIE,
-  REFRESH_TOKEN_COOKIE,
-} from '../../src/modules/user/interface/security/auth-cookie.constants';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+} from '@modules/user/application/ports/password-reset-token-repository.port';
+import { sha256Hex } from '@modules/user/application/sha256-hex';
+import { CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from '@modules/user/interface/security/auth-cookie.constants';
+import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { authHeader, cookieValueOf, loginAs, sessionHeaders, setCookieEntry } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';

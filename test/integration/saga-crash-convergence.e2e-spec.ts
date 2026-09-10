@@ -3,18 +3,18 @@ import type { Queue } from 'bullmq';
 import { eq, isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { OrderStatus } from '@modules/order/domain/order-status';
+import { SweepExpiredReservationsUseCase } from '@modules/order/application/use-cases';
+import { PAYMENT_GATEWAY } from '@modules/payment/application/ports/payment-gateway.port';
+import { PaymentStatus } from '@modules/payment/domain/payment-status';
+import { FakeSignerGatewayAdapter } from '@modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { OutboxRelay } from '@shared/messaging/outbox/outbox-relay';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
+import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { DomainEventProcessor } from '@shared/messaging/queue/domain-event.processor';
+import { DOMAIN_EVENTS_QUEUE } from '@shared/messaging/queue/queue.constants';
 import {
   auditLedgerInvariants,
   placeAndOpenSession,

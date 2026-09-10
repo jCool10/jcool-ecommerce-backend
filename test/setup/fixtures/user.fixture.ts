@@ -1,16 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
-import {
-  PASSWORD_HASHER,
-  type PasswordHasherPort,
-} from '../../../src/modules/user/application/ports/password-hasher.port';
-import {
-  USER_REPOSITORY,
-  type UserRepositoryPort,
-} from '../../../src/modules/user/application/ports/user-repository.port';
-import { AuthTokensService } from '../../../src/modules/user/application/services/auth-tokens.service';
-import type { User } from '../../../src/modules/user/domain/entities/user.entity';
-import { normalizeEmail } from '../../../src/shared/kernel/normalize-email';
-import type { Role } from '../../../src/shared/rbac/role.enum';
+import { PASSWORD_HASHER, type PasswordHasherPort } from '@modules/user/application/ports/password-hasher.port';
+import { USER_REPOSITORY, type UserRepositoryPort } from '@modules/user/application/ports/user-repository.port';
+import { AuthTokensService } from '@modules/user/application/services/auth-tokens.service';
+import type { User } from '@modules/user/domain/entities/user.entity';
+import { normalizeEmail } from '@shared/kernel/normalize-email';
+import type { Role } from '@shared/rbac/role.enum';
 
 let seq = 0;
 

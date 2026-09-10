@@ -2,12 +2,12 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { IdentityService } from '../../src/shared/identity';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
-import { RetentionSweepRegistry, type RetentionSweep } from '../../src/shared/retention';
-import { RetentionScheduler } from '../../src/shared/retention/retention.scheduler';
+import { IdentityService } from '@shared/identity';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { normalizeEmail } from '@shared/kernel/normalize-email';
+import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
+import { RetentionScheduler } from '@shared/retention/retention.scheduler';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 

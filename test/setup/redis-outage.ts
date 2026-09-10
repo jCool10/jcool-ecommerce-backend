@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Redis } from 'ioredis';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { RedisService } from '@shared/infrastructure/redis';
 import { waitForRedisReady } from './redis-ready';
 
 /**

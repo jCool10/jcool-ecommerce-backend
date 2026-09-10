@@ -4,12 +4,12 @@ import { PinoLogger } from 'nestjs-pino';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { FinalizeOrderUseCase, SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
-import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { FinalizeOrderUseCase, SweepExpiredReservationsUseCase } from '@modules/order/application/use-cases';
+import { OrderStatus } from '@modules/order/domain/order-status';
+import { PAYMENT_GATEWAY } from '@modules/payment/application/ports/payment-gateway.port';
+import { FakeSignerGatewayAdapter } from '@modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import {
   placeAndOpenSession,
   postWebhook,

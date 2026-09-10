@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ShutdownService } from '../../src/shared/health/shutdown.service';
+import { ShutdownService } from '@shared/health/shutdown.service';
 import { createTestApp } from '../setup/test-app.factory';
 
 // Redis connects lazily (enableOfflineQueue:false), so the very first readiness probe can race

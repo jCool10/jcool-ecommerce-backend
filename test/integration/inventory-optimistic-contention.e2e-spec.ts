@@ -2,15 +2,15 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
 import {
   STOCK_REPOSITORY,
   type ReserveLine,
   type StockRepositoryPort,
-} from '../../src/modules/inventory/application/ports/stock-repository.port';
-import { InsufficientStockError } from '../../src/modules/inventory/domain/errors/insufficient-stock.error';
-import { ReservationConflictError } from '../../src/modules/inventory/domain/errors/reservation-conflict.error';
+} from '@modules/inventory/application/ports/stock-repository.port';
+import { InsufficientStockError } from '@modules/inventory/domain/errors/insufficient-stock.error';
+import { ReservationConflictError } from '@modules/inventory/domain/errors/reservation-conflict.error';
 import { countHeldReservations, seedStock } from '../setup/fixtures/inventory.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';

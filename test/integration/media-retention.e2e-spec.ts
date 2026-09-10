@@ -7,10 +7,10 @@ import {
   MEDIA_FACADE,
   MediaAssetUnavailableError,
   type MediaFacade,
-} from '../../src/modules/media/application/public/media-facade.port';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { RetentionSweepRegistry, type RetentionSweep } from '../../src/shared/retention';
+} from '@modules/media/application/public/media-facade.port';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
 import { createTestAdmin } from '../setup/fixtures/user.fixture';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetDatabase } from '../setup/reset-database';

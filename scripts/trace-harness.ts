@@ -7,7 +7,7 @@ import { SpanKind, context, propagation, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { BasicTracerProvider, ConsoleSpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { extractTraceContext, injectTraceContext } from '../src/shared/observability/tracing/propagation';
+import { extractTraceContext, injectTraceContext } from '@shared/observability/tracing/propagation';
 
 const provider = new BasicTracerProvider({
   spanProcessors: [new SimpleSpanProcessor(new ConsoleSpanExporter())],

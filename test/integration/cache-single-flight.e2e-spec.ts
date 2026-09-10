@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SingleFlightLock, SwrCacheService, type TtlPolicy } from '../../src/shared/cache';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { SingleFlightLock, SwrCacheService, type TtlPolicy } from '@shared/cache';
+import { RedisService } from '@shared/infrastructure/redis';
 import { withRedisDown } from '../setup/redis-outage';
 import { createTestApp } from '../setup/test-app.factory';
 

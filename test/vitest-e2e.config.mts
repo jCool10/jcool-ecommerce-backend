@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
+import { workspaceAliases } from '../vitest.aliases.mjs';
 
 // e2e config (HTTP via supertest + Testcontainers). Kept separate from the unit
 // config so `test` stays fast and hermetic.
@@ -20,13 +21,9 @@ export default defineConfig({
       // Deterministic so every app in a run buckets identically; mirrored in test-app.factory.ts.
       IDENTITY_BUCKET_KEY: 'e2e-identity-bucket-key-not-a-real-secret-000',
     },
-    // Path aliases (mirror tsconfig paths) for the e2e runner. Semantic aliases
-    // first (`@modules`/`@shared`), `@` catch-all last.
-    alias: {
-      '@modules': fileURLToPath(new URL('../src/modules', import.meta.url)),
-      '@shared': fileURLToPath(new URL('../src/shared', import.meta.url)),
-      '@': fileURLToPath(new URL('../src', import.meta.url)),
-    },
+    // Path aliases (mirror tsconfig paths) for the e2e runner; shared with the unit config so the
+    // two tiers cannot resolve the same specifier differently.
+    alias: workspaceAliases(new URL('../', import.meta.url)),
     // Boot Postgres + Redis containers once per run and migrate; connection URLs
     // reach tests via provide()/inject() (globalSetup runs in its own process).
     globalSetup: ['./test/setup/global-setup.ts'],

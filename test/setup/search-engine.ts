@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
-import { CATALOG_SEARCH, type CatalogSearchPort } from '../../src/modules/catalog/application/ports';
+import { CATALOG_SEARCH, type CatalogSearchPort } from '@modules/catalog/application/ports';
 
 const SEARCH_IMAGE = 'getmeili/meilisearch:v1.53.1';
 const SEARCH_PORT = 7700;

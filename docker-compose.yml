@@ -152,7 +152,7 @@ services:
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-    command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
+    command: ['node', '--import', './dist/apps/commerce-core/src/instrumentation.js', 'dist/apps/commerce-core/src/main.js']
     # meilisearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
     depends_on:

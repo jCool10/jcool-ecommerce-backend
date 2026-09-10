@@ -1,8 +1,8 @@
 import { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
-import { bucketForEmail, identityKeyFingerprint } from '../../src/shared/identity';
-import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
+import { bucketForEmail, identityKeyFingerprint } from '@shared/identity';
+import { normalizeEmail } from '@shared/kernel/normalize-email';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { E2E_IDENTITY_BUCKET_KEY, WRONG_IDENTITY_BUCKET_KEY } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';

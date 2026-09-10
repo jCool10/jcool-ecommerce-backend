@@ -2,13 +2,9 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-  CATALOG_SEARCH,
-  type CatalogSearchPort,
-  type SearchableProduct,
-} from '../../src/modules/catalog/application/ports';
-import { DrizzleProductRepository, reindexAll } from '../../src/modules/catalog/infrastructure';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { CATALOG_SEARCH, type CatalogSearchPort, type SearchableProduct } from '@modules/catalog/application/ports';
+import { DrizzleProductRepository, reindexAll } from '@modules/catalog/infrastructure';
+import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { archiveTestCategory, createTestCategory, createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { resetDatabase } from '../setup/reset-database';
 import { resetSearchIndex, startSearchEngine, type StartedSearchEngine } from '../setup/search-engine';

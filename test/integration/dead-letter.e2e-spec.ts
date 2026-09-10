@@ -4,19 +4,19 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
-import { PermanentError } from '../../src/shared/messaging/errors';
-import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { replayDeadLetters } from '../../src/shared/messaging/queue/dead-letter.replay';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import * as schema from '@commerce-core/database/schema';
+import { PermanentError } from '@shared/messaging/errors';
+import { DomainEventDispatcher } from '@commerce-core/messaging/domain-event.dispatcher';
+import type { DeadLetterJob } from '@shared/messaging/queue/dead-letter';
+import { replayDeadLetters } from '@shared/messaging/queue/dead-letter.replay';
+import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { DomainEventProcessor } from '@shared/messaging/queue/domain-event.processor';
 import {
   DOMAIN_EVENTS_CONSUMER,
   DOMAIN_EVENTS_DLQ_QUEUE,
   DOMAIN_EVENTS_QUEUE,
-} from '../../src/shared/messaging/queue/queue.constants';
+} from '@shared/messaging/queue/queue.constants';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
