@@ -5,9 +5,9 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { authHeader, loginAs, sessionHeaders } from '../setup/auth.helper';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createRealTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 /**
  * The session-epoch bump (logout-all / change-password) rejects every outstanding access token at
@@ -21,7 +21,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
   const newPassword = 'NewPassword456!';
 
   beforeAll(async () => {
-    app = await createTestApp();
+    app = await createUserApp();
     pool = app.get<Pool>(PG_POOL);
   });
 
@@ -35,7 +35,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
 
   describe('POST /auth/change-password', () => {
     it('swaps the credential: the new password logs in, the old one no longer does', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const session = await loginAs(app, { email: user.email, password });
 
       await request(app.getHttpServer())
@@ -52,7 +52,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
     });
 
     it('revokes every session: the caller’s access token and refresh cookie both stop working', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const session = await loginAs(app, { email: user.email, password });
 
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(200);
@@ -69,7 +69,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a wrong current password (401) and leaves the credential unchanged', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const session = await loginAs(app, { email: user.email, password });
 
       await request(app.getHttpServer())
@@ -82,7 +82,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a too-short new password with 400 (DTO validation)', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const session = await loginAs(app, { email: user.email, password });
 
       await request(app.getHttpServer())
@@ -102,7 +102,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
 
   describe('GET /auth/sessions + DELETE /auth/sessions/:id', () => {
     it('lists a user’s active sessions and flags the one making the request', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
       await loginAs(app, { email: user.email, password }); // a second device/session
 
@@ -125,7 +125,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
     });
 
     it('revokes one remote session: that session can’t rotate, the caller’s still can', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
       const b = await loginAs(app, { email: user.email, password });
 
@@ -147,7 +147,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
     });
 
     it('404s revoking a session id that isn’t the caller’s (cross-user isolation)', async () => {
-      const owner = await createTestUser(app, { password });
+      const owner = await createRealTestUser(app, { password });
       const ownerSession = await loginAs(app, { email: owner.user.email, password });
       const ownerList = await request(app.getHttpServer())
         .get('/auth/sessions')
@@ -155,7 +155,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
         .expect(200);
       const foreignId = (ownerList.body[0] as { id: string }).id;
 
-      const attacker = await createTestUser(app, { password });
+      const attacker = await createRealTestUser(app, { password });
       const attackerSession = await loginAs(app, { email: attacker.user.email, password });
 
       await request(app.getHttpServer())
@@ -168,7 +168,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
     });
 
     it('404s an unknown session id and 400s a malformed one', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
 
       await request(app.getHttpServer())
@@ -185,7 +185,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
 
   describe('POST /auth/logout-all (session epoch)', () => {
     it('kills every session at once — all access tokens and refresh cookies stop working', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
       const b = await loginAs(app, { email: user.email, password });
 
@@ -202,7 +202,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
     });
 
     it('lets the user log in again afterward (a fresh session under the new epoch works)', async () => {
-      const { user } = await createTestUser(app, { password });
+      const { user } = await createRealTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
 
       await request(app.getHttpServer()).post('/auth/logout-all').set(authHeader(a.accessToken)).expect(204);

@@ -1,0 +1,34 @@
+# Alerts for the session-epoch projection: `users.token_epoch` in Postgres is the source of truth,
+# Redis `auth:epoch:{sub}` is the copy every authenticated request reads. The verifier fails closed
+# on a missing key, so drift between the two is not a stale-data problem — it is a 401.
+#
+# Only the read side is alerted. `auth_epoch_projection_write_failure_total` is a dashboard series:
+# a failed write is already covered here, because the token it failed to publish for is exactly the
+# one that will miss on its next request.
+groups:
+  - name: auth
+    rules:
+      # Misses are self-healing by design — a 401 sends the client through refresh, which republishes
+      # the key — so the alert is about the rate never settling, not about any single miss. A steady
+      # stream means a path that mints or bumps stopped publishing, and every user it serves is being
+      # logged out once per token.
+      #
+      # The hold is deliberately longer than the rate window: a one-off burst (a Redis flush, a
+      # failover that lost the keyspace) leaves the 10m window before the 15m hold elapses, so the
+      # recovery it triggers cannot page anyone. Only a source that keeps producing misses survives
+      # both. 0.1/s ≈ 6 a minute — above the trickle of tokens that outlive the projection TTL,
+      # below anything a real regression produces.
+      #
+      # Absolute rate, not a ratio against http_requests_total: the RED counter is fed by an
+      # interceptor, and a request rejected by JwtAuthGuard never reaches one (see slo-burn-rate.yml)
+      # — the denominator would be missing precisely the requests this alert is counting.
+      - alert: AuthEpochProjectionMissing
+        expr: sum(rate(auth_epoch_projection_miss_total[10m])) > 0.1
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Session epochs are missing from Redis at a sustained rate'
+          # printf, not humanize: the rate sits under 1 and humanize renders that with an SI prefix,
+          # so a real 0.5/s reaches the on-call as "500m/s".
+          description: 'Tokens are being rejected because `auth:epoch:{sub}` is absent, at {{ $value | printf "%.2f" }}/s and not settling. Postgres still holds the truth, so nothing is lost — but each affected user is 401ing until their client refreshes. A rate that persists means a mint or bump path is no longer publishing; check the projection writer and the Redis keyspace before assuming the clients are at fault.'

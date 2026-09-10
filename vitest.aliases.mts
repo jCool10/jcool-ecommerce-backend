@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 const families: Record<string, string> = {
   '@modules': 'apps/commerce-core/src/modules',
   '@commerce-core': 'apps/commerce-core/src',
+  '@user': 'apps/user/src',
 
+  '@shared/auth': 'libs/auth/src',
   '@shared/kernel': 'libs/kernel/src',
   '@shared/rbac': 'libs/rbac/src',
   '@shared/config': 'libs/config/src',

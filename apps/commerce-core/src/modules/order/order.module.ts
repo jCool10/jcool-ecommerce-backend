@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
-import { UserModule } from '@modules/user/user.module';
 import { MailModule } from '@shared/mail';
 import {
   CancelOrderUseCase,
@@ -38,7 +37,7 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
  * nothing in this module imports another context's domain or infrastructure.
  */
 @Module({
-  imports: [CartModule, CatalogModule, InventoryModule, UserModule, MailModule],
+  imports: [CartModule, CatalogModule, InventoryModule, MailModule],
   controllers: [OrderController, AdminOrderController],
   providers: [
     CheckoutOrderUseCase,

@@ -13,7 +13,6 @@ import { DomainEventProcessor } from '@shared/messaging/queue/domain-event.proce
 import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '@shared/messaging/queue/queue.constants';
 import { authHeader } from '../setup/auth.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -21,6 +20,7 @@ import { createTestApp } from '../setup/test-app.factory';
 const METRICS_TOKEN = 'e2e-consumer-metrics-token';
 const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
 const ORDER_ID = '0198f0d8-1111-7000-8000-000000000001';
+const USER_ID = '0198f0d8-2222-8000-8000-000000000001';
 
 /**
  * The transport can and does deliver twice — the relay may crash after publishing but before
@@ -127,10 +127,17 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('applies each of the order events the producers emit today', async () => {
-    // Every finalized event carries `userId` (`order-outbox.mapper.ts`), and order.paid's handler
-    // resolves the buyer's address from it — so the payload here has to be the one producers emit.
-    const { user } = await createTestUser(app);
-    const payload = { orderId: ORDER_ID, userId: user.id, totalAmountMinor: 150_000 };
+    // order.paid's handler reads the order row for the recipient, so the order has to exist.
+    await db.insert(schema.orders).values({
+      id: ORDER_ID,
+      userId: USER_ID,
+      buyerEmail: 'buyer@test.local',
+      status: 'PAID',
+      currency: 'VND',
+      totalAmount: 150_000,
+      placedAt: new Date(),
+    });
+    const payload = { orderId: ORDER_ID, userId: USER_ID, totalAmountMinor: 150_000, currency: 'VND' };
     for (const [index, eventType] of ['order.placed', 'order.paid', 'order.failed', 'order.expired'].entries()) {
       const outboxId = `0198f0d8-0000-7000-8000-00000000000${index + 1}`;
       await expect(processor.process(job({ outboxId, eventType, payload }))).resolves.toBe('processed');

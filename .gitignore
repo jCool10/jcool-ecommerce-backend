@@ -9,10 +9,11 @@
 /coverage
 /.nyc_output
 
-# Environment (never commit real secrets; .env.example is the committed template)
+# Environment (never commit real secrets; the *.example files are the committed templates)
 .env
 .env.*
 !.env.example
+!.env.user.example
 
 # Local observability secret (Phase 5): the real Prometheus scrape token, mounted into the
 # Prometheus container. Must match the app's METRICS_TOKEN. Only the .example template is committed.

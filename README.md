@@ -1,8 +1,8 @@
 # JCool E-commerce Backend
 
-Single-store e-commerce backend built as a **NestJS modular monolith** — seven bounded contexts,
-Clean Architecture layering enforced by a build gate, and a deliberate focus on the parts of
-commerce that are hard: **never oversell, never double-charge, never lose an event**.
+Single-store e-commerce backend built as a **NestJS monorepo** — seven bounded contexts across two
+deployables, Clean Architecture layering enforced by a build gate, and a deliberate focus on the
+parts of commerce that are hard: **never oversell, never double-charge, never lose an event**.
 
 <p>
   <a href="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml/badge.svg"></a>
@@ -18,9 +18,9 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
 
 | | |
 | --- | --- |
-| **Scale** | 7 bounded contexts · 559 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
-| **Tests** | 1,161 unit tests (160 files, hermetic) + 60 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers |
-| **Gates** | `lint` → `typecheck` → `arch:check` (9 boundary rules) → `npm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
+| **Scale** | 2 deployables · 7 bounded contexts · 577 TypeScript files · 22 tables across 2 databases · 24 committed migrations in 2 journals · 53 HTTP routes |
+| **Tests** | 1,180 unit tests (163 files, hermetic) + 64 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers |
+| **Gates** | `lint` → `typecheck` → `arch:check` (10 boundary rules) → `npm audit` → `build` → both migration journals → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
 
@@ -35,9 +35,10 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
 
 ## What this is
 
-A backend for a **single-store** (not multi-vendor) shop, built as one deployable process split into
-independent bounded contexts with boundaries a build step enforces — so a context can be extracted
-into its own service as a bounded piece of work rather than a rewrite.
+A backend for a **single-store** (not multi-vendor) shop, built as independent bounded contexts with
+boundaries a build step enforces — so a context can be extracted into its own service as a bounded
+piece of work rather than a rewrite. User is the one that has been: it runs as its own deployable on
+its own database, and the extraction cost no redesign.
 
 Four invariants drive nearly every design decision in the repository:
 
@@ -55,40 +56,53 @@ Where a guarantee is weaker than it looks, [Known limits](#known-limits) says so
 
 ## Architecture
 
+Two deployables from one image. They share no database and call each other not at all: the only
+things that cross the line are a signed access token and two Redis keys.
+
 ```mermaid
 flowchart TB
-    subgraph edge["interface — HTTP"]
-        AUTH["/auth"]:::ctx
-        CAT["/products, /admin"]:::ctx
-        CART["/cart"]:::ctx
-        ORD["/orders, /admin/orders"]:::ctx
-        PAY["/orders/:id/pay<br/>/webhooks/payment"]:::ctx
-        INV["/admin/inventory"]:::ctx
-        MED["/admin/media"]:::ctx
+    subgraph user["user-service — apps/user"]
+        AUTH["/auth"]:::ctx --> U[User]:::box
+        UPG[(PostgreSQL<br/>users · tokens · pin)]:::db
+        U --> UPG
     end
 
-    subgraph core["bounded contexts — application + domain"]
-        U[User]:::box --- C[Catalog]:::box --- K[Cart]:::box
-        O[Order]:::box --- P[Payment]:::box --- I[Inventory]:::box --- M[Media]:::box
+    subgraph commerce["commerce-core — apps/commerce-core"]
+        subgraph edge["interface — HTTP"]
+            CAT["/products, /admin"]:::ctx
+            CART["/cart"]:::ctx
+            ORD["/orders, /admin/orders"]:::ctx
+            PAY["/orders/:id/pay<br/>/webhooks/payment"]:::ctx
+            INV["/admin/inventory"]:::ctx
+            MED["/admin/media"]:::ctx
+        end
+
+        subgraph ctxs["bounded contexts — application + domain"]
+            C[Catalog]:::box --- K[Cart]:::box --- I[Inventory]:::box
+            O[Order]:::box --- P[Payment]:::box --- M[Media]:::box
+        end
+
+        subgraph async["asynchronous backbone"]
+            OB[(outbox)]:::db --> RLY[relay<br/>FOR UPDATE SKIP LOCKED]:::box
+            RLY --> Q[[BullMQ<br/>domain-events]]:::box
+            Q --> W[worker]:::box --> IB[(inbox claim)]:::db
+            Q -.retries exhausted.-> DLQ[[domain-events-dlq]]:::box
+        end
+
+        PG[(PostgreSQL<br/>catalog · orders · …)]:::db
     end
 
-    subgraph async["asynchronous backbone"]
-        OB[(outbox)]:::db --> RLY[relay<br/>FOR UPDATE SKIP LOCKED]:::box
-        RLY --> Q[[BullMQ<br/>domain-events]]:::box
-        Q --> W[worker]:::box --> IB[(inbox claim)]:::db
-        Q -.retries exhausted.-> DLQ[[domain-events-dlq]]:::box
+    subgraph shared["shared infrastructure"]
+        RD[(Redis 7<br/>auth:epoch · auth:denylist<br/>cache · queue · throttler)]:::db
+        SMTP[(SMTP)]:::db
     end
 
-    subgraph infra["infrastructure"]
-        PG[(PostgreSQL 16)]:::db
-        RD[(Redis 7)]:::db
+    subgraph infra["commerce-core only"]
         S3[(S3 / MinIO)]:::db
         MS[(Meilisearch)]:::db
-        SMTP[(SMTP)]:::db
         STRIPE([Stripe]):::ext
     end
 
-    AUTH --> U
     CAT --> C
     CART --> K
     ORD --> O
@@ -98,6 +112,7 @@ flowchart TB
 
     O -->|one transaction| PG
     O --> OB
+    O --> SMTP
     P --> OB
     P --> STRIPE
     C --> RD
@@ -105,6 +120,9 @@ flowchart TB
     M --> S3
     U --> SMTP
     W --> PG
+
+    U ==>|writes| RD
+    ORD -.->|reads the epoch<br/>verifies the token locally| RD
 
     classDef ctx fill:#1f2937,stroke:#4b5563,color:#e5e7eb
     classDef box fill:#111827,stroke:#374151,color:#e5e7eb
@@ -116,7 +134,7 @@ flowchart TB
 
 | Context | Owns | Publishes to other contexts |
 | --- | --- | --- |
-| **User** | Accounts, credentials, sessions, RBAC, sharding-ready ids | `USER_FACADE` |
+| **User** *(own service, own database)* | Accounts, credentials, sessions, RBAC, sharding-ready ids | — (nothing; identity travels in the access token) |
 | **Catalog** | Categories, products, SKUs, prices, product images, search index | `CATALOG_SKU_QUERY` (live price/name) |
 | **Cart** | Per-user cart lines — quantities only, no prices | `CART_SNAPSHOT` (`{skuId, quantity}`) |
 | **Inventory** | Stock levels and reservations | `STOCK_RESERVATION` (reserve / commit / release) |
@@ -128,6 +146,11 @@ No context reads another's tables. Cross-context calls go through an anti-corrup
 *calling* context owns, bound to the target's published port — there are no cross-context foreign
 keys anywhere in the schema, which is what keeps an extraction from becoming a schema migration.
 
+User is the proof: it now runs as its own service on its own Postgres, and the extraction changed no
+other context's code. It publishes nothing because it needs to — commerce-core reads the buyer's
+identity out of the access token it verifies locally, and an order snapshots the address it was
+placed with onto its own row.
+
 ### Layering
 
 Dependencies point inward; infrastructure is plugged in through ports declared by the inner layers.
@@ -138,7 +161,7 @@ interface  ──▶  application  ──▶  domain          (framework-free, n
                      └──── implements ─┴──── infrastructure   (Drizzle, Redis, S3, Stripe, SMTP)
 ```
 
-`npm run arch:check` (dependency-cruiser, 9 error-severity rules) fails the build when `domain`
+`npm run arch:check` (dependency-cruiser, 10 error-severity rules) fails the build when `domain`
 imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one
 context reaches into another for anything but its `application/public` surface — internal use cases
 included, which is the crossing a boundary rule usually forgets — or when `domain`/`application`
@@ -146,8 +169,10 @@ import **any** telemetry
 package. That last rule is mechanical because the leak is easy: the observability barrel transitively
 pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity.
 Two more hold the monorepo shape: a library may not import an app, and an app may not import another
-app. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no
-`uuid`/`randomUUID` in user infrastructure.
+app — which now has teeth, because commerce-core and user-service are separate processes on separate
+databases and a single import edge would be a compile-time lie about that. ESLint adds two
+file-scoped fences of its own — no `async`/`await` in the id generator, and no `uuid`/`randomUUID` in
+user infrastructure.
 
 There are **no exemptions**. The two wirings that used to need one — the event dispatch table and the
 schema barrel — now live in the app and reach the libraries through a token instead:
@@ -157,23 +182,31 @@ a library no app owns.
 
 ### Project layout
 
-One deployable, laid out as `apps/` + `libs/` so a context can be lifted into its own service
-without a rewrite. One `package.json`, one lockfile, one runtime — the split is enforced by
-`arch:check`, not by package boundaries.
+Two deployables, laid out as `apps/` + `libs/`. One `package.json`, one lockfile, one image — the
+separation is enforced by `arch:check` and by each app owning its own database, not by package
+boundaries.
 
 ```
 apps/
-└── commerce-core/
-    ├── migrations/          # drizzle-kit journal (the app owns its schema)
+├── commerce-core/
+│   ├── drizzle.config.ts    # its own drizzle-kit config
+│   ├── migrations/          # drizzle-kit journal (the app owns its schema)
+│   └── src/
+│       ├── main.ts          # bootstrap: helmet, CORS, cookies, ValidationPipe, Swagger, shutdown hooks
+│       ├── instrumentation.ts  # OTel + Sentry, preloaded via `node --import` before Nest boots
+│       ├── app.module.ts
+│       ├── modules/         # bounded contexts — each: domain / application / infrastructure / interface
+│       │   ├── cart/  catalog/  inventory/  media/  order/  payment/
+│       ├── messaging/       # the dispatch table: which handler applies which event (app-owned)
+│       ├── database/        # schema barrel (every context's tables) + seed
+│       └── storage/         # bucket ↔ database reconciliation CLI
+└── user/                    # the auth issuer — no queue, no outbox, no inbox
+    ├── drizzle.config.ts
+    ├── migrations/          # a separate journal against a separate Postgres
     └── src/
-        ├── main.ts          # bootstrap: helmet, CORS, cookies, ValidationPipe, Swagger, shutdown hooks
-        ├── instrumentation.ts  # OTel + Sentry, preloaded via `node --import` before Nest boots
-        ├── app.module.ts
-        ├── modules/         # bounded contexts — each: domain / application / infrastructure / interface
-        │   ├── cart/  catalog/  inventory/  media/  order/  payment/  user/
-        ├── messaging/       # the dispatch table: which handler applies which event (app-owned)
-        ├── database/        # schema barrel (every context's tables) + seed
-        └── storage/         # bucket ↔ database reconciliation CLI
+        ├── main.ts  instrumentation.ts  app.module.ts
+        ├── modules/user/    # accounts, sessions, tokens, RBAC, id minting
+        └── database/        # its five tables
 libs/                        # shared by every app; may never import one back
 ├── kernel/                  # framework-free DDD building blocks (Money, Entity, DomainError, Result)
 ├── config/                  # env validation (fail-fast) + typed config factory
@@ -184,7 +217,8 @@ libs/                        # shared by every app; may never import one back
 ├── platform/                # health, throttler, idempotency, retention, HTTP filters/controllers
 ├── rbac/  mail/  resilience/
 test/
-├── integration/             # 60 e2e suites on real infrastructure (Testcontainers)
+├── integration/             # 64 e2e suites on real infrastructure (Testcontainers)
+│   └── cross-app/           # the one flow that spans both services: a token minted, then spent
 ├── setup/                   # global setup, app factory, fixtures, per-suite side containers
 └── load/                    # k6 mixes
 infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector
@@ -233,7 +267,7 @@ The parts worth reading the code for. Each row names the file to open.
 
 | Problem | Approach | Where |
 | --- | --- | --- |
-| **Immediate JWT revocation** | Stateless HS256 access tokens carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user `token_epoch` counter (every token issued before a logout-all or password change) | `modules/user/interface/strategies/jwt.strategy.ts` |
+| **Immediate JWT revocation** | ES256 access tokens carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and the projected `token_epoch` (every token issued before a logout-all or password change). Verification holds a public key and Redis only — no private key, no database — so it can be split off with the services that need it; a missing epoch is a rejection, never an assumed `0` | `libs/auth/src/jwt.strategy.ts` |
 | **Token delivery and CSRF** | The access token goes in the JSON body (Bearer is CSRF-immune). The refresh token goes **only** in an `httpOnly; SameSite=Strict; Path=/auth` cookie (`Secure` in production, per `COOKIE_SECURE`), paired with a signed double-submit CSRF cookie enforced on the two routes that consume it | `modules/user/interface/security/csrf.guard.ts` |
 | **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `shared/infrastructure/throttler/throttler.constants.ts` |
 | **User enumeration** | `forgot-password` and `resend-verification` always answer `202`. Login runs a real argon2 verify against a cached dummy hash on the unknown-email branch, so the timing of "no such user" matches "wrong password" | `modules/user/application/use-cases/login-user.use-case.ts` |
@@ -261,30 +295,48 @@ The parts worth reading the code for. Each row names the file to open.
 # 1. install
 npm ci
 
-# 2. configure — the template boots as-is against the Compose stack below
+# 2. configure — one file per service, both pointed at the Compose stack below
 cp .env.example .env
+cp .env.user.example .env.user
 
-# 3. infrastructure (the ports below are the host-mapped ones)
-docker compose up -d postgres redis meilisearch mailpit minio minio-init
+# 3. mint the ES256 pair — no key is committed, so neither service boots without this
+openssl ecparam -name prime256v1 -genkey -noout -out jwt-es256.key
+openssl ec -in jwt-es256.key -pubout -out jwt-es256.pub
+base64 < jwt-es256.key | tr -d '\n'   # JWT_ES256_PRIVATE_KEY → .env.user only
+base64 < jwt-es256.pub | tr -d '\n'   # JWT_ES256_PUBLIC_KEY  → both files
+openssl rand -base64 48               # IDENTITY_BUCKET_KEY   → .env.user only
 
-# 4. schema + sample data
+# 4. infrastructure (the ports below are the host-mapped ones)
+docker compose up -d postgres postgres-user redis meilisearch mailpit minio minio-init
+
+# 5. schema + sample data — two journals, two databases
 npm run db:migrate
+npm run db:migrate:user
 npm run db:seed
 
-# 5. run
+# 6. run both services (separate terminals)
 npm run start:dev
+npm run start:dev:user
 ```
 
-- API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs>
+- commerce-core → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs>
+- user-service (`/auth/*`) → <http://localhost:3001> · OpenAPI → <http://localhost:3001/docs>
 - Mail inbox (Mailpit) → <http://localhost:8025> · MinIO console → <http://localhost:9001>
-- Postgres → `localhost:5433` · Redis → `localhost:6380` · Meilisearch → `localhost:7700`
+- Postgres → `localhost:5433` · user Postgres → `localhost:5434` · Redis → `localhost:6380` ·
+  Meilisearch → `localhost:7700`
+
+A mismatched public key is not a boot failure — commerce-core simply rejects every token
+user-service mints, so keep `JWT_KEY_ID` identical in both files too.
 
 `minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh
 `docker compose up` has a bucket before the first upload. Meilisearch is only needed with
 `SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships
 `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
-Full stack in-network (app included): `docker compose up -d --build`.
+Full stack in-network (both apps included): `docker compose up -d --build`. That also brings up
+`commerce-core-migrate` and `user-migrate`, two one-shot containers each app waits on, so the
+schemas are applied before either process starts serving. In the compose network user-service is
+published on host `3002` (Grafana already owns 3001).
 Tear down including volumes: `docker compose down -v`.
 
 ---
@@ -292,25 +344,37 @@ Tear down including volumes: `docker compose down -v`.
 ## Configuration
 
 Environment is validated **once at startup** and the process refuses to boot on anything invalid —
-a missing secret is a crash, not a runtime surprise. `.env.example` is the complete, commented
-reference for all ~105 variables; these are the ones without a default:
+a missing secret is a crash, not a runtime surprise. Each service validates against its own schema:
+a shared base plus `UserEnvironmentVariables` for the three variables only the issuer may hold.
+Unknown keys are ignored on both sides, deliberately — the e2e harness runs both apps in one
+`process.env`, and a schema that *rejected* a sibling's variable would break it.
 
-| Variable | Notes |
-| --- | --- |
-| `NODE_ENV` | `development` \| `test` \| `production` |
-| `DATABASE_URL` | Postgres connection string |
-| `REDIS_URL` | Shared by cache, throttler, denylist and BullMQ |
-| `JWT_ACCESS_SECRET` | min 32 chars; production refuses to boot on a shorter one |
-| `IDENTITY_BUCKET_KEY` | HMAC key for id routing buckets. **Permanent** — the DB pins its fingerprint on first boot and refuses a later boot under a different key. See [RUNBOOK.md](./RUNBOOK.md) |
-| `STRIPE_SUCCESS_URL` | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
+`.env.example` (commerce-core) and `.env.user.example` (user-service) are the complete, commented
+references. The variables without a default:
+
+| Variable | Service | Notes |
+| --- | --- | --- |
+| `NODE_ENV` | both | `development` \| `test` \| `production` |
+| `DATABASE_URL` | commerce-core | Postgres connection string |
+| `USER_DATABASE_URL` | user | Its own Postgres — a separate instance, not a schema |
+| `REDIS_URL` | both | One instance. commerce-core owns the catalog cache and BullMQ; user-service writes the two `auth:*` keys core reads. Nothing else is shared — [RUNBOOK.md](./RUNBOOK.md) has the full key census |
+| `JWT_ES256_PRIVATE_KEY` | user | PEM or base64 PEM. Signs access tokens — the issuer alone holds it |
+| `JWT_ES256_PUBLIC_KEY` | both | PEM or base64 PEM. All a verifier needs |
+| `IDENTITY_BUCKET_KEY` | user | HMAC key for id routing buckets. **Permanent** — the user DB pins its fingerprint on first boot and refuses a later boot under a different key. See [RUNBOOK.md](./RUNBOOK.md) |
+| `STRIPE_SUCCESS_URL` | commerce-core | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
+
+`MAIL_*` / `SMTP_URL` belong to **both**: user-service sends verification and reset links, and
+commerce-core sends the order confirmation. Making them user-only would not fail any boot —
+commerce-core's transport silently falls back to a log sink — so an e2e asserts it resolves a real
+SMTP transport.
 
 Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY`
 (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`,
-`STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`,
-`METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`.
+`STORAGE_*` (S3/R2/MinIO), `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`,
+`OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`.
 
-`MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it
-because it ships `migrations/` without a `src/` tree.
+`MIGRATIONS_DIR` and `USER_MIGRATIONS_DIR` are read raw, outside Nest, by the migration CLI — the
+production image sets both because it ships the two `migrations/` trees without a `src/` tree.
 
 ---
 
@@ -443,18 +507,24 @@ development and test.
 Two tiers, kept separate on purpose.
 
 ```bash
-npm test           # 1,161 unit tests, 160 files — hermetic, no Docker
+npm test           # 1,180 unit tests, 163 files — hermetic, no Docker
 npm run test:cov   # same, with the coverage floor CI enforces
-npm run test:e2e   # 60 integration suites, 504 tests — requires Docker
+npm run test:e2e   # 64 integration suites, 521 tests — requires Docker
 ```
 
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated
   ids are stable within a run.
 - **Integration** (`test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB
-  mocking. A single `globalSetup` boots **Postgres + Redis** once per run and applies the committed
-  migrations; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit**
-  per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't
-  use. So the suite exercises real S3, a real search engine and a real SMTP server.
+  mocking. A single `globalSetup` boots **Postgres + Redis** once per run, creates **two databases**
+  in the one container, and applies both committed journals to them; the media, search and mail
+  suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of
+  `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises
+  real S3, a real search engine and a real SMTP server.
+
+Two databases, two app factories: `createTestApp()` boots commerce-core, `createUserApp()` boots
+user-service, and a suite gets exactly the one it needs. `test/integration/cross-app/` is the only
+place both run side by side — deliberately, because a composite module would prove the opposite of
+what those tests claim.
 
 Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot
 change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by
@@ -510,20 +580,24 @@ it is not an npm dependency, CI installs it from the pinned Prometheus release.
 ## Operations
 
 [**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express:
-never rotating `IDENTITY_BUCKET_KEY`, backup/restore (including restoring a dump into a database
-pinned to a different key fingerprint), rebuilding the search index, replaying the dead-letter queue,
-reconciling the object bucket against `media_assets`, retention horizons, and what to do when a
-refund is owed.
+what the two services share in Redis and how to audit it, never rotating `IDENTITY_BUCKET_KEY`,
+backup/restore of both databases (including restoring a dump into a database pinned to a different
+key fingerprint), the one-time split of the five user tables out of commerce-core, rebuilding the
+search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`,
+retention horizons, and what to do when a refund is owed.
 
 **Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with
-production dependencies only. The runtime stage copies `dist/` **and** the migration `.sql` files, so
-the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*,
-separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the
-app and taking down the version that was serving fine.
+production dependencies only. **One image, two entry points** — the runtime stage copies `dist/` and
+*both* migration journals, so either service starts from it and applies its own schema:
+`db:migrate:prod` and `db:migrate:prod:user` run as *release commands*, separate from app bootstrap
+— a failed migration then stops that service's rollout instead of crashlooping it and taking down
+the version that was serving fine.
 
-**CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first:
-`lint:check` → `typecheck` → `arch:check` → `npm audit --omit=dev --audit-level=high` → `build` →
-promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is
+**CI** (`ci.yml`) — three jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing
+first: `lint:check` → `typecheck` → `arch:check` → `npm audit --omit=dev --audit-level=high` →
+`build` → promtool rule parse + rule tests; a `migrate` job that applies **both** journals to two
+empty databases and re-runs them to prove idempotency; then coverage-gated unit tests +
+Testcontainers e2e. The audit is
 runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed
 process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
 
@@ -556,6 +630,13 @@ Stated plainly, because a reviewer will find them anyway.
   without cancelling the in-flight request, send up to eight confirmations for one order. A lost
   confirmation is worse than nothing and better than that. The fix, if the tolerance changes, is a
   separate `mail_outbox` table — not SMTP back inside the transaction.
+- **Nothing scrubs `orders.buyer_email`.** Checkout snapshots the buyer's address onto the order so
+  the confirmation goes to the address that made the purchase and the Order context needs no read of
+  `users` — but that puts an email address in a table no deletion path touches, and `orders.user_id`
+  has no foreign key to reach it by. There is no delete-account endpoint today, so nothing is
+  currently orphaned. When one lands it must emit `user.deleted`, and Order must scrub the column on
+  that event; the mail handler already fails permanently on a missing order, and an empty address is
+  the same class of failure.
 - **Auth mail is sent synchronously, outside the outbox**, because it carries a raw redeemable token
   and the token tables store only hashes. Putting the token in an outbox payload would write it to
   Postgres in plaintext.
@@ -587,21 +668,24 @@ Stated plainly, because a reviewer will find them anyway.
 
 | Script | Purpose |
 | --- | --- |
-| `start:dev` · `start:prod` · `build` | Watch mode · compiled run (`node --import ./dist/apps/commerce-core/src/instrumentation.js dist/apps/commerce-core/src/main`) · SWC compile of `apps` + `libs` |
+| `start:dev` · `start:prod` · `build` | commerce-core: watch mode · compiled run (`node --import ./dist/apps/commerce-core/src/instrumentation.js dist/apps/commerce-core/src/main`) · SWC compile of `apps` + `libs` |
+| `start:dev:user` · `start:prod:user` | The same two for user-service, reading `.env.user` |
 | `typecheck` · `lint` / `lint:check` · `format` | `tsc --noEmit` · ESLint with / without `--fix` · Prettier |
 | `arch:check` | dependency-cruiser boundary rules |
 | `alerts:check` · `alerts:test` | Prometheus rules parse · and fire (and clear) on the timelines they claim to |
 | `test` · `test:cov` · `test:e2e` | Unit · unit with the coverage floor · integration (needs Docker) |
-| `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | Drizzle migration workflow (`:prod` runs the compiled CLI — the image's release command) |
+| `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | commerce-core's Drizzle workflow (`:prod` runs the compiled CLI — the image's release command) |
+| `db:generate:user` · `db:migrate:user` · `db:migrate:prod:user` · `db:studio:user` | The same journal workflow for user-service. Two configs, two `_journal.json`, two databases — never one command for both |
 | `search:reindex` | Rebuild the Meilisearch index from Postgres |
 | `queue:replay-dlq` | Inspect the dead-letter queue; `-- --apply` to replay (dry run is the default) |
-| `identity:verify` | Scan every user row for an id that does not route to its email's bucket |
+| `identity:verify` | Scan every user row for an id that does not route to its email's bucket. Reads `USER_DATABASE_URL` |
 | `storage:verify` | Reconcile bucket against `media_assets` three ways: orphan objects, `ATTACHED` rows whose object is gone, and `product_images` rows whose asset row is gone |
 | `load:baseline` · `load:register:*` | k6 mixes |
 | `db:seed:perf` · `seed:users:bulk` · `db:metrics:users` | Planner-oriented perf seed · bulk identity seed · DB benchmark capture |
 
-`:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `storage:verify:prod`) run the compiled
-CLI from `dist/`, because `tsx` is a devDependency and is not installed in the image.
+`:prod` twins (`db:migrate:prod`, `db:migrate:prod:user`, `queue:replay-dlq:prod`,
+`storage:verify:prod`) run the compiled CLI from `dist/`, because `tsx` is a devDependency and is not
+installed in the image.
 
 ---
 

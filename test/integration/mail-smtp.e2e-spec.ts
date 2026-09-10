@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 const METRICS_TOKEN = 'e2e-mail-metrics-token';
 const MAIL_FROM = 'no-reply@jcool.test';
@@ -37,7 +37,7 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
 
   beforeAll(async () => {
     mail = await startMailServer();
-    app = await createTestApp({
+    app = await createUserApp({
       SMTP_URL: mail.smtpUrl,
       MAIL_FROM,
       APP_PUBLIC_URL: PUBLIC_URL,
@@ -107,7 +107,7 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
   // The enumeration oracle a throwing mailer would open: these routes answer the same either way,
   // so a dead mail server must not turn the existing-account branch into a 500.
   it('keeps registering, and keeps its answers uniform, when the mail server is unreachable', async () => {
-    const broken = await createTestApp({
+    const broken = await createUserApp({
       SMTP_URL: UNREACHABLE_SMTP_URL,
       MAIL_FROM,
       APP_PUBLIC_URL: PUBLIC_URL,

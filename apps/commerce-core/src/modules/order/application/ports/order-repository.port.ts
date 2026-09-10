@@ -41,6 +41,8 @@ export interface OrderRepositoryPort {
    */
   createCheckout(
     order: Order,
+    /** Snapshot of the buyer's address at purchase time — not a live lookup, and never re-read. */
+    buyerEmail: string,
     idempotencyKey: string | null,
     reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
     appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,

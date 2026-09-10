@@ -39,7 +39,7 @@ export class CheckoutOrderUseCase {
     private readonly cls: ClsService,
   ) {}
 
-  async execute(userId: string): Promise<OrderView> {
+  async execute(userId: string, buyerEmail: string): Promise<OrderView> {
     const { currency, items } = await this.snapshotCart(userId);
     const placed = Order.create(userId, currency, items).place(new Date());
     const lines = items.map((item) => ({ skuId: item.skuId, quantity: item.quantity }));
@@ -55,6 +55,7 @@ export class CheckoutOrderUseCase {
     try {
       result = await this.repo.createCheckout(
         placed,
+        buyerEmail,
         idem.key,
         (tx, orderId) => this.reservation.reserve(tx, orderId, lines),
         (tx, orderId) => this.outbox.append(tx, toPlacedOutboxRecord(this.withId(placed, orderId).toPlacedEvent())),

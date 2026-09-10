@@ -1,11 +1,16 @@
-# Deterministic host ports (5433/6380) avoid clashes with any host-installed Postgres/Redis and
+# Deterministic host ports (5433/5434/6380) avoid clashes with any host-installed Postgres/Redis and
 # prevent port auto-increment / ghost processes.
 #
-# Copy `.env.example` → `.env` first: the `app` service reads it via `env_file`, so a missing `.env`
-# fails `up` fast (clearer than a later env-validation crash inside the container).
+# Two apps, one image, two databases. Redis is shared on purpose: the auth epoch and the denylist are
+# the only state the two services have in common, and both are prefixed keys.
 #
-# To trace/scrape the app container under `--profile observability`, set OTEL_ENABLED=true +
-# METRICS_TOKEN in .env and provision infra/prometheus/secrets/metrics-token to match.
+# Copy `.env.example` → `.env` and `.env.user.example` → `.env.user` first: the app services read
+# them via `env_file`, so a missing file fails `up` fast (clearer than a later env-validation crash
+# inside the container).
+#
+# To trace/scrape either app under `--profile observability`, set OTEL_ENABLED=true in its env file
+# and the SAME METRICS_TOKEN in both — Prometheus scrapes the two jobs with one credentials file
+# (infra/prometheus/secrets/metrics-token), which must match it too.
 
 name: jcool-ecommerce
 
@@ -24,6 +29,28 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # user-service's own database. Separate instance, not a second schema: the point of the split is
+  # that one app cannot join across the boundary even by accident.
+  postgres-user:
+    image: postgres:16-alpine
+    container_name: jcool-postgres-user
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_USER_HOST_PORT:-5434}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_USER_DB:-jcool_user}
+    volumes:
+      - pguserdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_USER_DB:-jcool_user}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -128,11 +155,48 @@ services:
     networks:
       - jcool-net
 
-  app:
+  # One-shot migrators. Kept out of the app containers so a bad migration stops the rollout instead
+  # of crashlooping a version that was serving fine — the same reason db:migrate:prod is a release
+  # command in production.
+  commerce-core-migrate:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: jcool-app
+    container_name: jcool-commerce-core-migrate
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+    command: ['npm', 'run', 'db:migrate:prod']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  user-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jcool-user-migrate
+    env_file:
+      - .env.user
+    environment:
+      NODE_ENV: production
+      USER_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-user:5432/${POSTGRES_USER_DB:-jcool_user}?schema=public
+    command: ['npm', 'run', 'db:migrate:prod:user']
+    depends_on:
+      postgres-user:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  commerce-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jcool-commerce-core
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
@@ -160,6 +224,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      commerce-core-migrate:
+        condition: service_completed_successfully
       # The bucket must exist before the first upload is confirmed, and this container is the only
       # thing that creates it.
       minio-init:
@@ -172,6 +238,48 @@ services:
           "node",
           "-e",
           "require('http').get('http://127.0.0.1:3000/health/live',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+  # Same image, second entry point. No meilisearch, no minio, no mailpit dependency beyond SMTP:
+  # user-service issues tokens and sends verification/reset mail, and nothing else.
+  user:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jcool-user
+    restart: unless-stopped
+    ports:
+      - "${USER_PORT:-3002}:3001"
+    env_file:
+      - .env.user
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      USER_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-user:5432/${POSTGRES_USER_DB:-jcool_user}?schema=public
+      REDIS_URL: redis://redis:6379
+      SMTP_URL: smtp://mailpit:1025
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    command: ['node', '--import', './dist/apps/user/src/instrumentation.js', 'dist/apps/user/src/main.js']
+    depends_on:
+      postgres-user:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      user-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3001/health/live',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
         ]
       interval: 5s
       timeout: 3s
@@ -210,9 +318,9 @@ services:
     networks:
       - jcool-net
 
-  # Scrapes the app's guarded /metrics with a bearer token read from the mounted secret file.
-  # depends_on app is service_started, NOT healthy — Prometheus must be up to observe the app
-  # failing, not blocked by it.
+  # Scrapes both apps' guarded /metrics with a bearer token read from the mounted secret file.
+  # depends_on is service_started, NOT healthy — Prometheus must be up to observe an app failing,
+  # not blocked by it.
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: jcool-prometheus
@@ -229,7 +337,9 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:
-      app:
+      commerce-core:
+        condition: service_started
+      user:
         condition: service_started
     networks:
       - jcool-net
@@ -256,6 +366,7 @@ services:
 
 volumes:
   pgdata:
+  pguserdata:
   redisdata:
   meilidata:
   miniodata:

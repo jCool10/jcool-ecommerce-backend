@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 // Rate limiting is off in the default harness (the shared loopback IP would make every suite
 // flaky), so this suite opts in explicitly. Emails are unique per run so a leftover Redis block
@@ -18,7 +18,7 @@ describe('Auth rate limiting (integration, real Redis)', () => {
 
   beforeAll(async () => {
     process.env.THROTTLE_ENABLED = 'true';
-    app = await createTestApp();
+    app = await createUserApp();
     pool = app.get<Pool>(PG_POOL);
   });
 

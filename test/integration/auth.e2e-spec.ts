@@ -6,18 +6,18 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMAIL_VERIFICATION_TOKEN_REPOSITORY,
   type EmailVerificationTokenRepositoryPort,
-} from '@modules/user/application/ports/email-verification-token-repository.port';
+} from '@user/modules/user/application/ports/email-verification-token-repository.port';
 import {
   PASSWORD_RESET_TOKEN_REPOSITORY,
   type PasswordResetTokenRepositoryPort,
-} from '@modules/user/application/ports/password-reset-token-repository.port';
-import { sha256Hex } from '@modules/user/application/sha256-hex';
-import { CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from '@modules/user/interface/security/auth-cookie.constants';
+} from '@user/modules/user/application/ports/password-reset-token-repository.port';
+import { sha256Hex } from '@user/modules/user/application/sha256-hex';
+import { CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from '@user/modules/user/interface/security/auth-cookie.constants';
 import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { authHeader, cookieValueOf, loginAs, sessionHeaders, setCookieEntry } from '../setup/auth.helper';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createRealTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 describe('Auth (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -26,7 +26,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
   const password = 'Password123!';
 
   beforeAll(async () => {
-    app = await createTestApp();
+    app = await createUserApp();
     pool = app.get<Pool>(PG_POOL);
   });
 
@@ -95,7 +95,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     }
 
     it('verifies the email with a valid token (204) and flips emailVerified', async () => {
-      const { user, accessToken } = await createTestUser(app);
+      const { user, accessToken } = await createRealTestUser(app);
       const token = await issueToken(user.id);
 
       await request(app.getHttpServer()).post('/auth/verify-email').send({ token }).expect(204);
@@ -105,7 +105,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a second use of the same token (single-use → 400)', async () => {
-      const { user } = await createTestUser(app);
+      const { user } = await createRealTestUser(app);
       const token = await issueToken(user.id);
 
       await request(app.getHttpServer()).post('/auth/verify-email').send({ token }).expect(204);
@@ -114,7 +114,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects an expired token with 400', async () => {
-      const { user } = await createTestUser(app);
+      const { user } = await createRealTestUser(app);
       const token = await issueToken(user.id, new Date(Date.now() - 1_000));
 
       const res = await request(app.getHttpServer()).post('/auth/verify-email').send({ token });
@@ -131,8 +131,8 @@ describe('Auth (integration, real Postgres + Redis)', () => {
 
   describe('POST /auth/resend-verification', () => {
     it('returns the same generic 202 for unknown, unverified, and already-verified addresses', async () => {
-      const { user } = await createTestUser(app);
-      const verified = await createTestUser(app, { emailVerified: true });
+      const { user } = await createRealTestUser(app);
+      const verified = await createRealTestUser(app, { emailVerified: true });
 
       const unknown = await request(app.getHttpServer())
         .post('/auth/resend-verification')
@@ -157,7 +157,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
 
   describe('POST /auth/forgot-password', () => {
     it('returns the same generic 202 for both a known and an unknown address', async () => {
-      const { user } = await createTestUser(app);
+      const { user } = await createRealTestUser(app);
 
       const known = await request(app.getHttpServer()).post('/auth/forgot-password').send({ email: user.email });
       const unknown = await request(app.getHttpServer())
@@ -185,7 +185,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     }
 
     it('resets the password (204): new password logs in, old one is rejected', async () => {
-      const { user, password } = await createTestUser(app);
+      const { user, password } = await createRealTestUser(app);
       const token = await issueResetToken(user.id);
 
       await request(app.getHttpServer())
@@ -203,7 +203,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
 
     it('revokes all existing sessions — the pre-reset access token and refresh cookie both stop working', async () => {
-      const { user, password } = await createTestUser(app);
+      const { user, password } = await createRealTestUser(app);
       const session = await loginAs(app, { email: user.email, password });
       const token = await issueResetToken(user.id);
 
@@ -221,7 +221,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a second use of the same token (single-use → 400)', async () => {
-      const { user } = await createTestUser(app);
+      const { user } = await createRealTestUser(app);
       const token = await issueResetToken(user.id);
 
       await request(app.getHttpServer())
@@ -235,7 +235,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects an expired token with 400', async () => {
-      const { user } = await createTestUser(app);
+      const { user } = await createRealTestUser(app);
       const token = await issueResetToken(user.id, new Date(Date.now() - 1_000));
 
       const res = await request(app.getHttpServer())
@@ -252,7 +252,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a too-short new password with 400', async () => {
-      const { user } = await createTestUser(app);
+      const { user } = await createRealTestUser(app);
       const token = await issueResetToken(user.id);
 
       const res = await request(app.getHttpServer()).post('/auth/reset-password').send({ token, password: 'short' });
@@ -434,35 +434,20 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
   });
 
-  describe('Route protection (JwtAuthGuard) and RBAC (RolesGuard)', () => {
+  describe('Route protection (JwtAuthGuard)', () => {
     it('rejects a protected route without a token with 401', async () => {
       const res = await request(app.getHttpServer()).get('/auth/me');
       expect(res.status).toBe(401);
     });
 
     it('allows a protected route with a valid token (200)', async () => {
-      const { user, accessToken } = await createTestUser(app);
+      const { user, accessToken } = await createRealTestUser(app);
       const res = await request(app.getHttpServer()).get('/auth/me').set(authHeader(accessToken));
 
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ id: user.id, email: user.email, role: user.role });
     });
 
-    it('rejects an admin route for an authenticated non-admin with 403', async () => {
-      const { accessToken } = await createTestUser(app);
-      const res = await request(app.getHttpServer())
-        .post('/admin/categories')
-        .set(authHeader(accessToken))
-        .send({ name: 'Blocked', slug: 'blocked' });
-
-      expect(res.status).toBe(403);
-    });
-
-    it('rejects an admin route without a token with 401 (authenticate before authorize)', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/admin/categories')
-        .send({ name: 'Blocked', slug: 'blocked' });
-      expect(res.status).toBe(401);
-    });
+    // RolesGuard is exercised where the admin routes live — see the cross-app suite.
   });
 });

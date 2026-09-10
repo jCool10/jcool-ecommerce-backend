@@ -3,9 +3,14 @@
 Procedures an operator needs that the code cannot express on its own. Everything here is a manual
 action with consequences — nothing in this file runs on a schedule.
 
+Two deployables ship from one image: **commerce-core** and **user-service**. They have separate
+Postgres instances and share one Redis. Which service a procedure runs against is stated wherever it
+matters; where it is not stated, the procedure is the same on both.
+
 Conventions used below:
 
-- **local** — a developer machine with the repo, `npm ci` done, and `.env` pointing at the target.
+- **local** — a developer machine with the repo, `npm ci` done, and `.env` (commerce-core) or
+  `.env.user` (user-service) pointing at the target.
 - **container** — a shell inside the deployed image (`railway ssh --service "$RAILWAY_SERVICE"`),
   where `dist/` exists and `devDependencies` (including `tsx`) do **not**.
 
@@ -13,8 +18,12 @@ Conventions used below:
 
 ## Contents
 
+- [Two databases, one Redis](#two-databases-one-redis)
 - [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key)
+- [Rotate the JWT signing key](#rotate-the-jwt-signing-key)
+- [Sessions depend on Redis](#sessions-depend-on-redis)
 - [Backup and restore](#backup-and-restore)
+- [Split the user service off](#split-the-user-service-off)
 - [Rebuild the search index](#rebuild-the-search-index)
 - [Reconcile the bucket against `media_assets`](#reconcile-the-bucket-against-media_assets)
 - [Outbox relay is not draining](#outbox-relay-is-not-draining)
@@ -23,6 +32,48 @@ Conventions used below:
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Standing exceptions](#standing-exceptions)
+
+---
+
+## Two databases, one Redis
+
+Postgres is split; Redis is not. Neither service can reach the other's database — there is no
+connection string for it and no HTTP call between them — so **everything the two share is a Redis
+key**, and that list is short enough to hold in your head:
+
+| Key | Written by | Read by | If it disappears |
+| --- | ---------- | ------- | ---------------- |
+| `auth:epoch:{sub}` | user-service | **both** | Affected tokens 401 until a refresh republishes the key. Self-healing, see below |
+| `auth:denylist:{jti}` | user-service | **both** | A logged-out access token is honoured again for the rest of its `JWT_ACCESS_TTL` |
+
+Everything else is single-owner and must stay that way:
+
+| Prefix | Owner | Notes |
+| ------ | ----- | ----- |
+| `catalog:v2:*` | commerce-core | Product cache and its generation counter. `catalog:v2:ver` carries no TTL — see `catalog-cache.keys.ts` |
+| `${QUEUE_PREFIX}` (`bull` by default) | commerce-core | BullMQ. user-service boots no queue at all; a `bull*` key appearing after a user-service-only deploy means a messaging module was wired back in |
+| throttler counters (`@nest-lab/throttler-storage-redis`) | one store, disjoint keys | Both apps write here, but a key is hashed from the controller class and handler name as well as the tracker, so no counter is ever shared: a flood on `/auth/login` does not spend `/products`' budget. Short TTLs, nothing to clean up |
+
+### Audit the keyspace
+
+Run after any deploy that moved a module between services, and whenever a key is suspected of
+leaking across the boundary:
+
+```bash
+# container / local — needs redis-cli against REDIS_URL
+redis-cli --scan --count 1000 | sed -E 's/[0-9a-f-]{8,}.*//' | sort | uniq -c | sort -rn
+```
+
+The output is a namespace census, not a key list — the trailing id of every per-entity key is
+stripped. What you are looking for is a prefix that should not be there:
+
+- a `bull*` prefix while only user-service has deployed,
+- an `auth:epoch:` or `auth:denylist:` key when user-service is **not** running (nothing else mints
+  them; a stale one is a leftover, harmless, and expires),
+- any prefix in the single-owner table above appearing in a window when only its non-owner ran.
+
+Two services on one Redis also means `FLUSHALL` is never a per-service action. It drops the catalog
+cache and every live session projection at once.
 
 ---
 
@@ -36,8 +87,12 @@ does not invalidate anything visibly — it mints *new* ids into buckets their e
 to, and nothing reads a bucket until the split. The damage would surface years after the key that
 caused it was lost.
 
+The key belongs to **user-service** and to no other process: it is the only service that mints ids,
+and it is the only one that holds the key. commerce-core stores user ids it was handed and never
+derives one.
+
 The application defends this on every boot, in two layers
-(`apps/commerce-core/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
+(`apps/user/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against
    the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use
@@ -76,38 +131,111 @@ it.
 
 ---
 
+## Rotate the JWT signing key
+
+Unlike `IDENTITY_BUCKET_KEY`, this key is rotatable — nothing persistent was minted under it. Access
+tokens are ES256 and carry a `kid`; verifiers select the key by that `kid`, so a rotation is additive
+and needs no coordinated restart.
+
+There is exactly one issuer — **user-service** — and two verifiers: user-service itself and
+commerce-core. Only the issuer gets `JWT_ES256_PRIVATE_KEY`; commerce-core is configured with the
+public half alone, which is what makes "core cannot mint a token" a fact about its environment
+rather than a convention.
+
+Generate a pair (the private half never leaves the issuing service):
+
+```bash
+openssl ecparam -name prime256v1 -genkey -noout -out jwt-es256.key
+openssl ec -in jwt-es256.key -pubout -out jwt-es256.pub
+base64 < jwt-es256.key   # JWT_ES256_PRIVATE_KEY
+base64 < jwt-es256.pub   # JWT_ES256_PUBLIC_KEY
+```
+
+Order matters, and only the first step is urgent:
+
+1. Add the new public key to **every** verifier under a new `kid`, alongside the current one — that
+   is **both** services (`libs/auth/src/jwt.strategy.ts` builds that map — today it holds one entry,
+   and a rotation is where the second appears). Deploy both. Nothing changes yet: no token carries
+   the new `kid`.
+2. Point user-service at the new private key and `JWT_KEY_ID`. Deploy. New tokens verify against the
+   new entry; outstanding ones still match the old.
+3. Wait one `JWT_ACCESS_TTL` (default 5m), then drop the old public key.
+
+Rotating in the other order — issuing before every verifier knows the `kid` — rejects every token
+minted in the gap. Compromise is the one case worth that: swap the private key immediately, accept
+the 401s, and let clients refresh. With two deployables the gap is a deploy apart rather than a
+restart apart, so step 1 must be confirmed live on commerce-core before step 2 starts.
+
+---
+
+## Sessions depend on Redis
+
+Every authenticated request reads Redis twice: the `auth:denylist:{jti}` key (already true before
+the epoch projection) and `auth:epoch:{sub}`. **Redis being down means requests are rejected, not
+served stale.** That is deliberate — a missing epoch is indistinguishable from a revoked session,
+and guessing costs a logout-all its meaning.
+
+`users.token_epoch` — in **user-service's** Postgres — is the source of truth; `auth:epoch:{sub}` is
+a projection written on every mint and every bump. commerce-core reads the projection and has no
+path to the row behind it, so a projection problem is diagnosed on user-service and *felt* on
+commerce-core. Consequences to know before diagnosing:
+
+- **A lost keyspace is self-healing.** Missing keys 401 the affected tokens, the clients refresh, and
+  refresh republishes. Expect a burst of `auth_epoch_projection_miss_total` and no action needed —
+  the `AuthEpochProjectionMissing` alert deliberately ignores a burst and fires only on a rate that
+  will not settle.
+- **A crash between the Postgres bump and the Redis write leaves a window of one `JWT_ACCESS_TTL`**
+  in which already-minted tokens still pass. It is bounded and it is not fixed: closing it means a
+  distributed transaction across two stores for a five-minute exposure on a revocation the user
+  already believes happened.
+- **`auth_epoch_projection_write_failure_total` climbing without a Redis outage** means the writer is
+  failing on its own — it never throws, by design, so nothing else will tell you. The series is
+  exported by `jcool-user` only; it does not exist on `jcool-api`.
+
+---
+
 ## Backup and restore
 
-The `IDENTITY_BUCKET_KEY` and the database are **one artifact**. Back them up together; a dump
-without its key is a dump you cannot serve.
+Two databases, backed up separately, and only one of them is coupled to a secret: the
+`IDENTITY_BUCKET_KEY` and **user-service's** database are one artifact, and a dump without its key
+is a dump you cannot serve. commerce-core's database has no such pairing.
+
+They are also not consistent with each other at any instant — no distributed snapshot exists — so a
+restore of both to the same wall-clock time can leave commerce-core holding an order for a user id
+user-service's dump does not have. Orders snapshot the buyer's email at checkout precisely so that
+row is still readable; treat the mismatch as expected, not as corruption.
 
 ### Back up
 
 ```bash
-# local — against whatever DATABASE_URL points at
-pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" > backup-$(date +%Y%m%d-%H%M).dump
+# local — one per service
+pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL"      > core-$(date +%Y%m%d-%H%M).dump
+pg_dump --format=custom --no-owner --no-privileges "$USER_DATABASE_URL" > user-$(date +%Y%m%d-%H%M).dump
 ```
 
-Then record, alongside the dump:
+Then record, alongside the **user** dump:
 
-- the `IDENTITY_BUCKET_KEY` fingerprint (`SELECT fingerprint FROM identity_key_pin WHERE id = 1;`),
+- the `IDENTITY_BUCKET_KEY` fingerprint
+  (`psql "$USER_DATABASE_URL" -c 'SELECT fingerprint FROM identity_key_pin WHERE id = 1;'`),
 - which secret-manager entry holds the key itself.
 
 ### Restore
 
 ```bash
-# local — into an EMPTY database
+# local — into an EMPTY database, one per service
 createdb jcool_restore
-pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges backup-….dump
+pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges core-….dump
 ```
 
-Then boot the app against it **with the key that dump was taken under**.
+Then boot the service against it — user-service **with the key that dump was taken under**.
 
 ### Restoring into an environment with a different key
 
+Applies to the **user** dump only — `identity_key_pin` lives in user-service's database.
+
 The dump carries the `identity_key_pin` row, so the restored database still remembers the original
-key's fingerprint. Booting the app against it under a different `IDENTITY_BUCKET_KEY` **refuses to
-start** with the mismatch error above. That is the designed outcome — it is the check working, not
+key's fingerprint. Booting user-service against it under a different `IDENTITY_BUCKET_KEY`
+**refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not
 a restore problem.
 
 Consequences to plan for:
@@ -118,6 +246,103 @@ Consequences to plan for:
   key of `identity_key_pin` during `pg_restore`, not at boot. Restore into an empty database.
 - Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the
   pinned key; changing the pin makes the database lie about its own history.
+
+---
+
+## Split the user service off
+
+A one-time migration of five tables out of commerce-core's database and into user-service's. It is
+run once per environment and is **not** a deploy step — the code ships first and does nothing until
+the rows move.
+
+Two facts make it survivable:
+
+- `orders.user_id` has never had a foreign key to `users`, and orders snapshot the buyer's email at
+  checkout. Nothing in commerce-core needs the rows after the move.
+- Commerce-core migration `0022_drop_user_tables` is what makes the move irreversible, and it is in
+  the journal. **Do not deploy commerce-core past 0021 until step 6 has passed.** Until then the old
+  tables are still sitting there and the whole procedure rolls back by pointing `/auth` at the old
+  origin again.
+
+The refresh cookie is `path=/auth` on whichever origin issued it. Moving `/auth` to a different
+origin invalidates every session that existed before the switch: **everyone logs in once more.**
+Plan the window around that, not around the dump.
+
+### 1. Freeze writes to the five tables
+
+Stop the old `/auth` — take commerce-core's auth routes out of the router, or scale the old service
+to zero. A register or a refresh landing between the dump and the switch is a row that exists in
+neither database afterwards. Reads elsewhere are unaffected; carts and checkout do not touch these
+tables.
+
+### 2. Dump the five tables
+
+```bash
+# local — from commerce-core's database
+pg_dump --format=custom --no-owner --no-privileges \
+  -t users -t refresh_tokens -t email_verification_tokens -t password_reset_tokens \
+  -t identity_key_pin \
+  "$DATABASE_URL" > user-tables-$(date +%Y%m%d-%H%M).dump
+```
+
+`identity_key_pin` is not optional. It is the fingerprint of the `IDENTITY_BUCKET_KEY` every
+existing id was minted under; leaving it behind lets user-service pin a *different* key on its first
+boot and record it as the reference every later boot is held to.
+
+### 3. Create the target schema, then restore into it
+
+```bash
+npm run db:migrate:prod:user                       # baseline: the five tables, empty
+pg_restore --dbname="$USER_DATABASE_URL" --no-owner --no-privileges \
+  --data-only --disable-triggers user-tables-….dump
+```
+
+`--data-only` because the journal already created the tables — restoring the schema too would fail
+on objects that exist. If it fails on the `role` enum, the baseline did not run; do not create the
+type by hand.
+
+### 4. Verify row counts match
+
+```bash
+for t in users refresh_tokens email_verification_tokens password_reset_tokens identity_key_pin; do
+  printf '%-28s %8s %8s\n' "$t" \
+    "$(psql -tAc "select count(*) from $t" "$DATABASE_URL")" \
+    "$(psql -tAc "select count(*) from $t" "$USER_DATABASE_URL")"
+done
+```
+
+Every row must be equal. A short `refresh_tokens` is a set of sessions that will 401 on their next
+refresh; a short `users` is accounts that no longer exist.
+
+### 5. Verify the ids still route
+
+```bash
+# local — with USER_DATABASE_URL and the ORIGINAL IDENTITY_BUCKET_KEY
+npm run identity:verify
+```
+
+This re-derives each user's routing bucket from their email and compares it against the bucket
+embedded in their id. A mismatch here means the key in this environment is not the key the ids were
+minted under — **stop**, and read
+[Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key). Do not continue and do not
+"fix" `identity_key_pin`.
+
+### 6. Boot user-service and switch the route
+
+Start user-service against the restored database — the key pin check runs on boot and is a second,
+independent confirmation of step 5 — then point `/auth/*` at it and lift the freeze.
+
+Watch for one `JWT_ACCESS_TTL`:
+
+- `auth_epoch_projection_miss_total` — a burst is expected and self-healing; a rate that will not
+  settle is not,
+- 401s on commerce-core routes, which would mean the two services disagree about `JWT_KEY_ID` or the
+  public key.
+
+### 7. Only then, drop the old tables
+
+Deploy commerce-core with `0022_drop_user_tables`. From here the move is one-way: reverting means
+restoring commerce-core's database from a backup taken before this step.
 
 ---
 
@@ -302,24 +527,27 @@ check is not optional, so a replay cannot be performed while the database is dow
 
 ## Retention sweeps
 
-One timer (`RETENTION_INTERVAL_MS`, hourly by default) drives eight independent sweeps, each
-reclaiming one table. Failures, timeouts and the "still running" guard are **per sweep**: one broken
-table cannot cost the others their tick.
+Eight sweeps, each reclaiming one table, split across the two services by which database holds the
+table: **five on commerce-core, three on user-service**. Each service runs its own timer
+(`RETENTION_INTERVAL_MS`, hourly by default) over its own sweeps, so the grace variables below are
+read from whichever `.env` owns that sweep and setting one on the wrong service does nothing at all.
+Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the
+others their tick.
 
 Every window is sized by **what still has to be able to retry against the row**, never by disk.
 Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say
 only during an incident.
 
-| Sweep | Table | Collected when | Never collected | Env var |
-| ----- | ----- | -------------- | --------------- | ------- |
-| `messaging:outbox` | `outbox` | `published_at` older than the window | **Any row with `published_at IS NULL`, at any age** — that is an unsent event, not a stale record | `RETENTION_OUTBOX_DAYS` (30) |
-| `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
-| `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
-| `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
-| `auth-tokens:email-verification` | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
-| `auth-tokens:password-reset` | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
-| `auth-tokens:refresh` | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
-| `media:assets` | `media_assets` **and the objects behind them** | `expires_at` past, or a `SWEEPING` claim older than `RETENTION_SWEEP_TIMEOUT_MS` | **Anything `ATTACHED`** — those rows have no `expires_at` at all, so no query the sweep can write will match them | `MEDIA_UPLOAD_TTL_SEC` (3600) / `MEDIA_READY_TTL_SEC` (86400) |
+| Sweep | Service | Table | Collected when | Never collected | Env var |
+| ----- | ------- | ----- | -------------- | --------------- | ------- |
+| `messaging:outbox` | core | `outbox` | `published_at` older than the window | **Any row with `published_at IS NULL`, at any age** — that is an unsent event, not a stale record | `RETENTION_OUTBOX_DAYS` (30) |
+| `messaging:inbox` | core | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
+| `order:idempotency-keys` | core | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
+| `payment:webhook-events` | core | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
+| `auth-tokens:email-verification` | **user** | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:password-reset` | **user** | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:refresh` | **user** | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
+| `media:assets` | core | `media_assets` **and the objects behind them** | `expires_at` past, or a `SWEEPING` claim older than `RETENTION_SWEEP_TIMEOUT_MS` | **Anything `ATTACHED`** — those rows have no `expires_at` at all, so no query the sweep can write will match them | `MEDIA_UPLOAD_TTL_SEC` (3600) / `MEDIA_READY_TTL_SEC` (86400) |
 
 `media:assets` is the only sweep that deletes something outside Postgres, and the only one whose work
 is not undoable by restoring a backup. It deletes **the object first, then the row**: a crash between
@@ -371,6 +599,10 @@ and the 30-day floor above would be fiction for every token that had ever been r
 Every log line from a sweep carries a `requestId` and a `job` of `retention:<sweep name>` — one
 correlation id per sweep, not per tick, because a retention question is about one table at a time.
 
+The `retention_*` series come from two scrape targets: the five core sweeps under `job="jcool-api"`,
+the three `auth-tokens:*` sweeps under `job="jcool-user"`. A query without a `job` matcher spans
+both, which is usually what you want; a dashboard that pins the wrong job silently shows nothing.
+
 ### Query plans
 
 Measured 2026-09-07 on Postgres 16, 200k rows per table, seeded to resemble a table that has been
@@ -391,7 +623,7 @@ case where `LIMIT` cannot help: the scan has nothing to find early.
 The three disjunctive predicates need **both** arms indexed or neither index is used. Measured with
 only one arm indexed, `email_verification_tokens` fell back to a parallel seq scan at 22 ms and
 `password_reset_tokens` to 15 ms — costs that grow with exactly the thing the sweep exists to bound.
-That is what migration 0018 is for; do not drop half a pair.
+Both arms of each pair are in user-service's baseline migration; do not drop half a pair.
 
 An index also has to match its arm's **whole** predicate, not just its column. `idx_refresh_tokens_expires`
 is partial on `revoked_at IS NULL` because that is the arm it serves; as a plain index on `expires_at`
@@ -469,27 +701,34 @@ are the ordinary case of a buyer who simply never paid, and their sessions read 
 
 ## Apply migrations out of band
 
-Railway runs `npm run db:migrate:prod` as `preDeployCommand`, so the normal path needs no operator.
-Run it by hand only when a deploy failed *after* the image built but before migrations applied, or
-when restoring.
+Two journals, two commands, two databases — never one command for both. Each service runs its own as
+`preDeployCommand`, so the normal path needs no operator. Run one by hand only when a deploy failed
+*after* the image built but before migrations applied, or when restoring.
 
 ```bash
 # container
-npm run db:migrate:prod
+npm run db:migrate:prod        # commerce-core → DATABASE_URL,      apps/commerce-core/migrations
+npm run db:migrate:prod:user   # user-service  → USER_DATABASE_URL, apps/user/migrations
 ```
 
 ```bash
-# local — drizzle-kit, reads drizzle.config.ts
+# local — drizzle-kit, reads the per-app config
 npm run db:migrate
+npm run db:migrate:user
 ```
 
-The compiled CLI fails loudly if its migrations directory resolves to a readable but wrong path:
-a directory with zero `.sql` files would otherwise make drizzle report "nothing pending" and exit 0
-— a green deploy onto an empty schema. In the image `MIGRATIONS_DIR=/app/migrations`, absolute
-because the image ships no `src/` tree.
+The compiled CLI takes the target as its argv (`migrate-cli.js commerce-core|user`) and picks the
+folder and connection variable from it, so there is no environment in which running the wrong one
+silently applies the wrong journal: an unknown target, a missing URL, or a folder with zero `.sql`
+files each exits 1 with a named message. The zero-file check is the one that matters — drizzle would
+otherwise report "nothing pending" and exit 0, a green deploy onto an empty schema. In the image the
+paths are absolute (`MIGRATIONS_DIR=/app/migrations/commerce-core`,
+`USER_MIGRATIONS_DIR=/app/migrations/user`) because it ships no `src/` tree.
 
-**Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two
-concurrent runs race on `__drizzle_migrations`. This is why there is a single deployable service.
+**Run exactly one migration process per database at a time.** `runMigrations()` takes no advisory
+lock, so two concurrent runs race on `__drizzle_migrations`. The two services never race with each
+other — separate databases, separate journals — but two instances of the *same* service do, which is
+why each `preDeployCommand` must be a single-replica step.
 
 ---
 

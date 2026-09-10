@@ -8,8 +8,8 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
+import { CSRF_HEADER } from '@shared/auth';
 import { AppModule } from './app.module';
-import { CSRF_HEADER } from '@modules/user/interface/security';
 
 /**
  * Read off disk, not `import pkg from '../package.json'`: the SWC builder has `sourceRoot: "src"`,

@@ -47,8 +47,8 @@ async function reportKeyPin(pool: Pool, fingerprint: string): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL is required to verify identity buckets');
+  const connectionString = process.env.USER_DATABASE_URL;
+  if (!connectionString) throw new Error('USER_DATABASE_URL is required to verify identity buckets');
   const bucketKey = process.env.IDENTITY_BUCKET_KEY;
   if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to verify identity buckets');
 

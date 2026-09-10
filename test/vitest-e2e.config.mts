@@ -1,7 +1,16 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 import { workspaceAliases } from '../vitest.aliases.mjs';
+
+// One throwaway ES256 pair per run, minted here rather than committed: env validation runs at
+// import time, so the keys must exist before any spec file loads. Mirrored in test-app.factory.ts.
+const jwtKeys = generateKeyPairSync('ec', {
+  namedCurve: 'prime256v1',
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+});
 
 // e2e config (HTTP via supertest + Testcontainers). Kept separate from the unit
 // config so `test` stays fast and hermetic.
@@ -16,8 +25,11 @@ export default defineConfig({
       NODE_ENV: 'test',
       LOG_LEVEL: 'warn',
       DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
+      // The user app's env validation also runs at import time, and it requires its own URL.
+      USER_DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
       REDIS_URL: 'redis://127.0.0.1:6379',
-      JWT_ACCESS_SECRET: '2b557f0c-ac0e-469d-bd24-9a380d07e3bc', // ≥32 chars for the schema
+      JWT_ES256_PRIVATE_KEY: jwtKeys.privateKey,
+      JWT_ES256_PUBLIC_KEY: jwtKeys.publicKey,
       // Deterministic so every app in a run buckets identically; mirrored in test-app.factory.ts.
       IDENTITY_BUCKET_KEY: 'e2e-identity-bucket-key-not-a-real-secret-000',
     },

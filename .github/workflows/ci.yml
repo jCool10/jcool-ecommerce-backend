@@ -45,6 +45,48 @@ jobs:
       - run: npm run alerts:check # alert rules parse
       - run: npm run alerts:test # and fire (and clear) on the timelines they claim to
 
+  # The e2e harness migrates both journals programmatically; this proves the two RELEASE commands do
+  # too, each against its own empty database and neither able to reach the other's. A journal that
+  # only ever runs inside the harness is a journal nobody has deployed.
+  migrate:
+    name: Migrations · both journals
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: commerce_core
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres-user:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: user_service
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/commerce_core
+      USER_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5433/user_service
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run db:migrate:prod
+      - run: npm run db:migrate:prod:user
+      # Deploys re-run these on every release, so a second pass has to be a no-op rather than an error.
+      - name: Re-run both — migrations are idempotent
+        run: npm run db:migrate:prod && npm run db:migrate:prod:user
+
   test:
     name: Test (unit + integration · Testcontainers)
     runs-on: ubuntu-latest # GitHub-hosted runner ships a Docker daemon → Testcontainers works

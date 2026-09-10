@@ -43,7 +43,14 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
   async function seedPendingOrder(): Promise<string> {
     const [row] = await db
       .insert(schema.orders)
-      .values({ userId: USER_ID, status: 'PENDING', currency: 'VND', totalAmount: 100_000, placedAt: new Date() })
+      .values({
+        userId: USER_ID,
+        buyerEmail: 'buyer@test.local',
+        status: 'PENDING',
+        currency: 'VND',
+        totalAmount: 100_000,
+        placedAt: new Date(),
+      })
       .returning({ id: schema.orders.id });
     return row.id;
   }

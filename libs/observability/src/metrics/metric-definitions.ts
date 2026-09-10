@@ -14,6 +14,11 @@ export const ORDER_VALUE_MINOR = 'order_value_minor';
 export const CART_OPERATIONS_TOTAL = 'cart_operations_total';
 export const CATALOG_CACHE_OPERATIONS_TOTAL = 'catalog_cache_operations_total';
 export const AUTH_EVENTS_TOTAL = 'auth_events_total';
+// The two halves of the Redis epoch projection. Postgres stays the source of truth, so a write
+// failure is a delay bounded by the access-token TTL and a miss is a forced client refresh — the
+// rates are what say whether either has stopped being occasional.
+export const AUTH_EPOCH_PROJECTION_MISS_TOTAL = 'auth_epoch_projection_miss_total';
+export const AUTH_EPOCH_PROJECTION_WRITE_FAILURE_TOTAL = 'auth_epoch_projection_write_failure_total';
 
 export const CACHE_REBUILD_DURATION_SECONDS = 'cache_rebuild_duration_seconds';
 // A gauge, not a counter: "open right now" is what pages someone; how often it got there is the
@@ -113,6 +118,14 @@ export const METRIC_PROVIDERS: Provider[] = [
     name: AUTH_EVENTS_TOTAL,
     help: 'Auth audit events, by event and outcome.',
     labelNames: ['event', 'outcome'],
+  }),
+  makeCounterProvider({
+    name: AUTH_EPOCH_PROJECTION_MISS_TOTAL,
+    help: 'Authenticated requests rejected because the Redis session-epoch projection held no key for the user. A deleted user counts here too, so the signal is a sustained rate, not a single increment.',
+  }),
+  makeCounterProvider({
+    name: AUTH_EPOCH_PROJECTION_WRITE_FAILURE_TOTAL,
+    help: 'Session-epoch writes to Redis that failed after Postgres had already been updated. Each one delays a revocation by up to one access-token TTL.',
   }),
   makeCounterProvider({
     name: MESSAGING_PUBLISH_TOTAL,

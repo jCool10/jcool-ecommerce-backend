@@ -8,7 +8,7 @@ import { BUCKET_COUNT, IdentityService, bucketOf } from '@shared/identity';
 import { normalizeEmail } from '@shared/kernel/normalize-email';
 import { E2E_IDENTITY_BUCKET_KEY, bucketForTestEmail } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 // Full locally, reduced on CI. Both keep the expected count per bucket above the handful below which
 // "one bucket is hot" is indistinguishable from noise. The verdict on the hash itself belongs to the
@@ -46,10 +46,10 @@ describe('Identity colocation at scale (integration)', () => {
   }
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: inject('DATABASE_URL') });
+    pool = new Pool({ connectionString: inject('USER_DATABASE_URL') });
     // Before the app boots, so it pins its key against a database it is the first to touch.
     await resetDatabase(pool);
-    app = await createTestApp();
+    app = await createUserApp();
 
     const identity = app.get(IdentityService);
     for (let from = 0; from < USERS; from += INSERT_BATCH) {
@@ -126,7 +126,7 @@ describe('Identity colocation at scale (integration)', () => {
           timeout: SCAN_TIMEOUT_MS,
           env: {
             ...process.env,
-            DATABASE_URL: inject('DATABASE_URL'),
+            USER_DATABASE_URL: inject('USER_DATABASE_URL'),
             IDENTITY_BUCKET_KEY: E2E_IDENTITY_BUCKET_KEY,
           },
         },

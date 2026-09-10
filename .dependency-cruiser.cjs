@@ -88,6 +88,14 @@ module.exports = {
       to: { path: '^apps/[^/]+/', pathNot: '^apps/$1/' },
     },
     {
+      name: 'order-does-not-reach-user',
+      severity: 'error',
+      comment:
+        'Order snapshots the buyer address at checkout and reads it back off its own row, so it needs nothing from the user context. Stricter than no-cross-context-internals, which would still allow an application/public edge; this pair has to stay at zero for the two to be separable at all. Superseded by apps-do-not-import-other-apps once user is its own deployable.',
+      from: { path: '^apps/[^/]+/src/modules/order/' },
+      to: { path: '^apps/[^/]+/src/modules/user/' },
+    },
+    {
       name: 'no-orphans',
       severity: 'warn',
       comment: 'Dead file — nothing imports it and it imports nothing (excludes entry points, specs, barrels, published facades).',
@@ -100,6 +108,7 @@ module.exports = {
           '(^|/)instrumentation\\.ts$', // OTel preload — loaded via `node --import`, never imported
 
           '(^|/)(migrate|seed)\\.ts$', // CLI entry scripts run by drizzle-kit / node, not imported
+          '(^|/)drizzle\\.config\\.ts$', // read by the drizzle-kit CLI, one per app
           '\\.module\\.ts$',
           '(^|/)index\\.ts$',
           '^apps/[^/]+/src/modules/[^/]+/application/public/', // reserved published language; may be unconsumed until a cross-context caller lands

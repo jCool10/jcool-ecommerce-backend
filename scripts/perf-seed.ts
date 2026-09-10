@@ -19,7 +19,7 @@ import { categories, prices, productVariants, products } from '@modules/catalog/
 import { CATALOG_CACHE_VERSION_KEY } from '@modules/catalog/infrastructure/catalog-cache.keys';
 import { cartItems, carts } from '@modules/cart/infrastructure/schema/cart.schema';
 import { stockLevels } from '@modules/inventory/infrastructure/schema/inventory.schema';
-import { users } from '@modules/user/infrastructure/schema/user.schema';
+import { users } from '@user/modules/user/infrastructure/schema/user.schema';
 import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '@shared/identity';
 import { normalizeEmail } from '@shared/kernel/normalize-email';
 
@@ -180,14 +180,16 @@ async function seedPricesAndStock(db: Db, variantIds: readonly string[]): Promis
   }
 }
 
-// The cart is deliberately fat, so `GET /cart` shows the per-line SKU fan-out.
-async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: string; lines: number }> {
-  let [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
+// The cart is deliberately fat, so `GET /cart` shows the per-line SKU fan-out. `userDb` is a second
+// connection: the account lives in the user service's database, the cart in commerce-core's, and no
+// foreign key ever spanned the two.
+async function seedPerfUserCart(db: Db, userDb: Db, cartLines: number): Promise<{ userId: string; lines: number }> {
+  let [user] = await userDb.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
   if (!user) {
     // Hashed only when the account is actually being created — argon2id is deliberately slow, and
     // a re-run must not burn that cost to produce a digest ON CONFLICT would discard anyway.
     const passwordHash = await argon2.hash(perfUserPassword(), { type: argon2.argon2id });
-    await db
+    await userDb
       .insert(users)
       .values({
         id: identity().mintUserId(PERF_USER_EMAIL),
@@ -196,7 +198,7 @@ async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: st
         emailVerifiedAt: new Date(),
       })
       .onConflictDoNothing();
-    [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
+    [user] = await userDb.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
   }
   if (!user) throw new Error(`Seed precondition failed: user ${PERF_USER_EMAIL} not found`);
 
@@ -238,18 +240,19 @@ async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: st
   return { userId: user.id, lines };
 }
 
-async function clean(db: Db): Promise<void> {
+async function clean(db: Db, userDb: Db): Promise<void> {
   const perfVariants = await db
     .select({ id: productVariants.id })
     .from(productVariants)
     .where(like(productVariants.sku, `${SKU_PREFIX}%`));
   const variantIds = perfVariants.map((v) => v.id);
 
-  const [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
+  const [user] = await userDb.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
   if (user) {
-    // cart_items cascade from carts; the user row has no FK to either (cross-context boundary).
+    // Two databases, in this order: cart_items cascade from carts, and the user row has no FK to
+    // either. A crash between them leaves an orphan cart, which the next run tops up over.
     await db.delete(carts).where(eq(carts.userId, user.id));
-    await db.delete(users).where(eq(users.id, user.id));
+    await userDb.delete(users).where(eq(users.id, user.id));
   }
 
   // Children before parents: prices and stock levels reference the variants being removed, and
@@ -270,6 +273,9 @@ async function clean(db: Db): Promise<void> {
 async function main(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL is required to run the perf seed');
+  // The load account lives in the user service's database now, so the seed spans two.
+  const userConnectionString = process.env.USER_DATABASE_URL;
+  if (!userConnectionString) throw new Error('USER_DATABASE_URL is required to run the perf seed');
   // Coarse guard only — it reads the runtime flag, not the target, so a DATABASE_URL pointed
   // somewhere real still passes. Point this at a throwaway database, never a shared one.
   if (process.env.NODE_ENV === 'production') {
@@ -278,10 +284,12 @@ async function main(): Promise<void> {
 
   const pool = new Pool({ connectionString, max: 4 });
   const db = drizzle(pool);
+  const userPool = new Pool({ connectionString: userConnectionString, max: 2 });
+  const userDb = drizzle(userPool);
 
   try {
     if (process.argv.includes('--clean')) {
-      await clean(db);
+      await clean(db, userDb);
       return;
     }
 
@@ -299,7 +307,7 @@ async function main(): Promise<void> {
     console.log(`  variants:   ${variantIds.length}`);
     await seedPricesAndStock(db, variantIds);
     console.log(`  prices + stock levels: ${variantIds.length} each`);
-    const cart = await seedPerfUserCart(db, cartLines);
+    const cart = await seedPerfUserCart(db, userDb, cartLines);
     console.log(`  cart:       ${cart.lines} lines for ${PERF_USER_EMAIL} (user ${cart.userId})`);
 
     // Autovacuum has not run yet, so without this the planner still describes the pre-seed table
@@ -317,7 +325,7 @@ async function main(): Promise<void> {
         `Remove the synthetic rows with: npm run db:seed:perf -- --clean`,
     );
   } finally {
-    await pool.end();
+    await Promise.allSettled([pool.end(), userPool.end()]);
   }
 }
 

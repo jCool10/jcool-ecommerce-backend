@@ -6,10 +6,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { IdentityService, bucketOf } from '@shared/identity';
 import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { loginAs, sessionHeaders } from '../setup/auth.helper';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createRealTestUser } from '../setup/fixtures/user.fixture';
 import { bucketForTestEmail } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 // Each mint site is reachable only through the request that needs it, so this drives all five over
 // real HTTP and reads the rows back out of Postgres — the two properties that matter (the id is a
@@ -26,7 +26,7 @@ describe('Identity routing across the auth paths (integration)', () => {
   const versionNibble = (id: string) => id[14];
 
   beforeAll(async () => {
-    app = await createTestApp();
+    app = await createUserApp();
     pool = app.get<Pool>(PG_POOL);
   });
 
@@ -61,7 +61,7 @@ describe('Identity routing across the auth paths (integration)', () => {
   });
 
   it("puts the refresh token a login issues in its owner's bucket", async () => {
-    const { user } = await createTestUser(app);
+    const { user } = await createRealTestUser(app);
 
     await loginAs(app, { email: user.email, password });
 
@@ -74,7 +74,7 @@ describe('Identity routing across the auth paths (integration)', () => {
   // The successor is minted inside the rotation transaction from a user id read off the locked row —
   // the one mint site with no caller to notice if it regressed to a default.
   it('puts the successor a refresh rotation mints in the same bucket', async () => {
-    const { user } = await createTestUser(app);
+    const { user } = await createRealTestUser(app);
     const session = await loginAs(app, { email: user.email, password });
 
     await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session)).expect(200);
@@ -96,7 +96,7 @@ describe('Identity routing across the auth paths (integration)', () => {
   });
 
   it("puts an email-verification token in its owner's bucket", async () => {
-    const { user } = await createTestUser(app);
+    const { user } = await createRealTestUser(app);
 
     await request(app.getHttpServer()).post('/auth/resend-verification').send({ email: user.email }).expect(202);
 
@@ -107,7 +107,7 @@ describe('Identity routing across the auth paths (integration)', () => {
   });
 
   it("puts a password-reset token in its owner's bucket", async () => {
-    const { user } = await createTestUser(app);
+    const { user } = await createRealTestUser(app);
 
     await request(app.getHttpServer()).post('/auth/forgot-password').send({ email: user.email }).expect(202);
 

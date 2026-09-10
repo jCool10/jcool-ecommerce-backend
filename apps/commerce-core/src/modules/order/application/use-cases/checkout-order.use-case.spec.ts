@@ -20,9 +20,11 @@ const OTHER_SKU = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const SCOPE = 'user:u1';
 const KEY = '9f8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const TX = {} as DrizzleTx;
+const BUYER_EMAIL = 'u1@example.com';
 
 type Checkout = (
   order: Order,
+  buyerEmail: string,
   key: string | null,
   reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
   appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
@@ -91,7 +93,7 @@ describe('CheckoutOrderUseCase', () => {
   it('rejects an empty cart with 400 and never opens the checkout', async () => {
     const { useCase, spies } = build({ lines: [] });
 
-    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(useCase.execute('u1', BUYER_EMAIL)).rejects.toBeInstanceOf(BadRequestException);
     expect(spies.createCheckout).not.toHaveBeenCalled();
   });
 
@@ -107,7 +109,7 @@ describe('CheckoutOrderUseCase', () => {
       checkout: () => Promise.resolve({ orderId: 'order-1', created: true }),
     });
 
-    const view = await useCase.execute('u1');
+    const view = await useCase.execute('u1', BUYER_EMAIL);
 
     expect(view.totalAmountMinor).toBe(100_000 * 1 + 50_000 * 2);
     expect(view.items).toEqual([
@@ -125,27 +127,27 @@ describe('CheckoutOrderUseCase', () => {
       views: [skuView(), skuView({ skuId: OTHER_SKU, currency: 'USD' })],
     });
 
-    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(useCase.execute('u1', BUYER_EMAIL)).rejects.toBeInstanceOf(BadRequestException);
     expect(spies.createCheckout).not.toHaveBeenCalled();
   });
 
   it('rejects an unpriced SKU with 400', async () => {
     const { useCase, spies } = build({ view: skuView({ unitPriceMinor: null }) });
 
-    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(useCase.execute('u1', BUYER_EMAIL)).rejects.toBeInstanceOf(BadRequestException);
     expect(spies.createCheckout).not.toHaveBeenCalled();
   });
 
   it('rejects an archived SKU with 400', async () => {
     const { useCase, spies } = build({ view: skuView({ isActive: false }) });
 
-    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(useCase.execute('u1', BUYER_EMAIL)).rejects.toBeInstanceOf(BadRequestException);
     expect(spies.createCheckout).not.toHaveBeenCalled();
   });
 
   it('checks out: reserves stock, appends the event and completes the key inside the tx, returns the PENDING view, records metrics', async () => {
     const { useCase, spies } = build({
-      checkout: async (_order, _key, reserve, appendEvent, complete) => {
+      checkout: async (_order, _buyerEmail, _key, reserve, appendEvent, complete) => {
         await reserve(TX, 'order-1');
         await appendEvent(TX, 'order-1');
         await complete(TX, 'order-1');
@@ -153,7 +155,7 @@ describe('CheckoutOrderUseCase', () => {
       },
     });
 
-    const view = await useCase.execute('u1');
+    const view = await useCase.execute('u1', BUYER_EMAIL);
 
     expect(view).toMatchObject({
       id: 'order-1',
@@ -162,6 +164,7 @@ describe('CheckoutOrderUseCase', () => {
       totalAmountMinor: 200_000,
     });
     expect(view.placedAt).toEqual(expect.any(String));
+    expect(spies.createCheckout.mock.calls[0][1]).toBe(BUYER_EMAIL);
     expect(spies.reserve).toHaveBeenCalledWith(TX, 'order-1', [{ skuId: SKU, quantity: 2 }]);
     const [tx, record] = spies.append.mock.calls[0] as [DrizzleTx, OutboxRecord];
     expect(tx).toBe(TX);
@@ -173,6 +176,8 @@ describe('CheckoutOrderUseCase', () => {
       currency: 'VND',
     });
     expect(typeof record.payload.placedAt).toBe('string');
+    // The event stays identity-free; the address lives on the order row.
+    expect(record.payload).not.toHaveProperty('email');
     expect(spies.markCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ scope: SCOPE, key: KEY, responseStatus: 201, orderId: 'order-1', responseBody: view }),
       TX,
@@ -185,7 +190,7 @@ describe('CheckoutOrderUseCase', () => {
   it('fails loud (500) when the idempotency context is missing, never opening the checkout', async () => {
     const { useCase, spies } = build({ noContext: true });
 
-    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(InternalServerErrorException);
+    await expect(useCase.execute('u1', BUYER_EMAIL)).rejects.toBeInstanceOf(InternalServerErrorException);
     expect(spies.createCheckout).not.toHaveBeenCalled();
   });
 
@@ -194,7 +199,7 @@ describe('CheckoutOrderUseCase', () => {
       checkout: () => Promise.reject(new StockReservationError('Insufficient stock', 'OUT_OF_STOCK')),
     });
 
-    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(ConflictException);
+    await expect(useCase.execute('u1', BUYER_EMAIL)).rejects.toBeInstanceOf(ConflictException);
     expect(spies.recordOrderCreated).not.toHaveBeenCalled();
     expect(spies.recordSagaStep).toHaveBeenCalledExactlyOnceWith('reserve', 'failed');
   });
@@ -214,7 +219,7 @@ describe('CheckoutOrderUseCase', () => {
     });
     spies.findForUser.mockResolvedValue(existing);
 
-    const view = await useCase.execute('u1');
+    const view = await useCase.execute('u1', BUYER_EMAIL);
 
     expect(view).toMatchObject({ id: 'order-existing', status: OrderStatus.PENDING });
     // The existing order already reserved and emitted when it was first placed.

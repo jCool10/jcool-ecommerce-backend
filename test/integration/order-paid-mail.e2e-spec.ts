@@ -1,31 +1,35 @@
 import type { INestApplication } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import * as schema from '@commerce-core/database/schema';
+import * as userSchema from '@user/database/schema';
+import { MAIL_TRANSPORT, SmtpMailTransport } from '@shared/mail';
 import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '@shared/messaging/queue/domain-event.processor';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createRealTestUser } from '../setup/fixtures/user.fixture';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createTestApp, createUserApp } from '../setup/test-app.factory';
 
 const METRICS_TOKEN = 'e2e-order-mail-metrics-token';
 const MAIL_FROM = 'no-reply@jcool.test';
 const MESSAGE_ID = '0198f0d8-4444-7000-8000-000000000001';
-const ORDER_ID = '0198f0d8-5555-7000-8000-000000000001';
+const ABSENT_ORDER_ID = '0198f0d8-6666-8000-8000-000000000001';
+const USER_ID = '0198f0d8-7777-8000-8000-000000000001';
 // Above the shipped 10s, below the 25s ceiling: on a cold runner the first connection through a
 // freshly started container can outlast it, and abandoning that send would fail the delivery this
 // suite is about.
 const MAIL_TIMEOUT_MS = '20000';
 
-const paidJob = (userId: string, overrides: Partial<DomainEventJob> = {}): DomainEventJob => ({
+const paidJob = (orderId: string, overrides: Partial<DomainEventJob> = {}): DomainEventJob => ({
   outboxId: MESSAGE_ID,
   aggregateType: 'Order',
-  aggregateId: ORDER_ID,
+  aggregateId: orderId,
   eventType: 'order.paid',
-  payload: { orderId: ORDER_ID, userId, totalAmountMinor: 150_000, currency: 'VND' },
+  payload: { orderId, userId: USER_ID, totalAmountMinor: 150_000, currency: 'VND' },
   occurredAt: new Date().toISOString(),
   traceparent: null,
   ...overrides,
@@ -45,6 +49,22 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
 
   const inboxRows = () => db.select().from(schema.inbox);
 
+  // No user row anywhere in this suite: the handler resolves the recipient from the order alone.
+  async function seedPaidOrder(buyerEmail: string, userId = USER_ID): Promise<string> {
+    const [row] = await db
+      .insert(schema.orders)
+      .values({
+        userId,
+        buyerEmail,
+        status: 'PAID',
+        currency: 'VND',
+        totalAmount: 150_000,
+        placedAt: new Date(),
+      })
+      .returning({ id: schema.orders.id });
+    return row.id;
+  }
+
   beforeAll(async () => {
     mail = await startMailServer();
     app = await createTestApp({ SMTP_URL: mail.smtpUrl, MAIL_FROM, METRICS_TOKEN, MAIL_TIMEOUT_MS });
@@ -63,23 +83,57 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
     await mail.clear();
   });
 
-  it('confirms a paid order to the address the event only names by id', async () => {
-    const { user } = await createTestUser(app);
+  // commerce-core still sends this mail, so it still needs MAIL_*/SMTP_URL. Were they to become
+  // user-service's alone, this app would fall back to the log sink: every confirmation would stop
+  // arriving and no boot, metric or log line would say so.
+  it('resolves a real SMTP transport rather than the log sink', () => {
+    expect(app.get(MAIL_TRANSPORT)).toBeInstanceOf(SmtpMailTransport);
+  });
 
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
+  it('confirms a paid order to the address the order itself snapshotted', async () => {
+    const orderId = await seedPaidOrder('buyer@jcool.test');
 
-    const [delivered] = await mail.waitForMail(user.email);
+    await expect(processor.process(paidJob(orderId))).resolves.toBe('processed');
+
+    const [delivered] = await mail.waitForMail('buyer@jcool.test');
     expect(delivered.Subject).toBe('Your order is confirmed');
-    expect(await mail.body(delivered.ID)).toContain(ORDER_ID);
+    expect(await mail.body(delivered.ID)).toContain(orderId);
+  });
+
+  // The snapshot is the point: an order confirms to the address that made the purchase, and an
+  // account change in user-service — a different app on a different database — cannot redirect a
+  // confirmation for an order already placed.
+  it('ignores a later change to the buyer’s account email', async () => {
+    const userApp = await createUserApp();
+    const userPool = userApp.get<Pool>(PG_POOL);
+    try {
+      const { user } = await createRealTestUser(userApp, { email: 'at-checkout@jcool.test' });
+      const orderId = await seedPaidOrder(user.email, user.id);
+      await userApp
+        .get<DrizzleDB>(DRIZZLE)
+        .update(userSchema.users)
+        .set({ email: 'moved-on@jcool.test' })
+        .where(eq(userSchema.users.id, user.id));
+
+      await expect(processor.process(paidJob(orderId))).resolves.toBe('processed');
+
+      const [delivered] = await mail.waitForMail('at-checkout@jcool.test');
+      expect(delivered.Subject).toBe('Your order is confirmed');
+      expect(await mail.messages()).toHaveLength(1);
+    } finally {
+      // beforeEach resets core's database only; this suite is the sole writer to the user one.
+      await resetDatabase(userPool);
+      await userApp.close();
+    }
   });
 
   it('sends nothing a second time when the message is redelivered', async () => {
-    const { user } = await createTestUser(app);
+    const orderId = await seedPaidOrder('buyer@jcool.test');
 
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
-    await mail.waitForMail(user.email);
+    await expect(processor.process(paidJob(orderId))).resolves.toBe('processed');
+    await mail.waitForMail('buyer@jcool.test');
     // A fresh job id for the same message, which is what a BullMQ retry looks like from here.
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('duplicate');
+    await expect(processor.process(paidJob(orderId))).resolves.toBe('duplicate');
 
     // No polling needed: process() awaits the post-commit effect, so a second send would already
     // have happened by now. The claim is what stops it — the duplicate never reaches a handler.
@@ -87,10 +141,8 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
     expect(await inboxRows()).toHaveLength(1);
   });
 
-  it('refuses permanently when the event names a user that no longer exists', async () => {
-    await expect(processor.process(paidJob('0198f0d8-6666-8000-8000-000000000001'))).rejects.toThrow(
-      /no longer exists/,
-    );
+  it('refuses permanently when the event names an order that no longer exists', async () => {
+    await expect(processor.process(paidJob(ABSENT_ORDER_ID))).rejects.toThrow(/no longer exists/);
 
     // The claim rolled back with the failed handler, so nothing is deduped away on a redelivery.
     expect(await inboxRows()).toHaveLength(0);
@@ -100,10 +152,10 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   // a metric rather than a retry — because the redelivery a retry would trigger can only find its
   // own claim and do nothing.
   it('keeps a message applied when the mail cannot be delivered, and does not retry it', async () => {
-    const { user } = await createTestUser(app);
+    const orderId = await seedPaidOrder('buyer@jcool.test');
     const broken = await createTestApp({ SMTP_URL: UNREACHABLE_SMTP_URL, MAIL_FROM, METRICS_TOKEN });
     try {
-      await expect(broken.get(DomainEventProcessor).process(paidJob(user.id))).resolves.toBe('processed');
+      await expect(broken.get(DomainEventProcessor).process(paidJob(orderId))).resolves.toBe('processed');
 
       // `resolves.toBe('processed')` above is the whole proof: the dead-letter queue is written by
       // the worker's 'failed' listener, and a consume that never fails never reaches it.

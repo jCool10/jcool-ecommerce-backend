@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  UnauthorizedException,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -65,7 +66,12 @@ export class OrderController {
   @ApiConflictResponse({ description: 'Idempotency-Key already in progress, or insufficient stock' })
   @ApiUnprocessableEntityResponse({ description: 'Idempotency-Key reused with a different request' })
   async create(@CurrentUser() user: AuthenticatedUser): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.checkout.execute(user.userId));
+    // A token minted before the email claim existed would snapshot nothing. Rejecting costs the
+    // caller one refresh; accepting would cost the column its NOT NULL.
+    if (!user.email) {
+      throw new UnauthorizedException('Access token predates the email claim — refresh and retry');
+    }
+    return OrderResponseDto.fromView(await this.checkout.execute(user.userId, user.email));
   }
 
   @Get()

@@ -23,6 +23,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
 
   async createCheckout(
     order: Order,
+    buyerEmail: string,
     idempotencyKey: string | null,
     reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
     appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
@@ -48,6 +49,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
         .insert(orders)
         .values({
           userId: order.userId,
+          buyerEmail,
           status: order.status,
           currency: order.currency,
           totalAmount: order.totalAmountMinor,

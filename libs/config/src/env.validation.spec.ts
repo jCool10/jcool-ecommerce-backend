@@ -1,37 +1,66 @@
 import 'reflect-metadata'; // class-validator decorators; the app gets it from @nestjs/core's bootstrap.
 import { describe, expect, it } from 'vitest';
-import { NodeEnv, validate } from './env.validation';
+import { NodeEnv, validate, validateUser } from './env.validation';
 
 // The minimum a boot needs to get past every other required var, so each case below isolates one.
 const BASE_ENV = {
   NODE_ENV: NodeEnv.Test,
   DATABASE_URL: 'postgresql://user:pw@localhost:5432/db',
   REDIS_URL: 'redis://localhost:6379',
-  JWT_ACCESS_SECRET: 'test-jwt-access-secret-not-a-real-secret-000',
+  JWT_ES256_PUBLIC_KEY: 'not-a-real-key',
+};
+
+const USER_ENV = {
+  ...BASE_ENV,
+  USER_DATABASE_URL: 'postgresql://user:pw@localhost:5432/user_db',
+  JWT_ES256_PRIVATE_KEY: 'not-a-real-key',
   IDENTITY_BUCKET_KEY: 'test-identity-bucket-key-not-a-real-secret-000',
 };
 
 describe('env validation — IDENTITY_BUCKET_KEY', () => {
-  it('accepts a base env that carries the key', () => {
-    expect(validate(BASE_ENV).IDENTITY_BUCKET_KEY).toBe(BASE_ENV.IDENTITY_BUCKET_KEY);
+  it('accepts a user env that carries the key', () => {
+    expect(validateUser(USER_ENV).IDENTITY_BUCKET_KEY).toBe(USER_ENV.IDENTITY_BUCKET_KEY);
   });
 
   it('refuses to boot when the key is missing', () => {
-    const { IDENTITY_BUCKET_KEY: _missing, ...withoutKey } = BASE_ENV;
+    const { IDENTITY_BUCKET_KEY: _missing, ...withoutKey } = USER_ENV;
 
-    expect(() => validate(withoutKey)).toThrow(/IDENTITY_BUCKET_KEY/);
+    expect(() => validateUser(withoutKey)).toThrow(/IDENTITY_BUCKET_KEY/);
   });
 
   it('refuses to boot when the key is shorter than 32 chars', () => {
-    expect(() => validate({ ...BASE_ENV, IDENTITY_BUCKET_KEY: 'a'.repeat(31) })).toThrow(/IDENTITY_BUCKET_KEY/);
+    expect(() => validateUser({ ...USER_ENV, IDENTITY_BUCKET_KEY: 'a'.repeat(31) })).toThrow(/IDENTITY_BUCKET_KEY/);
   });
 
   it('refuses to boot on an empty key (dotenv writes "" rather than leaving it unset)', () => {
-    expect(() => validate({ ...BASE_ENV, IDENTITY_BUCKET_KEY: '' })).toThrow(/IDENTITY_BUCKET_KEY/);
+    expect(() => validateUser({ ...USER_ENV, IDENTITY_BUCKET_KEY: '' })).toThrow(/IDENTITY_BUCKET_KEY/);
   });
 
   it('accepts exactly 32 chars', () => {
-    expect(() => validate({ ...BASE_ENV, IDENTITY_BUCKET_KEY: 'a'.repeat(32) })).not.toThrow();
+    expect(() => validateUser({ ...USER_ENV, IDENTITY_BUCKET_KEY: 'a'.repeat(32) })).not.toThrow();
+  });
+});
+
+// The whole point of two schemas: a deployment must fail on its own missing variables and must
+// never be asked for a secret it has no business holding.
+describe('env validation — per-app schemas', () => {
+  it('boots commerce-core without the issuer’s private key, bucket key or database', () => {
+    expect(() => validate(BASE_ENV)).not.toThrow();
+  });
+
+  it.each(['USER_DATABASE_URL', 'JWT_ES256_PRIVATE_KEY', 'IDENTITY_BUCKET_KEY'])(
+    'refuses to boot user-service without %s',
+    (key) => {
+      const { [key]: _missing, ...incomplete } = USER_ENV as Record<string, string>;
+
+      expect(() => validateUser(incomplete)).toThrow(new RegExp(key));
+    },
+  );
+
+  // Both apps share one process.env in the e2e harness, so each schema has to tolerate the other's
+  // variables rather than reject them.
+  it('ignores the sibling app’s variables instead of rejecting them', () => {
+    expect(() => validate(USER_ENV)).not.toThrow();
   });
 });
 

@@ -23,6 +23,10 @@ export const orders = pgTable(
     id: id(),
     // No FK — cross-context boundary kept at the application layer.
     userId: uuid('user_id').notNull(),
+    // Snapshotted at checkout from the access token, the same way line prices and names are: the
+    // confirmation goes to the address that made the purchase, and the order stops needing the user
+    // table to be reachable. A later email change does not move an order already placed.
+    buyerEmail: text('buyer_email').notNull(),
     status: orderStatus('status').notNull().default('DRAFT'),
     currency: text('currency').notNull(),
     // Snapshot total in smallest units; never a float. bigint (not int4) because the

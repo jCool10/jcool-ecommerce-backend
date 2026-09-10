@@ -8,6 +8,8 @@ function build() {
   const valueObserve = vi.fn();
   const cartInc = vi.fn();
   const authInc = vi.fn();
+  const epochMissInc = vi.fn();
+  const epochWriteFailureInc = vi.fn();
   const cacheInc = vi.fn();
   const publishInc = vi.fn();
   const consumeInc = vi.fn();
@@ -34,6 +36,8 @@ function build() {
     { observe: valueObserve } as unknown as Histogram<string>,
     { inc: cartInc } as unknown as Counter<string>,
     { inc: authInc } as unknown as Counter<string>,
+    { inc: epochMissInc } as unknown as Counter<string>,
+    { inc: epochWriteFailureInc } as unknown as Counter<string>,
     { inc: cacheInc } as unknown as Counter<string>,
     { inc: publishInc } as unknown as Counter<string>,
     { inc: consumeInc } as unknown as Counter<string>,
@@ -61,6 +65,8 @@ function build() {
     valueObserve,
     cartInc,
     authInc,
+    epochMissInc,
+    epochWriteFailureInc,
     cacheInc,
     publishInc,
     consumeInc,
@@ -107,6 +113,14 @@ describe('BusinessMetrics', () => {
     const { metrics, authInc } = build();
     metrics.recordAuthEvent('login.failed', 'failure');
     expect(authInc).toHaveBeenCalledWith({ event: 'login.failed', outcome: 'failure' });
+  });
+
+  it('counts an epoch-projection miss and write failure separately', () => {
+    const { metrics, epochMissInc, epochWriteFailureInc } = build();
+    metrics.recordAuthEpochProjectionMiss();
+    metrics.recordAuthEpochProjectionWriteFailure();
+    expect(epochMissInc).toHaveBeenCalledOnce();
+    expect(epochWriteFailureInc).toHaveBeenCalledOnce();
   });
 
   it('counts a catalog cache lookup by result', () => {

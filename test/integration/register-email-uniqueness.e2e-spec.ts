@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PG_POOL } from '@shared/infrastructure/database/drizzle.tokens';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 // The register write path is race-free because the unique email index — not a check-then-insert
 // pre-check — is the sole uniqueness guarantee: concurrent identical signups resolve to exactly one
@@ -21,7 +21,7 @@ describe('Register email uniqueness under concurrency (integration)', () => {
   }
 
   beforeAll(async () => {
-    app = await createTestApp();
+    app = await createUserApp();
     pool = app.get<Pool>(PG_POOL);
   });
 

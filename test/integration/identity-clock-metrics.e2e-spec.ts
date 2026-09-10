@@ -3,7 +3,7 @@ import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { UuidV8Generator } from '@shared/identity';
 import { ID_CLOCK_DRIFT_MS } from '@shared/observability/metrics/identity-clock.collector';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 const METRICS_TOKEN = 'e2e-identity-clock-token-abcdef';
 const CLOCK_JUMP_MS = 90_000;
@@ -20,7 +20,7 @@ describe('Identity clock metrics (integration)', () => {
   const started: INestApplication[] = [];
 
   async function boot(): Promise<INestApplication> {
-    const app = await createTestApp();
+    const app = await createUserApp();
     started.push(app);
     return app;
   }

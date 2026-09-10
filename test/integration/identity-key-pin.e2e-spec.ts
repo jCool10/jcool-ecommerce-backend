@@ -3,10 +3,10 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
 import { bucketForEmail, identityKeyFingerprint } from '@shared/identity';
 import { normalizeEmail } from '@shared/kernel/normalize-email';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createRealTestUser } from '../setup/fixtures/user.fixture';
 import { E2E_IDENTITY_BUCKET_KEY, WRONG_IDENTITY_BUCKET_KEY } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createUserApp } from '../setup/test-app.factory';
 
 // Booting under the wrong key misfiles every id minted from then on, silently. The unit suite proves
 // the guard's branches; this proves a real application boot reaches them.
@@ -31,7 +31,7 @@ describe('Identity bucket key boot guards (integration)', () => {
   }
 
   beforeAll(() => {
-    pool = new Pool({ connectionString: inject('DATABASE_URL') });
+    pool = new Pool({ connectionString: inject('USER_DATABASE_URL') });
   });
 
   afterAll(async () => {
@@ -46,7 +46,7 @@ describe('Identity bucket key boot guards (integration)', () => {
   });
 
   it('pins the running key the first time it boots against a database', async () => {
-    const app = await createTestApp();
+    const app = await createUserApp();
     try {
       const { rows } = await pool.query<{ fingerprint: string }>(`SELECT fingerprint FROM identity_key_pin`);
 
@@ -58,9 +58,9 @@ describe('Identity bucket key boot guards (integration)', () => {
 
   // No rows to sample, so the canary cannot speak — the case the pin exists for.
   it('refuses to boot under a different key against an empty database', async () => {
-    await (await createTestApp()).close();
+    await (await createUserApp()).close();
 
-    await expect(createTestApp({ IDENTITY_BUCKET_KEY: WRONG_IDENTITY_BUCKET_KEY })).rejects.toThrow(
+    await expect(createUserApp({ IDENTITY_BUCKET_KEY: WRONG_IDENTITY_BUCKET_KEY })).rejects.toThrow(
       /does not match the key this database was built with/,
     );
   });
@@ -68,12 +68,12 @@ describe('Identity bucket key boot guards (integration)', () => {
   // Ordering, not just detection: a pin recorded before the canary has spoken would hold every later
   // boot to the wrong key.
   it('refuses on a misrouted row without pinning the key that found it', async () => {
-    const first = await createTestApp();
-    await createTestUser(first, { email: addressTheKeysDisagreeAbout() });
+    const first = await createUserApp();
+    await createRealTestUser(first, { email: addressTheKeysDisagreeAbout() });
     await first.close();
     await pool.query(`DELETE FROM identity_key_pin`);
 
-    await expect(createTestApp({ IDENTITY_BUCKET_KEY: WRONG_IDENTITY_BUCKET_KEY })).rejects.toThrow(
+    await expect(createUserApp({ IDENTITY_BUCKET_KEY: WRONG_IDENTITY_BUCKET_KEY })).rejects.toThrow(
       /does not route to the bucket its email hashes to/,
     );
 
@@ -86,7 +86,7 @@ describe('Identity bucket key boot guards (integration)', () => {
     // Renamed rather than dropped: every later spec file in the run shares this database.
     await pool.query(`ALTER TABLE identity_key_pin RENAME TO identity_key_pin_unreachable`);
     try {
-      const app = await createTestApp();
+      const app = await createUserApp();
       try {
         await request(app.getHttpServer())
           .post('/auth/register')

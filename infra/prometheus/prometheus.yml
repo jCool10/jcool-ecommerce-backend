@@ -13,6 +13,9 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  # One job per deployable. The identity and auth-epoch series come from jcool-user alone — it is the
+  # only issuer and the only process that mints ids — so a rule that goes quiet there is not covered
+  # by jcool-api still reporting.
   - job_name: jcool-api
     metrics_path: /metrics
     # The token must match or /metrics answers 404 — an unauthenticated scraper cannot even
@@ -21,4 +24,12 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/secrets/metrics-token
     static_configs:
-      - targets: ['app:3000']
+      - targets: ['commerce-core:3000']
+
+  - job_name: jcool-user
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics-token
+    static_configs:
+      - targets: ['user:3001']

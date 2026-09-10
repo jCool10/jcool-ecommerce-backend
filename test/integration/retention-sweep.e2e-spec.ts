@@ -2,10 +2,8 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { IdentityService } from '@shared/identity';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import * as schema from '@commerce-core/database/schema';
-import { normalizeEmail } from '@shared/kernel/normalize-email';
 import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
 import { RetentionScheduler } from '@shared/retention/retention.scheduler';
 import { resetDatabase } from '../setup/reset-database';
@@ -24,10 +22,6 @@ const WINDOWS = {
   RETENTION_OUTBOX_DAYS: '30',
   RETENTION_INBOX_DAYS: '7',
   RETENTION_WEBHOOK_EVENT_DAYS: '14',
-  // Zero, so "collectable" means exactly "past its own expiry" and the test asserts the predicate
-  // rather than the slack around it. The shipped defaults add a week.
-  RETENTION_AUTH_TOKEN_GRACE_DAYS: '0',
-  RETENTION_REFRESH_TOKEN_GRACE_DAYS: '30',
   RETENTION_IDEMPOTENCY_GRACE_SEC: '0',
 };
 
@@ -42,20 +36,12 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   let db: DrizzleDB;
   let registry: RetentionSweepRegistry;
   let scheduler: RetentionScheduler;
-  let identity: IdentityService;
 
   const sweepNamed = (name: string): RetentionSweep => {
     const sweep = registry.all().find((s) => s.name === name);
     if (!sweep) throw new Error(`no retention sweep named "${name}" — registration is what makes it run`);
     return sweep;
   };
-
-  /** Every token table hangs off a user by FK, so a fixture user has to exist first. */
-  async function insertUser(email: string): Promise<string> {
-    const id = identity.mintUserId(normalizeEmail(email));
-    await db.insert(schema.users).values({ id, email, passwordHash: 'not-a-real-hash' });
-    return id;
-  }
 
   const outboxRow = (overrides: Partial<typeof schema.outbox.$inferInsert> = {}) => ({
     aggregateType: 'Order',
@@ -92,7 +78,6 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     db = app.get<DrizzleDB>(DRIZZLE);
     registry = app.get(RetentionSweepRegistry);
     scheduler = app.get(RetentionScheduler);
-    identity = app.get(IdentityService);
   });
 
   afterAll(async () => {
@@ -105,11 +90,10 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
   // A sweep that was never registered produces no error and no metric — the table simply stops
   // being collected.
+  // The three `auth-tokens:*` sweeps are deliberately absent: those tables live in user-service, and
+  // a sweep registered here would run against a database that no longer has them.
   it('registers a sweep for every table with a retention rule', () => {
     expect([...registry.names()].sort()).toEqual([
-      'auth-tokens:email-verification',
-      'auth-tokens:password-reset',
-      'auth-tokens:refresh',
       'media:assets',
       'messaging:inbox',
       'messaging:outbox',
@@ -220,70 +204,6 @@ describe('Retention sweeps (integration, real Postgres)', () => {
         .select({ providerEventId: schema.webhookEvents.providerEventId })
         .from(schema.webhookEvents);
       expect(left).toEqual([{ providerEventId: 'evt_recent' }]);
-    });
-  });
-
-  describe('auth-tokens', () => {
-    it.each([
-      ['auth-tokens:email-verification', schema.emailVerificationTokens] as const,
-      ['auth-tokens:password-reset', schema.passwordResetTokens] as const,
-    ])('%s keeps a token that can still be spent', async (name, table) => {
-      const userId = await insertUser(`${name.replace(/[:.]/g, '-')}@example.com`);
-      const row = (suffix: string, expiresAt: Date, consumedAt: Date | null = null) => ({
-        id: identity.mintOwnedBy(userId),
-        userId,
-        tokenHash: `${suffix}-${'0'.repeat(40)}`,
-        expiresAt,
-        consumedAt,
-      });
-      await db.insert(table).values([
-        row('live', hoursFromNow(1)),
-        row('expired', daysAgo(1)),
-        // Already spent: `consume` can never match it again, so it is collectable on the same clock.
-        row('consumed', hoursFromNow(1), daysAgo(1)),
-      ]);
-
-      const deleted = await sweepNamed(name).sweep(500);
-
-      expect(deleted).toBe(2);
-      const left = await db.select({ tokenHash: table.tokenHash }).from(table);
-      expect(left).toEqual([{ tokenHash: `live-${'0'.repeat(40)}` }]);
-    });
-
-    // Expiry is age, revocation is evidence — collecting a revoked token on the expiry clock turns
-    // a detected replay back into a successful refresh.
-    it('auth-tokens:refresh keeps a revoked token far longer than an expired one', async () => {
-      const userId = await insertUser('refresh-retention@example.com');
-      const row = (suffix: string, expiresAt: Date, revokedAt: Date | null = null) => ({
-        id: identity.mintOwnedBy(userId),
-        userId,
-        tokenHash: `${suffix}-${'0'.repeat(40)}`,
-        familyId: '0198f0d8-5555-7000-8000-000000000001',
-        expiresAt,
-        revokedAt,
-      });
-      await db.insert(schema.refreshTokens).values([
-        row('live', hoursFromNow(1)),
-        row('expired', daysAgo(1)),
-        // Revoked but still inside the 30-day reuse-detection horizon, and NOT yet expired.
-        row('revoked-recently', hoursFromNow(1), daysAgo(10)),
-        // Revoked AND long since expired — the shape rotation actually produces. `rotate` checks
-        // revoked/replaced before expiry, so this row still answers "that token came back" and must
-        // outlive its expiry by the REVOCATION grace; an expiry arm without `revoked_at IS NULL`
-        // collects it here.
-        row('revoked-and-expired', daysAgo(8), daysAgo(10)),
-        row('revoked-long-ago', hoursFromNow(1), daysAgo(40)),
-      ]);
-
-      const deleted = await sweepNamed('auth-tokens:refresh').sweep(500);
-
-      expect(deleted).toBe(2);
-      const left = await db.select({ tokenHash: schema.refreshTokens.tokenHash }).from(schema.refreshTokens);
-      expect(left.map((r) => r.tokenHash).sort()).toEqual([
-        `live-${'0'.repeat(40)}`,
-        `revoked-and-expired-${'0'.repeat(40)}`,
-        `revoked-recently-${'0'.repeat(40)}`,
-      ]);
     });
   });
 

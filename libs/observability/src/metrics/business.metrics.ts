@@ -17,6 +17,8 @@ import type {
   SagaStep,
 } from './metrics.port';
 import {
+  AUTH_EPOCH_PROJECTION_MISS_TOTAL,
+  AUTH_EPOCH_PROJECTION_WRITE_FAILURE_TOTAL,
   AUTH_EVENTS_TOTAL,
   CACHE_REBUILD_DURATION_SECONDS,
   CART_OPERATIONS_TOTAL,
@@ -58,6 +60,9 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(ORDER_VALUE_MINOR) private readonly orderValue: Histogram<string>,
     @InjectMetric(CART_OPERATIONS_TOTAL) private readonly cartOps: Counter<string>,
     @InjectMetric(AUTH_EVENTS_TOTAL) private readonly authEvents: Counter<string>,
+    @InjectMetric(AUTH_EPOCH_PROJECTION_MISS_TOTAL) private readonly authEpochMisses: Counter<string>,
+    @InjectMetric(AUTH_EPOCH_PROJECTION_WRITE_FAILURE_TOTAL)
+    private readonly authEpochWriteFailures: Counter<string>,
     @InjectMetric(CATALOG_CACHE_OPERATIONS_TOTAL) private readonly catalogCacheOps: Counter<string>,
     @InjectMetric(MESSAGING_PUBLISH_TOTAL) private readonly eventsPublished: Counter<string>,
     @InjectMetric(MESSAGING_CONSUME_TOTAL) private readonly eventsConsumed: Counter<string>,
@@ -94,6 +99,14 @@ export class BusinessMetrics implements MetricsPort {
 
   recordAuthEvent(event: string, outcome: 'success' | 'failure'): void {
     this.safely('auth_event', () => this.authEvents.inc({ event, outcome }));
+  }
+
+  recordAuthEpochProjectionMiss(): void {
+    this.safely('auth_epoch_projection_miss', () => this.authEpochMisses.inc());
+  }
+
+  recordAuthEpochProjectionWriteFailure(): void {
+    this.safely('auth_epoch_projection_write_failure', () => this.authEpochWriteFailures.inc());
   }
 
   recordCatalogCacheOperation(result: CacheResult): void {

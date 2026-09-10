@@ -15,14 +15,18 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 # SWC emits .js only, so the migration .sql files never reach dist/ — copy them straight from the
-# builder. MIGRATIONS_DIR is absolute because this image has no source tree to resolve against. Apply
-# them as a release command (npm run db:migrate:prod): a bad migration must stop the rollout, not
-# crashloop the running version.
-COPY --from=builder /app/apps/commerce-core/migrations ./migrations
-ENV MIGRATIONS_DIR=/app/migrations
-EXPOSE 3000
+# builder. Both journals ship in one image because both apps do; the paths are absolute because this
+# image has no source tree to resolve against. Apply them as release commands (db:migrate:prod and
+# db:migrate:prod:user): a bad migration must stop the rollout, not crashloop the running version.
+COPY --from=builder /app/apps/commerce-core/migrations ./migrations/commerce-core
+COPY --from=builder /app/apps/user/migrations ./migrations/user
+ENV MIGRATIONS_DIR=/app/migrations/commerce-core
+ENV USER_MIGRATIONS_DIR=/app/migrations/user
+EXPOSE 3000 3001
 USER node
-# `--import`, not a trailing argument: Node would take the second path as argv[2] and never load it,
-# leaving Sentry silently uninitialised. Both exporters are runtime-gated (OTEL_ENABLED / SENTRY_DSN),
-# so a hosted deployment gets error tracking without the local observability stack coming with it.
+# One image, two entry points: the default is commerce-core and user-service overrides the command
+# (see docker-compose.yml). `--import`, not a trailing argument: Node would take the second path as
+# argv[2] and never load it, leaving Sentry silently uninitialised. Both exporters are runtime-gated
+# (OTEL_ENABLED / SENTRY_DSN), so a hosted deployment gets error tracking without the local
+# observability stack coming with it.
 CMD ["node", "--import", "./dist/apps/commerce-core/src/instrumentation.js", "dist/apps/commerce-core/src/main.js"]

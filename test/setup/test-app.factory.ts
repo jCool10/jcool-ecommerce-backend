@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { basename } from 'node:path';
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -8,7 +9,8 @@ import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { expect, inject } from 'vitest';
 import { AppModule } from '@commerce-core/app.module';
-import { CSRF_HEADER } from '@modules/user/interface/security/auth-cookie.constants';
+import { UserAppModule } from '@user/app.module';
+import { CSRF_HEADER } from '@shared/auth';
 import { RedisService } from '@shared/infrastructure/redis';
 import { E2E_IDENTITY_BUCKET_KEY } from './identity.helper';
 import { waitForRedisReady } from './redis-ready';
@@ -18,19 +20,55 @@ export interface ProviderOverride {
   useValue: unknown;
 }
 
-// `envOverrides` set config-backing env vars for this app only: config reads process.env when the
-// module compiles, so they are applied before compile and restored after — one app's config never
-// leaks into the next (e2e files share this process and run sequentially).
+/**
+ * `envOverrides` set config-backing env vars for this app only: config reads process.env when the
+ * module compiles, so they are applied before compile and restored after — one app's config never
+ * leaks into the next (e2e files share this process and run sequentially).
+ *
+ * Boots **commerce-core**. `/auth/*` lives in the user service — see {@link createUserApp}.
+ */
 export async function createTestApp(
   envOverrides: Record<string, string> = {},
   providerOverrides: ProviderOverride[] = [],
 ): Promise<INestApplication> {
-  // Set before AppModule loads: @nestjs/config's dotenv won't override these, so
+  return build(AppModule, { rawBody: true }, envOverrides, providerOverrides);
+}
+
+/**
+ * Boots **user-service**: `/auth/*`, its own Postgres, no queue and no outbox. A cross-app flow is
+ * two of these side by side passing a token, never one module tree importing the other — a
+ * composite AppModule would mean the split is not real.
+ */
+export async function createUserApp(
+  envOverrides: Record<string, string> = {},
+  providerOverrides: ProviderOverride[] = [],
+): Promise<INestApplication> {
+  return build(UserAppModule, {}, envOverrides, providerOverrides);
+}
+
+async function build(
+  rootModule: unknown,
+  factoryOptions: { rawBody?: true },
+  envOverrides: Record<string, string>,
+  providerOverrides: ProviderOverride[],
+): Promise<INestApplication> {
+  // Set before the module loads: @nestjs/config's dotenv won't override these, so
   // the container URLs win over any local .env.
   process.env.NODE_ENV = 'test';
   process.env.DATABASE_URL = inject('DATABASE_URL');
+  process.env.USER_DATABASE_URL = inject('USER_DATABASE_URL');
   process.env.REDIS_URL = inject('REDIS_URL');
-  process.env.JWT_ACCESS_SECRET ??= 'test-jwt-access-secret-not-a-real-secret-000'; // schema needs ≥32 chars
+  // Normally already set by vitest-e2e.config.mts (env validation runs at import time); minted here
+  // as well so an app built outside that config still boots.
+  if (!process.env.JWT_ES256_PRIVATE_KEY || !process.env.JWT_ES256_PUBLIC_KEY) {
+    const keys = generateKeyPairSync('ec', {
+      namedCurve: 'prime256v1',
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    process.env.JWT_ES256_PRIVATE_KEY = keys.privateKey;
+    process.env.JWT_ES256_PUBLIC_KEY = keys.publicKey;
+  }
   // Payment defaults to the Stripe adapter, which refuses to construct without a webhook secret;
   // provide a dummy so AppModule boots. Signed-webhook e2e can override with its own known secret.
   process.env.PAYMENT_WEBHOOK_SECRET ??= 'whsec_test_not_a_real_secret_0000'; // schema needs ≥16 chars
@@ -81,13 +119,14 @@ export async function createTestApp(
   }
 
   try {
-    let builder = Test.createTestingModule({ imports: [AppModule] });
+    let builder = Test.createTestingModule({ imports: [rootModule as never] });
     for (const override of providerOverrides) {
       builder = builder.overrideProvider(override.provide).useValue(override.useValue);
     }
     const moduleRef = await builder.compile();
-    // `rawBody: true` mirrors main.ts so the payment webhook's raw-body signature check works in e2e.
-    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, rawBody: true });
+    // `rawBody` mirrors each app's own main.ts — core needs it for the payment webhook's raw-body
+    // signature check, user-service has no webhook sink and does not.
+    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, ...factoryOptions });
     app.useLogger(app.get(Logger));
 
     // Mirror main.ts edge config so the e2e app exercises the same middleware.

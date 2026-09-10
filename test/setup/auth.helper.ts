@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from '@modules/user/interface/security/auth-cookie.constants';
+import { CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from '@user/modules/user/interface/security/auth-cookie.constants';
 
 export interface Credentials {
   email: string;

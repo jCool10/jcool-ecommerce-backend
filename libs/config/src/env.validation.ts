@@ -39,8 +39,15 @@ export enum PaymentProvider {
   Stripe = 'stripe',
 }
 
-/** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
- * default applied in configuration.ts; the comments here only explain the BOUNDS. */
+/**
+ * Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
+ * default applied in configuration.ts; the comments here only explain the BOUNDS.
+ *
+ * This is what **commerce-core** requires, and it is also the shared base — see
+ * {@link UserEnvironmentVariables} for the three variables only the issuer needs. Unknown keys are
+ * ignored rather than rejected: the e2e harness boots both apps in one process off one
+ * `process.env`, so a schema that refused a foreign key would fail on its sibling's variables.
+ */
 export class EnvironmentVariables {
   @IsEnum(NodeEnv)
   NODE_ENV!: NodeEnv;
@@ -557,19 +564,23 @@ export class EnvironmentVariables {
   @IsString()
   STRIPE_CANCEL_URL?: string;
 
-  // MinLength(32) enforces a ~256-bit floor for HS256.
+  // The verifying half of the ES256 access-token keypair, a PEM or the base64 of one. Every app
+  // needs it; only the issuer holds the private half (UserEnvironmentVariables).
   @IsString()
-  @MinLength(32)
-  JWT_ACCESS_SECRET!: string;
+  @IsNotEmpty()
+  JWT_ES256_PUBLIC_KEY!: string;
 
-  // HMAC key behind the routing bucket in every user-context id. PERMANENT — rotating it routes
-  // every existing account to a shard that does not hold its rows, and old buckets are not
-  // recomputable, so back it up with the same rank as the database. MinLength gates length, not
-  // entropy: a passphrase is brute-forceable from a few self-registered (email, bucket) pairs, so
-  // generate it with `openssl rand -base64 48`.
+  // `kid` on every token. Bump it in the same release that swaps the keypair.
+  @IsOptional()
   @IsString()
-  @MinLength(MIN_BUCKET_KEY_LENGTH)
-  IDENTITY_BUCKET_KEY!: string;
+  @IsNotEmpty()
+  JWT_KEY_ID?: string;
+
+  // Duration form. Must stay at or above REFRESH_TOKEN_TTL — see configuration.ts.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  AUTH_EPOCH_REDIS_TTL?: string;
 
   // The four token TTLs below take duration form ("15m"/"7d").
   @IsOptional()
@@ -636,8 +647,37 @@ export class EnvironmentVariables {
   ARGON2_PARALLELISM?: number;
 }
 
-export function validate(config: Record<string, unknown>): EnvironmentVariables {
-  const validated = plainToInstance(EnvironmentVariables, config, {
+/**
+ * What only the **issuer** needs. commerce-core verifies tokens with the public key and mints no
+ * bucketed ids, so requiring any of these there would be a deployment asking for a secret it must
+ * not hold.
+ */
+export class UserEnvironmentVariables extends EnvironmentVariables {
+  // Separate from DATABASE_URL so both apps can share one process in the e2e harness without one
+  // app's connection string standing in for the other's.
+  @IsString()
+  @IsNotEmpty()
+  USER_DATABASE_URL!: string;
+
+  // The signing half of the ES256 keypair. Never deployed to a verifier.
+  @IsString()
+  @IsNotEmpty()
+  JWT_ES256_PRIVATE_KEY!: string;
+
+  // HMAC key behind the routing bucket in every user-context id. PERMANENT — rotating it routes
+  // every existing account to a shard that does not hold its rows, and old buckets are not
+  // recomputable, so back it up with the same rank as the database. MinLength gates length, not
+  // entropy: a passphrase is brute-forceable from a few self-registered (email, bucket) pairs, so
+  // generate it with `openssl rand -base64 48`.
+  @IsString()
+  @MinLength(MIN_BUCKET_KEY_LENGTH)
+  IDENTITY_BUCKET_KEY!: string;
+}
+
+type EnvClass<T> = new () => T;
+
+function validateAgainst<T extends object>(schema: EnvClass<T>, config: Record<string, unknown>): T {
+  const validated = plainToInstance(schema, config, {
     enableImplicitConversion: false,
   });
 
@@ -654,4 +694,12 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
   }
 
   return validated;
+}
+
+export function validate(config: Record<string, unknown>): EnvironmentVariables {
+  return validateAgainst(EnvironmentVariables, config);
+}
+
+export function validateUser(config: Record<string, unknown>): UserEnvironmentVariables {
+  return validateAgainst(UserEnvironmentVariables, config);
 }

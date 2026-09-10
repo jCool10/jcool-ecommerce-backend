@@ -3,6 +3,7 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SentryModule } from '@sentry/nestjs/setup';
 import { ClsModule } from 'nestjs-cls';
+import { AuthVerifyModule } from '@shared/auth';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import { RedisModule } from '@shared/infrastructure/redis';
@@ -20,14 +21,13 @@ import { InventoryModule } from '@modules/inventory/inventory.module';
 import { MediaModule } from '@modules/media/media.module';
 import { OrderModule } from '@modules/order/order.module';
 import { PaymentModule } from '@modules/payment/payment.module';
-import { UserModule } from '@modules/user/user.module';
-import { AuthModule } from '@modules/user/auth.module';
 import * as schema from './database/schema';
 import { CommerceMessagingModule } from './messaging/commerce-messaging.module';
 
 // ClsModule precedes ObservabilityLoggerModule so its correlation middleware mounts before pino;
-// ThrottlerSecurityModule precedes AuthModule so its rate-limit guard runs before the auth guards.
-// SentryModule only adds a route-name interceptor — Sentry itself is initialized in instrumentation.ts.
+// ThrottlerSecurityModule precedes AuthVerifyModule so its rate-limit guard runs before the auth
+// guards. SentryModule only adds a route-name interceptor — Sentry itself is initialized in
+// instrumentation.ts. No user code: identity is a signed token this app verifies and never issues.
 @Module({
   imports: [
     ConfigModule,
@@ -45,6 +45,8 @@ import { CommerceMessagingModule } from './messaging/commerce-messaging.module';
     // both are @Global, so neither imports the other and registration order carries no meaning.
     CommerceMessagingModule,
     ThrottlerSecurityModule,
+    // Verification only — a public key and Redis. Issuing lives in AuthModule below.
+    AuthVerifyModule,
     ScheduleModule.forRoot(),
     HealthModule,
     CatalogModule,
@@ -54,8 +56,6 @@ import { CommerceMessagingModule } from './messaging/commerce-messaging.module';
     MediaModule,
     OrderModule,
     PaymentModule,
-    UserModule,
-    AuthModule,
   ],
   controllers: [DebugController],
   providers: [

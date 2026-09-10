@@ -34,8 +34,9 @@ interface VacuumRow {
 }
 
 async function main(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL is required to capture DB metrics');
+  // Every table it measures is a user table, so it reads the user service's database.
+  const connectionString = process.env.USER_DATABASE_URL;
+  if (!connectionString) throw new Error('USER_DATABASE_URL is required to capture DB metrics');
 
   const pool = new Pool({ connectionString, max: 2 });
   try {

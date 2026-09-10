@@ -58,6 +58,10 @@ export interface MetricsPort {
   recordCartOperation(op: CartOperation): void;
   /** `event` is the bounded AuthAuditEvent union. */
   recordAuthEvent(event: string, outcome: 'success' | 'failure'): void;
+  /** A verify that found no `auth:epoch:` key. Both a deleted user and a lost key land here. */
+  recordAuthEpochProjectionMiss(): void;
+  /** Postgres bumped, Redis did not follow: revocation is delayed by up to one access-token TTL. */
+  recordAuthEpochProjectionWriteFailure(): void;
   recordCatalogCacheOperation(result: CacheResult): void;
   /** Measured under the single-flight lock, so it is the number the lock lease must stay ahead of. */
   observeCacheRebuild(seconds: number): void;

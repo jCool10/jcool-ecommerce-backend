@@ -15,8 +15,12 @@ export class DrizzleModule implements OnApplicationShutdown {
    * The schema is a parameter, not an import: the barrel that collects every context's tables is
    * app-owned (it is what drizzle-kit reads to generate migrations), and a library that imported it
    * would depend on the app it is supposed to serve.
+   *
+   * `urlKey` is the config path holding this app's connection string. It is a parameter for the
+   * same reason: the e2e harness boots several apps in one process off one `process.env`, so the
+   * app decides which database it means rather than inheriting a single global name.
    */
-  static forRoot(schema: DbSchema): DynamicModule {
+  static forRoot(schema: DbSchema, urlKey = 'database.url'): DynamicModule {
     return {
       module: DrizzleModule,
       providers: [
@@ -25,7 +29,7 @@ export class DrizzleModule implements OnApplicationShutdown {
           inject: [ConfigService],
           useFactory: (config: ConfigService): Pool => {
             const pool = new Pool({
-              connectionString: config.getOrThrow<string>('database.url'),
+              connectionString: config.getOrThrow<string>(urlKey),
               // Bounded so a connection spike can't exhaust Postgres backends; a finite
               // connectionTimeoutMillis (pg defaults to 0 = wait forever) makes a saturated pool fail
               // fast instead of piling requests up.

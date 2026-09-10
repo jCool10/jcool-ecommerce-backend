@@ -44,6 +44,7 @@ describe('Order finalization (integration, real Postgres)', () => {
       .insert(schema.orders)
       .values({
         userId: USER_ID,
+        buyerEmail: 'buyer@test.local',
         status,
         currency: 'VND',
         totalAmount: 100_000,

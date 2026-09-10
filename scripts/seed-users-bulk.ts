@@ -61,8 +61,8 @@ async function clean(pool: Pool): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL is required to run the bulk seeder');
+  const connectionString = process.env.USER_DATABASE_URL;
+  if (!connectionString) throw new Error('USER_DATABASE_URL is required to run the bulk seeder');
   if (process.env.NODE_ENV === 'production') {
     throw new Error('seed-users-bulk refuses to run with NODE_ENV=production (writes/deletes throwaway rows)');
   }

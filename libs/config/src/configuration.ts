@@ -24,6 +24,17 @@ function parseIntOr(raw: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// PEM carries newlines, which most secret stores and .env files mangle, so the variable holds
+// base64. A raw PEM is accepted as-is for the case where the store does handle newlines.
+function pemEnv(raw: string | undefined, name: string): string | undefined {
+  if (!raw) return undefined;
+  const pem = raw.includes('-----BEGIN') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+  if (!pem.includes('-----BEGIN')) {
+    throw new Error(`${name} is not a PEM key (expected PEM, or base64 of one)`);
+  }
+  return pem;
+}
+
 export default () => ({
   app: {
     env: process.env.NODE_ENV,
@@ -67,6 +78,9 @@ export default () => ({
   },
   database: {
     url: process.env.DATABASE_URL,
+    // The user service's own instance. Its own key rather than a reused DATABASE_URL because the
+    // e2e harness boots both apps in one process, off one process.env.
+    userUrl: process.env.USER_DATABASE_URL,
     // The stack has no external pooler (a PgBouncer drop-in is owned by deploy), so this caps the
     // backend connections Postgres faces.
     poolMax: intEnv(process.env.DB_POOL_MAX, 10),
@@ -111,7 +125,16 @@ export default () => ({
     batchSize: parseIntOr(process.env.OUTBOX_BATCH_SIZE, 100),
   },
   auth: {
-    jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
+    // Asymmetric on purpose: only the issuer holds the private half, so a verifier can be deployed
+    // with no ability to mint. No defaults — the env schema requires both.
+    jwtPrivateKey: pemEnv(process.env.JWT_ES256_PRIVATE_KEY, 'JWT_ES256_PRIVATE_KEY'),
+    jwtPublicKey: pemEnv(process.env.JWT_ES256_PUBLIC_KEY, 'JWT_ES256_PUBLIC_KEY'),
+    // Stamped into every token's `kid` and used by the verifier to pick a key, so rotation is
+    // additive: publish the next key, sign with it, retire the old id a token TTL later.
+    jwtKeyId: process.env.JWT_KEY_ID ?? 'v1',
+    // Bounds how long a projected epoch outlives its last write. At/above the refresh TTL, so a
+    // session cannot outlive its own projection and fail closed while still legitimately alive.
+    epochProjectionTtl: process.env.AUTH_EPOCH_REDIS_TTL ?? '7d',
     // Short by design: it caps exposure if the jti denylist is ever bypassed.
     jwtAccessTtl: process.env.JWT_ACCESS_TTL ?? '5m',
     refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '7d',
