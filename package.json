@@ -92,6 +92,9 @@
     "stripe": "^22.6.1",
     "uuid": "^11.1.0"
   },
+  "overrides": {
+    "multer": "^2.3.0"
+  },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
     "@eslint/js": "^10.0.1",
