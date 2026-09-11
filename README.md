@@ -16,9 +16,11 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
   <img alt="Docker" src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white">
 </p>
 
+**Live:** <https://jcool-ecommerce.up.railway.app> · OpenAPI <https://jcool-ecommerce.up.railway.app/docs>
+
 | | |
 | --- | --- |
-| **Scale** | 7 bounded contexts · 559 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
+| **Scale** | 7 bounded contexts · 566 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
 | **Tests** | 1,131 unit tests (160 files, hermetic) + 68 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers, run four workers wide |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `npm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
@@ -28,8 +30,8 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
 
 - [What this is](#what-this-is) · [Architecture](#architecture) · [Engineering highlights](#engineering-highlights)
 - [Quick start](#quick-start) · [Configuration](#configuration) · [API](#api)
-- [Testing](#testing) · [Observability](#observability) · [Operations](#operations)
-- [Known limits](#known-limits) · [Scripts](#scripts)
+- [Testing](#testing) · [Measured performance](#measured-performance) · [Observability](#observability)
+- [Operations](#operations) · [Known limits](#known-limits) · [Scripts](#scripts)
 
 ---
 
@@ -300,6 +302,13 @@ Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_
 `MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it
 because it ships `migrations/` without a `src/` tree.
 
+> **`TRUST_PROXY` is required behind a platform load balancer, including Railway.** It defaults to
+> off — correct for a direct deploy, where trusting `X-Forwarded-For` would let any client spoof its
+> own rate-limit key. Behind a proxy the same default inverts the problem: `req.ip` becomes the
+> proxy's peer address, which changes per connection, so the IP-keyed throttle tiers count
+> per-connection instead of per-client and stop binding. Set `TRUST_PROXY=1`. See
+> [Known limits](#known-limits).
+
 ---
 
 ## API
@@ -466,6 +475,73 @@ app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate
 
 ---
 
+## Measured performance
+
+Numbers below are from k6 against the **live Railway deployment**, not a local run and not a
+projection. Reproduce with:
+
+```bash
+BASE_URL=https://jcool-ecommerce.up.railway.app PROFILE=steady npm run load:public-read
+```
+
+**Read this before reading the numbers.** They are client-side timings taken from a single machine
+in Vietnam against a deployment in another region, so **the round trip dominates every figure**.
+The measured TCP connect time is **≈90 ms**, and `GET /health/live` — which touches no database, no
+cache, and no authentication — still costs **≈305 ms**. That ~305 ms is the floor of the path, not
+the cost of the application. What the application costs is the *gap above that floor*, and the whole
+point of the table is that there barely is one.
+
+### Steady read profile — 1.5 req/s, 4 min, 361 requests
+
+Offered under the app-wide IP throttle so the app is measured rather than the rate limiter.
+**0 × `429`, 0 × `5xx`, 0 dropped iterations.**
+
+| Route | Work it does | min | med | p90 | p95 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `GET /health/live` | none — the path floor | 290.5 ms | 310.5 ms | 619.3 ms | 700.2 ms |
+| `GET /products` | cached list, page 1 | 296.1 ms | 311.9 ms | 422.5 ms | 622.5 ms |
+| `GET /products/:slug` | cached detail | 297.1 ms | 310.4 ms | 449.9 ms | 639.2 ms |
+
+**A cached catalog read is within ~1.5 ms of a no-op liveness probe at the median**, and within
+~7 ms at the minimum. The SWR cache and the generation-counter invalidation are doing what
+[Performance and caching](#performance-and-caching) claims: at steady state a product read does not
+reach Postgres, and the residual cost is too small to separate from network jitter.
+
+### Load — 50 req/s, 30 s, 1,500 requests
+
+**0 × `429`, 0 × `5xx`, 0 dropped iterations.** A **32×** increase in offered load left every median
+unchanged within ~5 ms — all three, in fact, came in marginally *faster* than at 1.5 req/s, which is
+the signature of a system nowhere near its knee:
+
+| Route | min | med | p90 | p95 |
+| --- | ---: | ---: | ---: | ---: |
+| `GET /health/live` | 291.2 ms | 305.9 ms | 618.0 ms | 725.2 ms |
+| `GET /products` | 291.1 ms | 308.4 ms | 588.7 ms | 737.6 ms |
+| `GET /products/:slug` | 292.4 ms | 307.7 ms | 584.2 ms | 646.3 ms |
+
+### Saturation — 150 req/s offered, 30 s
+
+Achieved **≈81 req/s**; the remaining **28 % answered `429`** and one request returned `5xx`. Latency
+on the requests that *were* served stayed flat (median 306 ms, p95 640 ms) — the deployment sheds
+load rather than degrading under it, which is the correct failure mode.
+
+Those `429`s are also where the `TRUST_PROXY` gap in [Known limits](#known-limits) showed itself: k6
+reuses connections, so many requests share one proxy peer address and *do* trip the 100/60 s tier —
+while a client opening a fresh connection per request never does. Same offered load, opposite
+outcome, decided by connection reuse rather than by who is calling.
+
+**The ceiling here is not attributed.** It could be the single Railway container, the platform edge,
+the client, or the WAN path, and a single-client run from one continent away cannot tell them apart.
+Calling ~81 req/s "the application's capacity" would be dishonest. The experiments that *can*
+attribute a bottleneck run against the local stack, where Prometheus is scrapable and the
+`route:http_request_duration_seconds:p99` recording rules are authoritative — see
+[`test/load/`](./test/load) and `load:breakpoint` / `load:cache-stampede` / `load:sku-contention`.
+
+> `/metrics` answers `404` on the deployment (no `METRICS_TOKEN` is configured), so no server-side
+> latency, cache-hit or pool figures were available to corroborate these client-side numbers.
+
+---
+
 ## Observability
 
 Three pillars plus error tracking, wired **around** the Clean Architecture core — `domain` and
@@ -569,6 +645,15 @@ Stated plainly, because a reviewer will find them anyway.
 - **No `CHECK` on the id layout.** Version and variant nibbles are validated in the codec on decode;
   a raw-SQL writer is not blocked at the database. The honest reason is that nothing writes those
   tables but this process.
+- **The IP-keyed throttle tiers are only as good as `req.ip`.** With `TRUST_PROXY` unset behind a
+  platform load balancer, `req.ip` is the proxy's peer address rather than the client's, and that
+  address changes per connection — so the `default` tier (100/60 s app-wide) and the IP half of the
+  auth tiers count per *connection* and never accumulate. Measured on the live deployment: a client
+  opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten
+  consecutive failed logins against one email never tripped the 5-per-15-min account block; a client
+  reusing one connection does get throttled. The guards are right — [the composition is unit-tested
+  three ways](./src/shared/infrastructure/throttler) — and the knob is documented; the failure is
+  that nothing at boot notices the combination of "production" and "untrusted proxy" and says so.
 - **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2`
   rather than reinterpret an existing path.
 - **The observability stack is local-only.** No collector is deployed — a hosted one is an
@@ -591,6 +676,8 @@ Stated plainly, because a reviewer will find them anyway.
 | `identity:verify` | Scan every user row for an id that does not route to its email's bucket |
 | `storage:verify` | Reconcile bucket against `media_assets` three ways: orphan objects, `ATTACHED` rows whose object is gone, and `product_images` rows whose asset row is gone |
 | `load:baseline` · `load:register:*` | k6 mixes |
+| `load:cache-stampede` · `load:breakpoint` · `load:sku-contention` | Performance-experiment mixes (`test/load/`): cache stampede arms, open-model breakpoint ramp, single-SKU reservation contention. Each exports `--summary-export` JSON; authoritative numbers come from Prometheus, not k6 timing |
+| `load:public-read` | Anonymous read profile for a **deployed** instance (`BASE_URL=…`, `PROFILE=steady` \| `burst`). No Prometheus and no write journey — see [Measured performance](#measured-performance) for what it can and cannot answer |
 | `db:seed:perf` · `seed:users:bulk` · `db:metrics:users` | Planner-oriented perf seed · bulk identity seed · DB benchmark capture |
 
 `:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `storage:verify:prod`) run the compiled
