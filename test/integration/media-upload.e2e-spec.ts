@@ -3,13 +3,13 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestAppWithObjectStorage } from '../setup/harness';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 // The env floor is 1024, and the point is a body that clears it — not a realistic image.
 const MAX_BYTES = 1024;
@@ -36,17 +36,11 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
 
   beforeAll(async () => {
     storage = await startObjectStorage();
-    app = await createTestApp({
-      STORAGE_ENDPOINT: storage.endpoint,
-      STORAGE_BUCKET: storage.bucket,
-      STORAGE_ACCESS_KEY_ID: storage.accessKeyId,
-      STORAGE_SECRET_ACCESS_KEY: storage.secretAccessKey,
-      MEDIA_MAX_BYTES: String(MAX_BYTES),
-    });
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithObjectStorage(storage, { MEDIA_MAX_BYTES: String(MAX_BYTES) }));
   }, 180_000);
 
+  // Explicit rather than `closeAppAfterAll`: the app has to go before the bucket it still holds
+  // connections to.
   afterAll(async () => {
     await app?.close();
     await storage?.stop();

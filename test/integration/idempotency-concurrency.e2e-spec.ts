@@ -3,17 +3,17 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { computeRequestHash } from '../../src/shared/idempotency';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { countHeldReservations, getStockView, seedStock } from '../setup/fixtures/inventory.fixture';
+import { addToCart } from '../setup/fixtures/order-flow.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // The count on the DB, not the HTTP status, is the verdict: a replay is also a 201, so status alone
 // cannot tell one order from two.
@@ -31,28 +31,16 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const server = () => app.getHttpServer();
 
   async function newUser(): Promise<{ token: string; userId: string }> {
     const { accessToken, user } = await createTestUser(app);
     return { token: accessToken, userId: user.id };
-  }
-
-  async function addToCart(token: string, skuId: string, quantity: number): Promise<void> {
-    await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId, quantity }).expect(200);
   }
 
   function postOrder(token: string, key: string): request.Test {
@@ -68,7 +56,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
-    await addToCart(token, variantId, 1);
+    await addToCart(app, token, variantId, 1);
     const key = randomUUID();
 
     const settled = await Promise.allSettled(range(CONTENDERS).map(() => postOrder(token, key)));
@@ -98,7 +86,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
-    await addToCart(token, variantId, 1);
+    await addToCart(app, token, variantId, 1);
 
     const first = await postOrder(token, randomUUID());
     const second = await postOrder(token, randomUUID());
@@ -120,7 +108,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
-    await addToCart(token, variantId, 1);
+    await addToCart(app, token, variantId, 1);
     const key = randomUUID();
 
     const first = await postOrder(token, key);
@@ -138,7 +126,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
-    await addToCart(token, variantId, 1);
+    await addToCart(app, token, variantId, 1);
     const key = randomUUID();
 
     const first = await postOrder(token, key);
@@ -173,7 +161,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const { token, userId } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
-    await addToCart(token, variantId, 1);
+    await addToCart(app, token, variantId, 1);
     const key = randomUUID();
     const scope = `user:${userId}`;
 
@@ -208,7 +196,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, 1);
-    await addToCart(token, variantId, 2); // order needs 2, only 1 on hand → whole checkout rolls back
+    await addToCart(app, token, variantId, 2); // order needs 2, only 1 on hand → whole checkout rolls back
     const key = randomUUID();
 
     const first = await postOrder(token, key);

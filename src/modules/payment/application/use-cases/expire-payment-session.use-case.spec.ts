@@ -1,11 +1,10 @@
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { PaymentStatus } from '../../domain/payment-status';
 import { Payment } from '../../domain/payment.entity';
-import type { PaymentGatewayPort } from '../ports/payment-gateway.port';
-import type { PaymentRepositoryPort } from '../ports/payment-repository.port';
+import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';
 import { ExpirePaymentSessionUseCase } from './expire-payment-session.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -31,13 +30,13 @@ function build(found: Payment | null = payment()) {
   const updateStatus = vi.fn().mockResolvedValue(payment(PaymentStatus.EXPIRED));
   const expireSession = vi.fn().mockResolvedValue('expired');
   const recordRefundOwed = vi.fn();
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const logger = { error: vi.fn(), info: vi.fn() };
 
   const useCase = new ExpirePaymentSessionUseCase(
-    { findByOrderId, updateStatus } as unknown as PaymentRepositoryPort,
-    { expireSession } as unknown as PaymentGatewayPort,
-    { recordRefundOwed } as unknown as MetricsPort,
-    logger as unknown as PinoLogger,
+    fakePaymentRepository({ findByOrderId, updateStatus }),
+    fakePaymentGateway({ expireSession }),
+    fakeMetricsPort({ recordRefundOwed }),
+    fakePinoLogger(logger),
   );
   return { useCase, findByOrderId, updateStatus, expireSession, recordRefundOwed, logger };
 }

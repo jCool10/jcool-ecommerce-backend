@@ -1,13 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
 import { inArray, sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { seedProducts } from '../setup/fixtures/catalog.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 const PAGE = 10;
 // More pages than any fixture here needs: a cursor that fails to advance pages forever, and a
@@ -25,19 +24,11 @@ describe('Catalog reindex paging (integration, real Postgres)', () => {
   let repo: DrizzleProductRepository;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool());
     repo = app.get(DrizzleProductRepository);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   // Postgres stores created_at to the microsecond; every row is stamped to the same one, so a
   // timestamp-keyed cursor has no tiebreak left to advance on.

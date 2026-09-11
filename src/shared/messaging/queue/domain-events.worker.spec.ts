@@ -1,7 +1,7 @@
-import type { ConfigService } from '@nestjs/config';
 import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type { DeadLetterRouter } from './dead-letter';
 import type { DomainEventProcessor } from './domain-event.processor';
 import { DomainEventsWorker } from './domain-events.worker';
@@ -14,14 +14,7 @@ const CONFIG: Record<string, unknown> = {
 };
 
 function build(overrides: Record<string, unknown> = {}) {
-  const values = { ...CONFIG, ...overrides };
-  const config = {
-    get: (key: string) => values[key],
-    getOrThrow: (key: string) => {
-      if (values[key] === undefined) throw new Error(`Missing config ${key}`);
-      return values[key];
-    },
-  } as unknown as ConfigService;
+  const config = fakeConfigService({ ...CONFIG, ...overrides });
   const logger = { info: vi.fn(), error: vi.fn() };
 
   const worker = new DomainEventsWorker(
@@ -39,7 +32,9 @@ function build(overrides: Record<string, unknown> = {}) {
 // real Redis connection and belongs to the e2e suite.
 describe('DomainEventsWorker', () => {
   it('reads its config at construction, so a missing key fails at boot rather than on first job', () => {
-    expect(() => build({ 'queue.prefix': undefined })).toThrow(/Missing config queue.prefix/);
+    // Matches the key, not the fixture's phrasing: the claim is that the worker asked for
+    // `queue.prefix` before doing any work, not how the double words its refusal.
+    expect(() => build({ 'queue.prefix': undefined })).toThrow(/queue\.prefix/);
   });
 
   it('opens no connection while disabled', async () => {

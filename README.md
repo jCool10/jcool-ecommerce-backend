@@ -19,7 +19,7 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
 | | |
 | --- | --- |
 | **Scale** | 7 bounded contexts · 559 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
-| **Tests** | 1,161 unit tests (160 files, hermetic) + 60 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers |
+| **Tests** | 1,131 unit tests (160 files, hermetic) + 68 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers, run four workers wide |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `npm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
@@ -431,16 +431,21 @@ development and test.
 Two tiers, kept separate on purpose.
 
 ```bash
-npm test           # 1,161 unit tests, 160 files — hermetic, no Docker
+npm test           # 1,131 unit tests, 160 files — hermetic, no Docker
 npm run test:cov   # same, with the coverage floor CI enforces
-npm run test:e2e   # 60 integration suites, 504 tests — requires Docker
+npm run test:e2e   # 68 integration suites, 522 tests — requires Docker
 ```
+
+`E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1`
+serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the
+number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
 
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated
   ids are stable within a run.
 - **Integration** (`test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB
-  mocking. A single `globalSetup` boots **Postgres + Redis** once per run and applies the committed
-  migrations; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit**
+  mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed
+  migrations to a template database and clones one database per worker from it; the media, search and
+  mail suites additionally boot **MinIO, Meilisearch and Mailpit**
   per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't
   use. So the suite exercises real S3, a real search engine and a real SMTP server.
 

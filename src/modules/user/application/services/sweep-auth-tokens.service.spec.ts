@@ -1,5 +1,6 @@
-import type { ConfigService } from '@nestjs/config';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { useFakeClock } from '@shared/testing/fake-clock';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { RetentionSweepRegistry } from '@shared/retention';
 import type {
   EmailVerificationTokenRepositoryPort,
@@ -18,12 +19,7 @@ const CONFIG: Record<string, unknown> = {
 
 function build(overrides: Record<string, unknown> = {}) {
   const values = { ...CONFIG, ...overrides };
-  const config = {
-    getOrThrow: (key: string) => {
-      if (values[key] === undefined) throw new Error(`Missing config key: ${key}`);
-      return values[key];
-    },
-  } as unknown as ConfigService;
+  const config = fakeConfigService(values);
 
   const emailVerification = { deleteSpentBefore: vi.fn().mockResolvedValue(0) };
   const passwordReset = { deleteSpentBefore: vi.fn().mockResolvedValue(0) };
@@ -48,14 +44,7 @@ const byName = (service: SweepAuthTokensService, name: string) => {
 };
 
 describe('SweepAuthTokensService', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  useFakeClock(NOW);
 
   it('registers each token table as its own sweep', () => {
     const { make, registry } = build();

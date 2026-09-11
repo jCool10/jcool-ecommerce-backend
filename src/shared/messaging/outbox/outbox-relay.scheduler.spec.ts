@@ -1,7 +1,7 @@
-import type { ConfigService } from '@nestjs/config';
 import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OutboxRelay, RelayTickSummary } from './outbox-relay';
 import { OutboxRelayScheduler } from './outbox-relay.scheduler';
@@ -16,7 +16,7 @@ const IDLE: RelayTickSummary = { published: 0, failed: 0 };
 
 function build(overrides: Record<string, unknown> = {}, runOnce = vi.fn().mockResolvedValue(IDLE)) {
   const values = { ...CONFIG, ...overrides };
-  const config = { get: (key: string) => values[key] } as unknown as ConfigService;
+  const config = fakeConfigService(values);
   const registry = { addInterval: vi.fn(), deleteInterval: vi.fn(), doesExist: vi.fn().mockReturnValue(true) };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const make = () =>
@@ -26,7 +26,7 @@ function build(overrides: Record<string, unknown> = {}, runOnce = vi.fn().mockRe
       registry as unknown as SchedulerRegistry,
       // Pass-through: correlation is asserted in job-context.spec.ts.
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
-      logger as unknown as PinoLogger,
+      fakePinoLogger(logger),
     );
   return { make, registry, logger, runOnce };
 }

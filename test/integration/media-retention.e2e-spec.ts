@@ -8,15 +8,15 @@ import {
   MediaAssetUnavailableError,
   type MediaFacade,
 } from '../../src/modules/media/application/public/media-facade.port';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { RetentionSweepRegistry, type RetentionSweep } from '../../src/shared/retention';
 import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAppWithObjectStorage } from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
-const METRICS_TOKEN = 'e2e-media-metrics-token';
 // The window after which a SWEEPING claim is assumed dead — the scheduler's own per-sweep timeout,
 // since a claim older than that cannot still be in flight. One minute, so a claim stamped "now" and
 // one stamped five minutes ago land either side of it regardless of how slow the runner is.
@@ -41,16 +41,10 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
 
   beforeAll(async () => {
     storage = await startObjectStorage();
-    app = await createTestApp({
-      STORAGE_ENDPOINT: storage.endpoint,
-      STORAGE_BUCKET: storage.bucket,
-      STORAGE_ACCESS_KEY_ID: storage.accessKeyId,
-      STORAGE_SECRET_ACCESS_KEY: storage.secretAccessKey,
+    ({ app, pool, db } = await createTestAppWithObjectStorage(storage, {
       RETENTION_SWEEP_TIMEOUT_MS: String(SWEEP_TIMEOUT_MS),
-      METRICS_TOKEN,
-    });
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
+    }));
     facade = app.get<MediaFacade>(MEDIA_FACADE);
 
     const registered = app
@@ -61,6 +55,8 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
     sweep = registered;
   }, 180_000);
 
+  // Explicit rather than `closeAppAfterAll`: the app has to go before the bucket it still holds
+  // connections to.
   afterAll(async () => {
     await app?.close();
     await storage?.stop();
@@ -209,10 +205,7 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   });
 
   async function reclaimedBytes(): Promise<number> {
-    const { text } = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
     const match = /^media_bytes_reclaimed_total (\d+(?:\.\d+)?)$/m.exec(text);
     if (!match) throw new Error('media_bytes_reclaimed_total is not exported');
     return Number(match[1]);

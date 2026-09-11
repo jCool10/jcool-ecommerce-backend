@@ -1,5 +1,6 @@
-import type { ConfigService } from '@nestjs/config';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { useFakeClock } from '@shared/testing/fake-clock';
 import { RetentionSweepRegistry } from '@shared/retention';
 import type { WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import { SweepWebhookEventsUseCase } from './sweep-webhook-events.use-case';
@@ -11,12 +12,7 @@ const NOW = new Date('2026-09-07T12:00:00.000Z');
 const MISSING = Symbol('missing config');
 
 function build(days: unknown = 30) {
-  const config = {
-    getOrThrow: (key: string) => {
-      if (key !== 'retention.webhookEventDays' || days === MISSING) throw new Error(`Missing config key: ${key}`);
-      return days;
-    },
-  } as unknown as ConfigService;
+  const config = fakeConfigService(days === MISSING ? {} : { 'retention.webhookEventDays': days });
   const webhookEvents = { deleteReceivedBefore: vi.fn().mockResolvedValue(0) };
   const registry = new RetentionSweepRegistry();
   return {
@@ -27,14 +23,7 @@ function build(days: unknown = 30) {
 }
 
 describe('SweepWebhookEventsUseCase', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  useFakeClock(NOW);
 
   it('registers itself under its metric label', () => {
     const { make, registry } = build();

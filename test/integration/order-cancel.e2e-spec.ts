@@ -2,13 +2,12 @@ import type { INestApplication } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
 import { HandlePaymentWebhookUseCase } from '../../src/modules/payment/application/use-cases';
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
@@ -27,8 +26,8 @@ import {
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 const WEBHOOK_SECRET = 'whsec_e2e_order_cancel_secret_01234';
 const STOCK = 10;
@@ -50,18 +49,10 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
   let sku: SellableSku;
 
   beforeAll(async () => {
-    gateway = new FakeSignerGatewayAdapter(WEBHOOK_SECRET);
-    app = await createTestApp({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }, [
-      { provide: PAYMENT_GATEWAY, useValue: gateway },
-    ]);
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
     processor = app.get(DomainEventProcessor);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
   beforeEach(async () => {
     vi.restoreAllMocks();

@@ -1,9 +1,9 @@
 import { Logger } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bucketForEmail, encode, identityKeyFingerprint } from '@shared/identity';
 import type { DrizzleDB } from '@shared/infrastructure/database';
 import { normalizeEmail } from '@shared/kernel';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { IdentityBucketKeyVerifier } from './identity-bucket-key.verifier';
 import { identityKeyPin } from './schema/user.schema';
 
@@ -44,7 +44,7 @@ function fakeDb(options: FakeDbOptions = {}) {
 }
 
 const verifier = (db: DrizzleDB, key = KEY): IdentityBucketKeyVerifier =>
-  new IdentityBucketKeyVerifier(db, { getOrThrow: () => key } as unknown as ConfigService);
+  new IdentityBucketKeyVerifier(db, fakeConfigService({ 'identity.bucketKey': key }));
 
 describe('IdentityBucketKeyVerifier', () => {
   beforeEach(() => {
@@ -62,7 +62,10 @@ describe('IdentityBucketKeyVerifier', () => {
       const fingerprint = identityKeyFingerprint(KEY);
       const { db, values } = fakeDb({ pinInsert: () => Promise.resolve([{ fingerprint }]) });
 
-      await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
+      // That the boot succeeds and lands the row is asserted end to end; the singleton `id: 1` the
+      // pin is written under is not.
+      await verifier(db).onApplicationBootstrap();
+
       expect(values).toHaveBeenCalledWith({ id: 1, fingerprint });
     });
 

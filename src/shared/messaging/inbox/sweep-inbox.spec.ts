@@ -1,4 +1,4 @@
-import type { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database';
 import { RetentionSweepRegistry } from '@shared/retention';
@@ -8,12 +8,7 @@ import { SweepInbox } from './sweep-inbox';
 const MINIMUM_DAYS = MIN_INBOX_RETENTION_DAYS;
 
 function build(days: unknown) {
-  const config = {
-    getOrThrow: (key: string) => {
-      if (key !== 'retention.inboxDays') throw new Error(`Missing config key: ${key}`);
-      return days;
-    },
-  } as unknown as ConfigService;
+  const config = fakeConfigService({ 'retention.inboxDays': days });
   const registry = new RetentionSweepRegistry();
   return {
     registry,
@@ -47,11 +42,7 @@ describe('SweepInbox', () => {
   // A missing key would otherwise become NaN days, and `lt(processed_at, Invalid Date)` matches
   // nothing — a sweep that runs forever, reports success, and reclaims not one row.
   it('refuses to boot without the key at all', () => {
-    const config = {
-      getOrThrow: (key: string) => {
-        throw new Error(`Missing config key: ${key}`);
-      },
-    } as unknown as ConfigService;
+    const config = fakeConfigService({});
 
     expect(() => new SweepInbox({} as DrizzleDB, config, new RetentionSweepRegistry())).toThrow(/Missing config key/);
   });

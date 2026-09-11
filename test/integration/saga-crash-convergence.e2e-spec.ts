@@ -1,14 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Queue } from 'bullmq';
-import { eq, isNull } from 'drizzle-orm';
+import { isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
 import { SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
@@ -17,18 +16,20 @@ import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-ev
 import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import {
   auditLedgerInvariants,
+  lapseReservation,
   placeAndOpenSession,
   postWebhook,
   readOrder,
   readPayment,
+  readReservation,
   readStock,
   seedSellableSku,
   signOutcome,
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
+import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 const WEBHOOK_SECRET = 'whsec_e2e_crash_convergence_0123456789';
 const STOCK = 10;
@@ -54,12 +55,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   let sku: SellableSku;
 
   beforeAll(async () => {
-    gateway = new FakeSignerGatewayAdapter(WEBHOOK_SECRET);
-    app = await createTestApp({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }, [
-      { provide: PAYMENT_GATEWAY, useValue: gateway },
-    ]);
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
     relay = app.get(OutboxRelay);
     processor = app.get(DomainEventProcessor);
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
@@ -67,10 +63,10 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     writer = app.get<OutboxWriterPort>(OUTBOX_WRITER);
   });
 
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
+  // Explicit rather than `resetDatabaseBeforeEach`: the queue has to be emptied in the same hook and
+  // after the truncate, or a job left over from the previous test lands on rows that no longer exist.
   beforeEach(async () => {
     await resetDatabase(pool);
     await queue.obliterate({ force: true });
@@ -98,19 +94,6 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     }
     return results;
   };
-
-  async function readReservation(orderId: string) {
-    const [row] = await db.select().from(schema.reservations).where(eq(schema.reservations.orderId, orderId));
-    return row;
-  }
-
-  /** Age a hold past its expiry — the one thing a test cannot wait for. */
-  async function lapse(orderId: string): Promise<void> {
-    await db
-      .update(schema.reservations)
-      .set({ expiresAt: new Date(Date.now() - 30 * 60_000) })
-      .where(eq(schema.reservations.orderId, orderId));
-  }
 
   // Run twice: settling an order emits its own events, which need a second drain before the ledger
   // is quiet.
@@ -145,7 +128,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   async function expectFinalizeWasLost(orderId: string): Promise<void> {
     expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.SUCCEEDED);
     expect((await readOrder(app, orderId)).status).toBe(OrderStatus.PENDING);
-    expect((await readReservation(orderId)).status).toBe('HELD');
+    expect((await readReservation(app, orderId)).status).toBe('HELD');
   }
 
   it('converges an order whose finalize died inside its own transaction', async () => {
@@ -163,7 +146,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     await restartAndConverge();
 
     expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.PAID);
-    expect((await readReservation(order.orderId)).status).toBe('COMMITTED');
+    expect((await readReservation(app, order.orderId)).status).toBe('COMMITTED');
     expect(await readStock(app, sku.variantId)).toMatchObject({
       quantityOnHand: STOCK - QUANTITY,
       quantityReserved: 0,
@@ -222,7 +205,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   it('applies the expiry effect once when the worker dies before acknowledging it', async () => {
     const expireSession = vi.spyOn(gateway, 'expireSession');
     const order = await placeAndOpenSession(app, sku, QUANTITY);
-    await lapse(order.orderId);
+    await lapseReservation(app, order.orderId);
     await sweep.execute(SWEEP_ALL);
     await relay.runOnce(50);
     const [expiry] = (await queuedJobs()).filter((job) => job.eventType === 'order.expired');
@@ -242,12 +225,12 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
 
   it('converges an order no result ever arrives for', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
-    await lapse(order.orderId);
+    await lapseReservation(app, order.orderId);
 
     await restartAndConverge();
 
     expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.EXPIRED);
-    expect((await readReservation(order.orderId)).status).toBe('RELEASED');
+    expect((await readReservation(app, order.orderId)).status).toBe('RELEASED');
     // Nothing was sold, so every seeded unit is back on the shelf rather than stranded in a hold.
     expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
     expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.EXPIRED);
@@ -267,7 +250,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     // into three ordinary orders converging, and every assertion below still passes.
     await expectFinalizeWasLost(paid.orderId);
     await settle(failed, 'FAILED', 'evt_batch_failed').expect(200);
-    await lapse(abandoned.orderId);
+    await lapseReservation(app, abandoned.orderId);
 
     await restartAndConverge();
 

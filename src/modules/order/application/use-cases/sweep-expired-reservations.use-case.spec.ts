@@ -1,8 +1,9 @@
-import type { PinoLogger } from 'nestjs-pino';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OrderStatus } from '../../domain/order-status';
 import type { Order } from '../../domain/order.entity';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { useFakeClock } from '@shared/testing/fake-clock';
 import type { ExpiredHold, InventoryReservationPort } from '../ports/inventory-reservation.port';
 import type { FinalizeOrderUseCase } from './finalize-order.use-case';
 import type { FinalizeResult } from './finalize-order.types';
@@ -24,22 +25,19 @@ function finalized(): FinalizeResult {
 
 function build(holds: ExpiredHold[], execute = vi.fn().mockResolvedValue(finalized())) {
   const findExpiredHolds = vi.fn().mockResolvedValue(holds);
-  const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+  const logger = { warn: vi.fn() };
   const recordReservationExpiry = vi.fn();
   const useCase = new SweepExpiredReservationsUseCase(
     { findExpiredHolds } as unknown as InventoryReservationPort,
     { execute } as unknown as FinalizeOrderUseCase,
-    { recordReservationExpiry } as unknown as MetricsPort,
-    logger as unknown as PinoLogger,
+    fakeMetricsPort({ recordReservationExpiry }),
+    fakePinoLogger(logger),
   );
   return { useCase, findExpiredHolds, execute, logger, recordReservationExpiry };
 }
 
 describe('SweepExpiredReservationsUseCase', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-  });
+  useFakeClock(NOW);
 
   it('expires every lapsed hold it is handed', async () => {
     const { useCase, execute } = build([hold(1), hold(2)]);

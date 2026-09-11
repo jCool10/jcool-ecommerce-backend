@@ -1,4 +1,4 @@
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { describe, expect, it, vi } from 'vitest';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
@@ -31,7 +31,7 @@ function build() {
   const closeCancelled = vi.fn().mockResolvedValue(undefined);
   const sendMail = vi.fn().mockResolvedValue(undefined);
   const prepare = vi.fn().mockResolvedValue(sendMail);
-  const handler = new OrderEventsHandler({ info } as unknown as PinoLogger);
+  const handler = new OrderEventsHandler(fakePinoLogger({ info }));
   return {
     dispatcher: new DomainEventDispatcher(
       handler,

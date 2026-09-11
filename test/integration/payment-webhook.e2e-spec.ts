@@ -2,16 +2,16 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { addToCart, postWebhook } from '../setup/fixtures/order-flow.fixture';
+import { newUserToken } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import {
   checkoutSessionCompleted,
   checkoutSessionExpired,
@@ -33,18 +33,10 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    app = await createTestApp({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET });
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }));
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const server = () => app.getHttpServer();
 
@@ -55,14 +47,10 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     sessionId: string;
     charge: SessionCharge;
   }> {
-    const { accessToken: token } = await createTestUser(app);
+    const token = await newUserToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 150_000 });
     await seedStock(app, variantId, 5);
-    await request(server())
-      .post('/cart/items')
-      .set(authHeader(token))
-      .send({ skuId: variantId, quantity: 1 })
-      .expect(200);
+    await addToCart(app, token, variantId, 1);
     const order = await request(server())
       .post('/orders')
       .set(authHeader(token))
@@ -82,10 +70,6 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     };
   }
 
-  function postWebhook(signed: SignedWebhook) {
-    return request(server()).post('/webhooks/payment').set(signed.headers).send(signed.rawBody);
-  }
-
   async function webhookRows() {
     return db.select().from(schema.webhookEvents);
   }
@@ -102,7 +86,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
       event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_ok_1', paymentIntent: 'pi_e2e_123' }),
     });
 
-    const res = await postWebhook(signed);
+    const res = await postWebhook(app, signed);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'processed' });
@@ -121,7 +105,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     // Mutate one byte AFTER signing — the HMAC no longer covers the bytes we send (raw-body sensitivity).
     const tampered: SignedWebhook = { ...signed, rawBody: `${signed.rawBody} ` };
 
-    const res = await postWebhook(tampered);
+    const res = await postWebhook(app, tampered);
 
     expect(res.status).toBe(401);
     expect(await webhookRows()).toHaveLength(0);
@@ -137,7 +121,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
       timestampSec: oneHourAgo,
     });
 
-    const res = await postWebhook(signed);
+    const res = await postWebhook(app, signed);
 
     expect(res.status).toBe(401);
     expect(await webhookRows()).toHaveLength(0);
@@ -151,8 +135,8 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
       event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_dup_1', paymentIntent: 'pi_dup' }),
     });
 
-    const first = await postWebhook(signed);
-    const second = await postWebhook(signed); // byte-identical redelivery
+    const first = await postWebhook(app, signed);
+    const second = await postWebhook(app, signed); // byte-identical redelivery
 
     expect(first.status).toBe(200);
     expect(first.body).toEqual({ status: 'processed' });
@@ -173,7 +157,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     // Fire both byte-identical deliveries at once: the reason insert+apply live in ONE tx behind the
     // UNIQUE(provider, event_id) index. The loser blocks on the winner's uncommitted insert, then
     // sees the committed row and no-ops — exactly one apply, no double-charge.
-    const results = await Promise.all([postWebhook(signed), postWebhook(signed)]);
+    const results = await Promise.all([postWebhook(app, signed), postWebhook(app, signed)]);
 
     for (const r of results) expect(r.status).toBe(200);
     expect(results.map((r) => r.body.status).sort()).toEqual(['duplicate', 'processed']);
@@ -184,6 +168,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   it('skips an out-of-order failure after success without downgrading the payment (200 skipped, event SKIPPED)', async () => {
     const { paymentId, sessionId, charge } = await openPayment();
     await postWebhook(
+      app,
       signWebhook({
         secret: WEBHOOK_SECRET,
         event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_win', paymentIntent: 'pi_win' }),
@@ -191,6 +176,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     ).then((r) => expect(r.status).toBe(200));
 
     const late = await postWebhook(
+      app,
       signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionExpired(sessionId, { eventId: 'evt_late_fail' }) }),
     );
 
@@ -219,7 +205,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
       ),
     });
 
-    const res = await postWebhook(signed);
+    const res = await postWebhook(app, signed);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'skipped' }); // reason not leaked over HTTP; asserted at the DB below
@@ -230,6 +216,7 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   it('finalizes the Order to PAID after a success webhook (payment settle drives order finalize)', async () => {
     const { token, orderId, sessionId, charge } = await openPayment();
     await postWebhook(
+      app,
       signWebhook({
         secret: WEBHOOK_SECRET,
         event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_final' }),

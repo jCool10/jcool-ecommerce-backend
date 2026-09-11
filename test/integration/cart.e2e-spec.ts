@@ -1,15 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { authHeader } from '../setup/auth.helper';
-import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { archiveProduct, createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
+import { newUserToken } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // A syntactically-valid UUID that no fixture creates — used to probe 404 paths
 // (unknown SKU on add, absent line on patch) without a text→uuid cast 500.
@@ -21,38 +17,14 @@ const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 describe('Cart (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let db: DrizzleDB;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const server = () => app.getHttpServer();
-
-  async function newUser(): Promise<string> {
-    const { accessToken } = await createTestUser(app);
-    return accessToken;
-  }
-
-  // Directly repriced in the DB (mirrors the fixtures) to exercise "cart reflects
-  // the new price" without going through the admin write API.
-  async function repriceSku(variantId: string, amountMinor: number): Promise<void> {
-    await db.update(schema.prices).set({ amountMinor }).where(eq(schema.prices.variantId, variantId));
-  }
-
-  async function archiveProduct(productId: string): Promise<void> {
-    await db.update(schema.products).set({ status: 'ARCHIVED' }).where(eq(schema.products.id, productId));
-  }
 
   describe('auth', () => {
     it('rejects an unauthenticated GET /cart with 401', async () => {
@@ -68,7 +40,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   describe('GET /cart', () => {
     it('auto-creates an empty cart on first read (200, items [], subtotal 0)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
 
       const res = await request(server()).get('/cart').set(authHeader(token));
 
@@ -78,7 +50,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('sums the subtotal from live prices across lines', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const a = await createTestProduct(app, { priceMinor: 199_000 });
       const b = await createTestProduct(app, { priceMinor: 50_000 });
 
@@ -96,7 +68,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   describe('POST /cart/items', () => {
     it('adds a SKU to an empty cart (200, one line with the right quantity + live price)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 199_000 });
 
       const res = await request(server())
@@ -117,7 +89,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('accumulates quantity on a repeat SKU instead of adding a second line', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
 
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
@@ -133,7 +105,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects quantity = 0 with 400 (DTO validation)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app);
 
       const res = await request(server())
@@ -145,7 +117,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a negative quantity with 400 (DTO validation)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app);
 
       const res = await request(server())
@@ -157,7 +129,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a quantity above the per-line cap with 400, not a 500 (int4 overflow guard)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app);
 
       const res = await request(server())
@@ -169,7 +141,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('returns 404 when the SKU does not exist in Catalog', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
 
       const res = await request(server())
         .post('/cart/items')
@@ -182,7 +154,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   describe('PATCH /cart/items/:skuId', () => {
     it('sets a line to an absolute quantity (200)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
 
@@ -197,7 +169,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('returns 404 when the SKU is not in the cart', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app);
 
       const res = await request(server())
@@ -211,7 +183,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   describe('DELETE /cart/items/:skuId', () => {
     it('removes one line from the cart (200)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app);
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 1 });
 
@@ -222,7 +194,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('is idempotent — deleting an absent line still returns 200', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
 
       const res = await request(server()).delete(`/cart/items/${ABSENT_UUID}`).set(authHeader(token));
 
@@ -233,7 +205,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   describe('DELETE /cart', () => {
     it('clears every line (200, empty cart)', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const a = await createTestProduct(app);
       const b = await createTestProduct(app);
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: a.variantId, quantity: 1 });
@@ -249,11 +221,11 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   describe('cart is scratch space (live price, not frozen)', () => {
     it('reflects a Catalog price change on the next read', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
 
-      await repriceSku(variantId, 150_000); // price changes in Catalog after the add
+      await repriceSku(app, variantId, 150_000); // price changes in Catalog after the add
 
       const res = await request(server()).get('/cart').set(authHeader(token));
 
@@ -263,11 +235,11 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
 
     it('keeps an archived-after-add line in the subtotal, flagged isActive:false', async () => {
-      const token = await newUser();
+      const token = await newUserToken(app);
       const { productId, variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
 
-      await archiveProduct(productId);
+      await archiveProduct(app, productId);
 
       const res = await request(server()).get('/cart').set(authHeader(token));
 
@@ -280,8 +252,8 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   describe('per-user isolation', () => {
     it("does not leak one user's items into another user's cart", async () => {
-      const tokenA = await newUser();
-      const tokenB = await newUser();
+      const tokenA = await newUserToken(app);
+      const tokenB = await newUserToken(app);
       const { variantId } = await createTestProduct(app);
       await request(server()).post('/cart/items').set(authHeader(tokenA)).send({ skuId: variantId, quantity: 1 });
 

@@ -1,4 +1,4 @@
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { Counter, Gauge, Histogram } from 'prom-client';
 import { describe, expect, it, vi } from 'vitest';
 import { BusinessMetrics } from './business.metrics';
@@ -28,7 +28,7 @@ function build() {
   const breakerCallInc = vi.fn();
   const rateLimitInc = vi.fn();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
-  const logger = { warn } as unknown as PinoLogger;
+  const logger = fakePinoLogger({ warn });
   const metrics = new BusinessMetrics(
     { inc: ordersInc } as unknown as Counter<string>,
     { observe: valueObserve } as unknown as Histogram<string>,

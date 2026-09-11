@@ -3,8 +3,8 @@ import type { OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.po
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import { WebhookEvent } from '../../domain/webhook-event.entity';
-import type { PaymentGatewayPort, VerifiedEvent } from '../ports/payment-gateway.port';
-import type { PaymentRepositoryPort } from '../ports/payment-repository.port';
+import type { VerifiedEvent } from '../ports/payment-gateway.port';
+import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';
 import type { WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import type { TransactionRunnerPort } from '../ports/transaction-runner.port';
 import { ProcessWebhookEventUseCase } from './process-webhook-event.use-case';
@@ -78,13 +78,8 @@ function build(opts: { verify: VerifiedEvent; inserted?: boolean; existing?: Pay
   const verifyAndParseEvent = vi.fn().mockReturnValue(opts.verify);
 
   const webhookEvents = { insertIfNew, markProcessed, markSkipped } as unknown as WebhookEventRepositoryPort;
-  const payments = {
-    findByProviderSessionId,
-    updateStatus,
-    findByOrderId: vi.fn(),
-    create: vi.fn(),
-  } as unknown as PaymentRepositoryPort;
-  const gateway = { provider: 'stripe', createSession: vi.fn(), verifyAndParseEvent } as unknown as PaymentGatewayPort;
+  const payments = fakePaymentRepository({ findByProviderSessionId, updateStatus });
+  const gateway = fakePaymentGateway({ verifyAndParseEvent });
   // A sentinel tx handle the runner threads into `work`; tests assert every DB call received THIS
   // exact object, proving the insert + apply + mark all run inside the one transaction.
   const tx = { __tx: true };

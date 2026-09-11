@@ -1,20 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../domain/entities/user.entity';
 import type { UserRepositoryPort } from '../ports';
+import { EmailLookupUserRepository } from '../../testing/user-repository.double';
 import type { EmailVerificationService, VerificationRecipient } from '../services';
 import { ResendVerificationUseCase } from './resend-verification.use-case';
 
 function makeUser(emailVerifiedAt: Date | null): User {
   return new User('u1', 'user@example.com', 'hash', 'CUSTOMER', new Date(), new Date(), emailVerifiedAt);
-}
-
-class MockUserRepository implements Partial<UserRepositoryPort> {
-  user: User | null = null;
-  lastFindEmail?: string;
-  findByEmail(email: string): Promise<User | null> {
-    this.lastFindEmail = email;
-    return Promise.resolve(this.user);
-  }
 }
 
 class MockEmailVerification {
@@ -26,12 +18,12 @@ class MockEmailVerification {
 }
 
 describe('ResendVerificationUseCase', () => {
-  let repo: MockUserRepository;
+  let repo: EmailLookupUserRepository;
   let emailVerification: MockEmailVerification;
   let useCase: ResendVerificationUseCase;
 
   beforeEach(() => {
-    repo = new MockUserRepository();
+    repo = new EmailLookupUserRepository();
     emailVerification = new MockEmailVerification();
     useCase = new ResendVerificationUseCase(
       repo as unknown as UserRepositoryPort,

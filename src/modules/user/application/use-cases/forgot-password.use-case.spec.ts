@@ -1,20 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../domain/entities/user.entity';
 import type { UserRepositoryPort } from '../ports';
+import { EmailLookupUserRepository } from '../../testing/user-repository.double';
 import type { PasswordResetService, ResetRecipient } from '../services';
 import { ForgotPasswordUseCase } from './forgot-password.use-case';
 
 function makeUser(emailVerifiedAt: Date | null = null): User {
   return new User('u1', 'user@example.com', 'hash', 'CUSTOMER', new Date(), new Date(), emailVerifiedAt);
-}
-
-class MockUserRepository implements Partial<UserRepositoryPort> {
-  user: User | null = null;
-  lastFindEmail?: string;
-  findByEmail(email: string): Promise<User | null> {
-    this.lastFindEmail = email;
-    return Promise.resolve(this.user);
-  }
 }
 
 class MockPasswordReset {
@@ -26,12 +18,12 @@ class MockPasswordReset {
 }
 
 describe('ForgotPasswordUseCase', () => {
-  let repo: MockUserRepository;
+  let repo: EmailLookupUserRepository;
   let passwordReset: MockPasswordReset;
   let useCase: ForgotPasswordUseCase;
 
   beforeEach(() => {
-    repo = new MockUserRepository();
+    repo = new EmailLookupUserRepository();
     passwordReset = new MockPasswordReset();
     useCase = new ForgotPasswordUseCase(
       repo as unknown as UserRepositoryPort,

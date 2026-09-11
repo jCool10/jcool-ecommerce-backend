@@ -1,8 +1,8 @@
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { OrderStatus } from '../../domain/order-status';
 import type { InventoryReservationPort } from '../ports/inventory-reservation.port';
 import type { OrderRepositoryPort } from '../ports/order-repository.port';
@@ -15,13 +15,13 @@ const CALLER_TX = Symbol('tx') as unknown as DrizzleTx;
 function build(withTransaction: () => Promise<FinalizeResult>) {
   const recordSagaStep = vi.fn();
   const recordCompensation = vi.fn();
-  const logger = { info: vi.fn(), warn: vi.fn() };
+  const logger = { info: vi.fn() };
   const useCase = new FinalizeOrderUseCase(
     { withTransaction: vi.fn(withTransaction) } as unknown as OrderRepositoryPort,
     {} as unknown as InventoryReservationPort,
     {} as unknown as OutboxWriterPort,
-    { recordSagaStep, recordCompensation } as unknown as MetricsPort,
-    logger as unknown as PinoLogger,
+    fakeMetricsPort({ recordSagaStep, recordCompensation }),
+    fakePinoLogger(logger),
   );
   return { useCase, recordSagaStep, recordCompensation, logger };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
 import { CartItem } from '../domain/cart-item.entity';
 import type { CartRepositoryPort } from './ports/cart-repository.port';
 import type { CartSkuView, CatalogQueryPort } from './ports/catalog-query.port';
@@ -20,7 +20,7 @@ function build(opts: { items?: CartItem[]; views?: CartSkuView[] } = {}) {
     findItems: vi.fn().mockResolvedValue(items),
   } as unknown as CartRepositoryPort;
   const catalog = { getSkuView: vi.fn(), getSkuViews } as CatalogQueryPort;
-  const metrics = { recordCartOperation: vi.fn() } as unknown as MetricsPort;
+  const metrics = fakeMetricsPort();
 
   return { service: new CartService(repo, catalog, metrics), getSkuViews };
 }

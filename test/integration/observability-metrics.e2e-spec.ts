@@ -1,20 +1,22 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
 
 // The guarded /metrics endpoint and the RED route-template label, over the real HTTP stack.
-// METRICS_TOKEN is set before the app builds so the ConfigModule factory picks it up.
-const METRICS_TOKEN = 'e2e-metrics-token-abcdef';
 
 describe('Metrics endpoint (integration)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
+    // Set before the app builds so the ConfigModule factory picks it up.
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
     app = await createTestApp();
   });
 
+  // Explicit rather than `closeAppAfterAll`: the token has to be cleared too, or the next file in
+  // this worker boots with /metrics unguarded.
   afterAll(async () => {
     delete process.env.METRICS_TOKEN;
     await app.close();
@@ -29,10 +31,7 @@ describe('Metrics endpoint (integration)', () => {
   });
 
   it('exposes default + RED + business metrics with the correct token', async () => {
-    const res = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
     const body = res.text;
     // Default (saturation): event-loop lag proves collectDefaultMetrics ran.
@@ -67,10 +66,7 @@ describe('Metrics endpoint (integration)', () => {
     const rawId = 'zzz-cardinality-probe-9f1c';
     await request(app.getHttpServer()).get(`/products/${rawId}`);
 
-    const res = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
     expect(res.text).toContain('route="/products/:idOrSlug"');
     expect(res.text).not.toContain(rawId);
@@ -81,10 +77,7 @@ describe('Metrics endpoint (integration)', () => {
     // (this stack sets res.statusCode before the tap fires).
     await request(app.getHttpServer()).get('/products').expect(200);
 
-    const res = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
     expect(res.text).toMatch(/http_requests_total\{[^}]*route="\/products"[^}]*status_code="200"/);
   });

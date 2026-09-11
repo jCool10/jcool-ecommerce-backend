@@ -1,6 +1,7 @@
-import type { ConfigService } from '@nestjs/config';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { useFakeClock } from '@shared/testing/fake-clock';
 import { RetentionSweepRegistry } from '@shared/retention';
 import { SweepPublishedOutbox } from './sweep-published-outbox';
 
@@ -11,12 +12,7 @@ const NOW = new Date('2026-09-07T12:00:00.000Z');
 const MISSING = Symbol('missing config');
 
 function build(days: unknown = 30) {
-  const config = {
-    getOrThrow: (key: string) => {
-      if (key !== 'retention.outboxDays' || days === MISSING) throw new Error(`Missing config key: ${key}`);
-      return days;
-    },
-  } as unknown as ConfigService;
+  const config = fakeConfigService(days === MISSING ? {} : { 'retention.outboxDays': days });
   const registry = new RetentionSweepRegistry();
   return {
     registry,
@@ -28,14 +24,7 @@ function build(days: unknown = 30) {
 // asserting without a database is the cutoff's direction: a window ADDED to now would collect rows
 // the relay published moments ago.
 describe('SweepPublishedOutbox', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  useFakeClock(NOW);
 
   it('registers itself, so a table is never left uncollected by a forgotten wiring line', () => {
     const { make, registry } = build();
@@ -61,7 +50,7 @@ describe('SweepPublishedOutbox', () => {
       select: () => ({ from: () => ({ where: () => ({ limit: () => 'subquery' }) }) }),
       delete: () => ({ where: () => ({ returning }) }),
     } as unknown as DrizzleDB;
-    const config = { getOrThrow: () => 30 } as unknown as ConfigService;
+    const config = fakeConfigService({ 'retention.outboxDays': 30 });
 
     const sweep = new SweepPublishedOutbox(db, config, new RetentionSweepRegistry());
 
@@ -75,7 +64,7 @@ describe('SweepPublishedOutbox', () => {
       select: () => ({ from: () => ({ where: () => ({ limit }) }) }),
       delete: () => ({ where: () => ({ returning }) }),
     } as unknown as DrizzleDB;
-    const config = { getOrThrow: () => 30 } as unknown as ConfigService;
+    const config = fakeConfigService({ 'retention.outboxDays': 30 });
 
     const deleted = await new SweepPublishedOutbox(db, config, new RetentionSweepRegistry()).sweep(500);
 
@@ -93,7 +82,7 @@ describe('SweepPublishedOutbox', () => {
       select: () => ({ from: () => ({ where }) }),
       delete: () => ({ where: () => ({ returning: () => Promise.resolve([]) }) }),
     } as unknown as DrizzleDB;
-    const config = { getOrThrow: () => 30 } as unknown as ConfigService;
+    const config = fakeConfigService({ 'retention.outboxDays': 30 });
     const sweep = new SweepPublishedOutbox(db, config, new RetentionSweepRegistry());
 
     await sweep.sweep(500);

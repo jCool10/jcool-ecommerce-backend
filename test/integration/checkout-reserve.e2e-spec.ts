@@ -2,16 +2,16 @@ import type { INestApplication } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { addToCart } from '../setup/fixtures/order-flow.fixture';
+import { newUserToken } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // Single-thread proof that POST /orders holds stock in the SAME transaction as order creation, so a
 // short line rolls the WHOLE checkout back — no order, no hold, no orphan reservation. Runs on the
@@ -22,29 +22,12 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const server = () => app.getHttpServer();
-
-  async function newUser(): Promise<string> {
-    const { accessToken } = await createTestUser(app);
-    return accessToken;
-  }
-
-  async function addToCart(token: string, skuId: string, quantity: number): Promise<void> {
-    await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId, quantity }).expect(200);
-  }
 
   async function stockOf(variantId: string): Promise<{ onHand: number; reserved: number }> {
     const [row] = await db
@@ -68,13 +51,13 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   }
 
   it('checks out a two-line order when stock is sufficient (201 PENDING, reserved raised, HELD reservations)', async () => {
-    const token = await newUser();
+    const token = await newUserToken(app);
     const a = await createTestProduct(app, { priceMinor: 100_000 });
     const b = await createTestProduct(app, { priceMinor: 50_000 });
     await seedStock(app, a.variantId, 5);
     await seedStock(app, b.variantId, 5);
-    await addToCart(token, a.variantId, 2);
-    await addToCart(token, b.variantId, 3);
+    await addToCart(app, token, a.variantId, 2);
+    await addToCart(app, token, b.variantId, 3);
 
     const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
@@ -99,10 +82,10 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   });
 
   it('holds exactly the last available units (onHand == requested → available 0)', async () => {
-    const token = await newUser();
+    const token = await newUserToken(app);
     const p = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, p.variantId, 3);
-    await addToCart(token, p.variantId, 3);
+    await addToCart(app, token, p.variantId, 3);
 
     const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(201);
 
@@ -113,13 +96,13 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   });
 
   it('rolls the whole checkout back when one line is short (409, NO order persisted, no hold, no orphan reservation)', async () => {
-    const token = await newUser();
+    const token = await newUserToken(app);
     const a = await createTestProduct(app, { priceMinor: 100_000 });
     const b = await createTestProduct(app, { priceMinor: 50_000 });
     await seedStock(app, a.variantId, 5);
     await seedStock(app, b.variantId, 1); // short: the order needs 2
-    await addToCart(token, a.variantId, 2);
-    await addToCart(token, b.variantId, 2);
+    await addToCart(app, token, a.variantId, 2);
+    await addToCart(app, token, b.variantId, 2);
 
     const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 

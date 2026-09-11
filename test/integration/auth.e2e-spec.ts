@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   EMAIL_VERIFICATION_TOKEN_REPOSITORY,
   type EmailVerificationTokenRepositoryPort,
@@ -16,11 +16,9 @@ import {
   CSRF_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,
 } from '../../src/modules/user/interface/security/auth-cookie.constants';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { authHeader, cookieValueOf, loginAs, sessionHeaders, setCookieEntry } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 describe('Auth (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -29,17 +27,10 @@ describe('Auth (integration, real Postgres + Redis)', () => {
   const password = 'Password123!';
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   describe('Security headers (helmet)', () => {
     it('rides hardening headers on every response and strips X-Powered-By', async () => {
@@ -346,7 +337,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(401);
     });
 
-    it('rejects a refresh with no cookie at all with 401', async () => {
+    it('rejects a refresh with no cookie at all with 403', async () => {
       // No refresh cookie and no CSRF token → CSRF guard rejects first (403).
       const res = await request(app.getHttpServer()).post('/auth/refresh');
       expect(res.status).toBe(403);

@@ -1,16 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
 import { FinalizeOrderUseCase, SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import {
+  lapseReservation,
   placeAndOpenSession,
   postWebhook,
   readOrder,
@@ -19,12 +15,10 @@ import {
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
+import { createTestAppWithFakeGateway } from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
-// Pinned rather than inherited from the developer's .env, so the guarded scrape behaves the same on
-// every machine.
-const METRICS_TOKEN = 'e2e-saga-observability-token';
 const WEBHOOK_SECRET = 'whsec_e2e_saga_observability_0123456789';
 const STOCK = 10;
 const QUANTITY = 2;
@@ -38,24 +32,20 @@ const SWEEP_ALL = { graceSec: 0, batchSize: 50 };
 describe('Saga observability (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let db: DrizzleDB;
-  let gateway: FakeSignerGatewayAdapter;
   let sweep: SweepExpiredReservationsUseCase;
   let finalize: FinalizeOrderUseCase;
   let sku: SellableSku;
 
   beforeAll(async () => {
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
-    gateway = new FakeSignerGatewayAdapter(WEBHOOK_SECRET);
-    app = await createTestApp({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }, [
-      { provide: PAYMENT_GATEWAY, useValue: gateway },
-    ]);
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    // Pinned rather than inherited from the developer's .env, so the guarded scrape behaves the same
+    // on every machine.
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
+    ({ app, pool } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
     sweep = app.get(SweepExpiredReservationsUseCase);
     finalize = app.get(FinalizeOrderUseCase);
   });
 
+  // Explicit rather than `closeAppAfterAll`: the pinned token has to be cleared too.
   afterAll(async () => {
     delete process.env.METRICS_TOKEN;
     await app.close();
@@ -68,10 +58,7 @@ describe('Saga observability (integration, real Postgres)', () => {
   });
 
   async function scrape(): Promise<string> {
-    const { text } = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
     return text;
   }
 
@@ -92,16 +79,9 @@ describe('Saga observability (integration, real Postgres)', () => {
     return 0;
   }
 
-  async function lapse(orderId: string): Promise<void> {
-    await db
-      .update(schema.reservations)
-      .set({ expiresAt: new Date(Date.now() - 30 * 60_000) })
-      .where(eq(schema.reservations.orderId, orderId));
-  }
-
   async function lapsedOrder(): Promise<OpenOrder> {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
-    await lapse(order.orderId);
+    await lapseReservation(app, order.orderId);
     return order;
   }
 

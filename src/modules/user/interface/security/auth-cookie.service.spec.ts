@@ -1,6 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Response } from 'express';
 import { describe, expect, it } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { AUTH_COOKIE_PATH, CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from './auth-cookie.constants';
 import { AuthCookieService } from './auth-cookie.service';
 import type { CsrfTokenService } from './csrf-token.service';
@@ -12,13 +13,7 @@ interface CookieCall {
 }
 
 function config(cookieSecure: boolean, refreshTtl = '7d'): ConfigService {
-  return {
-    get: (key: string) => (key === 'app.cookieSecure' ? cookieSecure : undefined),
-    getOrThrow: (key: string) => {
-      if (key === 'auth.refreshTokenTtl') return refreshTtl;
-      throw new Error(`unexpected key ${key}`);
-    },
-  } as unknown as ConfigService;
+  return fakeConfigService({ 'app.cookieSecure': cookieSecure, 'auth.refreshTokenTtl': refreshTtl });
 }
 
 const csrf = { issue: () => 'issued-csrf-token' } as unknown as CsrfTokenService;

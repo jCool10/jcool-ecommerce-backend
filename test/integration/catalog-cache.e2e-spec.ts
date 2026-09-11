@@ -3,17 +3,16 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { withRedisDown } from '../setup/redis-outage';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
-
-const METRICS_TOKEN = 'e2e-catalog-cache-token-abcdef';
 
 // Writing straight through Drizzle bypasses the admin path that bumps the cache generation, so a
 // read that still returns the old value proves it came from Redis rather than Postgres — no spies
@@ -24,10 +23,7 @@ async function renameBehindTheCache(app: INestApplication, productId: string, na
 }
 
 async function readCacheCounter(app: INestApplication, result: 'hit_fresh' | 'miss' | 'error'): Promise<number> {
-  const res = await request(app.getHttpServer())
-    .get('/metrics')
-    .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-    .expect(200);
+  const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
   const match = new RegExp(`^catalog_cache_operations_total\\{result="${result}"\\} (\\d+)`, 'm').exec(res.text);
   return match ? Number(match[1]) : 0;
 }
@@ -37,23 +33,25 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
     // Pinned rather than defaulted: every assertion below is about an entry still being fresh, and a
     // local .env would otherwise get to decide how long that is.
-    app = await createTestApp({
+    ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '60',
       CACHE_STALE_WINDOW_SEC: '30',
       CACHE_TTL_JITTER_SEC: '10',
       CACHE_LOCK_WAIT_MS: '500',
-    });
-    pool = app.get<Pool>(PG_POOL);
+    }));
   });
 
+  // Explicit rather than `closeAppAfterAll`: the token has to be cleared too.
   afterAll(async () => {
     delete process.env.METRICS_TOKEN;
     await app.close();
   });
 
+  // Explicit rather than `resetDatabaseBeforeEach`: the cache generation has to be bumped after the
+  // truncate, or the next read is served from the previous test's rows out of Redis.
   beforeEach(async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
@@ -280,21 +278,19 @@ describe('Catalog cache freshness window (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
 
+  // A second app, not a second test on the first: the fresh window is read once when the module
+  // compiles, and this suite needs a 1s window where the first suite needs 60s.
   beforeAll(async () => {
     // Shortest fresh window the env schema accepts, so the stale path is reachable without a long
     // sleep. The stale window is pinned wide and jitter off: with a local `CACHE_STALE_WINDOW_SEC=0`
     // the entry would be deleted at the same moment it goes stale and this would test a miss.
-    app = await createTestApp({
+    ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '1',
       CACHE_STALE_WINDOW_SEC: '30',
       CACHE_TTL_JITTER_SEC: '0',
-    });
-    pool = app.get<Pool>(PG_POOL);
+    }));
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
   it('answers from the stale entry the moment the fresh window closes, then from the refill behind it', async () => {
     await resetDatabase(pool);
@@ -319,16 +315,17 @@ describe('Catalog cache hard expiry (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
 
+  // A third app for the third window configuration: stale-serving off, which neither suite above can
+  // reach without changing what they prove.
   beforeAll(async () => {
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
     // Stale-serving and jitter switched off, so the entry's whole life is the fresh window. This is
     // what bounds staleness after a missed invalidation: the three windows, and nothing beyond them.
-    app = await createTestApp({
+    ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '1',
       CACHE_STALE_WINDOW_SEC: '0',
       CACHE_TTL_JITTER_SEC: '0',
-    });
-    pool = app.get<Pool>(PG_POOL);
+    }));
   });
 
   afterAll(async () => {

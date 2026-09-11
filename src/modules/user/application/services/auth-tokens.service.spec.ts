@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '../../domain/entities/user.entity';
 import type { ActiveSession, CreateRefreshTokenInput, RefreshTokenRepositoryPort, RotateOutcome } from '../ports';
@@ -39,7 +39,7 @@ const ttls: Record<string, string> = {
   'auth.jwtAccessTtl': '15m',
   'auth.refreshTokenTtl': '7d',
 };
-const config = { getOrThrow: (key: string) => ttls[key] } as unknown as ConfigService;
+const config = fakeConfigService(ttls);
 
 describe('AuthTokensService', () => {
   const jwt = new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } });

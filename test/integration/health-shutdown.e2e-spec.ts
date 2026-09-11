@@ -1,7 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { ShutdownService } from '../../src/shared/health/shutdown.service';
+import { closeAppAfterAll } from '../setup/harness';
 import { createTestApp } from '../setup/test-app.factory';
 
 // Redis connects lazily (enableOfflineQueue:false), so the very first readiness probe can race
@@ -26,10 +27,7 @@ describe('Health — shutdown-aware readiness (real Postgres + Redis)', () => {
     app = await createTestApp();
     await waitForReady(app);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
   it('GET /health/ready → 200 while serving normally', async () => {
     const res = await request(app.getHttpServer()).get('/health/ready');

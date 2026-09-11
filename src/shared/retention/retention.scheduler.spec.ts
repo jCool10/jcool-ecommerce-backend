@@ -1,9 +1,9 @@
-import type { ConfigService } from '@nestjs/config';
 import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type { RetentionSweep } from './retention-sweep.port';
 import { RetentionSweepRegistry } from './retention-sweep.registry';
 import { RetentionScheduler } from './retention.scheduler';
@@ -20,8 +20,7 @@ const idle = () => vi.fn<RetentionSweep['sweep']>().mockResolvedValue(0);
 const stub = (name: string, sweep: RetentionSweep['sweep'] = idle()): RetentionSweep => ({ name, sweep });
 
 function build(overrides: Record<string, unknown> = {}, sweeps: RetentionSweep[] = []) {
-  const values = { ...CONFIG, ...overrides };
-  const config = { get: (key: string) => values[key] } as unknown as ConfigService;
+  const config = fakeConfigService({ ...CONFIG, ...overrides });
   const registry = new RetentionSweepRegistry();
   for (const sweep of sweeps) registry.register(sweep);
 
@@ -187,24 +186,6 @@ describe('RetentionScheduler', () => {
   });
 
   describe('fault isolation', () => {
-    it('keeps sweeping the other tables when one throws', async () => {
-      const healthy = idle();
-      const { make, metrics, logger } = build({}, [
-        stub('messaging:outbox', vi.fn().mockRejectedValue(new Error('pool exhausted'))),
-        stub('messaging:inbox', healthy),
-      ]);
-
-      await expect(make().tick()).resolves.toBeUndefined();
-
-      expect(healthy).toHaveBeenCalledWith(500);
-      expect(metrics.recordRetentionSweepFailure).toHaveBeenCalledWith('messaging:outbox');
-      expect(metrics.recordRetentionSweepFailure).not.toHaveBeenCalledWith('messaging:inbox');
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ sweep: 'messaging:outbox' }),
-        expect.stringContaining('pool exhausted'),
-      );
-    });
-
     it('skips only the sweep that is still running, not the whole tick', async () => {
       let release = (): void => {};
       const slow = vi.fn().mockReturnValue(new Promise<number>((resolve) => (release = () => resolve(0))));

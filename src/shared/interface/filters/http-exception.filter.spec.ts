@@ -1,11 +1,11 @@
 import { ArgumentsHost, BadRequestException, NotFoundException } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
 import { ClockStalledError } from '@shared/identity/identity.errors';
 import { DomainError } from '@shared/kernel/domain-error';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { HttpExceptionFilter } from './http-exception.filter';
 
 // Sentry is a no-op without a DSN at runtime; here we mock it to assert the filter's reporting
@@ -17,9 +17,9 @@ const captureException = vi.mocked(Sentry.captureException);
 // Minimal collaborators: real @shared/observability helpers read this CLS mock; no active OTel span
 // so getActiveTraceId() returns undefined (traceId absent, as in a no-tracing test run).
 const cls = { isActive: () => true, getId: () => 'req-1', get: () => undefined } as unknown as ClsService;
-const config = { get: () => 'test' } as unknown as ConfigService; // app.env !== 'development' → JSON branch
+const config = fakeConfigService({ 'app.env': 'test' }); // app.env !== 'development' → JSON branch
 const logWarn = vi.fn();
-const logger = { error: vi.fn(), warn: logWarn } as unknown as PinoLogger;
+const logger = fakePinoLogger({ warn: logWarn });
 
 // `routePath`/`baseUrl` let a test drive the concrete url and the matched template apart, which is
 // the divergence the route log field has to resolve in favour of the template. `routePath: null`

@@ -1,20 +1,20 @@
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { AuthAuditRecord } from '../application/ports';
 import { AuthAuditLogger } from './auth-audit.logger';
 
 function build(requestId: string | undefined) {
   const info = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
-  const logger = { info, warn } as unknown as PinoLogger;
+  const logger = fakePinoLogger({ info, warn });
   const cls = {
     isActive: () => requestId !== undefined,
     getId: () => requestId,
   } as unknown as ClsService;
   const recordAuthEvent = vi.fn<(event: string, outcome: 'success' | 'failure') => void>();
-  const metrics = { recordAuthEvent } as unknown as MetricsPort;
+  const metrics = fakeMetricsPort({ recordAuthEvent });
   return { logger: new AuthAuditLogger(logger, cls, metrics), info, warn, recordAuthEvent };
 }
 

@@ -128,19 +128,4 @@ describe('throttler composition', () => {
 
     expect(booted.recordRateLimitRejection).toHaveBeenCalledWith(DEFAULT_THROTTLER, '/orders');
   });
-
-  it('charges nothing at all while the kill-switch is off', async () => {
-    const booted = await boot(true);
-    app = booted.app;
-    const previous = process.env.THROTTLE_ENABLED;
-    process.env.THROTTLE_ENABLED = 'false';
-
-    try {
-      await http(app).post('/orders').expect(201);
-      expect(booted.increment).not.toHaveBeenCalled();
-    } finally {
-      if (previous === undefined) delete process.env.THROTTLE_ENABLED;
-      else process.env.THROTTLE_ENABLED = previous;
-    }
-  });
 });

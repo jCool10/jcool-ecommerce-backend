@@ -1,11 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // The verified-email login gate is off in the default harness, so this suite opts in explicitly
 // and boots its own app with AUTH_REQUIRE_VERIFIED_EMAIL='true'.
@@ -17,19 +15,17 @@ describe('Auth verified-email login gate (integration)', () => {
 
   beforeAll(async () => {
     process.env.AUTH_REQUIRE_VERIFIED_EMAIL = 'true';
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
 
+  // Explicit rather than `closeAppAfterAll`: the flag has to be cleared as well, or it leaks into
+  // other e2e suites sharing this worker's env.
   afterAll(async () => {
     await app.close();
-    // Don't leak the flag into other e2e suites sharing this worker's env.
     delete process.env.AUTH_REQUIRE_VERIFIED_EMAIL;
   });
 
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  resetDatabaseBeforeEach(() => pool);
 
   it('refuses login for an unverified account with 403 (credentials are correct)', async () => {
     const { user } = await createTestUser(app, { password }); // unverified

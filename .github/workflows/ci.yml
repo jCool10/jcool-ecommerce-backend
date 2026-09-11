@@ -64,3 +64,7 @@ jobs:
           # container. Trades auto-cleanup (unneeded here) for reliability on runners
           # that restrict spawning the reaper.
           TESTCONTAINERS_RYUK_DISABLED: 'true'
+          # Spec files run in parallel, one Postgres database and one Redis logical db per worker.
+          # ubuntu-latest is 4 vCPU, and the boot cost the parallelism hides is CPU-bound, so more
+          # workers than cores buys contention rather than wall clock.
+          E2E_WORKERS: '4'

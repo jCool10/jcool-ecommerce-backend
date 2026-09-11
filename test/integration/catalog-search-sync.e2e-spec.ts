@@ -4,10 +4,10 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../src/modules/catalog/application/ports';
 import { DrizzleProductRepository, reindexAll } from '../../src/modules/catalog/infrastructure';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { authHeader } from '../setup/auth.helper';
 import { createTestCategory } from '../setup/fixtures/catalog.fixture';
 import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 import {
   resetSearchIndex,
@@ -42,9 +42,10 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
 
   beforeAll(async () => {
     engine = await startSearchEngine();
-    app = await createTestApp({ SEARCH_ENABLED: 'true', SEARCH_URL: engine.url });
+    ({ app, pool } = await createTestAppWithPool({ SEARCH_ENABLED: 'true', SEARCH_URL: engine.url }));
+    // A second boot, not a second test: `SEARCH_URL` is read once when the module compiles, so
+    // "the engine is unreachable" is only expressible as an app that was built that way.
     blindApp = await createTestApp({ SEARCH_ENABLED: 'true', SEARCH_URL: UNREACHABLE_SEARCH_URL });
-    pool = app.get<Pool>(PG_POOL);
   }, 180_000);
 
   afterAll(async () => {

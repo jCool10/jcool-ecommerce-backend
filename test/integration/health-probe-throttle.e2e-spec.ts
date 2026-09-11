@@ -17,6 +17,8 @@ describe('Health probes vs rate limiting (integration, real Redis)', () => {
     app = await createTestApp();
   });
 
+  // Explicit rather than `closeAppAfterAll`: the opt-in flag has to be cleared too, or the next
+  // file in this worker boots with rate limiting on.
   afterAll(async () => {
     await app.close();
     delete process.env.THROTTLE_ENABLED;

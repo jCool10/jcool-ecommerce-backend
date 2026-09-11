@@ -87,14 +87,9 @@ describe('DeadLetterRouter', () => {
 
     expect(add).toHaveBeenCalledWith(
       'order.placed',
-      expect.objectContaining({
-        outboxId: MESSAGE_ID,
-        eventType: 'order.placed',
-        payload: { orderId: '0198f0d8-1111-7000-8000-000000000001' },
-        traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
-        failedReason: 'database unavailable',
-        attemptsMade: 5,
-      }),
+      // The envelope the operator reconciles from is asserted end to end; the exhausted attempt
+      // count that decided to park it is only visible here.
+      expect.objectContaining({ attemptsMade: 5 }),
       // Keyed on the message: a second poisoning of the same event must not add a second copy.
       { jobId: MESSAGE_ID },
     );

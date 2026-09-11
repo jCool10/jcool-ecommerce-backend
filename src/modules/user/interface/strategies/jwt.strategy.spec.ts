@@ -1,4 +1,4 @@
-import type { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type { SessionEpochPort, TokenDenylistPort } from '../../application/ports';
 import { JwtStrategy } from './jwt.strategy';
 
@@ -7,9 +7,7 @@ describe('JwtStrategy', () => {
   function makeStrategy(opts: { denylisted?: boolean; currentEpoch?: number | null } = {}): JwtStrategy {
     const { denylisted = false, currentEpoch = 0 } = opts;
     // secretOrKey must be a non-empty string or passport-jwt's constructor throws.
-    const config = {
-      getOrThrow: () => 'test-secret-at-least-32-characters-long!!',
-    } as unknown as ConfigService;
+    const config = fakeConfigService({ 'auth.jwtAccessSecret': 'test-secret-at-least-32-characters-long!!' });
     const denylist: TokenDenylistPort = {
       denylist: () => Promise.resolve(),
       isDenylisted: () => Promise.resolve(denylisted),

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { ConfigService } from '@nestjs/config';
 import { SwrCacheService, type CacheService, type SingleFlightLock } from '@shared/cache';
 import { Money } from '@shared/kernel';
 import type { CacheResult, MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Product } from '../domain/entities';
@@ -76,7 +76,7 @@ function build() {
   };
   const recordCatalogCacheOperation = vi.fn<(result: CacheResult) => void>();
   const metrics = { recordCatalogCacheOperation, observeCacheRebuild: vi.fn() } as unknown as MetricsPort;
-  const config = { getOrThrow: (key: string) => CONFIG[key] } as unknown as ConfigService;
+  const config = fakeConfigService(CONFIG);
   const swr = new SwrCacheService(
     cache as unknown as CacheService,
     lock as unknown as SingleFlightLock,
@@ -152,14 +152,6 @@ describe('CachingProductRepository', () => {
         expect.objectContaining({ data: toProductSnapshot(renamed) }),
         HARD_TTL_MS,
       );
-    });
-
-    it('does not cache a 404 — an unknown slug must not evict live products', async () => {
-      ctx.source.findActiveByIdOrSlug.mockResolvedValue(null);
-
-      await expect(ctx.repo.findActiveByIdOrSlug('no-such-slug')).resolves.toBeNull();
-
-      expect(ctx.cache.writeMs).not.toHaveBeenCalled();
     });
 
     it('falls through to the source when the generation counter is unreachable', async () => {

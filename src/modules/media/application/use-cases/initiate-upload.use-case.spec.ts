@@ -1,6 +1,6 @@
-import type { ConfigService } from '@nestjs/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectStoragePort } from '@shared/infrastructure/storage';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { UnsupportedContentTypeError } from '../../domain/asset-content-type';
 import type { MediaAsset } from '../../domain/media-asset.entity';
 import type { MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
@@ -10,9 +10,7 @@ const UPLOAD_TTL_SEC = 3600;
 const PRESIGN_TTL_SEC = 900;
 
 const configWith = (presignTtlSec: number, uploadTtlSec = UPLOAD_TTL_SEC) =>
-  ({
-    getOrThrow: (key: string) => (key === 'storage.presignTtlSec' ? presignTtlSec : uploadTtlSec),
-  }) as unknown as ConfigService;
+  fakeConfigService({ 'storage.presignTtlSec': presignTtlSec, 'media.uploadTtlSec': uploadTtlSec });
 
 function build() {
   const calls: string[] = [];

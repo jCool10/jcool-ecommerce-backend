@@ -1,6 +1,6 @@
-import type { ConfigService } from '@nestjs/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectStoragePort, StoredObjectHead } from '@shared/infrastructure/storage';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { AssetTransitionError } from '../../domain/asset-state-machine';
 import { AssetStatus } from '../../domain/asset-status';
 import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-found.error';
@@ -34,7 +34,7 @@ function build(overrides: { asset?: MediaAsset | null; head?: StoredObjectHead |
     Promise.resolve(overrides.head === undefined ? { sizeBytes: 512, contentType: 'image/png' } : overrides.head),
   );
 
-  const config = { getOrThrow: (key: string) => CONFIG[key] } as unknown as ConfigService;
+  const config = fakeConfigService(CONFIG);
   const useCase = new CompleteUploadUseCase(
     { findById, markReady } as unknown as MediaAssetRepositoryPort,
     { head } as unknown as ObjectStoragePort,

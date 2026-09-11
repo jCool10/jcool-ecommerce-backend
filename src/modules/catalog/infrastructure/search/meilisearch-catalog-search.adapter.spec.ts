@@ -1,20 +1,9 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type { SearchableProduct } from '../../application/ports';
 import { PRODUCTS_INDEX_SETTINGS, SEARCH_MAX_TOTAL_HITS } from './index-settings';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
-
-function configStub(values: Record<string, unknown>): ConfigService {
-  return {
-    get: (key: string) => values[key],
-    getOrThrow: (key: string) => {
-      const value = values[key];
-      if (value === undefined) throw new Error(`missing config: ${key}`);
-      return value;
-    },
-  } as unknown as ConfigService;
-}
 
 const DOC: SearchableProduct = {
   id: 'p1',
@@ -31,7 +20,7 @@ const DOC: SearchableProduct = {
 };
 
 describe('MeilisearchCatalogSearch (disabled)', () => {
-  const adapter = new MeilisearchCatalogSearch(configStub({ 'search.enabled': false }));
+  const adapter = new MeilisearchCatalogSearch(fakeConfigService({ 'search.enabled': false }));
 
   it('search resolves to an empty result', async () => {
     await expect(adapter.search({ q: 'anything', page: 1, pageSize: 20 })).resolves.toEqual({
@@ -78,7 +67,7 @@ describe('MeilisearchCatalogSearch (engine task outcome)', () => {
 
     const { port } = server.address() as AddressInfo;
     adapter = new MeilisearchCatalogSearch(
-      configStub({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
+      fakeConfigService({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
     );
   });
 
@@ -136,7 +125,7 @@ describe('MeilisearchCatalogSearch (query construction)', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
     adapter = new MeilisearchCatalogSearch(
-      configStub({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
+      fakeConfigService({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
     );
   });
 
@@ -228,7 +217,7 @@ describe('MeilisearchCatalogSearch (engine failure degrades)', () => {
   it('resolves to an empty result when the engine refuses the connection', async () => {
     // Port 1 is privileged and unbound in the test environment, so the connection fails immediately.
     const adapter = new MeilisearchCatalogSearch(
-      configStub({ 'search.enabled': true, 'search.url': 'http://127.0.0.1:1' }),
+      fakeConfigService({ 'search.enabled': true, 'search.url': 'http://127.0.0.1:1' }),
     );
 
     await expect(adapter.search({ q: 'widget', page: 1, pageSize: 20 })).resolves.toEqual({
@@ -246,7 +235,7 @@ describe('MeilisearchCatalogSearch (engine failure degrades)', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
     const adapter = new MeilisearchCatalogSearch(
-      configStub({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
+      fakeConfigService({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
     );
 
     try {

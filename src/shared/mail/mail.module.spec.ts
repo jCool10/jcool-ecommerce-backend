@@ -1,4 +1,4 @@
-import type { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { describe, expect, it, vi } from 'vitest';
 import type { CircuitBreakerFactory } from '@shared/resilience';
 import { LogMailTransport } from './log-mail.transport';
@@ -7,13 +7,7 @@ import { MAIL_BREAKER, SmtpMailTransport } from './smtp-mail.transport';
 
 function build(values: Record<string, unknown>) {
   const create = vi.fn().mockReturnValue({ run: vi.fn() });
-  const config = {
-    get: (key: string) => values[key],
-    getOrThrow: (key: string) => {
-      if (values[key] === undefined) throw new Error(`missing ${key}`);
-      return values[key];
-    },
-  } as unknown as ConfigService;
+  const config = fakeConfigService(values);
   return { config, breakers: { create } as unknown as CircuitBreakerFactory, create };
 }
 

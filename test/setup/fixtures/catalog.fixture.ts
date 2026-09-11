@@ -96,6 +96,20 @@ export async function createTestProduct(app: INestApplication, options: TestProd
   };
 }
 
+// Direct writes rather than the admin endpoints, for the same reason as `archiveTestCategory`: the
+// write API refuses some of these, and the refused state is exactly what the cart and order suites
+// need to arrange — a line whose product went away, or whose price moved after the snapshot.
+
+export async function archiveProduct(app: INestApplication, productId: string): Promise<void> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  await db.update(schema.products).set({ status: 'ARCHIVED' }).where(eq(schema.products.id, productId));
+}
+
+export async function repriceSku(app: INestApplication, variantId: string, amountMinor: number): Promise<void> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  await db.update(schema.prices).set({ amountMinor }).where(eq(schema.prices.variantId, variantId));
+}
+
 export interface SeedProductsOptions {
   categoryId?: string;
   status?: 'DRAFT' | 'ACTIVE' | 'ARCHIVED';

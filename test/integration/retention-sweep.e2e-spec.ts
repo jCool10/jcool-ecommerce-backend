@@ -1,17 +1,16 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { IdentityService } from '../../src/shared/identity';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
 import { RetentionSweepRegistry, type RetentionSweep } from '../../src/shared/retention';
 import { RetentionScheduler } from '../../src/shared/retention/retention.scheduler';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 
-const METRICS_TOKEN = 'e2e-retention-metrics-token';
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 const daysAgo = (days: number) => new Date(Date.now() - days * DAY_MS);
@@ -20,7 +19,7 @@ const hoursFromNow = (hours: number) => new Date(Date.now() + hours * HOUR_MS);
 // Chosen so every boundary below can be crossed with a row a few days either side of it, and every
 // one is at or above the floor `env.validation.ts` enforces.
 const WINDOWS = {
-  METRICS_TOKEN,
+  METRICS_TOKEN: E2E_METRICS_TOKEN,
   RETENTION_OUTBOX_DAYS: '30',
   RETENTION_INBOX_DAYS: '7',
   RETENTION_WEBHOOK_EVENT_DAYS: '14',
@@ -87,21 +86,14 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     (await db.select({ key: schema.idempotencyKeys.key }).from(schema.idempotencyKeys)).map((r) => r.key);
 
   beforeAll(async () => {
-    app = await createTestApp(WINDOWS);
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool(WINDOWS));
     registry = app.get(RetentionSweepRegistry);
     scheduler = app.get(RetentionScheduler);
     identity = app.get(IdentityService);
   });
 
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   // A sweep that was never registered produces no error and no metric — the table simply stops
   // being collected.
@@ -304,10 +296,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       expect(await db.select().from(schema.outbox)).toHaveLength(0);
       expect(await keysLeft()).toHaveLength(0);
 
-      const { text } = await request(app.getHttpServer())
-        .get('/metrics')
-        .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-        .expect(200);
+      const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
       // Every registered sweep has a series after ONE tick, so none is silently missing from the
       // roster. That the TIMER starts late enough to see them all is a separate claim, asserted in

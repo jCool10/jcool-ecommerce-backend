@@ -1,9 +1,9 @@
-import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it, vi } from 'vitest';
-import type { ObjectStoragePort } from '@shared/infrastructure/storage';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type { RetentionSweepRegistry } from '@shared/retention';
-import type { ClaimedAsset, MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
+import type { ClaimedAsset } from '../ports/media-asset-repository.port';
+import { fakeMediaAssetRepository, fakeObjectStorage } from '../../testing/media-port.doubles';
 import { SweepAbandonedAssetsUseCase } from './sweep-abandoned-assets.use-case';
 
 const STALE_CLAIM_MS = 60_000;
@@ -22,12 +22,12 @@ function build(claimed: ClaimedAsset[], rowRemoved: (id: string) => boolean = ()
   });
   const recordMediaBytesReclaimed = vi.fn();
   const register = vi.fn();
-  const config = { getOrThrow: () => STALE_CLAIM_MS } as unknown as ConfigService;
+  const config = fakeConfigService({ 'retention.sweepTimeoutMs': STALE_CLAIM_MS });
 
   const useCase = new SweepAbandonedAssetsUseCase(
-    { claimForSweep, deleteClaimed } as unknown as MediaAssetRepositoryPort,
-    { delete: deleteObject } as unknown as ObjectStoragePort,
-    { recordMediaBytesReclaimed } as unknown as MetricsPort,
+    fakeMediaAssetRepository({ claimForSweep, deleteClaimed }),
+    fakeObjectStorage({ delete: deleteObject }),
+    fakeMetricsPort({ recordMediaBytesReclaimed }),
     config,
     { register } as unknown as RetentionSweepRegistry,
   );

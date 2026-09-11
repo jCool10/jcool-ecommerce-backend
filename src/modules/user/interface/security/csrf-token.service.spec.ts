@@ -1,10 +1,9 @@
-import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { CsrfTokenService } from './csrf-token.service';
 
 function serviceWithSecret(secret: string): CsrfTokenService {
-  const config = { getOrThrow: () => secret } as unknown as ConfigService;
-  return new CsrfTokenService(config);
+  return new CsrfTokenService(fakeConfigService({ 'auth.jwtAccessSecret': secret }));
 }
 
 const SECRET = 'test-jwt-access-secret-not-a-real-secret-000';

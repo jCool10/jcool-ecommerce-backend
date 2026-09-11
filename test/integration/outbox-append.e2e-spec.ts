@@ -2,8 +2,8 @@ import type { INestApplication } from '@nestjs/common';
 import { asc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
   OUTBOX_WRITER,
@@ -19,8 +19,7 @@ import {
   postWebhook,
   signOutcome,
 } from '../setup/fixtures/order-flow.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 const WEBHOOK_SECRET = 'whsec_e2e_outbox_secret_0123456789';
 const STOCK = 5;
@@ -35,18 +34,10 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    app = await createTestApp({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET });
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }));
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const readOutbox = (orderId: string) =>
     db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, orderId)).orderBy(asc(schema.outbox.createdAt));
@@ -153,26 +144,20 @@ describe('Outbox append failure rolls back the checkout (integration, real Postg
   let pool: Pool;
   let db: DrizzleDB;
 
+  // A second boot, not a second test: the throwing writer is injected when the module compiles, and
+  // the suite above needs the real one on the same routes.
   beforeAll(async () => {
-    app = await createTestApp({}, [
+    ({ app, pool, db } = await createTestAppWithPool({}, [
       {
         provide: OUTBOX_WRITER,
         useValue: {
           append: () => Promise.reject(new Error('outbox unavailable')),
         },
       },
-    ]);
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ]));
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   it('leaves no order, no event, and no stock hold when the append throws', async () => {
     const sku = await seedSellableSku(app, { onHand: STOCK, priceMinor: PRICE });

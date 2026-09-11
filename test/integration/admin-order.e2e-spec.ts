@@ -1,14 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { authHeader } from '../setup/auth.helper';
 import { buyerWithCart, checkout, readOrder, readStock, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 const STOCK = 40;
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
@@ -25,13 +24,9 @@ describe('Admin orders (integration, real Postgres)', () => {
   let variantId: string;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
   beforeEach(async () => {
     await resetDatabase(pool);

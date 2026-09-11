@@ -2,7 +2,8 @@ import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { Reflector } from '@nestjs/core';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { CanonicalLogInterceptor } from './canonical-log.interceptor';
@@ -53,7 +54,7 @@ function httpContext(
 }
 
 function configFor(env: string): ConfigService {
-  return { get: () => env } as unknown as ConfigService;
+  return fakeConfigService({ 'app.env': env });
 }
 
 // The start stamp must be a real bigint, or getRequestDurationMs yields undefined.
@@ -73,7 +74,7 @@ function reflectorFor(controller: object, controllerPath: string, handlerPath: s
 describe('CanonicalLogInterceptor', () => {
   it('logs one "request completed" line with method, route template, status, durationMs, db.queries', async () => {
     const info = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
-    const logger = { info } as unknown as PinoLogger;
+    const logger = fakePinoLogger({ info });
     const controller = class ProductsController {};
     const handler = function findOne(): void {};
     const interceptor = new CanonicalLogInterceptor(
@@ -103,7 +104,7 @@ describe('CanonicalLogInterceptor', () => {
 
   it('logs a morgan dev-style one-line string (not a structured object) in development', async () => {
     const info = vi.fn<(objOrMsg: unknown, msg?: string) => void>();
-    const logger = { info } as unknown as PinoLogger;
+    const logger = fakePinoLogger({ info });
     const controller = class ProductsController {};
     const handler = function findOne(): void {};
     const interceptor = new CanonicalLogInterceptor(
@@ -138,7 +139,7 @@ describe('CanonicalLogInterceptor', () => {
 
   it('still logs the dev line when the connection is aborted before the body is written', async () => {
     const info = vi.fn<(objOrMsg: unknown, msg?: string) => void>();
-    const logger = { info } as unknown as PinoLogger;
+    const logger = fakePinoLogger({ info });
     const controller = class ProductsController {};
     const handler = function findOne(): void {};
     const interceptor = new CanonicalLogInterceptor(
@@ -165,7 +166,7 @@ describe('CanonicalLogInterceptor', () => {
 
   it('does not log for health-probe routes (noise from orchestrator liveness/readiness)', async () => {
     const info = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
-    const logger = { info } as unknown as PinoLogger;
+    const logger = fakePinoLogger({ info });
     const controller = class HealthController {};
     const handler = function live(): void {};
     const interceptor = new CanonicalLogInterceptor(
@@ -186,7 +187,7 @@ describe('CanonicalLogInterceptor', () => {
 
   it('does not log for non-http contexts (e.g. scheduled/rpc)', () => {
     const info = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
-    const logger = { info } as unknown as PinoLogger;
+    const logger = fakePinoLogger({ info });
     const reflector = { get: () => '' } as unknown as Reflector;
 
     const interceptor = new CanonicalLogInterceptor(logger, clsStub(), reflector, configFor('production'));

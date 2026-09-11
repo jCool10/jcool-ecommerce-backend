@@ -1,4 +1,4 @@
-import type { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { describe, expect, it } from 'vitest';
 import { ObjectStorageNotConfiguredError } from './object-storage.port';
 import { S3ObjectStorageAdapter } from './s3-object-storage.adapter';
@@ -13,25 +13,15 @@ const configured = {
   'storage.presignTtlSec': 900,
 };
 
-function build(values: Record<string, unknown>) {
-  return {
-    get: (key: string) => values[key],
-    getOrThrow: (key: string) => {
-      if (values[key] === undefined) throw new Error(`missing ${key}`);
-      return values[key];
-    },
-  } as unknown as ConfigService;
-}
-
 describe('createObjectStorage', () => {
   it('builds the S3 adapter once every setting is present', () => {
-    expect(createObjectStorage(build({ 'app.env': 'production', ...configured }))).toBeInstanceOf(
+    expect(createObjectStorage(fakeConfigService({ 'app.env': 'production', ...configured }))).toBeInstanceOf(
       S3ObjectStorageAdapter,
     );
   });
 
   it('keeps a dev app booting without a bucket, and fails only where storage is used', async () => {
-    const storage = createObjectStorage(build({ 'app.env': 'development' }));
+    const storage = createObjectStorage(fakeConfigService({ 'app.env': 'development' }));
 
     await expect(storage.presignPut('products/a.webp', 'image/webp')).rejects.toThrow(ObjectStorageNotConfiguredError);
   });
@@ -41,6 +31,6 @@ describe('createObjectStorage', () => {
   it('refuses to boot in production with the group half set', () => {
     const values = { 'app.env': 'production', ...configured, 'storage.secretAccessKey': '  ' };
 
-    expect(() => createObjectStorage(build(values))).toThrow(/Object storage is required in production/);
+    expect(() => createObjectStorage(fakeConfigService(values))).toThrow(/Object storage is required in production/);
   });
 });

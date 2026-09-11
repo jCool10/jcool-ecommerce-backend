@@ -3,27 +3,20 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
+import { createTestAppWithPool } from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { withRedisDown } from '../setup/redis-outage';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { sleep } from '../setup/sleep';
 
-const METRICS_TOKEN = 'e2e-catalog-stampede-token-abcdef';
 const HERD = 20;
 // Long enough that every member of the herd is already in flight before the winner answers.
 const SOURCE_DELAY_MS = 200;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function readCacheCounter(app: INestApplication, result: string): Promise<number> {
-  const res = await request(app.getHttpServer())
-    .get('/metrics')
-    .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-    .expect(200);
+  const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
   const match = new RegExp(`^catalog_cache_operations_total\\{result="${result}"\\} (\\d+)`, 'm').exec(res.text);
   return match ? Number(match[1]) : 0;
 }
@@ -54,24 +47,26 @@ describe('Catalog stampede protection (integration, real Postgres + Redis)', () 
   let source: DrizzleProductRepository;
 
   beforeAll(async () => {
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
     // Pinned, not defaulted: a local .env would otherwise decide whether a waiter outlasts the
     // injected source delay, which is the whole assertion.
-    app = await createTestApp({
+    ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '60',
       CACHE_STALE_WINDOW_SEC: '30',
       CACHE_TTL_JITTER_SEC: '10',
       CACHE_LOCK_WAIT_MS: '2000',
-    });
-    pool = app.get<Pool>(PG_POOL);
+    }));
     source = app.get(DrizzleProductRepository);
   });
 
+  // Explicit rather than `closeAppAfterAll`: the token has to be cleared too.
   afterAll(async () => {
     delete process.env.METRICS_TOKEN;
     await app.close();
   });
 
+  // Explicit rather than `resetDatabaseBeforeEach`: the cache generation has to be bumped after the
+  // truncate, or a herd is served the previous test's rows out of Redis.
   beforeEach(async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
@@ -128,17 +123,18 @@ describe('Catalog stale-while-revalidate under load (integration)', () => {
   let pool: Pool;
   let source: DrizzleProductRepository;
 
+  // A second app, not a second test on the first: the fresh window is fixed when the module
+  // compiles, and the suite above needs 60s where this one needs 1s.
   beforeAll(async () => {
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
     // Shortest fresh window the env schema accepts, so the stale path is reachable in a test. The
     // stale window is pinned too: a local `CACHE_STALE_WINDOW_SEC=0` would delete the entry instead
     // of ageing it, and every assertion below would be about a miss.
-    app = await createTestApp({
+    ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '1',
       CACHE_STALE_WINDOW_SEC: '30',
       CACHE_TTL_JITTER_SEC: '0',
-    });
-    pool = app.get<Pool>(PG_POOL);
+    }));
     source = app.get(DrizzleProductRepository);
   });
 

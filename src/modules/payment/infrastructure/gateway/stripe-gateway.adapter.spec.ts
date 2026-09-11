@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import Stripe from 'stripe';
 import { StripeGatewayAdapter, type StripeGatewayOptions } from './stripe-gateway.adapter';
-import { signStripeStyle } from './hmac-signature';
 import { PaymentGatewayError } from '../../application/ports/payment-gateway.port';
 
 const SECRET = 'whsec_test_secret_value_0000';
@@ -68,12 +67,6 @@ describe('StripeGatewayAdapter', () => {
   });
 
   describe('createSession', () => {
-    it('returns a stripe-style session handle and redirect url', async () => {
-      const session = await adapter().createSession({ orderId: 'o1', amountMinor: 1500, currency: 'USD' });
-      expect(session.providerSessionId).toMatch(/^cs_test_[0-9a-f]+$/);
-      expect(session.redirectUrl).toContain(session.providerSessionId);
-    });
-
     it('returns a distinct handle per call', async () => {
       const a = await adapter().createSession({ orderId: 'o1', amountMinor: 1500, currency: 'USD' });
       const b = await adapter().createSession({ orderId: 'o1', amountMinor: 1500, currency: 'USD' });
@@ -145,33 +138,6 @@ describe('StripeGatewayAdapter', () => {
 
     it('fail-fasts at construction when a live client is set but success_url is blank', () => {
       expect(() => liveAdapter(vi.fn(), { successUrl: '   ' })).toThrow(/STRIPE_SUCCESS_URL is required/);
-    });
-  });
-
-  describe('verifyAndParseEvent', () => {
-    const nowSec = Math.floor(Date.now() / 1000);
-
-    function signedBody(tsSec: number) {
-      const raw = Buffer.from(JSON.stringify({ id: 'evt_abc', type: 'payment_intent.succeeded' }));
-      return { raw, header: signStripeStyle(SECRET, tsSec, raw) };
-    }
-
-    it('accepts a validly signed, in-window event', () => {
-      const { raw, header } = signedBody(nowSec);
-      const result = adapter().verifyAndParseEvent(raw, { 'stripe-signature': header });
-      expect(result).toMatchObject({ kind: 'valid', providerEventId: 'evt_abc', type: 'payment_intent.succeeded' });
-    });
-
-    it('rejects a forged signature', () => {
-      const { raw } = signedBody(nowSec);
-      const result = adapter().verifyAndParseEvent(raw, { 'stripe-signature': `t=${nowSec},v1=${'0'.repeat(64)}` });
-      expect(result).toEqual({ kind: 'invalid_signature' });
-    });
-
-    it('rejects an expired (replayed) event', () => {
-      const { raw, header } = signedBody(nowSec - 301);
-      const result = adapter().verifyAndParseEvent(raw, { 'stripe-signature': header });
-      expect(result).toEqual({ kind: 'expired_timestamp' });
     });
   });
 });

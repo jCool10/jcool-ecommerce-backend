@@ -1,5 +1,6 @@
-import type { ConfigService } from '@nestjs/config';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { useFakeClock } from '@shared/testing/fake-clock';
 import { RetentionSweepRegistry } from '@shared/retention';
 import type { IdempotencyStorePort } from '../ports/idempotency-store.port';
 import { SweepIdempotencyKeysUseCase } from './sweep-idempotency-keys.use-case';
@@ -10,14 +11,7 @@ const NOW = new Date('2026-09-07T12:00:00.000Z');
 const MISSING = Symbol('missing config');
 
 function build(graceSec: unknown = 3600) {
-  const config = {
-    getOrThrow: (key: string) => {
-      if (key !== 'retention.idempotencyGraceSec' || graceSec === MISSING) {
-        throw new Error(`Missing config key: ${key}`);
-      }
-      return graceSec;
-    },
-  } as unknown as ConfigService;
+  const config = fakeConfigService(graceSec === MISSING ? {} : { 'retention.idempotencyGraceSec': graceSec });
   const store = { deleteExpired: vi.fn().mockResolvedValue(0) };
   const registry = new RetentionSweepRegistry();
   return {
@@ -33,14 +27,7 @@ function build(graceSec: unknown = 3600) {
  * expired yet, and each one of those is a retry of `POST /orders` turned into a second order.
  */
 describe('SweepIdempotencyKeysUseCase', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  useFakeClock(NOW);
 
   it('registers itself under its metric label', () => {
     const { make, registry } = build();

@@ -8,11 +8,10 @@ import {
   type SearchableProduct,
 } from '../../src/modules/catalog/application/ports';
 import { DrizzleProductRepository, reindexAll } from '../../src/modules/catalog/infrastructure';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { archiveTestCategory, createTestCategory, createTestProduct } from '../setup/fixtures/catalog.fixture';
+import { createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 import { resetSearchIndex, startSearchEngine, type StartedSearchEngine } from '../setup/search-engine';
-import { createTestApp } from '../setup/test-app.factory';
 
 interface SearchHitBody {
   id: string;
@@ -48,10 +47,10 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
 
   beforeAll(async () => {
     engine = await startSearchEngine();
-    app = await createTestApp({ SEARCH_ENABLED: 'true', SEARCH_URL: engine.url });
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool({ SEARCH_ENABLED: 'true', SEARCH_URL: engine.url }));
   }, 180_000);
 
+  // Explicit rather than `closeAppAfterAll`: the app has to go before the engine it still queries.
   afterAll(async () => {
     await app?.close();
     await engine?.stop();

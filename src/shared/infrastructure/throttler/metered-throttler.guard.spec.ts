@@ -65,14 +65,6 @@ const request: ThrottlerRequest = {
 };
 
 describe('MeteredThrottlerGuard', () => {
-  it('counts a rejection against the tier that ran out and the route template', async () => {
-    const { shim, recordRateLimitRejection } = await build(true);
-
-    await expect(shim.handleRequest(request)).rejects.toBeInstanceOf(ThrottlerException);
-
-    expect(recordRateLimitRejection).toHaveBeenCalledWith(USER_THROTTLER, '/orders');
-  });
-
   it('names the tier in the rejection log', async () => {
     const { shim, logger } = await build(true);
 

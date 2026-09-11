@@ -3,15 +3,15 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { createTestProduct, type TestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAppWithObjectStorage } from '../setup/harness';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
@@ -30,21 +30,18 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
 
   beforeAll(async () => {
     storage = await startObjectStorage();
-    app = await createTestApp({
-      STORAGE_ENDPOINT: storage.endpoint,
-      STORAGE_BUCKET: storage.bucket,
-      STORAGE_ACCESS_KEY_ID: storage.accessKeyId,
-      STORAGE_SECRET_ACCESS_KEY: storage.secretAccessKey,
-    });
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithObjectStorage(storage));
   }, 180_000);
 
+  // Explicit rather than `closeAppAfterAll`: the app has to go before the bucket it still holds
+  // connections to.
   afterAll(async () => {
     await app?.close();
     await storage?.stop();
   });
 
+  // Explicit rather than `resetDatabaseBeforeEach`: the bucket and the cache generation both have to
+  // follow the truncate, or a test reads the previous test's objects or its cached product rows.
   beforeEach(async () => {
     await resetDatabase(pool);
     await storage.clear();

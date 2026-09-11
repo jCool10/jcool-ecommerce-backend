@@ -1,8 +1,10 @@
 import type { ConfigService } from '@nestjs/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { ShutdownService } from './shutdown.service';
 
-const configWithGrace = (ms: number | undefined): ConfigService => ({ get: () => ms }) as unknown as ConfigService;
+const configWithGrace = (ms: number | undefined): ConfigService =>
+  fakeConfigService({ 'app.shutdownGracePeriodMs': ms });
 
 describe('ShutdownService', () => {
   afterEach(() => vi.useRealTimers());

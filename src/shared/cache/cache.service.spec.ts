@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RedisService } from '@shared/infrastructure/redis';
 import { CacheService } from './cache.service';
@@ -10,9 +10,7 @@ function build() {
   const client = { get: vi.fn(), set: vi.fn(), incr: vi.fn() };
   const cache = new CacheService(
     { getClient: () => client as unknown as Redis } as unknown as RedisService,
-    {
-      warn: vi.fn(),
-    } as unknown as PinoLogger,
+    fakePinoLogger(),
   );
   return { cache, client };
 }

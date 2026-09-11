@@ -45,28 +45,17 @@ function build(
 }
 
 describe('PaymentEventsHandler', () => {
-  it.each([
-    ['payment.succeeded', 'PAID'],
-    ['payment.failed', 'FAILED'],
-  ])('settles the order named in %s as %s', async (eventType, outcome) => {
+  // Only the failed→FAILED mapping is asserted here: no e2e ever consumes a `payment.failed` event
+  // onto a still-PENDING order, so this is the sole coverage of that half of OUTCOME_BY_EVENT.
+  it('settles the order named in payment.failed as FAILED', async () => {
     const { handler, execute } = build();
 
-    await handler.settle(job(eventType, { orderId: ORDER_ID, paymentRef: 'pi_1' }), tx);
+    await handler.settle(job('payment.failed', { orderId: ORDER_ID, paymentRef: 'pi_1' }), tx);
 
     expect(execute).toHaveBeenCalledWith(
-      { orderId: ORDER_ID, outcome, paymentRef: 'pi_1', reason: `event:${eventType}` },
+      { orderId: ORDER_ID, outcome: 'FAILED', paymentRef: 'pi_1', reason: 'event:payment.failed' },
       tx,
     );
-  });
-
-  // Without this the claim would commit on its own and the redelivery would find the message
-  // consumed with the order never settled.
-  it('runs the finalize on the consumer transaction it was handed', async () => {
-    const { handler, execute } = build();
-
-    await handler.settle(job('payment.succeeded'), tx);
-
-    expect(execute).toHaveBeenCalledWith(expect.anything(), tx);
   });
 
   it('treats a missing gateway handle as no handle rather than passing the raw value through', async () => {
@@ -77,26 +66,16 @@ describe('PaymentEventsHandler', () => {
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ paymentRef: null }), tx);
   });
 
-  it.each([
-    ['an order id of the wrong type', 'payment.succeeded', { orderId: 42 }],
-    ['no order id at all', 'payment.succeeded', {}],
-    ['an event type it does not settle', 'payment.refunded', { orderId: ORDER_ID }],
-  ])('rejects %s permanently, without settling anything', async (_case, eventType, payload) => {
+  // Only the unsettleable-event-type half of the guard is asserted here: the dispatcher routes just
+  // `payment.succeeded` and `payment.failed` to this handler, so no e2e can reach `outcome ===
+  // undefined`. The unreadable-orderId half is proven end to end instead.
+  it('rejects an event type it does not settle permanently, without settling anything', async () => {
     const { handler, execute } = build();
 
-    await expect(handler.settle(job(eventType, payload), tx)).rejects.toBeInstanceOf(PermanentError);
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it('acknowledges a settlement whose order is gone, and says so at error level', async () => {
-    const { handler, error } = build('not_found');
-
-    await expect(handler.settle(job('payment.succeeded'), tx)).resolves.toBeUndefined();
-
-    expect(error).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId: ORDER_ID }),
-      'payment settled for an order that does not exist',
+    await expect(handler.settle(job('payment.refunded', { orderId: ORDER_ID }), tx)).rejects.toBeInstanceOf(
+      PermanentError,
     );
+    expect(execute).not.toHaveBeenCalled();
   });
 
   // A redelivery after the webhook already settled the order the same way — the ordinary case for a

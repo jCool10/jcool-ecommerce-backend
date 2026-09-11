@@ -1,18 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type { Redis } from 'ioredis';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { SingleFlightLock, SwrCacheService, type TtlPolicy } from '../../src/shared/cache';
 import { RedisService } from '../../src/shared/infrastructure/redis';
+import { closeAppAfterAll } from '../setup/harness';
 import { withRedisDown } from '../setup/redis-outage';
+import { sleep } from '../setup/sleep';
 import { createTestApp } from '../setup/test-app.factory';
 
 // Real Redis, short windows so the stale path is reachable inside a test.
 const POLICY: TtlPolicy = { softTtlMs: 150, staleWindowMs: 10_000, jitterMs: 2_000, leaseMs: 5_000, waitMs: 3_000 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /** A source read that is slow enough for a herd to pile up behind it, and counts how often it ran. */
 function countingSource(value: unknown, delayMs = 100) {
@@ -39,10 +37,7 @@ describe('Cache stampede protection (integration, real Redis)', () => {
     lock = app.get(SingleFlightLock);
     client = app.get(RedisService).getClient();
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
   it('rebuilds a cold key exactly once for a herd of concurrent readers', async () => {
     const key = `swr:test:${randomUUID()}`;

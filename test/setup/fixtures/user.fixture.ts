@@ -53,3 +53,9 @@ export async function createTestUser(app: INestApplication, options: TestUserOpt
 export function createTestAdmin(app: INestApplication, options: Omit<TestUserOptions, 'role'> = {}): Promise<TestUser> {
   return createTestUser(app, { ...options, role: 'ADMIN' });
 }
+
+/** For the suites that only ever need a fresh caller, not the row behind it. */
+export async function newUserToken(app: INestApplication, options: TestUserOptions = {}): Promise<string> {
+  const { accessToken } = await createTestUser(app, options);
+  return accessToken;
+}

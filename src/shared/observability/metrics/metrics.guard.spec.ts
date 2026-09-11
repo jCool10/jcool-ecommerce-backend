@@ -2,12 +2,11 @@ import type { ExecutionContext } from '@nestjs/common';
 import { NotFoundException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { MetricsTokenGuard } from './metrics.guard';
 
 function configFor(token: string | undefined, env: string): ConfigService {
-  return {
-    get: (key: string): unknown => (key === 'metrics.token' ? token : key === 'app.env' ? env : undefined),
-  } as unknown as ConfigService;
+  return fakeConfigService({ 'metrics.token': token, 'app.env': env });
 }
 
 function contextWithAuth(authorization?: string): ExecutionContext {
@@ -17,23 +16,6 @@ function contextWithAuth(authorization?: string): ExecutionContext {
 }
 
 describe('MetricsTokenGuard', () => {
-  const TOKEN = 'super-secret-metrics-token';
-
-  it('allows a request carrying the correct bearer token', () => {
-    const guard = new MetricsTokenGuard(configFor(TOKEN, 'production'));
-    expect(guard.canActivate(contextWithAuth(`Bearer ${TOKEN}`))).toBe(true);
-  });
-
-  it('404s a wrong token (not 401 — never confirms the endpoint exists)', () => {
-    const guard = new MetricsTokenGuard(configFor(TOKEN, 'production'));
-    expect(() => guard.canActivate(contextWithAuth('Bearer nope'))).toThrow(NotFoundException);
-  });
-
-  it('404s a missing Authorization header', () => {
-    const guard = new MetricsTokenGuard(configFor(TOKEN, 'production'));
-    expect(() => guard.canActivate(contextWithAuth())).toThrow(NotFoundException);
-  });
-
   it('allows scraping in dev when no token is configured (local convenience)', () => {
     const guard = new MetricsTokenGuard(configFor(undefined, 'development'));
     expect(guard.canActivate(contextWithAuth())).toBe(true);

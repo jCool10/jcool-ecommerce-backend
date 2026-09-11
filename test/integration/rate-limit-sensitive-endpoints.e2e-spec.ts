@@ -2,16 +2,15 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { RedisService } from '../../src/shared/infrastructure/redis';
 import { ORDER_THROTTLE, USER_THROTTLER } from '../../src/shared/infrastructure/throttler';
 import { authHeader } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestAppWithPool } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
-const METRICS_TOKEN = 'e2e-rate-limit-token-abcdef';
 // Read from the shipped config, so retuning the limit retunes the suite instead of breaking it.
 const USER_LIMIT = ORDER_THROTTLE[USER_THROTTLER].limit;
 // Syntactically valid so the route's ParseUUIDPipe passes it through to a real 404.
@@ -24,15 +23,15 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
 
   beforeAll(async () => {
     process.env.THROTTLE_ENABLED = 'true';
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
+    ({ app, pool } = await createTestAppWithPool());
     await resetDatabase(pool);
     // Throttler counters live in Redis and outlive the process, so a re-run inside one window
     // would start partway through the IP budget these assertions depend on.
     await app.get(RedisService).getClient().flushdb();
   });
 
+  // Explicit rather than `closeAppAfterAll`: the flags have to be cleared too.
   afterAll(async () => {
     await app.close();
     // Don't leak the flags into other e2e suites sharing this worker's env.
@@ -47,10 +46,7 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
   }
 
   async function readRejections(tier: string, route: string): Promise<number> {
-    const res = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
     const line = new RegExp(
       `^rate_limit_rejections_total\\{(?=[^}]*tier="${tier}")(?=[^}]*route="${route}")[^}]*\\} (\\d+)`,
       'm',
