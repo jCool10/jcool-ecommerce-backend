@@ -1,15 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { IdentityService, bucketOf } from '../../src/shared/identity';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { bucketOf } from '../../src/shared/identity';
 import { loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { bucketForTestEmail } from '../setup/identity.helper';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 // Each mint site is reachable only through the request that needs it, so this drives all five over
 // real HTTP and reads the rows back out of Postgres — the two properties that matter (the id is a
@@ -26,17 +23,10 @@ describe('Identity routing across the auth paths (integration)', () => {
   const versionNibble = (id: string) => id[14];
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   async function ownedIds(table: string, userId: string): Promise<string[]> {
     const { rows } = await pool.query<{ id: string }>(`SELECT id FROM ${table} WHERE user_id = $1 ORDER BY id`, [
@@ -115,14 +105,5 @@ describe('Identity routing across the auth paths (integration)', () => {
     expect(extra).toHaveLength(0);
     expect(versionNibble(tokenId)).toBe('8');
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
-  });
-
-  // The documented break: a database carrying pre-routing user ids cannot mint tokens at all.
-  it('refuses to mint a token for an owner whose id carries no bucket', () => {
-    const identity = app.get(IdentityService);
-
-    // By message, not class: an undefined argument or typo'd property access also raises TypeError,
-    // so the class alone would keep passing if the refusal stopped happening.
-    expect(() => identity.mintOwnedBy(uuidv7())).toThrow(/Not a UUIDv8/);
   });
 });

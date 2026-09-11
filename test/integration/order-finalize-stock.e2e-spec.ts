@@ -1,8 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { FinalizeOrderUseCase } from '../../src/modules/order/application/use-cases';
 import {
@@ -10,8 +9,8 @@ import {
   type StockRepositoryPort,
 } from '../../src/modules/inventory/application/ports/stock-repository.port';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { readOrder, readReservation, readStock } from '../setup/fixtures/order-flow.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 const USER_ID = '00000000-0000-4000-8000-0000000000aa';
 const SKU = '11111111-1111-4111-8111-111111111111';
@@ -28,20 +27,12 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
   let stock: StockRepositoryPort;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool());
     finalize = app.get(FinalizeOrderUseCase);
     stock = app.get<StockRepositoryPort>(STOCK_REPOSITORY);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   async function seedPendingOrder(): Promise<string> {
     const [row] = await db
@@ -56,24 +47,6 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     await db.transaction((tx) => stock.reservePessimistic(tx, orderId, [{ variantId, quantity }]));
   }
 
-  async function readStock(variantId: string) {
-    const [row] = await db.select().from(schema.stockLevels).where(eq(schema.stockLevels.variantId, variantId));
-    return row;
-  }
-
-  async function readReservation(orderId: string, variantId: string) {
-    const [row] = await db
-      .select()
-      .from(schema.reservations)
-      .where(and(eq(schema.reservations.orderId, orderId), eq(schema.reservations.variantId, variantId)));
-    return row;
-  }
-
-  async function readOrder(id: string) {
-    const [row] = await db.select().from(schema.orders).where(eq(schema.orders.id, id));
-    return row;
-  }
-
   it('PAID commits the hold: reservation COMMITTED, on-hand drops, order PAID — all in one tx', async () => {
     const orderId = await seedPendingOrder();
     await seedStock(app, SKU, 10);
@@ -82,9 +55,9 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     const result = await finalize.execute({ orderId, outcome: 'PAID', paymentRef: 'pay_1' });
 
     expect(result.status).toBe('finalized');
-    expect((await readOrder(orderId)).status).toBe('PAID');
-    expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
-    const s = await readStock(SKU);
+    expect((await readOrder(app, orderId)).status).toBe('PAID');
+    expect((await readReservation(app, orderId, SKU)).status).toBe('COMMITTED');
+    const s = await readStock(app, SKU);
     expect(s.quantityOnHand).toBe(7); // goods shipped for real
     expect(s.quantityReserved).toBe(0);
   });
@@ -97,9 +70,9 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     const result = await finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' });
 
     expect(result.status).toBe('finalized');
-    expect((await readOrder(orderId)).status).toBe('FAILED');
-    expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
-    const s = await readStock(SKU);
+    expect((await readOrder(app, orderId)).status).toBe('FAILED');
+    expect((await readReservation(app, orderId, SKU)).status).toBe('RELEASED');
+    const s = await readStock(app, SKU);
     expect(s.quantityOnHand).toBe(10); // never left the shelf
     expect(s.quantityReserved).toBe(0);
   });
@@ -111,9 +84,9 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
 
     await finalize.execute({ orderId, outcome: 'EXPIRED', reason: 'expired' });
 
-    expect((await readOrder(orderId)).status).toBe('EXPIRED');
-    expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
-    expect((await readStock(SKU)).quantityReserved).toBe(0);
+    expect((await readOrder(app, orderId)).status).toBe('EXPIRED');
+    expect((await readReservation(app, orderId, SKU)).status).toBe('RELEASED');
+    expect((await readStock(app, SKU)).quantityReserved).toBe(0);
   });
 
   it('CANCELLED releases the hold, same as FAILED', async () => {
@@ -123,9 +96,9 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
 
     await finalize.execute({ orderId, outcome: 'CANCELLED', reason: 'user:cancelled' });
 
-    expect((await readOrder(orderId)).status).toBe('CANCELLED');
-    expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
-    expect((await readStock(SKU)).quantityReserved).toBe(0);
+    expect((await readOrder(app, orderId)).status).toBe('CANCELLED');
+    expect((await readReservation(app, orderId, SKU)).status).toBe('RELEASED');
+    expect((await readStock(app, SKU)).quantityReserved).toBe(0);
   });
 
   it('is idempotent: finalizing PAID twice commits the hold once — on-hand not dropped again', async () => {
@@ -137,8 +110,8 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     const again = await finalize.execute({ orderId, outcome: 'PAID', paymentRef: 'pay_1' });
 
     expect(again.status).toBe('noop');
-    expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
-    expect((await readStock(SKU)).quantityOnHand).toBe(7); // still 7, not 4
+    expect((await readReservation(app, orderId, SKU)).status).toBe('COMMITTED');
+    expect((await readStock(app, SKU)).quantityOnHand).toBe(7); // still 7, not 4
   });
 
   it('releases the hold once when FAILED is re-applied: stock given back once, not twice', async () => {
@@ -150,8 +123,8 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     const again = await finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' });
 
     expect(again.status).toBe('noop');
-    expect((await readReservation(orderId, SKU)).status).toBe('RELEASED');
-    const s = await readStock(SKU);
+    expect((await readReservation(app, orderId, SKU)).status).toBe('RELEASED');
+    const s = await readStock(app, SKU);
     expect(s.quantityReserved).toBe(0); // not -3
     expect(s.quantityOnHand).toBe(10);
   });
@@ -167,9 +140,9 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     // The terminal guard returns before the resolution branch, so compensation never runs on a
     // settled order — goods already shipped must not be handed back to available.
     expect(late.status).toBe('ignored');
-    expect((await readOrder(orderId)).status).toBe('PAID');
-    expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
-    const s = await readStock(SKU);
+    expect((await readOrder(app, orderId)).status).toBe('PAID');
+    expect((await readReservation(app, orderId, SKU)).status).toBe('COMMITTED');
+    const s = await readStock(app, SKU);
     expect(s.quantityOnHand).toBe(7);
     expect(s.quantityReserved).toBe(0);
   });
@@ -186,7 +159,7 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
 
     expect(first).toMatchObject({ applied: true, alreadyResolved: false, count: 1 });
     expect(second).toMatchObject({ applied: false, alreadyResolved: true, count: 0 });
-    const s = await readStock(SKU);
+    const s = await readStock(app, SKU);
     expect(s.quantityReserved).toBe(0);
     expect(s.quantityOnHand).toBe(10);
   });
@@ -198,8 +171,8 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     const result = await finalize.execute({ orderId, outcome: 'PAID', paymentRef: 'pay_1' });
 
     expect(result.status).toBe('finalized');
-    expect((await readOrder(orderId)).status).toBe('PAID');
-    const s = await readStock(SKU);
+    expect((await readOrder(app, orderId)).status).toBe('PAID');
+    const s = await readStock(app, SKU);
     expect(s.quantityOnHand).toBe(10);
     expect(s.quantityReserved).toBe(0);
   });
@@ -215,8 +188,8 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     ]);
 
     expect([a.status, b.status].sort()).toEqual(['finalized', 'noop']);
-    expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
-    expect((await readStock(SKU)).quantityOnHand).toBe(7); // committed once, not 4
+    expect((await readReservation(app, orderId, SKU)).status).toBe('COMMITTED');
+    expect((await readStock(app, SKU)).quantityOnHand).toBe(7); // committed once, not 4
   });
 
   it('commits a multi-SKU order: every line committed and each stock row dropped', async () => {
@@ -229,10 +202,10 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
     const result = await finalize.execute({ orderId, outcome: 'PAID', paymentRef: 'pay_1' });
 
     expect(result.status).toBe('finalized');
-    expect((await readReservation(orderId, SKU)).status).toBe('COMMITTED');
-    expect((await readReservation(orderId, SKU_B)).status).toBe('COMMITTED');
-    expect((await readStock(SKU)).quantityOnHand).toBe(7);
-    expect((await readStock(SKU_B)).quantityOnHand).toBe(3);
+    expect((await readReservation(app, orderId, SKU)).status).toBe('COMMITTED');
+    expect((await readReservation(app, orderId, SKU_B)).status).toBe('COMMITTED');
+    expect((await readStock(app, SKU)).quantityOnHand).toBe(7);
+    expect((await readStock(app, SKU_B)).quantityOnHand).toBe(3);
   });
 
   it('reservation-status CAS makes commitReservations idempotent on its own — no double decrement', async () => {
@@ -247,7 +220,7 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
 
     expect(first).toMatchObject({ applied: true, alreadyResolved: false, count: 1 });
     expect(second).toMatchObject({ applied: false, alreadyResolved: true, count: 0 });
-    expect((await readStock(SKU)).quantityOnHand).toBe(7); // decremented exactly once
+    expect((await readStock(app, SKU)).quantityOnHand).toBe(7); // decremented exactly once
   });
 
   it('is atomic: a stock resolution that fails the non-negative CHECK rolls back the order flip too', async () => {
@@ -260,8 +233,8 @@ describe('Order finalization stock resolution (integration, real Postgres)', () 
 
     await expect(finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' })).rejects.toThrow();
 
-    expect((await readOrder(orderId)).status).toBe('PENDING');
-    expect((await readReservation(orderId, SKU)).status).toBe('HELD');
-    expect((await readStock(SKU)).quantityReserved).toBe(2);
+    expect((await readOrder(app, orderId)).status).toBe('PENDING');
+    expect((await readReservation(app, orderId, SKU)).status).toBe('HELD');
+    expect((await readStock(app, SKU)).quantityReserved).toBe(2);
   });
 });

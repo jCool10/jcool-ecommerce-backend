@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ConfigService } from '@nestjs/config';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { ReserveStockUseCase } from './reserve-stock.use-case';
 
 const TX = {} as unknown as DrizzleTx;
@@ -14,8 +14,7 @@ function setup(strategy: string | undefined) {
     releaseReservations: vi.fn().mockResolvedValue({ applied: true, alreadyResolved: false, count: 1 }),
     findExpiredHolds: vi.fn().mockResolvedValue([]),
   };
-  const config = { get: vi.fn().mockReturnValue(strategy) };
-  const uc = new ReserveStockUseCase(stock, config as unknown as ConfigService);
+  const uc = new ReserveStockUseCase(stock, fakeConfigService({ 'inventory.lockStrategy': strategy }));
   return { uc, stock };
 }
 

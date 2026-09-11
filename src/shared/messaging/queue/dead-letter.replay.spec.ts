@@ -197,9 +197,10 @@ describe('replayDeadLetters', () => {
       });
 
       // Replaying it would collapse on the inbox's unique index while the operator reads "replayed".
+      // The skipped tally is asserted end to end; the negatives and the exact operator-facing detail
+      // — the applied-at timestamp, and that --force was refused — are not.
       expect(add).not.toHaveBeenCalled();
       expect(dlqJob.remove).not.toHaveBeenCalled();
-      expect(summary).toMatchObject({ replayed: 0, skipped: 1 });
       expect(summary.outcomes[0].detail).toContain('already applied at 2026-08-01T10:00:00.000Z');
       expect(summary.outcomes[0].detail).toContain('--force cannot override');
     });
@@ -244,10 +245,11 @@ describe('replayDeadLetters', () => {
       const dlqJob = entry(dead({ occurredAt: ago(31 * DAY_MS) }));
       const { main, dlq, add } = build({ entries: [dlqJob] });
 
-      const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false, force: true });
+      await replayDeadLetters(main, dlq, { ...guards, dryRun: false, force: true });
 
+      // The replayed tally is asserted end to end; that the message went back on the MAIN queue
+      // exactly once is not.
       expect(add).toHaveBeenCalledTimes(1);
-      expect(summary).toMatchObject({ replayed: 1, skipped: 0 });
     });
 
     // `isWellFormedEnvelope` vets `outboxId` and `eventType` only, so this field really can arrive

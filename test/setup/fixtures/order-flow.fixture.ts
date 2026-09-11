@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import request from 'supertest';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
@@ -42,14 +42,19 @@ export async function seedSellableSku(
   return { variantId, priceMinor, onHand: options.onHand };
 }
 
+/**
+ * Returns the supertest chain so a caller can assert on the response body, but the 200 is baked in:
+ * this is an arrangement step for the checkout tests, never the subject. A spec that needs a
+ * non-200 add-to-cart builds the request itself rather than reaching for this.
+ */
+export function addToCart(app: INestApplication, token: string, skuId: string, quantity = 1): request.Test {
+  return request(app.getHttpServer()).post('/cart/items').set(authHeader(token)).send({ skuId, quantity }).expect(200);
+}
+
 /** Checkout isolates by user, so each buyer races alone. */
 export async function buyerWithCart(app: INestApplication, variantId: string, quantity = 1): Promise<string> {
   const { accessToken } = await createTestUser(app);
-  await request(app.getHttpServer())
-    .post('/cart/items')
-    .set(authHeader(accessToken))
-    .send({ skuId: variantId, quantity })
-    .expect(200);
+  await addToCart(app, accessToken, variantId, quantity);
   return accessToken;
 }
 
@@ -121,6 +126,33 @@ export async function readStock(app: INestApplication, variantId: string) {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const [row] = await db.select().from(schema.stockLevels).where(eq(schema.stockLevels.variantId, variantId));
   return row;
+}
+
+/**
+ * The hold an order placed. `variantId` narrows it for the multi-line cases; an order with one line
+ * has exactly one reservation either way.
+ */
+export async function readReservation(app: INestApplication, orderId: string, variantId?: string) {
+  const [row] = await reservationsFor(app, orderId, variantId);
+  return row;
+}
+
+export async function reservationsFor(app: INestApplication, orderId: string, variantId?: string) {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  const byOrder = eq(schema.reservations.orderId, orderId);
+  return db
+    .select()
+    .from(schema.reservations)
+    .where(variantId === undefined ? byOrder : and(byOrder, eq(schema.reservations.variantId, variantId)));
+}
+
+/** Ages a hold past its expiry — the one thing a test cannot wait for. */
+export async function lapseReservation(app: INestApplication, orderId: string, minutesAgo = 30): Promise<void> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  await db
+    .update(schema.reservations)
+    .set({ expiresAt: new Date(Date.now() - minutesAgo * 60_000) })
+    .where(eq(schema.reservations.orderId, orderId));
 }
 
 export interface LedgerAuditReport {

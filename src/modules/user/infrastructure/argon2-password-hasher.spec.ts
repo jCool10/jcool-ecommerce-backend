@@ -1,4 +1,4 @@
-import { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { Argon2PasswordHasher } from './argon2-password-hasher';
 
 // Real argon2 rather than a mock — the roundtrip is the point, and it stays fast at the low params below.
@@ -8,7 +8,7 @@ describe('Argon2PasswordHasher', () => {
     'argon2.timeCost': 2,
     'argon2.parallelism': 1,
   };
-  const config = { getOrThrow: (key: string) => params[key] } as unknown as ConfigService;
+  const config = fakeConfigService(params);
   const hasher = new Argon2PasswordHasher(config);
 
   it('produces an argon2id digest that verifies against the original password', async () => {

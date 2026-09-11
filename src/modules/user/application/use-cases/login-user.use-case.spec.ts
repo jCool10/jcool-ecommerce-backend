@@ -1,5 +1,6 @@
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { User } from '../../domain/entities/user.entity';
 import type { PasswordHasherPort, UserRepositoryPort } from '../ports';
 import type { AuthTokens, AuthTokensService } from '../services';
@@ -12,7 +13,7 @@ function makeUser(passwordHash: string, emailVerifiedAt: Date | null = null): Us
 }
 
 function makeConfig(requireVerifiedEmail: boolean): ConfigService {
-  return { get: () => requireVerifiedEmail } as unknown as ConfigService;
+  return fakeConfigService({ 'auth.requireVerifiedEmail': requireVerifiedEmail });
 }
 
 class MockUserRepository implements UserRepositoryPort {

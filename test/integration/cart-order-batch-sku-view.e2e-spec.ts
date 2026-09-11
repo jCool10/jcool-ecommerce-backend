@@ -2,17 +2,17 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
-import { createTestProduct, type TestProduct } from '../setup/fixtures/catalog.fixture';
+import { archiveProduct, createTestProduct, type TestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { addToCart } from '../setup/fixtures/order-flow.fixture';
+import { newUserToken } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 // A syntactically-valid UUID no fixture creates, so probing it exercises "absent" and not a cast error.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
@@ -29,21 +29,13 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
   let repo: DrizzleProductRepository;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool());
     // The source adapter, not the cache in front of it: the SKU reads pass straight through, and
     // this is where "one query" is decided.
     repo = app.get(DrizzleProductRepository);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -51,21 +43,8 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
 
   const server = () => app.getHttpServer();
 
-  async function newBuyer(): Promise<string> {
-    const { accessToken } = await createTestUser(app);
-    return accessToken;
-  }
-
-  function addToCart(token: string, skuId: string, quantity = 1): request.Test {
-    return request(server()).post('/cart/items').set(authHeader(token)).send({ skuId, quantity }).expect(200);
-  }
-
   async function unprice(variantId: string): Promise<void> {
     await db.delete(schema.prices).where(eq(schema.prices.variantId, variantId));
-  }
-
-  async function archiveProduct(productId: string): Promise<void> {
-    await db.update(schema.products).set({ status: 'ARCHIVED' }).where(eq(schema.products.id, productId));
   }
 
   // Drops the SKU out of Catalog entirely. `cart_items` has no FK to `product_variants` (the
@@ -108,7 +87,7 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
       const live = await createTestProduct(app, { priceMinor: 123_000 });
       const dead = await createTestProduct(app);
       await unprice(dead.variantId);
-      await archiveProduct(dead.productId);
+      await archiveProduct(app, dead.productId);
 
       const batched = await repo.findManySkuViews([live.variantId, dead.variantId]);
       const [oneLive, oneDead] = await Promise.all([
@@ -124,13 +103,13 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
 
   describe('GET /cart', () => {
     it('resolves the whole cart with one Catalog read, whatever the line count', async () => {
-      const token = await newBuyer();
+      const token = await newUserToken(app);
       const skus: TestProduct[] = [];
       for (let i = 0; i < 12; i++) {
         skus.push(await createTestProduct(app, { priceMinor: 1_000 }));
       }
       for (const sku of skus) {
-        await addToCart(token, sku.variantId, 2);
+        await addToCart(app, token, sku.variantId, 2);
       }
 
       const batched = vi.spyOn(repo, 'findManySkuViews');
@@ -146,14 +125,14 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
     });
 
     it('keeps per-line price and isActive across a mixed cart', async () => {
-      const token = await newBuyer();
+      const token = await newUserToken(app);
       const live = await createTestProduct(app, { priceMinor: 100_000 });
       const archived = await createTestProduct(app, { priceMinor: 50_000 });
       const unpriced = await createTestProduct(app, { priceMinor: 70_000 });
-      await addToCart(token, live.variantId, 2);
-      await addToCart(token, archived.variantId, 1);
-      await addToCart(token, unpriced.variantId, 3);
-      await archiveProduct(archived.productId);
+      await addToCart(app, token, live.variantId, 2);
+      await addToCart(app, token, archived.variantId, 1);
+      await addToCart(app, token, unpriced.variantId, 3);
+      await archiveProduct(app, archived.productId);
       await unprice(unpriced.variantId);
 
       const res = await request(server()).get('/cart').set(authHeader(token));
@@ -180,13 +159,13 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
     it('keys every line to its own SKU when an earlier line has left Catalog', async () => {
       // The missing SKU is the FIRST line on purpose: a batch result read by position would slide
       // every later line onto the wrong view, which lands as a wrong price rather than an error.
-      const token = await newBuyer();
+      const token = await newUserToken(app);
       const gone = await createTestProduct(app, { priceMinor: 40_000 });
       const first = await createTestProduct(app, { priceMinor: 100_000 });
       const second = await createTestProduct(app, { priceMinor: 7_000 });
-      await addToCart(token, gone.variantId, 5);
-      await addToCart(token, first.variantId, 1);
-      await addToCart(token, second.variantId, 2);
+      await addToCart(app, token, gone.variantId, 5);
+      await addToCart(app, token, first.variantId, 1);
+      await addToCart(app, token, second.variantId, 2);
       await deleteSku(gone.variantId);
 
       const res = await request(server()).get('/cart').set(authHeader(token));
@@ -219,11 +198,11 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
       request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
     it('snapshots a multi-line order from one Catalog read', async () => {
-      const token = await newBuyer();
+      const token = await newUserToken(app);
       const a = await sellable(100_000);
       const b = await sellable(25_000);
-      await addToCart(token, a.variantId, 2);
-      await addToCart(token, b.variantId, 3);
+      await addToCart(app, token, a.variantId, 2);
+      await addToCart(app, token, b.variantId, 3);
 
       const batched = vi.spyOn(repo, 'findManySkuViews');
       const single = vi.spyOn(repo, 'findSkuView');
@@ -238,12 +217,12 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
     });
 
     it('still refuses an archived SKU with 400', async () => {
-      const token = await newBuyer();
+      const token = await newUserToken(app);
       const live = await sellable(100_000);
       const archived = await sellable(50_000);
-      await addToCart(token, live.variantId, 1);
-      await addToCart(token, archived.variantId, 1);
-      await archiveProduct(archived.productId);
+      await addToCart(app, token, live.variantId, 1);
+      await addToCart(app, token, archived.variantId, 1);
+      await archiveProduct(app, archived.productId);
 
       const res = await checkout(token);
 
@@ -252,11 +231,11 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
     });
 
     it('still refuses an unpriced SKU with 400', async () => {
-      const token = await newBuyer();
+      const token = await newUserToken(app);
       const live = await sellable(100_000);
       const unpriced = await sellable(50_000);
-      await addToCart(token, live.variantId, 1);
-      await addToCart(token, unpriced.variantId, 1);
+      await addToCart(app, token, live.variantId, 1);
+      await addToCart(app, token, unpriced.variantId, 1);
       await unprice(unpriced.variantId);
 
       const res = await checkout(token);
@@ -268,11 +247,11 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
     it('still refuses a line whose SKU left Catalog with 400, naming that line', async () => {
       // Missing SKU first again: read by position, the surviving line would absorb its view and
       // checkout would pass with the wrong SKU priced in.
-      const token = await newBuyer();
+      const token = await newUserToken(app);
       const gone = await sellable(50_000);
       const live = await sellable(100_000);
-      await addToCart(token, gone.variantId, 1);
-      await addToCart(token, live.variantId, 1);
+      await addToCart(app, token, gone.variantId, 1);
+      await addToCart(app, token, live.variantId, 1);
       await deleteSku(gone.variantId);
 
       const res = await checkout(token);

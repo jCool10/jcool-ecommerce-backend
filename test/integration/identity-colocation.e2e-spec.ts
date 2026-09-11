@@ -3,12 +3,13 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { INestApplication } from '@nestjs/common';
 import { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BUCKET_COUNT, IdentityService, bucketOf } from '../../src/shared/identity';
 import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
 import { E2E_IDENTITY_BUCKET_KEY, bucketForTestEmail } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
+import { workerDatabaseUrl } from '../setup/worker-resources';
 
 // Full locally, reduced on CI. Both keep the expected count per bucket above the handful below which
 // "one bucket is hot" is indistinguishable from noise. The verdict on the hash itself belongs to the
@@ -46,7 +47,8 @@ describe('Identity colocation at scale (integration)', () => {
   }
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: inject('DATABASE_URL') });
+    // This worker's database, the same one createTestApp boots against.
+    pool = new Pool({ connectionString: workerDatabaseUrl() });
     // Before the app boots, so it pins its key against a database it is the first to touch.
     await resetDatabase(pool);
     app = await createTestApp();
@@ -126,7 +128,7 @@ describe('Identity colocation at scale (integration)', () => {
           timeout: SCAN_TIMEOUT_MS,
           env: {
             ...process.env,
-            DATABASE_URL: inject('DATABASE_URL'),
+            DATABASE_URL: workerDatabaseUrl(),
             IDENTITY_BUCKET_KEY: E2E_IDENTITY_BUCKET_KEY,
           },
         },

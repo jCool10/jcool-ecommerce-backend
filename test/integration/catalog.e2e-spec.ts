@@ -1,8 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { authHeader } from '../setup/auth.helper';
 import {
   archiveTestCategory,
@@ -11,23 +10,21 @@ import {
   seedProducts,
 } from '../setup/fixtures/catalog.fixture';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 describe('Catalog (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
+  closeAppAfterAll(() => app);
 
-  afterAll(async () => {
-    await app.close();
-  });
-
+  // Explicit rather than `resetDatabaseBeforeEach`: the cache generation has to be bumped after the
+  // truncate, or a read is served the previous test's rows out of Redis.
   beforeEach(async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);

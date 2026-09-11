@@ -1,10 +1,10 @@
-import type { ConfigService } from '@nestjs/config';
 import { context, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { CacheService } from './cache.service';
 import type { SingleFlightLock } from './single-flight.lock';
 import { SwrCacheService } from './swr-cache.service';
@@ -28,15 +28,15 @@ function build() {
     isHeld: vi.fn().mockResolvedValue(true),
     release: vi.fn().mockResolvedValue(undefined),
   };
-  const metrics = { recordCatalogCacheOperation: vi.fn(), observeCacheRebuild: vi.fn() };
-  const config = { getOrThrow: (key: string) => CONFIG_VALUES[key] };
-  const logger = { warn: vi.fn() };
+  const metrics = fakeMetricsPort();
+  const config = fakeConfigService(CONFIG_VALUES);
+  const logger = fakePinoLogger();
   const swr = new SwrCacheService(
     cache as unknown as CacheService,
     lock as unknown as SingleFlightLock,
-    metrics as unknown as MetricsPort,
-    config as unknown as ConfigService,
-    logger as unknown as PinoLogger,
+    metrics,
+    config,
+    logger,
   );
   return { swr, cache, lock, metrics, logger };
 }

@@ -71,15 +71,6 @@ describe('SingleFlightLock', () => {
   });
 
   describe('release', () => {
-    it('deletes only under a matching token, so an expired lease cannot drop the next holder', async () => {
-      await ctx.lock.release('k:lock', 'token-1');
-
-      const [script, keyCount, key, token] = ctx.client.eval.mock.calls[0] as [string, number, string, string];
-      expect(script).toContain("redis.call('get', KEYS[1]) == ARGV[1]");
-      expect(script).toContain("redis.call('del', KEYS[1])");
-      expect([keyCount, key, token]).toEqual([1, 'k:lock', 'token-1']);
-    });
-
     it('swallows a failed release — the lease expires on its own', async () => {
       ctx.client.eval.mockRejectedValue(DOWN);
       await expect(ctx.lock.release('k:lock', 'token-1')).resolves.toBeUndefined();

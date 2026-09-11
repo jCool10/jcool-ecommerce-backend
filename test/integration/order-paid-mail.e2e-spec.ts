@@ -2,16 +2,17 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-const METRICS_TOKEN = 'e2e-order-mail-metrics-token';
 const MAIL_FROM = 'no-reply@jcool.test';
 const MESSAGE_ID = '0198f0d8-4444-7000-8000-000000000001';
 const ORDER_ID = '0198f0d8-5555-7000-8000-000000000001';
@@ -47,12 +48,17 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
 
   beforeAll(async () => {
     mail = await startMailServer();
-    app = await createTestApp({ SMTP_URL: mail.smtpUrl, MAIL_FROM, METRICS_TOKEN, MAIL_TIMEOUT_MS });
+    ({ app, pool, db } = await createTestAppWithPool({
+      SMTP_URL: mail.smtpUrl,
+      MAIL_FROM,
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
+      MAIL_TIMEOUT_MS,
+    }));
     processor = app.get(DomainEventProcessor);
-    db = app.get<DrizzleDB>(DRIZZLE);
-    pool = app.get<Pool>(PG_POOL);
   }, 180_000);
 
+  // Explicit rather than `closeAppAfterAll`: the app has to go before the mail server it still holds
+  // an SMTP connection to.
   afterAll(async () => {
     await app?.close();
     await mail?.stop();
@@ -101,7 +107,13 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   // own claim and do nothing.
   it('keeps a message applied when the mail cannot be delivered, and does not retry it', async () => {
     const { user } = await createTestUser(app);
-    const broken = await createTestApp({ SMTP_URL: UNREACHABLE_SMTP_URL, MAIL_FROM, METRICS_TOKEN });
+    // A second boot, not a second test: `SMTP_URL` is read once when the module compiles, so "the
+    // mail server is unreachable" is only expressible as an app that was built that way.
+    const broken = await createTestApp({
+      SMTP_URL: UNREACHABLE_SMTP_URL,
+      MAIL_FROM,
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
+    });
     try {
       await expect(broken.get(DomainEventProcessor).process(paidJob(user.id))).resolves.toBe('processed');
 
@@ -110,10 +122,7 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
       expect(await inboxRows()).toHaveLength(1);
       expect(await mail.messages()).toHaveLength(0);
 
-      const { text } = await request(broken.getHttpServer())
-        .get('/metrics')
-        .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-        .expect(200);
+      const { text } = await request(broken.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
       expect(text).toMatch(/mail_send_failures_total\{kind="order_paid"\} [1-9]/);
       // Applied, not failed: a failed consume here would mean the queue still owes a redelivery.
       expect(text).toContain('messaging_consume_total{event_type="order.paid",result="processed"}');

@@ -6,12 +6,13 @@ import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { expect, inject } from 'vitest';
+import { expect } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { CSRF_HEADER } from '../../src/modules/user/interface/security/auth-cookie.constants';
 import { RedisService } from '../../src/shared/infrastructure/redis';
 import { E2E_IDENTITY_BUCKET_KEY } from './identity.helper';
 import { waitForRedisReady } from './redis-ready';
+import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
 
 export interface ProviderOverride {
   provide: unknown;
@@ -28,8 +29,10 @@ export async function createTestApp(
   // Set before AppModule loads: @nestjs/config's dotenv won't override these, so
   // the container URLs win over any local .env.
   process.env.NODE_ENV = 'test';
-  process.env.DATABASE_URL = inject('DATABASE_URL');
-  process.env.REDIS_URL = inject('REDIS_URL');
+  // Per-worker, not per-run: the e2e tier is file-parallel, so a shared database and a shared Redis
+  // logical db would let one file's TRUNCATE and cache keys reach into another's. See worker-resources.ts.
+  process.env.DATABASE_URL = workerDatabaseUrl();
+  process.env.REDIS_URL = workerRedisUrl();
   process.env.JWT_ACCESS_SECRET ??= 'test-jwt-access-secret-not-a-real-secret-000'; // schema needs ≥32 chars
   // Payment defaults to the Stripe adapter, which refuses to construct without a webhook secret;
   // provide a dummy so AppModule boots. Signed-webhook e2e can override with its own known secret.
@@ -48,6 +51,11 @@ export async function createTestApp(
   process.env.QUEUE_WORKER_ENABLED = 'false';
   process.env.RESERVATION_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
+  // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
+  // is a plain sleep inside `app.close()`, so a developer's `SHUTDOWN_GRACE_PERIOD_MS=8000` charges
+  // every app in every file 8 seconds of doing nothing. Nothing here asserts on the window's length —
+  // `health-shutdown.e2e-spec.ts` reads the readiness flag, which flips before the wait.
+  process.env.SHUTDOWN_GRACE_PERIOD_MS = '0';
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
   // a file that leaves jobs waiting hands them to the next file that boots a worker — which then
   // applies events its own test never published. Same value for every app in a file, because a

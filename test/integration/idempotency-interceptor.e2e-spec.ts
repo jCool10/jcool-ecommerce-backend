@@ -2,16 +2,16 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { addToCart } from '../setup/fixtures/order-flow.fixture';
+import { newUserToken } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 const FIXED_KEY = '5c3f2b1a-9d8e-4c7b-8a6f-1e2d3c4b5a69';
 
@@ -24,32 +24,15 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const server = () => app.getHttpServer();
 
-  async function newUser(): Promise<string> {
-    const { accessToken } = await createTestUser(app);
-    return accessToken;
-  }
-
-  async function addToCart(token: string, skuId: string, quantity: number): Promise<void> {
-    await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId, quantity }).expect(200);
-  }
-
   it('rejects an authenticated POST /orders without an Idempotency-Key (400)', async () => {
-    const token = await newUser();
+    const token = await newUserToken(app);
 
     const res = await request(server()).post('/orders').set(authHeader(token));
 
@@ -57,7 +40,7 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
   });
 
   it('rejects a non-UUID Idempotency-Key (400)', async () => {
-    const token = await newUser();
+    const token = await newUserToken(app);
 
     const res = await request(server()).post('/orders').set(authHeader(token)).set({ 'Idempotency-Key': 'not-a-uuid' });
 
@@ -65,10 +48,10 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
   });
 
   it('replays the first order on a sequential retry with the same key (one order, not two)', async () => {
-    const token = await newUser();
+    const token = await newUserToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, 5); // checkout now holds stock — seed enough on-hand
-    await addToCart(token, variantId, 2);
+    await addToCart(app, token, variantId, 2);
 
     const first = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader(FIXED_KEY));
     const second = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader(FIXED_KEY));

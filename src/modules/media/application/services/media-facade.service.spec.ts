@@ -1,7 +1,7 @@
-import type { ConfigService } from '@nestjs/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { ObjectStoragePort } from '@shared/infrastructure/storage';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { AssetTransitionError } from '../../domain/asset-state-machine';
 import { AssetStatus } from '../../domain/asset-status';
 import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-found.error';
@@ -20,7 +20,7 @@ function build() {
   const detach = vi.fn((_tx: DrizzleTx, _id: string, _expiresAt: Date) => Promise.resolve());
   const publicUrl = vi.fn((key: string) => Promise.resolve(`https://cdn.example/${key}`));
 
-  const config = { getOrThrow: () => READY_TTL_SEC } as unknown as ConfigService;
+  const config = fakeConfigService({ 'media.readyTtlSec': READY_TTL_SEC });
   const facade = new MediaFacadeService(
     { findStorageKeys, attach, detach } as unknown as MediaAssetRepositoryPort,
     { publicUrl } as unknown as ObjectStoragePort,

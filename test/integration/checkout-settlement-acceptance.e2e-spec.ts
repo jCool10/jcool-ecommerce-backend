@@ -1,10 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { ReconcileStaleOrdersUseCase } from '../../src/modules/payment/application/use-cases';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import {
   auditLedgerInvariants,
   buyerWithCart,
@@ -19,9 +17,8 @@ import {
   signOutcome,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
+import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 import type { SessionCharge } from '../setup/sign-webhook.helper';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 const WEBHOOK_SECRET = 'whsec_e2e_settlement_acceptance_0123456789';
 // Sweep on sight: the suite decides staleness by what it stages, never by waiting on a clock.
@@ -44,29 +41,17 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
   beforeAll(async () => {
     // The payment provider is the only test double: the boundary outside the system. Signature
     // verification, dedup, finalize, and stock resolution are all the real code under test.
-    gateway = new FakeSignerGatewayAdapter(WEBHOOK_SECRET);
-    app = await createTestApp(
-      {
-        PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET,
-        RECONCILE_ENABLED: 'false',
-        // Pinned, not inherited: the exact-UNITS assertion below holds only under a strategy that makes
-        // losers wait. Optimistic gives up after `INVENTORY_OPTIMISTIC_MAX_RETRIES` (3) CAS misses, so a
-        // contender could 409 with a unit still unsold once UNITS exceeds that budget.
-        INVENTORY_LOCK_STRATEGY: 'pessimistic',
-      },
-      [{ provide: PAYMENT_GATEWAY, useValue: gateway }],
-    );
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+      RECONCILE_ENABLED: 'false',
+      // Pinned, not inherited: the exact-UNITS assertion below holds only under a strategy that makes
+      // losers wait. Optimistic gives up after `INVENTORY_OPTIMISTIC_MAX_RETRIES` (3) CAS misses, so a
+      // contender could 409 with a unit still unsold once UNITS exceeds that budget.
+      INVENTORY_LOCK_STRATEGY: 'pessimistic',
+    }));
     reconcile = app.get(ReconcileStaleOrdersUseCase);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const paid = (sessionId: string, charge: SessionCharge, eventId: string) =>
     signOutcome(WEBHOOK_SECRET, sessionId, charge, 'PAID', eventId);

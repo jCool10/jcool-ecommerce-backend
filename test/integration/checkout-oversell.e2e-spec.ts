@@ -2,16 +2,16 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/auth.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { countHeldReservations, getStockView, seedStock } from '../setup/fixtures/inventory.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { addToCart } from '../setup/fixtures/order-flow.fixture';
+import { newUserToken } from '../setup/fixtures/user.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // N distinct buyers race POST /orders for the last unit(s), each on its own connection so the row
 // lock / version-CAS actually contends. Each buyer has its own user, cart, and Idempotency-Key, so
@@ -30,24 +30,16 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    app = await createTestApp({ INVENTORY_LOCK_STRATEGY: strategy });
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool({ INVENTORY_LOCK_STRATEGY: strategy }));
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   const server = () => app.getHttpServer();
 
   async function buyerFor(skuId: string, quantity: number): Promise<string> {
-    const { accessToken } = await createTestUser(app);
-    await request(server()).post('/cart/items').set(authHeader(accessToken)).send({ skuId, quantity }).expect(200);
+    const accessToken = await newUserToken(app);
+    await addToCart(app, accessToken, skuId, quantity);
     return accessToken;
   }
 

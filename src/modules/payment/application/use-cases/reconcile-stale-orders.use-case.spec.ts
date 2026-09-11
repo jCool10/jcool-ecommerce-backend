@@ -1,11 +1,12 @@
-import type { PinoLogger } from 'nestjs-pino';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { useFakeClock } from '@shared/testing/fake-clock';
+import { describe, expect, it, vi } from 'vitest';
 import type { FinalizeOrderUseCase, FinalizeResult } from '@modules/order/application/public/order-finalization.port';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import type { OrderReadPort, StalePendingOrderView } from '../ports/order-read.port';
-import type { ExpireSessionOutcome, GatewayStatus, PaymentGatewayPort } from '../ports/payment-gateway.port';
-import type { PaymentRepositoryPort } from '../ports/payment-repository.port';
+import type { ExpireSessionOutcome, GatewayStatus } from '../ports/payment-gateway.port';
+import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';
 import { ReconcileStaleOrdersUseCase } from './reconcile-stale-orders.use-case';
 
 const INPUT = { staleAfterSec: 120, ttlSec: 900, batchSize: 50 };
@@ -93,10 +94,10 @@ function build(scenario: Scenario = {}) {
 
   const useCase = new ReconcileStaleOrdersUseCase(
     { findStalePending } as unknown as OrderReadPort,
-    { findByOrderId, updateStatus } as unknown as PaymentRepositoryPort,
-    { getPaymentStatus, expireSession } as unknown as PaymentGatewayPort,
+    fakePaymentRepository({ findByOrderId, updateStatus }),
+    fakePaymentGateway({ getPaymentStatus, expireSession }),
     { execute: finalizeExec } as unknown as FinalizeOrderUseCase,
-    { warn, info, error } as unknown as PinoLogger,
+    fakePinoLogger({ warn, info, error }),
   );
   return {
     useCase,
@@ -115,9 +116,7 @@ function build(scenario: Scenario = {}) {
 }
 
 describe('ReconcileStaleOrdersUseCase', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ now: NOW });
-  });
+  useFakeClock(NOW);
 
   it('only asks for orders older than the stale threshold, capped at the batch size', async () => {
     const { useCase, spies } = build();

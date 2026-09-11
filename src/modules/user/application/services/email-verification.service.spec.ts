@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type {
   AuthAuditPort,
   AuthAuditRecord,
@@ -70,7 +70,7 @@ class MockAudit implements AuthAuditPort {
   }
 }
 
-const config = { getOrThrow: () => TTL } as unknown as ConfigService;
+const config = fakeConfigService({ 'auth.emailVerificationTtl': TTL });
 
 describe('EmailVerificationService', () => {
   let tokens: MockTokenRepo;

@@ -1,15 +1,20 @@
 import { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bucketForEmail, identityKeyFingerprint } from '../../src/shared/identity';
 import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { resetDatabaseBeforeEach } from '../setup/harness';
 import { E2E_IDENTITY_BUCKET_KEY, WRONG_IDENTITY_BUCKET_KEY } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
+import { workerDatabaseUrl } from '../setup/worker-resources';
 
 // Booting under the wrong key misfiles every id minted from then on, silently. The unit suite proves
 // the guard's branches; this proves a real application boot reaches them.
+//
+// So every `createTestApp` below is the subject rather than a fixture: the guard runs during boot,
+// and each case needs its own key and its own database state to reach it. There is no app to share.
 describe('Identity bucket key boot guards (integration)', () => {
   let pool: Pool;
 
@@ -31,7 +36,8 @@ describe('Identity bucket key boot guards (integration)', () => {
   }
 
   beforeAll(() => {
-    pool = new Pool({ connectionString: inject('DATABASE_URL') });
+    // This worker's database, the same one createTestApp boots against — the pin row is per-worker.
+    pool = new Pool({ connectionString: workerDatabaseUrl() });
   });
 
   afterAll(async () => {
@@ -41,11 +47,10 @@ describe('Identity bucket key boot guards (integration)', () => {
     await pool.end();
   });
 
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  resetDatabaseBeforeEach(() => pool);
 
   it('pins the running key the first time it boots against a database', async () => {
+    // Its own boot: the pin is written during startup, so a shared app would have decided this already.
     const app = await createTestApp();
     try {
       const { rows } = await pool.query<{ fingerprint: string }>(`SELECT fingerprint FROM identity_key_pin`);
@@ -58,6 +63,7 @@ describe('Identity bucket key boot guards (integration)', () => {
 
   // No rows to sample, so the canary cannot speak — the case the pin exists for.
   it('refuses to boot under a different key against an empty database', async () => {
+    // A throwaway boot, only to lay the pin down; the boot under test is the one after it.
     await (await createTestApp()).close();
 
     await expect(createTestApp({ IDENTITY_BUCKET_KEY: WRONG_IDENTITY_BUCKET_KEY })).rejects.toThrow(
@@ -68,6 +74,7 @@ describe('Identity bucket key boot guards (integration)', () => {
   // Ordering, not just detection: a pin recorded before the canary has spoken would hold every later
   // boot to the wrong key.
   it('refuses on a misrouted row without pinning the key that found it', async () => {
+    // The right-key app exists only to write the row the wrong-key boot will trip over.
     const first = await createTestApp();
     await createTestUser(first, { email: addressTheKeysDisagreeAbout() });
     await first.close();
@@ -86,6 +93,7 @@ describe('Identity bucket key boot guards (integration)', () => {
     // Renamed rather than dropped: every later spec file in the run shares this database.
     await pool.query(`ALTER TABLE identity_key_pin RENAME TO identity_key_pin_unreachable`);
     try {
+      // Its own boot: the pin read happens during startup, and the table only disappears just above.
       const app = await createTestApp();
       try {
         await request(app.getHttpServer())

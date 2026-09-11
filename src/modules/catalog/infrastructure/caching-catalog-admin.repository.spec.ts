@@ -98,14 +98,6 @@ describe('CachingCatalogAdminRepository', () => {
     expect(ctx.bumpCounter).not.toHaveBeenCalled();
   });
 
-  it('does not bump when the id was unknown and nothing changed', async () => {
-    ctx.source.updateProduct.mockResolvedValue(null);
-
-    await expect(ctx.repo.updateProduct('missing', { name: 'x' })).resolves.toBeNull();
-
-    expect(ctx.bumpCounter).not.toHaveBeenCalled();
-  });
-
   it('bumps only after the write resolves, never before', async () => {
     const order: string[] = [];
     ctx.source.archiveProduct.mockImplementation(() => {

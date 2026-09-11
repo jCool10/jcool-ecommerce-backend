@@ -1,12 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DrizzleIdempotencyKeyRepository } from '../../src/modules/order/infrastructure/drizzle-idempotency-key.repository';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // Fixed, valid UUIDs — user ids feed the per-user scope.
 const USER_A = '11111111-1111-4111-8111-111111111111';
@@ -48,19 +47,11 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
   }
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithPool());
     repo = new DrizzleIdempotencyKeyRepository(db);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   it('inserts a fresh IN_PROGRESS record on first use', async () => {
     const record = await repo.tryInsertInProgress(insertInput());

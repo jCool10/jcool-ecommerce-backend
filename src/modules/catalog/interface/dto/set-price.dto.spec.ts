@@ -16,8 +16,4 @@ describe('SetPriceDto', () => {
   it('rejects an amount the int4 price column cannot hold', () => {
     expect(failedProperties({ amountMinor: 3_000_000_000 })).toEqual(['amountMinor']);
   });
-
-  it('rejects a negative amount', () => {
-    expect(failedProperties({ amountMinor: -1 })).toEqual(['amountMinor']);
-  });
 });

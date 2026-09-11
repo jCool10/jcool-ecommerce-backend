@@ -1,11 +1,20 @@
 {
   "extends": "./tsconfig.json",
+  // Governs the type-check pass only. `nest build` uses the SWC builder, which selects files from
+  // `sourceRoot` and never consults this list — what actually keeps specs and test doubles out of
+  // `dist` is `exclude` in .swcrc.build.json (selected by nest-cli.json via `swcrcPath`).
+  //
+  // That has to be a second file rather than a field in .swcrc, because `nest build` and the Vitest
+  // runner both read .swcrc: an `exclude` there makes Vitest refuse to transform the very files it
+  // is meant to run. Neither JSON accepts comments — SWC rejects unknown fields — so this list and
+  // .swcrc.build.json's must be kept in agreement by hand, and this is the note saying so.
   "exclude": [
     "node_modules",
     "test",
     "dist",
     "scripts",
     "**/*spec.ts",
+    "src/**/testing/**",
     "drizzle.config.ts",
     "src/shared/infrastructure/database/seed.ts"
   ]

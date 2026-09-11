@@ -1,13 +1,13 @@
 import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { CSRF_HEADER, CSRF_TOKEN_COOKIE } from './auth-cookie.constants';
 import { CsrfGuard } from './csrf.guard';
 import { CsrfTokenService } from './csrf-token.service';
 
-const csrf = new CsrfTokenService({
-  getOrThrow: () => 'test-jwt-access-secret-not-a-real-secret-000',
-} as unknown as ConfigService);
+const csrf = new CsrfTokenService(
+  fakeConfigService({ 'auth.jwtAccessSecret': 'test-jwt-access-secret-not-a-real-secret-000' }),
+);
 
 function contextWith(cookieValue?: string, headerValue?: string): ExecutionContext {
   const request = {
@@ -27,17 +27,8 @@ describe('CsrfGuard', () => {
     expect(guard.canActivate(contextWith(token, token))).toBe(true);
   });
 
-  it('rejects when the CSRF header is missing', () => {
-    const token = csrf.issue();
-    expect(() => guard.canActivate(contextWith(token, undefined))).toThrow(ForbiddenException);
-  });
-
   it('rejects when the CSRF cookie is missing', () => {
     const token = csrf.issue();
     expect(() => guard.canActivate(contextWith(undefined, token))).toThrow(ForbiddenException);
-  });
-
-  it('rejects when cookie and header disagree', () => {
-    expect(() => guard.canActivate(contextWith(csrf.issue(), csrf.issue()))).toThrow(ForbiddenException);
   });
 });

@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { RedisService } from '../../src/shared/infrastructure/redis';
 import {
   buildJobOptions,
@@ -11,10 +11,14 @@ import {
   QUEUE_DOMAIN_EVENTS,
 } from '../../src/shared/messaging/queue/queue.constants';
 import { QueueLifecycle } from '../../src/shared/messaging/queue/queue.lifecycle';
+import { closeAppAfterAll, obliterateQueueBeforeEach } from '../setup/harness';
 import { createTestApp } from '../setup/test-app.factory';
 
 // The producer half of the queue over real Redis. Nothing consumes yet — a job added here stays
 // waiting, which is what the relay hands off and the worker later picks up.
+//
+// The connection-lifecycle tests each boot their own app because each one ends by breaking or
+// closing the connection it was given, which the shared app's remaining tests still need alive.
 describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   let app: INestApplication;
   let queue: Queue;
@@ -31,13 +35,8 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
     prefix = app.get(ConfigService).getOrThrow<string>('queue.prefix');
   });
 
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await queue.obliterate({ force: true });
-  });
+  closeAppAfterAll(() => app);
+  obliterateQueueBeforeEach(() => [queue]);
 
   it('publishes a job onto the domain-events queue with the configured retention', async () => {
     await queue.add('order.placed', job);
@@ -81,6 +80,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('rejects a publish mid-reconnect instead of buffering it in memory', async () => {
+    // Its own app: this test breaks the queue connection, which the shared app above still needs.
     const isolated = await createTestApp();
     const isolatedQueue = isolated.get<Queue>(DOMAIN_EVENTS_QUEUE);
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
@@ -103,6 +103,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('closes the queue and its connection when the app shuts down', async () => {
+    // Its own app: shutdown is the subject, so the app under test has to be one this file can close.
     const isolated = await createTestApp();
     const isolatedQueue = isolated.get<Queue>(DOMAIN_EVENTS_QUEUE);
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
@@ -118,6 +119,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('does not hang shutting down when Redis is already gone', async () => {
+    // Its own app: it disconnects Redis and drives shutdown, neither of which the shared app survives.
     const isolated = await createTestApp();
     const lifecycle = isolated.get(QueueLifecycle);
     isolated.get<Redis>(QUEUE_CONNECTION).disconnect();

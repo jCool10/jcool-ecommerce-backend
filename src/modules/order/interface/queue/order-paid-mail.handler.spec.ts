@@ -27,9 +27,9 @@ const PAID = { orderId: ORDER_ID, userId: USER_ID, totalAmountMinor: 21_000_000,
 
 const tx = Symbol('tx') as unknown as DrizzleTx;
 
-function build({ user = { id: USER_ID, email: 'buyer@test.local', role: Role.Customer }, sendFails = false } = {}) {
-  const getUserSummary = vi.fn().mockResolvedValue(user);
-  const sendMail = sendFails ? vi.fn().mockRejectedValue(new Error('smtp down')) : vi.fn().mockResolvedValue(undefined);
+function build() {
+  const getUserSummary = vi.fn().mockResolvedValue({ id: USER_ID, email: 'buyer@test.local', role: Role.Customer });
+  const sendMail = vi.fn().mockResolvedValue(undefined);
   const recordMailSendFailure = vi.fn();
   const error = vi.fn();
   const handler = new OrderPaidMailHandler(
@@ -49,17 +49,6 @@ function build({ user = { id: USER_ID, email: 'buyer@test.local', role: Role.Cus
 }
 
 describe('OrderPaidMailHandler', () => {
-  it('resolves the address from the userId the event carries, and sends nothing until asked', async () => {
-    const ctx = build();
-
-    const effect = await ctx.handler.prepare(job(PAID), tx);
-
-    expect(ctx.sendMail).not.toHaveBeenCalled();
-    await effect();
-    expect(ctx.sent().to).toBe('buyer@test.local');
-    expect(ctx.sent().text).toContain(ORDER_ID);
-  });
-
   // The consumer already holds a pool connection for this job's transaction; a lookup off the pool
   // would take a second one and can deadlock the pool under worker concurrency.
   it('reads the address on the consumer transaction rather than off the pool', async () => {
@@ -87,21 +76,11 @@ describe('OrderPaidMailHandler', () => {
     expect(ctx.sent().text).not.toContain('Total');
   });
 
-  // Every redelivery carries the same bytes, so retrying either could only fail the same way.
-  it.each([
-    ['no ids to work from', { orderId: ORDER_ID }],
-    ['a user that no longer exists', PAID],
-  ])('refuses permanently on %s', async (label, payload) => {
-    const ctx = build(label === 'a user that no longer exists' ? { user: null as never } : {});
-    await expect(ctx.handler.prepare(job(payload), tx)).rejects.toBeInstanceOf(PermanentError);
-  });
-
-  it('counts a failed send instead of throwing — the message is applied and nothing will retry it', async () => {
-    const ctx = build({ sendFails: true });
-
-    await expect((await ctx.handler.prepare(job(PAID), tx))()).resolves.toBeUndefined();
-
-    expect(ctx.recordMailSendFailure).toHaveBeenCalledWith('order_paid');
-    expect(ctx.error).toHaveBeenCalled();
+  // Every redelivery carries the same bytes, so retrying could only fail the same way. Only the
+  // unreadable-payload half is asserted here: no e2e ever delivers an `order.paid` without a userId,
+  // while the user-is-gone half is proven end to end.
+  it('refuses permanently on no ids to work from', async () => {
+    const ctx = build();
+    await expect(ctx.handler.prepare(job({ orderId: ORDER_ID }), tx)).rejects.toBeInstanceOf(PermanentError);
   });
 });

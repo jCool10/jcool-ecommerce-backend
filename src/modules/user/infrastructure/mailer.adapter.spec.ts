@@ -1,8 +1,8 @@
 import { Logger } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MailMessage } from '@shared/mail/mail-transport.port';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
 import { MailerAdapter } from './mailer.adapter';
 
 const TOKEN = 'tok en/+raw';
@@ -10,8 +10,8 @@ const TOKEN = 'tok en/+raw';
 function build({ fails = false }: { fails?: boolean } = {}) {
   const sendMail = fails ? vi.fn().mockRejectedValue(new Error('smtp down')) : vi.fn().mockResolvedValue(undefined);
   const recordMailSendFailure = vi.fn();
-  const config = { get: () => 'https://app.example.com' } as unknown as ConfigService;
-  const mailer = new MailerAdapter({ sendMail }, { recordMailSendFailure } as unknown as MetricsPort, config);
+  const config = fakeConfigService({ 'app.publicUrl': 'https://app.example.com' });
+  const mailer = new MailerAdapter({ sendMail }, fakeMetricsPort({ recordMailSendFailure }), config);
   return { mailer, sendMail, recordMailSendFailure, sent: () => sendMail.mock.calls[0][0] as MailMessage };
 }
 

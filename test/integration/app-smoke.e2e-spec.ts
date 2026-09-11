@@ -2,13 +2,12 @@ import type { INestApplication } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { RedisService } from '../../src/shared/infrastructure/redis/redis.service';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // Proves the harness boots against real Postgres + Redis (no mocks) and that
 // resetDatabase() isolates each test.
@@ -17,17 +16,10 @@ describe('App smoke (real Postgres + Redis)', () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   it('GET /health/ready → 200 with Postgres and Redis reachable', async () => {
     const res = await request(app.getHttpServer()).get('/health/ready');

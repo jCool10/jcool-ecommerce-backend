@@ -3,9 +3,9 @@ import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { UuidV8Generator } from '../../src/shared/identity';
 import { ID_CLOCK_DRIFT_MS } from '../../src/shared/observability/metrics/identity-clock.collector';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
 
-const METRICS_TOKEN = 'e2e-identity-clock-token-abcdef';
 const CLOCK_JUMP_MS = 90_000;
 // Wall and monotonic readings floor to whole milliseconds independently, so absorbed drift can land
 // a millisecond or two under the step. The claim is that the jump reached the gauge.
@@ -19,6 +19,8 @@ const ABSORBED_DRIFT_MS = CLOCK_JUMP_MS - CLOCK_READ_SKEW_MS;
 describe('Identity clock metrics (integration)', () => {
   const started: INestApplication[] = [];
 
+  // Several apps per test on purpose: the gauge is process-wide and get-or-created by name, so
+  // "which generator does it read" is only answerable by booting more than one.
   async function boot(): Promise<INestApplication> {
     const app = await createTestApp();
     started.push(app);
@@ -26,10 +28,7 @@ describe('Identity clock metrics (integration)', () => {
   }
 
   async function drift(app: INestApplication): Promise<number | undefined> {
-    const res = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
     const line = res.text.split('\n').find((candidate) => candidate.startsWith(`${ID_CLOCK_DRIFT_MS} `));
     return line === undefined ? undefined : Number(line.slice(ID_CLOCK_DRIFT_MS.length + 1));
@@ -48,9 +47,11 @@ describe('Identity clock metrics (integration)', () => {
   }
 
   beforeAll(() => {
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
   });
 
+  // The apps are closed per-test below; what survives the file is the token, which the next file in
+  // this worker would otherwise inherit.
   afterAll(() => {
     delete process.env.METRICS_TOKEN;
   });

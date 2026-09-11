@@ -3,8 +3,8 @@ import type { Job, Queue } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { PermanentError } from '../../src/shared/messaging/errors';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
@@ -17,10 +17,14 @@ import {
   DOMAIN_EVENTS_DLQ_QUEUE,
   DOMAIN_EVENTS_QUEUE,
 } from '../../src/shared/messaging/queue/queue.constants';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import {
+  closeAppAfterAll,
+  createTestAppWithPool,
+  obliterateQueueBeforeEach,
+  resetDatabaseBeforeEach,
+} from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 
-const METRICS_TOKEN = 'e2e-dead-letter-metrics-token';
 const ATTEMPTS = 3;
 // Collapsed from the shipped 1s so a whole budget elapses inside a test: 100ms, then 200ms.
 const BACKOFF_MS = '100';
@@ -88,29 +92,20 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   };
 
   beforeAll(async () => {
-    app = await createTestApp({
-      METRICS_TOKEN,
+    ({ app, pool, db } = await createTestAppWithPool({
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
       QUEUE_WORKER_ENABLED: 'true',
       QUEUE_CONSUMER_ATTEMPTS: String(ATTEMPTS),
       QUEUE_CONSUMER_BACKOFF_MS: BACKOFF_MS,
-    });
+    }));
     processor = app.get(DomainEventProcessor);
     dispatcher = app.get(DomainEventDispatcher);
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
-    db = app.get<DrizzleDB>(DRIZZLE);
-    pool = app.get<Pool>(PG_POOL);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-    await queue.obliterate({ force: true });
-    await dlq.obliterate({ force: true });
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
+  obliterateQueueBeforeEach(() => [queue, dlq]);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -277,10 +272,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     await publish(job());
     await waitForDeadLetter();
 
-    const { text } = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
     // Presence, not value: counters accumulate across the tests in this file, so only a delta would
     // be meaningful.

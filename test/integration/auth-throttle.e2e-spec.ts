@@ -1,10 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // Rate limiting is off in the default harness (the shared loopback IP would make every suite
 // flaky), so this suite opts in explicitly. Emails are unique per run so a leftover Redis block
@@ -18,19 +16,17 @@ describe('Auth rate limiting (integration, real Redis)', () => {
 
   beforeAll(async () => {
     process.env.THROTTLE_ENABLED = 'true';
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
 
+  // Explicit rather than `closeAppAfterAll`: the flag has to be cleared as well, or it leaks into
+  // other e2e suites sharing this worker's env.
   afterAll(async () => {
     await app.close();
-    // Don't leak the flag into other e2e suites sharing this worker's env.
     delete process.env.THROTTLE_ENABLED;
   });
 
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  resetDatabaseBeforeEach(() => pool);
 
   it('locks a brute-forced account after repeated failures (429) without locking a different account on the same IP', async () => {
     const stamp = Date.now();

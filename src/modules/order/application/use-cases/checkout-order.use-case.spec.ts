@@ -59,7 +59,7 @@ function build(
   const observeOrderValue = vi.fn();
   const recordSagaStep = vi.fn();
 
-  const repo = { createCheckout, findForUser, findAllForUser: vi.fn() } as unknown as OrderRepositoryPort;
+  const repo = { createCheckout, findForUser } as unknown as OrderRepositoryPort;
   const cart: CartSnapshotReaderPort = { getLines };
   const catalog: CatalogQueryPort = { getSkuViews };
   const reservation: InventoryReservationPort = { reserve, commit, release, findExpiredHolds: vi.fn() };

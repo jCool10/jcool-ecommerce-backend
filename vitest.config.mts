@@ -23,7 +23,15 @@ export default defineConfig({
       provider: 'v8',
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.spec.ts', 'src/**/*.module.ts', 'src/main.ts'],
+      // `testing/` holds test doubles: they run in every spec that imports them, so counting them
+      // would inflate coverage with lines no production path executes.
+      exclude: [
+        'src/**/*.spec.ts',
+        'src/**/*.module.ts',
+        'src/main.ts',
+        'src/shared/testing/**',
+        'src/modules/*/testing/**',
+      ],
       // Glob-scoped, not global: `test:cov` runs the unit tier only, and repositories, adapters and
       // controllers are covered by the e2e tier — a global floor would go red on code that is tested.
       // The numbers are measured-minus-two, not a round 80 that would sit far below or above reality.

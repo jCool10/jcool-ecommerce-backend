@@ -2,10 +2,11 @@ import { BadGatewayException, ConflictException, NotFoundException } from '@nest
 import { describe, expect, it, vi } from 'vitest';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
 import type { OrderReadPort, OrderView } from '../ports/order-read.port';
-import { DuplicateActivePaymentError, type PaymentRepositoryPort } from '../ports/payment-repository.port';
-import { PaymentGatewayError, type GatewaySession, type PaymentGatewayPort } from '../ports/payment-gateway.port';
+import { DuplicateActivePaymentError } from '../ports/payment-repository.port';
+import { PaymentGatewayError, type GatewaySession } from '../ports/payment-gateway.port';
+import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';
 import { CreatePaymentSessionUseCase } from './create-payment-session.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -76,19 +77,12 @@ function build(
     : vi.fn().mockResolvedValue('expired');
 
   const orders = { findForPayment } as unknown as OrderReadPort;
-  const payments = { findByOrderId, create, updateStatus } as unknown as PaymentRepositoryPort;
-  const gateway = {
-    provider: 'stripe',
-    createSession,
-    expireSession,
-    verifyAndParseEvent: vi.fn(),
-  } as unknown as PaymentGatewayPort;
+  const payments = fakePaymentRepository({ findByOrderId, create, updateStatus });
+  const gateway = fakePaymentGateway({ createSession, expireSession });
 
   const recordSagaStep = vi.fn();
 
-  const useCase = new CreatePaymentSessionUseCase(orders, payments, gateway, {
-    recordSagaStep,
-  } as unknown as MetricsPort);
+  const useCase = new CreatePaymentSessionUseCase(orders, payments, gateway, fakeMetricsPort({ recordSagaStep }));
   return { useCase, findForPayment, findByOrderId, create, createSession, expireSession, updateStatus, recordSagaStep };
 }
 

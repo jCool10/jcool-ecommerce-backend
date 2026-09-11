@@ -4,17 +4,22 @@ import { eq, inArray, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../../src/shared/messaging/queue/queue.constants';
 import { authHeader } from '../setup/auth.helper';
 import { seedSellableSku, buyerWithCart } from '../setup/fixtures/order-flow.fixture';
+import {
+  closeAppAfterAll,
+  createTestAppWithPool,
+  obliterateQueueBeforeEach,
+  resetDatabaseBeforeEach,
+} from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { withClientDown } from '../setup/redis-outage';
-import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
 const TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
@@ -41,22 +46,14 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    app = await createTestApp();
+    ({ app, pool, db } = await createTestAppWithPool());
     relay = app.get(OutboxRelay);
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     connection = app.get<Redis>(QUEUE_CONNECTION);
-    db = app.get<DrizzleDB>(DRIZZLE);
-    pool = app.get<Pool>(PG_POOL);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-    await queue.obliterate({ force: true });
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
+  obliterateQueueBeforeEach(() => [queue]);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -219,6 +216,8 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
   // Everything above drives runOnce by hand; this proves the module registers a timer that calls it,
   // which is the one part a passing unit test cannot tell us.
   it('drains the backlog on its own once the interval elapses', async () => {
+    // A second boot, not a second test: the scheduler is off in the app above, which is what lets
+    // every other test own its own tick.
     const scheduled = await createTestApp({ OUTBOX_RELAY_ENABLED: 'true', OUTBOX_POLL_MS: '100' });
     try {
       await db.insert(schema.outbox).values(seedRow(1));

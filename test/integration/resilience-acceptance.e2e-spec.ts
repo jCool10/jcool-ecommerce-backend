@@ -4,7 +4,6 @@ import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
 import { PAYMENT_GATEWAY_BREAKER } from '../../src/modules/payment/infrastructure/gateway/breaker-payment-gateway.adapter';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { RedisService } from '../../src/shared/infrastructure/redis';
 import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '../../src/shared/infrastructure/throttler';
 import { CircuitBreakerFactory } from '../../src/shared/resilience';
@@ -20,10 +19,11 @@ import {
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetCatalogCache } from '../setup/reset-cache';
+import { createTestAppWithPool } from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { sleep } from '../setup/sleep';
 
-const METRICS_TOKEN = 'e2e-resilience-acceptance-token-abcdef';
 const HERD = 20;
 // Long enough that the whole herd is in flight before the winner answers.
 const SOURCE_DELAY_MS = 200;
@@ -34,8 +34,6 @@ const BREAKER_RESET_MS = 5_000;
 
 const IP_LIMIT = ORDER_THROTTLE[DEFAULT_THROTTLER].limit;
 const USER_LIMIT = ORDER_THROTTLE[USER_THROTTLER].limit;
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Each mechanism is already pinned on its own (catalog-stampede, rate-limit-sensitive-endpoints,
@@ -50,8 +48,8 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
   beforeAll(async () => {
     // Rate limiting is off in the default harness; this suite is here precisely to run with it on.
     process.env.THROTTLE_ENABLED = 'true';
-    process.env.METRICS_TOKEN = METRICS_TOKEN;
-    app = await createTestApp({
+    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
+    ({ app, pool } = await createTestAppWithPool({
       // Pinned rather than defaulted, including both kill-switches: a local .env decides otherwise
       // whether a waiter outlasts the injected source delay, whether the lease outlives the rebuild,
       // and whether there is a circuit at all — each of which is one of the assertions below.
@@ -67,8 +65,7 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
       // Wide enough that the two failures below cannot be split across windows by a GC pause and
       // leave the circuit closed with nothing to show for them.
       BREAKER_ROLLING_WINDOW_MS: '10000',
-    });
-    pool = app.get<Pool>(PG_POOL);
+    }));
     source = app.get(DrizzleProductRepository);
     await resetDatabase(pool);
     // Throttler counters live in Redis and outlive the process, so a re-run inside one window would
@@ -77,6 +74,8 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     await resetCatalogCache(app);
   });
 
+  // Explicit rather than `closeAppAfterAll`: the opt-in flags have to be cleared too, or the next
+  // file in this worker boots with rate limiting on.
   afterAll(async () => {
     await app.close();
     delete process.env.THROTTLE_ENABLED;
@@ -90,7 +89,7 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
   const server = () => app.getHttpServer();
 
   async function scrape(): Promise<string> {
-    const res = await request(server()).get('/metrics').set('Authorization', `Bearer ${METRICS_TOKEN}`).expect(200);
+    const res = await request(server()).get('/metrics').set(metricsAuthHeader()).expect(200);
     return res.text;
   }
 

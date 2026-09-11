@@ -1,34 +1,34 @@
 import type { INestApplication } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { FinalizeOrderUseCase, SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
-import { authHeader } from '../setup/auth.helper';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { newUserToken } from '../setup/fixtures/user.fixture';
 import {
+  addToCart,
   buyerWithCart,
   checkout,
+  lapseReservation,
   placeAndOpenSession,
   postWebhook,
   readOrder,
   readPayment,
+  readReservation,
   readStock,
   seedSellableSku,
   signOutcome,
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
+import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 const WEBHOOK_SECRET = 'whsec_e2e_ttl_sweep_secret_0123456789';
 const STOCK = 10;
@@ -49,19 +49,11 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
   let sku: SellableSku;
 
   beforeAll(async () => {
-    gateway = new FakeSignerGatewayAdapter(WEBHOOK_SECRET);
-    app = await createTestApp({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }, [
-      { provide: PAYMENT_GATEWAY, useValue: gateway },
-    ]);
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
     sweep = app.get(SweepExpiredReservationsUseCase);
     processor = app.get(DomainEventProcessor);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
   beforeEach(async () => {
     vi.restoreAllMocks();
@@ -69,21 +61,9 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
     sku = await seedSellableSku(app, { onHand: STOCK });
   });
 
-  async function lapse(orderId: string, minutesAgo = 30): Promise<void> {
-    await db
-      .update(schema.reservations)
-      .set({ expiresAt: new Date(Date.now() - minutesAgo * 60_000) })
-      .where(eq(schema.reservations.orderId, orderId));
-  }
-
-  async function readReservation(orderId: string) {
-    const [row] = await db.select().from(schema.reservations).where(eq(schema.reservations.orderId, orderId));
-    return row;
-  }
-
   async function lapsedOrder(minutesAgo = 30): Promise<OpenOrder> {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
-    await lapse(order.orderId, minutesAgo);
+    await lapseReservation(app, order.orderId, minutesAgo);
     return order;
   }
 
@@ -117,7 +97,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
     const order = await readOrder(app, orderId);
     expect(order.status).toBe(OrderStatus.EXPIRED);
     expect(order.finalizeReason).toBe('ttl:expired');
-    expect((await readReservation(orderId)).status).toBe('RELEASED');
+    expect((await readReservation(app, orderId)).status).toBe('RELEASED');
     const stock = await readStock(app, sku.variantId);
     expect(stock.quantityReserved).toBe(0);
     expect(stock.quantityOnHand).toBe(STOCK); // released, not sold
@@ -160,12 +140,12 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
     await postWebhook(app, signOutcome(WEBHOOK_SECRET, order.sessionId, order.charge, 'PAID', 'evt_ttl_paid')).expect(
       200,
     );
-    await lapse(order.orderId);
+    await lapseReservation(app, order.orderId);
 
     // Settling committed the hold, so it is not HELD and never enters the work queue at all.
     expect(await sweep.execute(SWEEP_ALL)).toEqual({ scanned: 0, expired: 0, raced: 0, errors: 0 });
     expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.PAID);
-    expect((await readReservation(order.orderId)).status).toBe('COMMITTED');
+    expect((await readReservation(app, order.orderId)).status).toBe('COMMITTED');
   });
 
   // The settlement that commits between the sweep's read and its row lock: the terminal guard, not
@@ -179,7 +159,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
     expect(summary).toEqual({ scanned: 1, expired: 0, raced: 1, errors: 0 });
     expect((await readOrder(app, orderId)).status).toBe(OrderStatus.PAID);
     // Stock stays held rather than being handed back behind a paid order.
-    expect((await readReservation(orderId)).status).toBe('HELD');
+    expect((await readReservation(app, orderId)).status).toBe('HELD');
     expect((await readStock(app, sku.variantId)).quantityReserved).toBe(QUANTITY);
   });
 
@@ -214,17 +194,13 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
   // has to collapse to one entry — otherwise finalize is called once per line for the same order.
   it('expires a multi-line order once, from the several holds it left behind', async () => {
     const second = await seedSellableSku(app, { onHand: STOCK });
-    const { accessToken } = await createTestUser(app);
+    const accessToken = await newUserToken(app);
     for (const variantId of [sku.variantId, second.variantId]) {
-      await request(app.getHttpServer())
-        .post('/cart/items')
-        .set(authHeader(accessToken))
-        .send({ skuId: variantId, quantity: QUANTITY })
-        .expect(200);
+      await addToCart(app, accessToken, variantId, QUANTITY).expect(200);
     }
     const placed = await checkout(app, accessToken).expect(201);
     const orderId = placed.body.id as string;
-    await lapse(orderId);
+    await lapseReservation(app, orderId);
 
     const summary = await sweep.execute(SWEEP_ALL);
 
@@ -267,7 +243,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
       const token = await buyerWithCart(app, sku.variantId, QUANTITY);
       const placed = await checkout(app, token).expect(201);
       const orderId = placed.body.id as string;
-      await lapse(orderId);
+      await lapseReservation(app, orderId);
       await sweep.execute(SWEEP_ALL);
 
       expect(await processor.process(await expiryJob(orderId))).toBe('processed');

@@ -1,7 +1,7 @@
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { PaymentStatus } from '../../domain/payment-status';
 import { HandlePaymentWebhookUseCase } from './handle-payment-webhook.use-case';
 import type { ProcessWebhookEventUseCase, WebhookProcessResult } from './process-webhook-event.use-case';
@@ -29,8 +29,8 @@ function build(opts: { process: WebhookProcessResult; finalize?: unknown; finali
 
   const processEvent = { execute: processExec } as unknown as ProcessWebhookEventUseCase;
   const finalizeOrder = { execute: finalizeExec } as unknown as FinalizeOrderUseCase;
-  const metrics = { recordRefundOwed } as unknown as MetricsPort;
-  const logger = { warn, error } as unknown as PinoLogger;
+  const metrics = fakeMetricsPort({ recordRefundOwed });
+  const logger = fakePinoLogger({ warn, error });
 
   const useCase = new HandlePaymentWebhookUseCase(processEvent, finalizeOrder, metrics, logger);
   return { useCase, spies: { processExec, finalizeExec, warn, error, recordRefundOwed } };

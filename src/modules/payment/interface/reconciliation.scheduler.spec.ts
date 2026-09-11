@@ -1,7 +1,7 @@
-import type { ConfigService } from '@nestjs/config';
 import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReconcileStaleOrdersUseCase, ReconcileSummary } from '../application/use-cases';
 import { ReconciliationScheduler } from './reconciliation.scheduler';
@@ -26,7 +26,7 @@ const IDLE: ReconcileSummary = {
 
 function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockResolvedValue(IDLE)) {
   const values = { ...CONFIG, ...overrides };
-  const config = { get: (key: string) => values[key] } as unknown as ConfigService;
+  const config = fakeConfigService(values);
   const registry = {
     addInterval: vi.fn(),
     deleteInterval: vi.fn(),
@@ -40,7 +40,7 @@ function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockRe
       registry as unknown as SchedulerRegistry,
       // Pass-through: correlation is asserted in job-context.spec.ts.
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
-      logger as unknown as PinoLogger,
+      fakePinoLogger(logger),
     );
   return { make, registry, logger, execute };
 }

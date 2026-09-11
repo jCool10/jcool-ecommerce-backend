@@ -1,10 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // The register write path is race-free because the unique email index — not a check-then-insert
 // pre-check — is the sole uniqueness guarantee: concurrent identical signups resolve to exactly one
@@ -21,17 +19,10 @@ describe('Register email uniqueness under concurrency (integration)', () => {
   }
 
   beforeAll(async () => {
-    app = await createTestApp();
-    pool = app.get<Pool>(PG_POOL);
+    ({ app, pool } = await createTestAppWithPool());
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   it('resolves N concurrent identical-email signups to exactly one 201, the rest 409, and one DB row', async () => {
     const email = 'race@test.local';

@@ -38,6 +38,7 @@
     "queue:replay-dlq": "tsx src/shared/messaging/queue/replay-dlq.cli.ts",
     "queue:replay-dlq:prod": "node dist/shared/messaging/queue/replay-dlq.cli.js",
     "search:reindex": "tsx src/modules/catalog/infrastructure/search/reindex.ts",
+    "search:reindex:prod": "node dist/modules/catalog/infrastructure/search/reindex.js",
     "storage:verify": "tsx src/shared/infrastructure/storage/verify-storage-orphans.cli.ts",
     "storage:verify:prod": "node dist/shared/infrastructure/storage/verify-storage-orphans.cli.js",
     "load:baseline": "k6 run k6/baseline.js",
@@ -90,6 +91,9 @@
     "rxjs": "^7.8.1",
     "stripe": "^22.6.1",
     "uuid": "^11.1.0"
+  },
+  "overrides": {
+    "multer": "^2.3.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",

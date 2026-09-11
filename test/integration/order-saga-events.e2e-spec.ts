@@ -2,13 +2,12 @@ import type { INestApplication } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FinalizeOrderUseCase } from '../../src/modules/order/application/use-cases';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
+import { METRICS, type MetricsPort } from '../../src/shared/observability/metrics/metrics.port';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
@@ -18,14 +17,15 @@ import {
   placeAndOpenSession,
   postWebhook,
   readOrder,
+  readReservation,
   readStock,
   seedSellableSku,
   signOutcome,
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
+import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
 
 const WEBHOOK_SECRET = 'whsec_e2e_saga_events_0123456789';
 const ON_HAND = 5;
@@ -48,22 +48,17 @@ describe('Payment settlement events → order saga (integration, real Postgres +
   let sku: SellableSku;
 
   beforeAll(async () => {
-    app = await createTestApp({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }, [
-      { provide: PAYMENT_GATEWAY, useValue: new FakeSignerGatewayAdapter(WEBHOOK_SECRET) },
-    ]);
-    pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
+    ({ app, pool, db } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
     relay = app.get(OutboxRelay);
     processor = app.get(DomainEventProcessor);
     dispatcher = app.get(DomainEventDispatcher);
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     finalize = app.get(FinalizeOrderUseCase);
   });
+  closeAppAfterAll(() => app);
 
-  afterAll(async () => {
-    await app.close();
-  });
-
+  // Explicit rather than `resetDatabaseBeforeEach`: the queue has to be emptied in the same hook and
+  // after the truncate, or a job left over from the previous test lands on rows that no longer exist.
   beforeEach(async () => {
     await resetDatabase(pool);
     await queue.obliterate({ force: true });
@@ -78,11 +73,6 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     db.select().from(schema.outbox).where(eq(schema.outbox.eventType, eventType));
 
   const inboxRows = () => db.select().from(schema.inbox);
-
-  const readReservation = async (orderId: string) => {
-    const [row] = await db.select().from(schema.reservations).where(eq(schema.reservations.orderId, orderId));
-    return row;
-  };
 
   /** The envelope the worker would receive, taken off the real queue rather than hand-built. */
   const publishedJobs = async (): Promise<DomainEventJob[]> => {
@@ -138,13 +128,13 @@ describe('Payment settlement events → order saga (integration, real Postgres +
 
     // Money moved, order did not: the exact state a crash between the two transactions leaves.
     expect((await readOrder(app, order.orderId)).status).toBe('PENDING');
-    expect((await readReservation(order.orderId)).status).toBe('HELD');
+    expect((await readReservation(app, order.orderId)).status).toBe('HELD');
 
     await relay.runOnce(10);
     expect(await deliverAll()).toContain('processed');
 
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
-    expect((await readReservation(order.orderId)).status).toBe('COMMITTED');
+    expect((await readReservation(app, order.orderId)).status).toBe('COMMITTED');
     const stock = await readStock(app, sku.variantId);
     expect(stock.quantityOnHand).toBe(ON_HAND - QUANTITY);
     expect(stock.quantityReserved).toBe(0);
@@ -166,7 +156,7 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     expect(stock.quantityReserved).toBe(0);
     // Re-committing the hold would have moved on-hand a second time; the terminal guard is what
     // makes the direct call and the event add up to one effect rather than two.
-    expect((await readReservation(order.orderId)).status).toBe('COMMITTED');
+    expect((await readReservation(app, order.orderId)).status).toBe('COMMITTED');
   });
 
   it('collapses a redelivered settlement into one effect', async () => {
@@ -202,11 +192,17 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     await expect(processor.process(late)).resolves.toBe('processed');
 
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
-    expect((await readReservation(order.orderId)).status).toBe('COMMITTED');
+    expect((await readReservation(app, order.orderId)).status).toBe('COMMITTED');
     expect((await readStock(app, sku.variantId)).quantityOnHand).toBe(ON_HAND - QUANTITY);
   });
 
-  it('acknowledges a settlement whose order does not exist instead of retrying it forever', async () => {
+  it('acknowledges a settlement whose order does not exist, and books the refund it now owes', async () => {
+    // The refund signal is the point, not a detail: money moved at the gateway and there is no order
+    // to ship, so acknowledging the job silently would retire the event with nothing recording that
+    // someone is owed a refund. `order-cancel.e2e-spec.ts` covers the sibling `ignored` branch;
+    // this is the only assertion on the `not_found` one.
+    const refundOwed = vi.spyOn(app.get<MetricsPort>(METRICS), 'recordRefundOwed');
+
     const orphan: DomainEventJob = {
       outboxId: '0198f0d8-9999-7000-8000-000000000002',
       aggregateType: 'Payment',
@@ -218,6 +214,7 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     };
 
     await expect(processor.process(orphan)).resolves.toBe('processed');
+    expect(refundOwed).toHaveBeenCalledWith('settlement_event');
   });
 
   it('sends a settlement it cannot read straight to the dead-letter path, without retrying', async () => {

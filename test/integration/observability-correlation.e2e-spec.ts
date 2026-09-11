@@ -1,7 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Server } from 'node:http';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { closeAppAfterAll } from '../setup/harness';
 import { createTestApp } from '../setup/test-app.factory';
 
 // Correlation-id behavior over the real HTTP stack (CLS middleware + pino). Uses the
@@ -15,10 +16,7 @@ describe('Correlation id (integration)', () => {
     app = await createTestApp();
     server = app.getHttpServer() as Server;
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
 
   it('returns a generated x-request-id header when the client sends none', async () => {
     const res = await request(server).get('/health/live').expect(200);

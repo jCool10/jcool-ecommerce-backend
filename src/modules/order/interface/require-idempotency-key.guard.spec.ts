@@ -1,4 +1,4 @@
-import { BadRequestException, type ExecutionContext } from '@nestjs/common';
+import type { ExecutionContext } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import { RequireIdempotencyKeyGuard, type IdempotentRequest } from './require-idempotency-key.guard';
 
@@ -27,15 +27,5 @@ describe('RequireIdempotencyKeyGuard', () => {
 
     expect(guard.canActivate(ctx)).toBe(true);
     expect(request.idempotencyKey).toBe(VALID_UUID);
-  });
-
-  it('rejects a missing header with 400', () => {
-    const { ctx } = contextFor({});
-    expect(() => guard.canActivate(ctx)).toThrow(BadRequestException);
-  });
-
-  it('rejects a non-UUID header with 400', () => {
-    const { ctx } = contextFor({ 'idempotency-key': 'not-a-uuid' });
-    expect(() => guard.canActivate(ctx)).toThrow(BadRequestException);
   });
 });

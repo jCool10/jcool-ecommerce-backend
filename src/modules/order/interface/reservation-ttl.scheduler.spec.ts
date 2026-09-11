@@ -3,6 +3,7 @@ import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { ClsService } from 'nestjs-cls';
 import type { PinoLogger } from 'nestjs-pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import type { SweepExpiredReservationsUseCase, SweepSummary } from '../application/use-cases';
 import { ReservationTtlScheduler } from './reservation-ttl.scheduler';
 
@@ -14,17 +15,28 @@ const CONFIG: Record<string, unknown> = {
   // Not this scheduler's keys, but its ordering guarantee is defined against them.
   'inventory.reservationTtl': '15m',
   'reconcile.orderTtlSec': 900,
+  // The rest of reconcile's configuration, present so a test can ask whether it is ever consulted.
+  'reconcile.enabled': true,
+  'reconcile.intervalMs': 60_000,
+  'reconcile.batchSize': 50,
 };
 
 const IDLE: SweepSummary = { scanned: 0, expired: 0, raced: 0, errors: 0 };
 
 function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockResolvedValue(IDLE)) {
-  const values = { ...CONFIG, ...overrides };
+  // Every key the scheduler asks for, in order — so a test can assert not only what it decided but
+  // what it looked at to decide. Answers come from the shared fake, so "absent key throws" stays
+  // defined in exactly one place; this only records the question on the way through.
+  const reads: string[] = [];
+  const answers = fakeConfigService({ ...CONFIG, ...overrides });
   const config = {
-    get: (key: string) => values[key],
+    get: (key: string) => {
+      reads.push(key);
+      return answers.get<unknown>(key);
+    },
     getOrThrow: (key: string) => {
-      if (values[key] === undefined) throw new Error(`Missing config key: ${key}`);
-      return values[key];
+      reads.push(key);
+      return answers.getOrThrow<unknown>(key);
     },
   } as unknown as ConfigService;
   const registry = {
@@ -43,7 +55,7 @@ function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockRe
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
       logger as unknown as PinoLogger,
     );
-  return { make, registry, logger, execute };
+  return { make, registry, logger, execute, reads };
 }
 
 describe('ReservationTtlScheduler', () => {
@@ -111,6 +123,58 @@ describe('ReservationTtlScheduler', () => {
       make().onModuleInit();
 
       expect(registry.addInterval).toHaveBeenCalled();
+    });
+
+    // CHARACTERIZATION — pins today's behaviour, which is NOT the intended one.
+    //
+    // Intended invariant: starting this sweep means reconcile genuinely reaches an order first, so
+    //   the checkout session is closed before the stock hold is released.
+    // Violated at: src/modules/order/interface/reservation-ttl.scheduler.ts:109 —
+    //   `assertBehindReconcile` compares thresholds and nothing else. Reconcile's cadence decides
+    //   whether it can reach an order inside the TTL at all, and a tick slower than the TTL means it
+    //   never does; the assert reads neither that key nor `reconcile.enabled`, so the ordering it
+    //   claims to enforce holds only for the default cadence nobody re-checks after changing it.
+    // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — SAGA-1 (and matrix q2:
+    //   whether cadence and batch drain belong in this assert or in a separate readiness check).
+    it('starts even when reconcile ticks an hour apart on orders that expire in fifteen minutes', () => {
+      const { make, registry, reads } = build({ 'reconcile.intervalMs': 3_600_000 });
+
+      expect(() => make().onModuleInit()).not.toThrow();
+
+      expect(registry.addInterval).toHaveBeenCalled();
+      // The reason it cannot object: it never looked.
+      expect(reads).toContain('reconcile.orderTtlSec');
+      expect(reads).not.toContain('reconcile.intervalMs');
+      expect(reads).not.toContain('reconcile.batchSize');
+    });
+
+    // CHARACTERIZATION — pins today's behaviour, which is NOT the intended one.
+    //
+    // Intended invariant: some sweep is always responsible for releasing a stock hold nobody paid
+    //   for; turning both off is a misconfiguration, not a mode.
+    // Violated at: src/modules/order/interface/reservation-ttl.scheduler.ts:48-51 — the disabled
+    //   branch logs at INFO and returns without ever reading `reconcile.enabled`, and reconcile's own
+    //   scheduler does the same in mirror image. With both off nothing releases a hold and nothing
+    //   says so: every order that goes unpaid holds its stock until a human notices the shelf is
+    //   empty. Contrast src/shared/messaging/inbox/sweep-inbox.ts:52, which refuses to boot on
+    //   exactly this shape of cross-config hazard.
+    // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — SAGA-3.
+    it('goes quiet when reconcile is disabled too, leaving nothing to release a hold', () => {
+      const { make, registry, logger, reads } = build({
+        'reservationSweep.enabled': false,
+        'reconcile.enabled': false,
+      });
+
+      make().onModuleInit();
+
+      expect(registry.addInterval).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      // INFO, the same line a deliberate single-sweep deployment writes — nothing distinguishes the
+      // configuration where stock is never released from the one where it still is.
+      expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'reservation expiry sweep disabled');
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(reads).not.toContain('reconcile.enabled');
     });
 
     // e2e drives the use case directly with no grace; the timer never starts, so neither does this.

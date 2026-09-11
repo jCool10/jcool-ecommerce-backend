@@ -145,8 +145,8 @@ describe('OutboxRelay', () => {
 
       await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 3, failed: 0 });
 
-      expect(t.add).toHaveBeenCalledTimes(3);
-      expect(t.jobs().map((job) => job.outboxId)).toEqual(rows.map((r) => r.id));
+      // Which rows reached the queue is asserted end to end; what only this tier sees is that the
+      // publish and the mark-published land as one write set, not two.
       expect(t.writes).toEqual([MARKED_PUBLISHED, MARKED_PUBLISHED, MARKED_PUBLISHED]);
     });
 
@@ -168,9 +168,8 @@ describe('OutboxRelay', () => {
 
       await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 2, failed: 1 });
 
-      // The refused row is the head of the batch, and the two behind it still reach the queue —
-      // otherwise it would sort first on every future tick and pin the whole backlog behind it.
-      expect(t.writes).toEqual([MARKED_PUBLISHED, MARKED_PUBLISHED, { attempts: 1 }]);
+      // That the refusal is charged to the row and the batch behind it still drains is asserted end
+      // to end; the operator-facing log line is what only this tier sees.
       expect(t.logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ outboxId: rows[0].id, refused: 1, charged: true }),
         expect.stringContaining('payload too large'),
@@ -211,8 +210,10 @@ describe('OutboxRelay', () => {
       const t = build([row()]);
       t.connection.status = 'reconnecting';
 
-      await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 0 });
+      await t.relay.runOnce(10);
 
+      // The empty tally is asserted end to end; the negatives are not — only this tier can see that
+      // no transaction was ever opened, as opposed to opened and rolled back.
       expect(t.transaction).not.toHaveBeenCalled();
       expect(t.add).not.toHaveBeenCalled();
       expect(t.logger.warn).not.toHaveBeenCalled();
@@ -225,7 +226,6 @@ describe('OutboxRelay', () => {
 
       await t.relay.runOnce(10);
 
-      expect(t.recordEventPublished).toHaveBeenCalledTimes(2);
       expect(t.recordEventPublished).toHaveBeenCalledWith('order.placed', 'published');
     });
 
@@ -236,7 +236,6 @@ describe('OutboxRelay', () => {
       await t.relay.runOnce(10);
 
       expect(t.recordEventPublished).toHaveBeenNthCalledWith(1, 'order.placed', 'refused');
-      expect(t.recordEventPublished).toHaveBeenNthCalledWith(2, 'order.placed', 'published');
     });
 
     it('folds an event type no consumer knows into one series instead of minting one per name', async () => {
@@ -244,9 +243,10 @@ describe('OutboxRelay', () => {
 
       await t.relay.runOnce(10);
 
-      // The fold doubles as a warning: these two are heading straight for the dead-letter queue.
+      // The fold doubles as a warning: these two are heading straight for the dead-letter queue. One
+      // unknown name folding is asserted end to end; that a SECOND, different name folds into the
+      // same series — rather than minting one per name — is only visible here.
       expect(t.recordEventPublished).toHaveBeenCalledTimes(2);
-      expect(t.recordEventPublished).toHaveBeenNthCalledWith(1, 'unregistered', 'published');
       expect(t.recordEventPublished).toHaveBeenNthCalledWith(2, 'unregistered', 'published');
     });
   });

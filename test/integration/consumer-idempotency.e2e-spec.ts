@@ -3,8 +3,8 @@ import type { Queue } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
@@ -14,11 +14,16 @@ import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/me
 import { authHeader } from '../setup/auth.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import {
+  closeAppAfterAll,
+  createTestAppWithPool,
+  obliterateQueueBeforeEach,
+  resetDatabaseBeforeEach,
+} from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { resetDatabase } from '../setup/reset-database';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
 
-const METRICS_TOKEN = 'e2e-consumer-metrics-token';
 const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
 const ORDER_ID = '0198f0d8-1111-7000-8000-000000000001';
 
@@ -50,23 +55,15 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   const inboxRows = () => db.select().from(schema.inbox);
 
   beforeAll(async () => {
-    app = await createTestApp({ METRICS_TOKEN });
+    ({ app, pool, db } = await createTestAppWithPool({ METRICS_TOKEN: E2E_METRICS_TOKEN }));
     processor = app.get(DomainEventProcessor);
     dispatcher = app.get(DomainEventDispatcher);
     relay = app.get(OutboxRelay);
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    db = app.get<DrizzleDB>(DRIZZLE);
-    pool = app.get<Pool>(PG_POOL);
   });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase(pool);
-    await queue.obliterate({ force: true });
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
+  obliterateQueueBeforeEach(() => [queue]);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -155,10 +152,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     await processor.process(job());
     await processor.process(job());
 
-    const { text } = await request(app.getHttpServer())
-      .get('/metrics')
-      .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-      .expect(200);
+    const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
     // Presence, not value: these counters accumulate across the file's tests, so only a delta would
     // mean anything.
@@ -167,6 +161,8 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('carries a real checkout from HTTP through the relay to a consumed effect', async () => {
+    // A second boot, not a second test: every other test here drives the processor by hand, which
+    // only works while the queue worker is off — so the one test that needs it running needs its own app.
     const worker = await createTestApp({ QUEUE_WORKER_ENABLED: 'true' });
     try {
       const sku = await seedSellableSku(app, { onHand: 5, priceMinor: 150_000 });

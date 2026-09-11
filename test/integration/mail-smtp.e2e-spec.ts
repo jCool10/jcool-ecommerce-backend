@@ -2,12 +2,12 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-const METRICS_TOKEN = 'e2e-mail-metrics-token';
 const MAIL_FROM = 'no-reply@jcool.test';
 const PUBLIC_URL = 'https://app.jcool.test';
 const PASSWORD = 'Password123!';
@@ -37,16 +37,17 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
 
   beforeAll(async () => {
     mail = await startMailServer();
-    app = await createTestApp({
+    ({ app, pool } = await createTestAppWithPool({
       SMTP_URL: mail.smtpUrl,
       MAIL_FROM,
       APP_PUBLIC_URL: PUBLIC_URL,
-      METRICS_TOKEN,
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
       MAIL_TIMEOUT_MS,
-    });
-    pool = app.get<Pool>(PG_POOL);
+    }));
   }, 180_000);
 
+  // Explicit rather than `closeAppAfterAll`: the app has to go before the mail server it still holds
+  // an SMTP connection to.
   afterAll(async () => {
     await app?.close();
     await mail?.stop();
@@ -107,11 +108,13 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
   // The enumeration oracle a throwing mailer would open: these routes answer the same either way,
   // so a dead mail server must not turn the existing-account branch into a 500.
   it('keeps registering, and keeps its answers uniform, when the mail server is unreachable', async () => {
+    // A second boot, not a second test: `SMTP_URL` is read once when the module compiles, so "the
+    // mail server is unreachable" is only expressible as an app that was built that way.
     const broken = await createTestApp({
       SMTP_URL: UNREACHABLE_SMTP_URL,
       MAIL_FROM,
       APP_PUBLIC_URL: PUBLIC_URL,
-      METRICS_TOKEN,
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
     });
     try {
       const email = freshEmail();
@@ -122,10 +125,7 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
       // The failure is only visible as a metric — which is the whole point of counting it.
       await vi.waitFor(
         async () => {
-          const { text } = await request(broken.getHttpServer())
-            .get('/metrics')
-            .set('Authorization', `Bearer ${METRICS_TOKEN}`)
-            .expect(200);
+          const { text } = await request(broken.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
           expect(text).toMatch(/mail_send_failures_total\{kind="email_verification"\} [1-9]/);
           expect(text).toMatch(/mail_send_failures_total\{kind="password_reset"\} [1-9]/);
         },

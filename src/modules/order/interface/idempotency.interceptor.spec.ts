@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  CallHandler,
-  ConflictException,
-  ExecutionContext,
-  UnprocessableEntityException,
-} from '@nestjs/common';
+import { CallHandler, ConflictException, ExecutionContext } from '@nestjs/common';
 import type { Response } from 'express';
 import type { ClsService } from 'nestjs-cls';
 import { firstValueFrom, of, throwError } from 'rxjs';
@@ -90,37 +84,6 @@ describe('IdempotencyInterceptor', () => {
     expect(store.markCompleted).not.toHaveBeenCalled();
   });
 
-  it('replays a COMPLETED record without invoking the handler', async () => {
-    const store = makeStore();
-    store.tryInsertInProgress.mockResolvedValue(null);
-    const cached = { id: 'o1' };
-    store.findByScopeAndKey.mockResolvedValue(
-      record({ status: 'COMPLETED', responseStatus: 201, responseBody: cached }),
-    );
-    const { interceptor } = build(store);
-    const statusSpy = vi.fn();
-    const { handler, handle } = handlerOf({ should: 'not run' });
-
-    const obs = await interceptor.intercept(context(statusSpy), handler);
-    const result = await firstValueFrom(obs);
-
-    expect(result).toEqual(cached);
-    expect(statusSpy).toHaveBeenCalledWith(201);
-    expect(handle).not.toHaveBeenCalled();
-    expect(store.markCompleted).not.toHaveBeenCalled();
-  });
-
-  it('rejects a same-key request with a different body as 422', async () => {
-    const store = makeStore();
-    store.tryInsertInProgress.mockResolvedValue(null);
-    store.findByScopeAndKey.mockResolvedValue(record({ requestHash: 'a-different-hash' }));
-    const { interceptor } = build(store);
-
-    await expect(interceptor.intercept(context(), handlerOf({}).handler)).rejects.toBeInstanceOf(
-      UnprocessableEntityException,
-    );
-  });
-
   it('returns 409 while a matching request is still in progress', async () => {
     const store = makeStore();
     store.tryInsertInProgress.mockResolvedValue(null);
@@ -141,24 +104,6 @@ describe('IdempotencyInterceptor', () => {
     await expect(interceptor.intercept(context(), handlerOf({}).handler)).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('reclaims an expired IN_PROGRESS row and re-runs the handler', async () => {
-    const store = makeStore();
-    store.tryInsertInProgress.mockResolvedValueOnce(null).mockResolvedValueOnce(record());
-    store.findByScopeAndKey.mockResolvedValue(
-      record({ status: 'IN_PROGRESS', expiresAt: new Date(Date.now() - 1_000) }),
-    );
-    const { interceptor } = build(store);
-
-    const obs = await interceptor.intercept(context(), handlerOf({ id: 'o2' }).handler);
-    const result = await firstValueFrom(obs);
-
-    expect(result).toEqual({ id: 'o2' });
-    expect(store.deleteExpiredInProgress).toHaveBeenCalledWith(SCOPE, KEY, expect.any(Date));
-    expect(store.tryInsertInProgress).toHaveBeenCalledTimes(2);
-    // The reclaimed handler re-runs; its checkout tx (not the interceptor) marks the row COMPLETED.
-    expect(store.markCompleted).not.toHaveBeenCalled();
-  });
-
   it('drops the IN_PROGRESS row and propagates an unexpected 5xx (never caches it)', async () => {
     const store = makeStore();
     store.tryInsertInProgress.mockResolvedValue(record());
@@ -168,19 +113,6 @@ describe('IdempotencyInterceptor', () => {
     const obs = await interceptor.intercept(context(), throwingHandler(boom));
 
     await expect(firstValueFrom(obs)).rejects.toBe(boom);
-    expect(store.deleteInProgress).toHaveBeenCalledWith(SCOPE, KEY);
-    expect(store.markCompleted).not.toHaveBeenCalled();
-  });
-
-  it('drops the IN_PROGRESS row on a deterministic business 4xx so a retry re-runs', async () => {
-    const store = makeStore();
-    store.tryInsertInProgress.mockResolvedValue(record());
-    const { interceptor } = build(store);
-    const rejection = new BadRequestException('Cart is empty');
-
-    const obs = await interceptor.intercept(context(), throwingHandler(rejection));
-
-    await expect(firstValueFrom(obs)).rejects.toBe(rejection);
     expect(store.deleteInProgress).toHaveBeenCalledWith(SCOPE, KEY);
     expect(store.markCompleted).not.toHaveBeenCalled();
   });

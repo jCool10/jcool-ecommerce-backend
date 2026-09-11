@@ -71,8 +71,9 @@ describe('DomainEventProcessor', () => {
   it('skips the effect when the claim was already taken', async () => {
     const ctx = build({ claimed: false });
 
-    await expect(ctx.processor.process(job())).resolves.toBe('duplicate');
+    await ctx.processor.process(job());
 
+    // The 'duplicate' resolution is asserted end to end; the negative and the metric label are not.
     expect(ctx.dispatch).not.toHaveBeenCalled();
     expect(ctx.recordEventConsumed).toHaveBeenCalledWith('order.placed', 'duplicate');
   });

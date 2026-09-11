@@ -1,9 +1,9 @@
-import type { ConfigService } from '@nestjs/config';
 import { context as otelContext, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { CircuitBreakerFactory } from './circuit-breaker.factory';
@@ -32,16 +32,11 @@ function build(overrides: Record<string, unknown> = {}) {
     recordBreakerTransition: vi.fn<MetricsPort['recordBreakerTransition']>(),
     recordBreakerCall: vi.fn<MetricsPort['recordBreakerCall']>(),
   };
-  const config = { getOrThrow: (key: string) => values[key] } as unknown as ConfigService;
-  const logger = { warn: vi.fn(), info: vi.fn() };
+  const config = fakeConfigService(values);
+  const logger = fakePinoLogger();
   // The real one drops the caller out of the request store; here there is none to drop out of.
   const cls = { exit: <T>(run: () => T): T => run() } as unknown as ClsService;
-  const factory = new CircuitBreakerFactory(
-    config,
-    metrics as unknown as MetricsPort,
-    logger as unknown as PinoLogger,
-    cls,
-  );
+  const factory = new CircuitBreakerFactory(config, metrics as unknown as MetricsPort, logger, cls);
   return { factory, metrics, logger };
 }
 

@@ -1,9 +1,9 @@
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import type { ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler';
-import type { PinoLogger } from 'nestjs-pino';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
 import { DEFAULT_THROTTLER, USER_THROTTLER } from './throttler.constants';
 import { UserThrottlerGuard } from './user-throttler.guard';
 
@@ -30,10 +30,8 @@ async function build() {
     { throttlers: [] },
     { increment },
     { get: () => undefined } as unknown as Reflector,
-    {
-      recordRateLimitRejection: vi.fn(),
-    } as unknown as MetricsPort,
-    { warn: vi.fn() } as unknown as PinoLogger,
+    fakeMetricsPort(),
+    fakePinoLogger(),
   );
   await guard.onModuleInit(); // resolves the options the base guard reads per request
   const shim = guard as unknown as {
