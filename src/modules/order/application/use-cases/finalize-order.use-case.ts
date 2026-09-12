@@ -35,7 +35,9 @@ export class FinalizeOrderUseCase {
     @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   /**
    * `join` runs the whole unit in a transaction the caller already owns — how a consumer settles an
@@ -65,7 +67,7 @@ export class FinalizeOrderUseCase {
       this.metrics.recordCompensation(COMPENSATION_TRIGGER[outcome]);
     }
     // The only log here that says an order actually reached its end state.
-    this.logger.info({ context: LOG_CONTEXT, orderId, outcome, reason }, 'order finalized');
+    this.logger.info({ orderId, outcome, reason }, 'order finalized');
   }
 
   private async settle(
@@ -84,10 +86,7 @@ export class FinalizeOrderUseCase {
             return { status: 'noop', order }; // duplicate of the same outcome — no second effect, no second event
           }
           // Conflicting outcome on a settled order (e.g. a late `failed` after `paid`): drop it, never regress.
-          this.logger.warn(
-            { context: LOG_CONTEXT, orderId, current: order.status, incoming: outcome },
-            'conflicting finalize ignored',
-          );
+          this.logger.warn({ orderId, current: order.status, incoming: outcome }, 'conflicting finalize ignored');
           return { status: 'ignored', order };
         }
 
@@ -106,7 +105,7 @@ export class FinalizeOrderUseCase {
             : await this.inventory.release(tx, orderId);
         if (!resolution.applied && !resolution.alreadyResolved) {
           // Not fatal, but it breaks the money = stock = status invariant, so a human has to look.
-          this.logger.warn({ context: LOG_CONTEXT, orderId, outcome }, 'finalized order had no reservation to resolve');
+          this.logger.warn({ orderId, outcome }, 'finalized order had no reservation to resolve');
         }
 
         // Same tx again: the settlement event cannot outlive a rolled-back finalize, and a committed

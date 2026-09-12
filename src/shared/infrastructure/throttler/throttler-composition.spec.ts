@@ -14,6 +14,7 @@ import { PinoLogger } from 'nestjs-pino';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import {
   ACCOUNT_THROTTLER,
@@ -70,7 +71,7 @@ async function boot(overLimit = false) {
     controllers: [ProbeController],
     providers: [
       { provide: METRICS, useValue: { recordRateLimitRejection } },
-      { provide: PinoLogger, useValue: { warn: vi.fn() } },
+      { provide: PinoLogger, useFactory: () => fakePinoLogger() },
       { provide: APP_GUARD, useClass: AccountAwareThrottlerGuard },
       { provide: APP_GUARD, useClass: FakeAuthGuard },
     ],

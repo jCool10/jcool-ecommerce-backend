@@ -1,5 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import type { MailMessage, MailTransportPort } from './mail-transport.port';
+
+const LOG_CONTEXT = 'Mailer';
 
 /**
  * Records that a message was sent, never what it said: bodies carry redeemable verification and
@@ -8,17 +11,14 @@ import type { MailMessage, MailTransportPort } from './mail-transport.port';
  */
 @Injectable()
 export class LogMailTransport implements MailTransportPort {
-  private readonly logger = new Logger('Mailer');
+  constructor(private readonly logger: PinoLogger) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   sendMail(message: MailMessage): Promise<void> {
-    this.logger.log(
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        to: message.to,
-        subject: message.subject,
-        bodyChars: message.text.length,
-      }),
-    );
+    // Fields, not a JSON.stringify'd blob: the recipient and subject are what a support ticket is
+    // searched by, and a stringified payload makes them a substring rather than a queryable key.
+    this.logger.info({ to: message.to, subject: message.subject, bodyChars: message.text.length }, 'mail sent');
     return Promise.resolve();
   }
 }

@@ -15,7 +15,7 @@ const CALLER_TX = Symbol('tx') as unknown as DrizzleTx;
 function build(withTransaction: () => Promise<FinalizeResult>) {
   const recordSagaStep = vi.fn();
   const recordCompensation = vi.fn();
-  const logger = { info: vi.fn() };
+  const logger = { info: vi.fn(), setContext: vi.fn() };
   const useCase = new FinalizeOrderUseCase(
     { withTransaction: vi.fn(withTransaction) } as unknown as OrderRepositoryPort,
     {} as unknown as InventoryReservationPort,
@@ -29,6 +29,15 @@ function build(withTransaction: () => Promise<FinalizeResult>) {
 // The settlement paths themselves are driven end-to-end against a real database; what is only
 // reachable from here is what the unit reports about a settlement that never committed.
 describe('FinalizeOrderUseCase', () => {
+  // The `context` label every line of this use case is filtered by. It is set once on the transient
+  // logger rather than stamped per call, so this constructor call is the only place it is observable
+  // — the e2e spy sees the call-site arguments, before nestjs-pino merges the label in.
+  it('labels its logger once, at construction', () => {
+    const { logger } = build(() => Promise.resolve({ status: 'noop' } as FinalizeResult));
+
+    expect(logger.setContext).toHaveBeenCalledExactlyOnceWith('FinalizeOrder');
+  });
+
   it('counts a failed step when the transaction throws, and rethrows the original error', async () => {
     const boom = new Error('deadlock detected');
     const { useCase, recordSagaStep, recordCompensation, logger } = build(() => Promise.reject(boom));

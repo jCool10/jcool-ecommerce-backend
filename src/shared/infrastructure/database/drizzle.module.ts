@@ -1,9 +1,11 @@
-import { Global, Inject, Logger, Module, OnApplicationShutdown } from '@nestjs/common';
+import { Global, Inject, Module, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { ClsService } from 'nestjs-cls';
+import { PinoLogger } from 'nestjs-pino';
 import { Pool } from 'pg';
 import { createDbQueryCounterLogger } from '@shared/observability';
+import { toError } from '@shared/kernel/to-error';
 import * as schema from './schema';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
 
@@ -12,8 +14,8 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
   providers: [
     {
       provide: PG_POOL,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService): Pool => {
+      inject: [ConfigService, PinoLogger],
+      useFactory: (config: ConfigService, logger: PinoLogger): Pool => {
         const pool = new Pool({
           connectionString: config.getOrThrow<string>('database.url'),
           // Bounded so a connection spike can't exhaust Postgres backends; a finite
@@ -25,9 +27,9 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from './drizzle.tokens';
         });
         // Without an 'error' listener a dead idle client crashes the process;
         // log and let pg discard it (DB restart, failover, idle timeout).
-        const logger = new Logger('DrizzleModule');
+        logger.setContext('DrizzleModule');
         pool.on('error', (err: Error) => {
-          logger.error(`Unexpected idle pg client error: ${err.message}`, err.stack);
+          logger.error({ err: toError(err) }, 'unexpected idle pg client error');
         });
         return pool;
       },

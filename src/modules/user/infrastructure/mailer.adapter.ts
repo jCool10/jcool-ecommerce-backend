@@ -1,6 +1,8 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
 import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@shared/mail/mail-transport.port';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type MailKind, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { EmailVerificationMessage, MailerPort, PasswordResetMessage } from '../application/ports';
 
@@ -13,15 +15,16 @@ const LOG_CONTEXT = 'MailerAdapter';
  */
 @Injectable()
 export class MailerAdapter implements MailerPort {
-  private readonly logger = new Logger(LOG_CONTEXT);
   private readonly publicUrl: string;
 
   constructor(
     @Inject(MAIL_TRANSPORT) private readonly transport: MailTransportPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     config: ConfigService,
+    private readonly logger: PinoLogger,
   ) {
     this.publicUrl = config.get<string>('app.publicUrl') ?? 'http://localhost:3000';
+    logger.setContext(LOG_CONTEXT);
   }
 
   sendEmailVerification(message: EmailVerificationMessage): Promise<void> {
@@ -55,7 +58,7 @@ export class MailerAdapter implements MailerPort {
     } catch (error) {
       this.metrics.recordMailSendFailure(kind);
       // The recipient is in the audit trail already; the body never is, since it holds the token.
-      this.logger.error(`Sending ${kind} mail failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.error({ kind, err: toError(error) }, 'mail send failed');
     }
   }
 }

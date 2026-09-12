@@ -1,7 +1,11 @@
-import { Inject, Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
+import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@shared/kernel/to-error';
 import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from './queue.constants';
+
+const LOG_CONTEXT = 'QueueLifecycle';
 
 /**
  * BullMQ closes only connections it opened itself — a client handed to it is treated as shared and
@@ -9,13 +13,14 @@ import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '
  */
 @Injectable()
 export class QueueLifecycle implements OnApplicationShutdown {
-  private readonly logger = new Logger(QueueLifecycle.name);
-
   constructor(
     @Inject(DOMAIN_EVENTS_QUEUE) private readonly queue: Queue,
     @Inject(DOMAIN_EVENTS_DLQ_QUEUE) private readonly deadLetterQueue: Queue,
     @Inject(QUEUE_CONNECTION) private readonly connection: Redis,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   // Close at onApplicationShutdown (after the HTTP server has closed) rather than onModuleDestroy,
   // matching the pg pool and RedisService: a request still draining can publish until the very end.
@@ -26,9 +31,7 @@ export class QueueLifecycle implements OnApplicationShutdown {
       try {
         await queue.close();
       } catch (error) {
-        this.logger.error(
-          `Failed to close queue ${queue.name}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        this.logger.error({ queue: queue.name, err: toError(error) }, 'failed to close queue');
       }
     }
 

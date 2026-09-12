@@ -108,8 +108,11 @@ describe('SweepExpiredReservationsUseCase', () => {
 
     expect(summary).toEqual({ scanned: 3, expired: 2, raced: 0, errors: 1 });
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId: hold(1).orderId }),
-      expect.stringContaining('deadlock detected'),
+      expect.objectContaining({
+        orderId: hold(1).orderId,
+        err: expect.objectContaining({ message: 'deadlock detected' }) as unknown,
+      }),
+      'expiry sweep failed for order',
     );
   });
 

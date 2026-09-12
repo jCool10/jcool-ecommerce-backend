@@ -4,6 +4,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import { runInJobContext } from '@shared/observability/correlation/job-context';
+import { toError } from '@shared/kernel/to-error';
 import { OutboxRelay } from './outbox-relay';
 
 const LOG_CONTEXT = 'OutboxRelayScheduler';
@@ -30,19 +31,17 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
     this.enabled = config.get<boolean>('outbox.relayEnabled') === true;
     this.intervalMs = requireInt(config, 'outbox.pollMs', 1);
     this.batchSize = requireInt(config, 'outbox.batchSize', 1);
+    logger.setContext(LOG_CONTEXT);
   }
 
   onModuleInit(): void {
     if (!this.enabled) {
-      this.logger.info({ context: LOG_CONTEXT }, 'outbox relay disabled');
+      this.logger.info('outbox relay disabled');
       return;
     }
     const interval = setInterval(() => void this.tick(), this.intervalMs);
     this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
-    this.logger.info(
-      { context: LOG_CONTEXT, intervalMs: this.intervalMs, batchSize: this.batchSize },
-      'outbox relay scheduled',
-    );
+    this.logger.info({ intervalMs: this.intervalMs, batchSize: this.batchSize }, 'outbox relay scheduled');
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -57,7 +56,7 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
   async tick(): Promise<void> {
     if (this.inFlight) {
       // Overlapping ticks poll the same backlog twice: harmless, never useful.
-      this.logger.warn({ context: LOG_CONTEXT }, 'previous outbox relay tick still running — tick skipped');
+      this.logger.warn('previous outbox relay tick still running — tick skipped');
       return;
     }
     this.inFlight = this.run();
@@ -75,14 +74,13 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
         const summary = await this.relay.runOnce(this.batchSize);
         // An idle backlog is the steady state; logging it would bury the ticks that moved something.
         if (summary.published > 0 || summary.failed > 0) {
-          this.logger.info({ context: LOG_CONTEXT, ...summary }, 'outbox relay tick completed');
+          this.logger.info({ ...summary }, 'outbox relay tick completed');
         }
       });
     } catch (error) {
       // The poll itself broke (the per-row failures are handled inside). Swallow it: an unhandled
       // rejection in a timer kills the process.
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error({ context: LOG_CONTEXT }, `outbox relay tick failed: ${message}`);
+      this.logger.error({ err: toError(error) }, 'outbox relay tick failed');
     }
   }
 }

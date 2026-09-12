@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { User } from '../../domain/entities/user.entity';
 import type { CreateUserInput, PasswordHasherPort, UserRepositoryPort } from '../ports';
 import type { EmailVerificationService, VerificationRecipient } from '../services';
@@ -53,7 +54,12 @@ describe('RegisterUserUseCase', () => {
   beforeEach(() => {
     repo = new MockUserRepository();
     emailVerification = new MockEmailVerification();
-    useCase = new RegisterUserUseCase(repo, hasher, emailVerification as unknown as EmailVerificationService);
+    useCase = new RegisterUserUseCase(
+      repo,
+      hasher,
+      emailVerification as unknown as EmailVerificationService,
+      fakePinoLogger(),
+    );
   });
 
   it('hashes the password and creates a user when the email is free', async () => {

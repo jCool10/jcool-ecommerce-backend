@@ -2,6 +2,7 @@ import type { Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
+import { PinoLogger } from 'nestjs-pino';
 import { createQueueConnection } from './queue-connection';
 import {
   buildJobOptions,
@@ -19,9 +20,9 @@ import {
 export const QUEUE_PROVIDERS: Provider[] = [
   {
     provide: QUEUE_CONNECTION,
-    inject: [ConfigService],
-    useFactory: (config: ConfigService): Redis =>
-      createQueueConnection(config.getOrThrow<string>('redis.url'), {
+    inject: [ConfigService, PinoLogger],
+    useFactory: (config: ConfigService, logger: PinoLogger): Redis =>
+      createQueueConnection(config.getOrThrow<string>('redis.url'), logger, {
         // Reject a publish while disconnected instead of buffering it in memory: the outbox row is
         // the durable buffer, whereas an offline queue would accept a publish that dies with the process.
         enableOfflineQueue: false,

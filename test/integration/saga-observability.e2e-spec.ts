@@ -208,8 +208,10 @@ describe('Saga observability (integration, real Postgres)', () => {
     }
   });
 
-  // These assert what the call site hands the logger, not the serialized line — the correlation
-  // fields come from pino's mixin at serialization time and are never part of this object.
+  // These assert what the call site hands the logger, not the serialized line. Two sets of fields
+  // are deliberately absent from this object: the correlation fields, which pino's mixin adds at
+  // serialization time, and `context`, which the transient logger merges in from setContext() after
+  // this spy has already seen the arguments (the label itself is asserted in the unit spec).
   describe('the fields the saga puts on its settlement logs', () => {
     it('states the outcome and the audit reason against the order id', async () => {
       const info = vi.spyOn(PinoLogger.prototype, 'info');
@@ -219,7 +221,6 @@ describe('Saga observability (integration, real Postgres)', () => {
 
       expect(info).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: 'FinalizeOrder',
           orderId,
           outcome: OrderStatus.EXPIRED,
           reason: 'ttl:expired',
@@ -237,7 +238,6 @@ describe('Saga observability (integration, real Postgres)', () => {
 
       expect(warn).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: 'FinalizeOrder',
           orderId,
           current: OrderStatus.PAID,
           incoming: OrderStatus.FAILED,

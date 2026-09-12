@@ -1,9 +1,9 @@
 import type { ConfigService } from '@nestjs/config';
 import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { SweepExpiredReservationsUseCase, SweepSummary } from '../application/use-cases';
 import { ReservationTtlScheduler } from './reservation-ttl.scheduler';
 
@@ -53,7 +53,7 @@ function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockRe
       // Pass-through: correlation is asserted in job-context.spec.ts, and a real CLS scope here
       // would only add a layer between the test and the tick it is driving.
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
-      logger as unknown as PinoLogger,
+      fakePinoLogger(logger),
     );
   return { make, registry, logger, execute, reads };
 }
@@ -106,7 +106,7 @@ describe('ReservationTtlScheduler', () => {
 
       expect(registry.addInterval).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
-      expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'reservation expiry sweep disabled');
+      expect(logger.info).toHaveBeenCalledWith('reservation expiry sweep disabled');
     });
 
     // This sweep cannot close a checkout session; reconcile can. Shortening the hold TTL moves this
@@ -171,7 +171,7 @@ describe('ReservationTtlScheduler', () => {
       expect(vi.getTimerCount()).toBe(0);
       // INFO, the same line a deliberate single-sweep deployment writes — nothing distinguishes the
       // configuration where stock is never released from the one where it still is.
-      expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'reservation expiry sweep disabled');
+      expect(logger.info).toHaveBeenCalledWith('reservation expiry sweep disabled');
       expect(logger.error).not.toHaveBeenCalled();
       expect(logger.warn).not.toHaveBeenCalled();
       expect(reads).not.toContain('reconcile.enabled');
@@ -200,7 +200,7 @@ describe('ReservationTtlScheduler', () => {
       await scheduler.tick();
 
       expect(execute).toHaveBeenCalledTimes(1);
-      expect(logger.warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('tick skipped'));
+      expect(logger.warn).toHaveBeenCalledWith('previous reservation expiry sweep still running — tick skipped');
       release();
       await first;
     });
@@ -251,7 +251,10 @@ describe('ReservationTtlScheduler', () => {
       const scheduler = make();
 
       await expect(scheduler.tick()).resolves.toBeUndefined();
-      expect(logger.error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('pool exhausted'));
+      expect(logger.error).toHaveBeenCalledWith(
+        { err: expect.objectContaining({ message: 'pool exhausted' }) as unknown },
+        'reservation expiry sweep failed',
+      );
 
       await scheduler.tick();
       expect(execute).toHaveBeenCalledTimes(2);

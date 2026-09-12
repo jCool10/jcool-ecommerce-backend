@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type ConsumeResult, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { InboxStore } from '../inbox/inbox.store';
 import { PermanentError } from '../errors';
@@ -28,7 +29,9 @@ export class DomainEventProcessor {
     private readonly inbox: InboxStore,
     private readonly dispatcher: DomainEventDispatcher,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async process(job: DomainEventJob): Promise<ConsumeResult> {
     let result: ConsumeResult;
@@ -72,7 +75,6 @@ export class DomainEventProcessor {
         // orderId for `order.*`, a paymentId for `payment.*` — and unlabelled it sends a reader
         // looking in the wrong table.
         {
-          context: LOG_CONTEXT,
           eventType: job.eventType,
           messageId: job.outboxId,
           aggregateType: job.aggregateType,
@@ -92,7 +94,7 @@ export class DomainEventProcessor {
       await effect();
     } catch (error: unknown) {
       this.logger.error(
-        { context: LOG_CONTEXT, eventType: job.eventType, messageId: job.outboxId, err: error },
+        { eventType: job.eventType, messageId: job.outboxId, err: toError(error) },
         'post-commit effect failed and will not be retried',
       );
     }

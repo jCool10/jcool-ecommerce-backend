@@ -5,9 +5,8 @@ import { getCorrelationId } from '@shared/observability';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import type { AuthAuditPort, AuthAuditRecord } from '../application/ports';
 
-// pino `context` label for the audit trail (SIEM filter key). Passed per-call rather than
-// via setContext() because the base PinoLogger is a shared singleton.
-const AUTH_AUDIT_CONTEXT = 'AuthAudit';
+/** pino `context` label for the audit trail — the SIEM filters the whole trail on this one key. */
+const LOG_CONTEXT = 'AuthAudit';
 
 @Injectable()
 export class AuthAuditLogger implements AuthAuditPort {
@@ -15,12 +14,14 @@ export class AuthAuditLogger implements AuthAuditPort {
     private readonly logger: PinoLogger,
     private readonly cls: ClsService,
     @Inject(METRICS) private readonly metrics: MetricsPort,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   record(entry: AuthAuditRecord): void {
     // The pino mixin already adds `requestId`; setting it here too keeps it on the line even
     // if this ever runs outside a request context.
-    const payload = { context: AUTH_AUDIT_CONTEXT, ...entry, requestId: getCorrelationId(this.cls) };
+    const payload = { ...entry, requestId: getCorrelationId(this.cls) };
     if (entry.outcome === 'failure') {
       this.logger.warn(payload, entry.event);
     } else {

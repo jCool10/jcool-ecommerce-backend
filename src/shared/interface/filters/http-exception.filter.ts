@@ -8,6 +8,7 @@ import { PinoLogger } from 'nestjs-pino';
 // filter's import graph.
 import { ClockStalledError } from '@shared/identity/identity.errors';
 import { DomainError } from '@shared/kernel/domain-error';
+import { toError } from '@shared/kernel/to-error';
 import {
   REQUEST_ID_HEADER,
   formatDevRequestLine,
@@ -22,7 +23,6 @@ const SERVER_ERROR_MIN: number = HttpStatus.INTERNAL_SERVER_ERROR;
 const SERVICE_UNAVAILABLE: number = HttpStatus.SERVICE_UNAVAILABLE;
 const UNPROCESSABLE_ENTITY: number = HttpStatus.UNPROCESSABLE_ENTITY;
 
-// pino `context` label; passed per-call because the base PinoLogger is a shared singleton.
 const LOG_CONTEXT = 'HttpExceptionFilter';
 
 /** Unified error envelope: <500 keep their payload, >=500 are masked to a generic message with the
@@ -37,6 +37,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     config: ConfigService,
   ) {
     this.devPretty = config.get<string>('app.env') === 'development';
+    logger.setContext(LOG_CONTEXT);
   }
 
   catch(exception: unknown, host: ArgumentsHost): void {
@@ -63,7 +64,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const durationMs = getRequestDurationMs(this.cls);
     const dbQueries = getDbQueryCount(this.cls);
     const isServerError = status >= SERVER_ERROR_MIN;
-    const err = isServerError ? (exception instanceof Error ? exception : new Error(String(exception))) : undefined;
+    const err = isServerError ? toError(exception) : undefined;
     // A DomainError gets no Sentry event, but a defensive guard that fires is still a bug: keep its
     // stack on the warn line, because the route alone cannot say which guard deep in the model threw.
     const warnErr = !isServerError && exception instanceof DomainError ? exception : undefined;
@@ -83,7 +84,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
       else this.logger.warn(line);
     } else {
       const logFields = {
-        context: LOG_CONTEXT,
         statusCode: status,
         method,
         route,

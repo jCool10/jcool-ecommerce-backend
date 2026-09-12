@@ -5,6 +5,7 @@ import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import { durationToMs } from '@shared/kernel';
 import { runInJobContext } from '@shared/observability/correlation/job-context';
+import { toError } from '@shared/kernel/to-error';
 import { withSpan } from '@shared/observability/tracing/tracer';
 import { SweepExpiredReservationsUseCase, type SweepInput } from '../application/use-cases';
 
@@ -43,17 +44,18 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
       batchSize: requireInt(config, 'reservationSweep.batchSize', 1),
     };
     this.config = config;
+    logger.setContext(LOG_CONTEXT);
   }
 
   onModuleInit(): void {
     if (!this.enabled) {
-      this.logger.info({ context: LOG_CONTEXT }, 'reservation expiry sweep disabled');
+      this.logger.info('reservation expiry sweep disabled');
       return;
     }
     this.assertBehindReconcile();
     const interval = setInterval(() => void this.tick(), this.intervalMs);
     this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
-    this.logger.info({ context: LOG_CONTEXT, intervalMs: this.intervalMs }, 'reservation expiry sweep scheduled');
+    this.logger.info({ intervalMs: this.intervalMs }, 'reservation expiry sweep scheduled');
   }
 
   onModuleDestroy(): void {
@@ -65,7 +67,7 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
 
   async tick(): Promise<void> {
     if (this.running) {
-      this.logger.warn({ context: LOG_CONTEXT }, 'previous reservation expiry sweep still running — tick skipped');
+      this.logger.warn('previous reservation expiry sweep still running — tick skipped');
       return;
     }
     this.running = true;
@@ -81,20 +83,19 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
           // get looked at. Distinct from the catch below: the sweep worked, its queue is jammed.
           if (summary.scanned === this.sweep.batchSize && summary.expired === 0) {
             this.logger.error(
-              { context: LOG_CONTEXT, ...summary, stuck: true },
+              { ...summary, stuck: true },
               'reservation expiry sweep filled a batch without expiring anything — stock stays held',
             );
           } else if (summary.scanned > 0) {
             // Idle sweeps are the common case; logging them buries the ticks that did something.
-            this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reservation expiry sweep completed');
+            this.logger.info({ ...summary }, 'reservation expiry sweep completed');
           }
         }),
       );
     } catch (error) {
       // Per-order failures are already isolated, so this is the sweep itself breaking. Swallow it:
       // an unhandled rejection in a timer kills the process.
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error({ context: LOG_CONTEXT }, `reservation expiry sweep failed: ${message}`);
+      this.logger.error({ err: toError(error) }, 'reservation expiry sweep failed');
     } finally {
       this.running = false;
     }

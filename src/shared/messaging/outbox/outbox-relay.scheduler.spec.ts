@@ -86,7 +86,7 @@ describe('OutboxRelayScheduler', () => {
 
       expect(registry.addInterval).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
-      expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'outbox relay disabled');
+      expect(logger.info).toHaveBeenCalledWith('outbox relay disabled');
     });
   });
 
@@ -101,7 +101,7 @@ describe('OutboxRelayScheduler', () => {
       await scheduler.tick();
 
       expect(runOnce).toHaveBeenCalledOnce();
-      expect(logger.warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('tick skipped'));
+      expect(logger.warn).toHaveBeenCalledWith('previous outbox relay tick still running — tick skipped');
       release();
       await first;
 
@@ -118,7 +118,10 @@ describe('OutboxRelayScheduler', () => {
       const scheduler = make();
       await expect(scheduler.tick()).resolves.toBeUndefined();
 
-      expect(logger.error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('outbox poll failed'));
+      expect(logger.error).toHaveBeenCalledWith(
+        { err: expect.objectContaining({ message: 'outbox poll failed' }) as unknown },
+        'outbox relay tick failed',
+      );
       await scheduler.tick();
       expect(runOnce).toHaveBeenCalledTimes(2);
     });

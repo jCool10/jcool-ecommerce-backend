@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PinoLogger } from 'nestjs-pino';
 import { createLogSampler } from '@shared/observability/logging/log-sampler';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { withSpan } from '@shared/observability/tracing/tracer';
 import { CacheService } from './cache.service';
@@ -66,6 +67,7 @@ export class SwrCacheService {
       leaseMs: config.getOrThrow<number>('cache.leaseMs'),
       waitMs: config.getOrThrow<number>('cache.waitMs'),
     };
+    logger.setContext(LOG_CONTEXT);
   }
 
   /**
@@ -140,7 +142,6 @@ export class SwrCacheService {
     if (this.shouldLog(options.label ?? UNLABELLED)) {
       this.logger.warn(
         {
-          context: LOG_CONTEXT,
           key,
           label: options.label,
           waitMs: options.policy.waitMs,
@@ -158,10 +159,7 @@ export class SwrCacheService {
    */
   private refreshInBackground<T>(key: string, rebuild: () => Promise<T>, options: ResolvedOptions<T>): void {
     void this.refreshIfUncontended(key, rebuild, options).catch((caught: unknown) => {
-      this.logger.warn(
-        { context: LOG_CONTEXT, key, reason: reasonOf(caught) },
-        'background cache rebuild failed, serving stale',
-      );
+      this.logger.warn({ key, err: toError(caught) }, 'background cache rebuild failed, serving stale');
     });
   }
 
@@ -232,7 +230,7 @@ export class SwrCacheService {
       } catch (caught) {
         // `encode` is the caller's code and may throw. The value is already answered from the
         // source, so failing to file it away must not turn a served read into a 500.
-        this.logger.warn({ context: LOG_CONTEXT, key, reason: reasonOf(caught) }, 'cache store failed');
+        this.logger.warn({ key, err: toError(caught) }, 'cache store failed');
         this.metrics.recordCatalogCacheOperation('store_rejected');
       }
       return data;
@@ -293,7 +291,7 @@ export class SwrCacheService {
       return { data: options.codec.decode(value.data), freshUntil: value.freshUntil };
     } catch (caught) {
       if (warnOnDrift) {
-        this.logger.warn({ context: LOG_CONTEXT, key, reason: reasonOf(caught) }, 'discarding undecodable cache entry');
+        this.logger.warn({ key, err: toError(caught) }, 'discarding undecodable cache entry');
       }
       return null;
     }
@@ -307,8 +305,4 @@ function lockKeyFor(key: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function reasonOf(caught: unknown): string {
-  return caught instanceof Error ? caught.message : String(caught);
 }

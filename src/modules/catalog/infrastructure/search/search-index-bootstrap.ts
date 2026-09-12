@@ -1,8 +1,12 @@
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@shared/kernel/to-error';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../application/ports';
 
 // Long enough for a merely slow engine, short enough that an unreachable one never holds a deploy open.
 const PROVISION_TIMEOUT_MS = 5_000;
+
+const LOG_CONTEXT = 'SearchIndexBootstrap';
 
 /**
  * Applies the index settings at boot so the engine is never left holding an index it auto-created on
@@ -13,21 +17,28 @@ const PROVISION_TIMEOUT_MS = 5_000;
  */
 @Injectable()
 export class SearchIndexBootstrap implements OnModuleInit {
-  private readonly logger = new Logger(SearchIndexBootstrap.name);
-
-  constructor(@Inject(CATALOG_SEARCH) private readonly search: CatalogSearchPort) {}
+  constructor(
+    @Inject(CATALOG_SEARCH) private readonly search: CatalogSearchPort,
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async onModuleInit(): Promise<void> {
     const provisioning = this.search.ensureIndex().catch((error: unknown) => {
       this.logger.warn(
-        `search index provisioning failed; search returns empty until it succeeds: ${describeError(error)}`,
+        { err: toError(error) },
+        'search index provisioning failed; search returns empty until it succeeds',
       );
     });
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
-        this.logger.warn(`search index provisioning exceeded ${PROVISION_TIMEOUT_MS}ms; continuing without it`);
+        this.logger.warn(
+          { timeoutMs: PROVISION_TIMEOUT_MS },
+          'search index provisioning exceeded its deadline; continuing without it',
+        );
         resolve();
       }, PROVISION_TIMEOUT_MS);
     });
@@ -38,8 +49,4 @@ export class SearchIndexBootstrap implements OnModuleInit {
       clearTimeout(timer);
     }
   }
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

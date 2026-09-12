@@ -1,9 +1,9 @@
 import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { RetentionSweep } from './retention-sweep.port';
 import { RetentionSweepRegistry } from './retention-sweep.registry';
 import { RetentionScheduler } from './retention.scheduler';
@@ -43,7 +43,7 @@ function build(overrides: Record<string, unknown> = {}, sweeps: RetentionSweep[]
       // Pass-through; correlation is asserted in job-context.spec.ts.
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
       metrics as unknown as MetricsPort,
-      logger as unknown as PinoLogger,
+      fakePinoLogger(logger),
     );
   return { make, registry, schedulerRegistry, metrics, logger };
 }
@@ -99,7 +99,7 @@ describe('RetentionScheduler', () => {
 
       expect(schedulerRegistry.addInterval).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
-      expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'retention sweeps disabled');
+      expect(logger.info).toHaveBeenCalledWith('retention sweeps disabled');
     });
 
     it('names the sweeps it will drive, which is where a forgotten registration shows up', () => {
@@ -255,7 +255,15 @@ describe('RetentionScheduler', () => {
       await expect(tick).resolves.toBeUndefined();
 
       expect(metrics.recordRetentionSweepFailure).toHaveBeenCalledWith('messaging:outbox');
-      expect(logger.error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('exceeded 30000ms'));
+      // The elapsed budget is carried by the error, not the message: the message stays the one
+      // string every retention failure groups under.
+      expect(logger.error).toHaveBeenCalledWith(
+        {
+          sweep: 'messaging:outbox',
+          err: expect.objectContaining({ message: expect.stringContaining('exceeded 30000ms') as unknown }) as unknown,
+        },
+        'retention sweep failed',
+      );
     });
 
     // The timeout ends the wait, not the DELETE. Freeing the guard when the wait ends would start a

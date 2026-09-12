@@ -1,6 +1,8 @@
 import { MODULE_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
+import { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import {
   CATALOG_ADMIN_REPOSITORY,
   CATALOG_SEARCH,
@@ -47,6 +49,7 @@ describe('CatalogModule search-sync wiring', () => {
         { provide: CATALOG_SEARCH, useValue: { indexProduct: vi.fn(), deleteProduct: vi.fn() } },
         { provide: PRODUCT_REPOSITORY, useValue: cached },
         { provide: PRODUCT_SOURCE_REPOSITORY, useValue: source },
+        { provide: PinoLogger, useFactory: () => fakePinoLogger() },
       ],
     }).compile();
 

@@ -4,6 +4,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import { runInJobContext } from '@shared/observability/correlation/job-context';
+import { toError } from '@shared/kernel/to-error';
 import { withSpan } from '@shared/observability/tracing/tracer';
 import { ReconcileStaleOrdersUseCase, type ReconcileInput } from '../application/use-cases';
 
@@ -39,16 +40,17 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
       ttlSec: requireInt(config, 'reconcile.orderTtlSec', 0),
       batchSize: requireInt(config, 'reconcile.batchSize', 1),
     };
+    logger.setContext(LOG_CONTEXT);
   }
 
   onModuleInit(): void {
     if (!this.enabled) {
-      this.logger.info({ context: LOG_CONTEXT }, 'reconciliation sweep disabled');
+      this.logger.info('reconciliation sweep disabled');
       return;
     }
     const interval = setInterval(() => void this.tick(), this.intervalMs);
     this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
-    this.logger.info({ context: LOG_CONTEXT, intervalMs: this.intervalMs }, 'reconciliation sweep scheduled');
+    this.logger.info({ intervalMs: this.intervalMs }, 'reconciliation sweep scheduled');
   }
 
   onModuleDestroy(): void {
@@ -60,7 +62,7 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
 
   async tick(): Promise<void> {
     if (this.running) {
-      this.logger.warn({ context: LOG_CONTEXT }, 'previous reconciliation sweep still running — tick skipped');
+      this.logger.warn('previous reconciliation sweep still running — tick skipped');
       return;
     }
     this.running = true;
@@ -73,15 +75,14 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
           const summary = await this.reconcile.execute(this.sweep);
           // Idle sweeps are the common case; logging them buries the ticks that did something.
           if (summary.scanned > 0) {
-            this.logger.info({ context: LOG_CONTEXT, ...summary }, 'reconciliation sweep completed');
+            this.logger.info({ ...summary }, 'reconciliation sweep completed');
           }
         }),
       );
     } catch (error) {
       // Per-order failures are already isolated, so this is the sweep itself breaking. Swallow it:
       // an unhandled rejection in a timer kills the process.
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error({ context: LOG_CONTEXT }, `reconciliation sweep failed: ${message}`);
+      this.logger.error({ err: toError(error) }, 'reconciliation sweep failed');
     } finally {
       this.running = false;
     }

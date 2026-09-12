@@ -1,7 +1,8 @@
-import { Logger, type FactoryProvider } from '@nestjs/common';
+import type { FactoryProvider } from '@nestjs/common';
 import { register } from 'prom-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import {
   OUTBOX_BACKLOG_PENDING,
   OUTBOX_BACKLOG_PROVIDERS,
@@ -26,10 +27,13 @@ const db = {
   }),
 } as unknown as DrizzleDB;
 
+const warn = vi.fn();
+
 // Through the real factories, so the collect hooks land in the default registry as MetricsModule
-// leaves them. willsoto puts its own options token first in `inject`, so db is the second argument.
+// leaves them. willsoto puts its own options token first in `inject`, so db is the second argument
+// and the logger the third.
 for (const provider of OUTBOX_BACKLOG_PROVIDERS as FactoryProvider[]) {
-  provider.useFactory(undefined, db);
+  provider.useFactory(undefined, db, fakePinoLogger({ warn }));
 }
 
 function valueOf(text: string, name: string): number {
@@ -38,8 +42,6 @@ function valueOf(text: string, name: string): number {
 }
 
 describe('outbox backlog collector', () => {
-  const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-
   beforeEach(() => {
     queries = 0;
     warn.mockClear();

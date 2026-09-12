@@ -30,6 +30,7 @@ export class MeteredThrottlerGuard extends ThrottlerGuard {
     protected readonly logger: PinoLogger,
   ) {
     super(options, storageService, reflector);
+    logger.setContext(LOG_CONTEXT);
   }
 
   // Global kill-switch (load tests / e2e). Read per request rather than resolved once into the
@@ -63,7 +64,7 @@ export class MeteredThrottlerGuard extends ThrottlerGuard {
     // The exception filter already logs every 429; what it cannot say is which tier ran out.
     // Sampled because a flood is the case this exists for, and each rejection already costs a line.
     if (this.shouldLog(`${tier}|${route}`)) {
-      this.logger.warn({ context: LOG_CONTEXT, tier, route }, 'rate limit exceeded');
+      this.logger.warn({ tier, route }, 'rate limit exceeded');
     }
   }
 }

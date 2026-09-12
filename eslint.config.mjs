@@ -135,4 +135,72 @@ export default tseslint.config(
       ],
     },
   },
+  // One logger, one call shape. See docs/logging-conventions.md.
+  //
+  // `Logger` from @nestjs/common writes outside the pino pipeline: no requestId, no job/trace
+  // correlation, no `context` unless it is hand-passed, and the only way to carry a value is to
+  // interpolate it into the message — which throws the stack away and gives every occurrence of one
+  // event a distinct message string, so no aggregator can group them. main.ts is the exception: the
+  // bootstrap logger runs before the pino provider exists.
+  {
+    files: ['src/**/*.ts'],
+    ignores: ['src/main.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@nestjs/common',
+              importNames: ['Logger', 'ConsoleLogger'],
+              message:
+                'Inject PinoLogger from nestjs-pino and label it with logger.setContext(LOG_CONTEXT) in the constructor.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        // PinoLogger is transient — one instance per injection site — so setContext() in the
+        // constructor stamps `context` on every line this class writes. Repeating it per call is
+        // both noise and a chance to drift. (A free function that takes a logger PARAMETER calls it
+        // as `logger.warn(...)`, not `this.logger.warn(...)`, and is deliberately not matched: it
+        // has no constructor to label in, so it passes `context` per call.)
+        {
+          selector: "CallExpression[callee.object.property.name='logger'] > ObjectExpression > Property[key.name='context']",
+          message:
+            'Set the context once with logger.setContext(LOG_CONTEXT) in the constructor rather than stamping it on every call.',
+        },
+        // The message is the group key. Interpolated values belong in fields, and a caught error
+        // belongs in `err: toError(caught)` — pino serializes it into type/message/stack.
+        {
+          selector: "CallExpression[callee.object.property.name='logger'] > TemplateLiteral",
+          message:
+            'Keep the log message a static string and put the values in the fields object: logger.warn({ orderId, err: toError(caught) }, "sweep failed").',
+        },
+      ],
+      // Application logs go through PinoLogger. The exceptions below are operator-facing terminal
+      // output from processes that run outside Nest DI, where there is no logger to inject.
+      'no-console': 'error',
+    },
+  },
+  {
+    files: [
+      'src/shared/infrastructure/database/migrate.ts',
+      'src/shared/infrastructure/database/migrate-cli.ts',
+      'src/shared/infrastructure/database/seed.ts',
+      'src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
+      'src/shared/messaging/queue/replay-dlq.cli.ts',
+      'src/modules/catalog/infrastructure/search/reindex.ts',
+      'src/**/*.spec.ts',
+    ],
+    rules: {
+      'no-console': 'off',
+    },
+  },
 );

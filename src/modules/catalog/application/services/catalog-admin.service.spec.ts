@@ -1,5 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Money } from '@shared/kernel';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { type Mock, vi } from 'vitest';
 import { Product } from '../../domain/entities';
 import type { AdminProduct, Category, Price, Sku } from '../../domain/entities';
@@ -100,7 +101,7 @@ describe('CatalogAdminService', () => {
       deleteProduct: vi.fn().mockResolvedValue(undefined),
       search: vi.fn(),
     };
-    service = new CatalogAdminService(repo, products, search);
+    service = new CatalogAdminService(repo, products, search, fakePinoLogger());
   });
 
   describe('createProduct', () => {

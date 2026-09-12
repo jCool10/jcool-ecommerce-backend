@@ -1,9 +1,13 @@
-import { Logger, type Provider } from '@nestjs/common';
+import type { Provider } from '@nestjs/common';
 import { makeGaugeProvider } from '@willsoto/nestjs-prometheus';
 import { count, isNull, sql } from 'drizzle-orm';
+import { PinoLogger } from 'nestjs-pino';
 import type { Gauge } from 'prom-client';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import { outbox } from '@shared/messaging/outbox/schema/outbox.schema';
+import { toError } from '@shared/kernel/to-error';
+
+const LOG_CONTEXT = 'OutboxBacklogCollector';
 
 // Only the pair is diagnostic. A count alone cannot tell a burst the relay is already draining from
 // a relay that died — on a quiet shop a dead relay barely moves it. An age alone cannot tell one
@@ -15,8 +19,6 @@ export const OUTBOX_OLDEST_AGE_SECONDS = 'outbox_oldest_age_seconds';
 // ACCESS EXCLUSIVE lock (a migration, VACUUM FULL) would hang the scrape while holding a pool
 // client — one lost per scrape interval until the pool is empty. A stale gauge beats a dead pool.
 const SCRAPE_TIMEOUT_MS = 2_000;
-
-const logger = new Logger('OutboxBacklogCollector');
 
 interface OutboxBacklog {
   pending: number;
@@ -33,7 +35,7 @@ interface PendingRead {
 // overlapping scrapes share one, so the second reports a snapshot at most one query old.
 let pending: PendingRead | null = null;
 
-function readBacklog(db: DrizzleDB): Promise<OutboxBacklog | null> {
+function readBacklog(db: DrizzleDB, logger: PinoLogger): Promise<OutboxBacklog | null> {
   const read = (pending ??= {
     // Cleared when the query settles, not when a caller gives up on it: a statement stuck behind a
     // lock keeps this slot, so later scrapes time out against the same query instead of checking out
@@ -44,13 +46,13 @@ function readBacklog(db: DrizzleDB): Promise<OutboxBacklog | null> {
     reported: false,
   });
 
-  return bounded(read);
+  return bounded(read, logger);
 }
 
 // Resolves to null on any failure: a scrape awaits every collect(), so one rejection here would fail
 // the WHOLE /metrics response and blank every unrelated series at exactly the moment the database is
 // unreachable. Hold the last value instead — the database has its own health signal.
-async function bounded(read: PendingRead): Promise<OutboxBacklog | null> {
+async function bounded(read: PendingRead, logger: PinoLogger): Promise<OutboxBacklog | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
@@ -67,7 +69,7 @@ async function bounded(read: PendingRead): Promise<OutboxBacklog | null> {
     // database outage lasts many scrapes.
     if (!read.reported) {
       read.reported = true;
-      logger.warn(`outbox backlog scrape failed: ${caught instanceof Error ? caught.message : String(caught)}`);
+      logger.warn({ context: LOG_CONTEXT, err: toError(caught) }, 'outbox backlog scrape failed');
     }
     return null;
   } finally {
@@ -94,8 +96,13 @@ async function queryBacklog(db: DrizzleDB): Promise<OutboxBacklog> {
   return { pending: row.pending, oldestAgeSeconds: Number(row.oldestAgeSeconds) };
 }
 
-async function observe(gauge: Gauge<string>, db: DrizzleDB, pick: (backlog: OutboxBacklog) => number): Promise<void> {
-  const backlog = await readBacklog(db);
+async function observe(
+  gauge: Gauge<string>,
+  db: DrizzleDB,
+  logger: PinoLogger,
+  pick: (backlog: OutboxBacklog) => number,
+): Promise<void> {
+  const backlog = await readBacklog(db, logger);
   if (backlog) gauge.set(pick(backlog));
 }
 
@@ -107,17 +114,17 @@ export const OUTBOX_BACKLOG_PROVIDERS: Provider[] = [
   makeGaugeProvider({
     name: OUTBOX_BACKLOG_PENDING,
     help: 'Outbox rows the relay has not published yet.',
-    inject: [DRIZZLE],
-    collect(this: Gauge<string>, db: DrizzleDB) {
-      return observe(this, db, (backlog) => backlog.pending);
+    inject: [DRIZZLE, PinoLogger],
+    collect(this: Gauge<string>, db: DrizzleDB, logger: PinoLogger) {
+      return observe(this, db, logger, (backlog) => backlog.pending);
     },
   }),
   makeGaugeProvider({
     name: OUTBOX_OLDEST_AGE_SECONDS,
     help: 'Age of the oldest unpublished outbox row in seconds (0 when nothing is pending).',
-    inject: [DRIZZLE],
-    collect(this: Gauge<string>, db: DrizzleDB) {
-      return observe(this, db, (backlog) => backlog.oldestAgeSeconds);
+    inject: [DRIZZLE, PinoLogger],
+    collect(this: Gauge<string>, db: DrizzleDB, logger: PinoLogger) {
+      return observe(this, db, logger, (backlog) => backlog.oldestAgeSeconds);
     },
   }),
 ];

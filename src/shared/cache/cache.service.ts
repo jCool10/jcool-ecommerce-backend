@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { RedisService } from '@shared/infrastructure/redis';
+// The leaf module, never the barrel: a one-line error normalizer must not pull the interceptor,
+// tracing and CLS graph into every service that logs a failure.
+import { toError } from '@shared/kernel/to-error';
 
 const LOG_CONTEXT = 'CacheService';
 
@@ -20,7 +23,9 @@ export class CacheService {
   constructor(
     private readonly redis: RedisService,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async read<T>(key: string): Promise<CacheRead<T>> {
     let raw: string | null;
@@ -92,7 +97,6 @@ export class CacheService {
   }
 
   private warn(op: string, key: string, caught: unknown): void {
-    const reason = caught instanceof Error ? caught.message : String(caught);
-    this.logger.warn({ context: LOG_CONTEXT, op, key, reason }, 'cache operation failed');
+    this.logger.warn({ op, key, err: toError(caught) }, 'cache operation failed');
   }
 }

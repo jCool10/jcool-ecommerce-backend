@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { OrderReadPort, OrderView } from '../ports/order-read.port';
 import { DuplicateActivePaymentError } from '../ports/payment-repository.port';
 import { PaymentGatewayError, type GatewaySession } from '../ports/payment-gateway.port';
@@ -82,7 +83,13 @@ function build(
 
   const recordSagaStep = vi.fn();
 
-  const useCase = new CreatePaymentSessionUseCase(orders, payments, gateway, fakeMetricsPort({ recordSagaStep }));
+  const useCase = new CreatePaymentSessionUseCase(
+    orders,
+    payments,
+    gateway,
+    fakeMetricsPort({ recordSagaStep }),
+    fakePinoLogger(),
+  );
   return { useCase, findForPayment, findByOrderId, create, createSession, expireSession, updateStatus, recordSagaStep };
 }
 

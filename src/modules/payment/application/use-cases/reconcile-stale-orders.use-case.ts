@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
+import { toError } from '@shared/kernel/to-error';
 import { PaymentStatus } from '../../domain/payment-status';
 import type { Payment } from '../../domain/payment.entity';
 import { ORDER_READ_PORT, type OrderReadPort, type StalePendingOrderView } from '../ports/order-read.port';
@@ -12,7 +13,9 @@ import { mapGatewayStatusToOutcome, type GatewayOutcome } from '../mappers/map-g
 const LOG_CONTEXT = 'ReconcileStaleOrders';
 
 // Shared by both ways an order can stop converging, so one log query catches them together.
-const STUCK_PREFIX = 'reconcile still cannot settle an order long past its TTL — stock stays held';
+// The escalation line, paired with `stuck: true` in the fields. Static so an alert can match the
+// message exactly rather than a prefix, and the cause rides in `err` or the surrounding fields.
+const STUCK_MESSAGE = 'reconcile still cannot settle an order long past its TTL — stock stays held';
 
 const PAYMENT_STATUS_FOR: Record<GatewayOutcome, PaymentStatus> = {
   PAID: PaymentStatus.SUCCEEDED,
@@ -60,7 +63,9 @@ export class ReconcileStaleOrdersUseCase {
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
     private readonly finalizeOrder: FinalizeOrderUseCase,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async execute({ staleAfterSec, ttlSec, batchSize }: ReconcileInput): Promise<ReconcileSummary> {
     const now = Date.now();
@@ -87,12 +92,12 @@ export class ReconcileStaleOrdersUseCase {
         summary[await this.settleOne(order, expiredBefore, stuckBefore)] += 1;
       } catch (error) {
         summary.errors += 1;
-        const message = error instanceof Error ? error.message : String(error);
+        const err = toError(error);
         if (order.placedAt < stuckBefore) {
           // Deliberately not expired blind: guessing would charge a buyer for a deleted order.
-          this.logger.error({ context: LOG_CONTEXT, orderId: order.id, stuck: true }, `${STUCK_PREFIX}: ${message}`);
+          this.logger.error({ orderId: order.id, stuck: true, err }, STUCK_MESSAGE);
         } else {
-          this.logger.warn({ context: LOG_CONTEXT, orderId: order.id }, `reconcile failed for order: ${message}`);
+          this.logger.warn({ orderId: order.id, err }, 'reconcile failed for order');
         }
       }
     }
@@ -117,7 +122,7 @@ export class ReconcileStaleOrdersUseCase {
         // One unrecognised handle is a data fault; a burst of them is a key pointing at the wrong
         // account, which would otherwise expire every pending order in silence.
         this.logger.warn(
-          { context: LOG_CONTEXT, orderId: order.id },
+          { orderId: order.id },
           'gateway does not recognise the session handle — expiring on TTL alone',
         );
       }
@@ -129,7 +134,7 @@ export class ReconcileStaleOrdersUseCase {
         // The buyer paid between the probe above and this call. Expiring now would settle the order
         // unpaid on top of money that moved; the next tick probes again and reads PAID.
         this.logger.info(
-          { context: LOG_CONTEXT, orderId: order.id, paymentId: payment.id },
+          { orderId: order.id, paymentId: payment.id },
           'checkout session was paid mid-sweep — leaving the order for the next tick',
         );
         return 'raced';
@@ -142,17 +147,19 @@ export class ReconcileStaleOrdersUseCase {
       const stuck = order.placedAt < stuckBefore;
       this.logger.error(
         {
-          context: LOG_CONTEXT,
           orderId: order.id,
           paymentId: payment.id,
           ...(stuck ? { stuck: true } : {}),
+          cause: 'charge_mismatch',
           expectedMinor: payment.amountMinor,
           expectedCurrency: payment.currency,
           actualMinor: probe.amountMinor,
           actualCurrency: probe.currency,
         },
+        // One message for both, escalated by the `stuck` field rather than by a longer string: an
+        // alert matches the message once, and `stuck` says whether it is overdue.
         stuck
-          ? `${STUCK_PREFIX}: the gateway reports a paid session whose charge does not match the recorded payment`
+          ? STUCK_MESSAGE
           : 'gateway reports a paid session whose charge does not match the recorded payment — left unsettled for manual review',
       );
       return 'unresolved';
@@ -169,7 +176,7 @@ export class ReconcileStaleOrdersUseCase {
         if (written === null) {
           // A webhook settled it inside our round-trip, so it owns the finalize. Back off.
           this.logger.info(
-            { context: LOG_CONTEXT, orderId: order.id, paymentId: payment.id },
+            { orderId: order.id, paymentId: payment.id },
             'payment was settled by a webhook mid-sweep — leaving the order to it',
           );
           return 'raced';
@@ -178,7 +185,7 @@ export class ReconcileStaleOrdersUseCase {
         // Reachable when an earlier sweep crashed between its two writes. The order still finalizes,
         // but the money row now records a different ending than the gateway does.
         this.logger.warn(
-          { context: LOG_CONTEXT, orderId: order.id, paymentStatus: payment.status, gatewayStatus: probe.status },
+          { orderId: order.id, paymentStatus: payment.status, gatewayStatus: probe.status },
           'payment is already terminal in a state the gateway disagrees with',
         );
       }
@@ -194,7 +201,7 @@ export class ReconcileStaleOrdersUseCase {
     if (finalize.status === 'ignored' || finalize.status === 'not_found') {
       // Money side and order side disagree, and no retry fixes that — surface it for a human.
       this.logger.warn(
-        { context: LOG_CONTEXT, orderId: order.id, gatewayStatus: probe.status, outcome, finalize: finalize.status },
+        { orderId: order.id, gatewayStatus: probe.status, outcome, finalize: finalize.status },
         'reconcile could not apply the gateway outcome to the order',
       );
       return 'unresolved';

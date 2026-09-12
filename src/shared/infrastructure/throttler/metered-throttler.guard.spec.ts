@@ -1,9 +1,9 @@
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { ThrottlerException, type ThrottlerRequest, type ThrottlerStorage } from '@nestjs/throttler';
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { MeteredThrottlerGuard } from './metered-throttler.guard';
 import { DEFAULT_THROTTLER, USER_THROTTLER } from './throttler.constants';
 
@@ -34,20 +34,16 @@ function incrementReturning(isBlocked: boolean) {
   });
 }
 
-function fakeLogger() {
-  return { warn: vi.fn() };
-}
-
 async function build(isBlocked: boolean) {
   const increment = incrementReturning(isBlocked);
   const recordRateLimitRejection = vi.fn();
-  const logger = fakeLogger();
+  const logger = { warn: vi.fn() };
   const guard = new MeteredThrottlerGuard(
     { throttlers: [] },
     { increment },
     reflector,
     { recordRateLimitRejection } as unknown as MetricsPort,
-    logger as unknown as PinoLogger,
+    fakePinoLogger(logger),
   );
   await guard.onModuleInit(); // resolves the options the base guard reads per request
   const shim = guard as unknown as { handleRequest(request: ThrottlerRequest): Promise<boolean> };
@@ -92,7 +88,7 @@ describe('MeteredThrottlerGuard', () => {
       { increment },
       reflector,
       { recordRateLimitRejection: vi.fn() } as unknown as MetricsPort,
-      fakeLogger() as unknown as PinoLogger,
+      fakePinoLogger(),
     );
     await guard.onModuleInit();
     const previous = process.env.THROTTLE_ENABLED;

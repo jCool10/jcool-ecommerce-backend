@@ -4,10 +4,10 @@ import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
-import type { PinoLogger } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
@@ -90,7 +90,7 @@ function build(rows: OutboxRow[]) {
     connection as unknown as Redis,
     { recordEventPublished } as unknown as MetricsPort,
     dispatcher,
-    logger as unknown as PinoLogger,
+    fakePinoLogger(logger),
   );
 
   const jobs = () => add.mock.calls.map(([, job]) => job as DomainEventJob);
@@ -171,8 +171,13 @@ describe('OutboxRelay', () => {
       // That the refusal is charged to the row and the batch behind it still drains is asserted end
       // to end; the operator-facing log line is what only this tier sees.
       expect(t.logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ outboxId: rows[0].id, refused: 1, charged: true }),
-        expect.stringContaining('payload too large'),
+        expect.objectContaining({
+          outboxId: rows[0].id,
+          refused: 1,
+          charged: true,
+          err: expect.objectContaining({ message: 'payload too large' }) as unknown,
+        }),
+        'outbox publish refused',
       );
     });
 
@@ -190,8 +195,12 @@ describe('OutboxRelay', () => {
       expect(t.connection.status).toBe('ready');
       expect(t.logger.warn).toHaveBeenCalledOnce();
       expect(t.logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ refused: 3, charged: false }),
-        expect.stringContaining('OOM'),
+        expect.objectContaining({
+          refused: 3,
+          charged: false,
+          err: expect.objectContaining({ message: expect.stringContaining('OOM') as unknown }) as unknown,
+        }),
+        'outbox publish refused',
       );
     });
 

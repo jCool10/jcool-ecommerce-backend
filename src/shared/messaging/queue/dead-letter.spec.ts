@@ -1,7 +1,7 @@
 import type { Job, Queue } from 'bullmq';
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { PermanentError, UnhandledEventError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
@@ -59,7 +59,7 @@ function build({
     { add, remove } as unknown as Queue,
     { recordConsumeRetry, recordDeadLetter } as unknown as MetricsPort,
     dispatcher,
-    { warn: vi.fn(), error: logError } as unknown as PinoLogger,
+    fakePinoLogger({ error: logError }),
   );
   const job = { name, data, attemptsMade, finishedOn, id: 'bullmq-job-id' } as unknown as Job<DomainEventJob>;
 
@@ -142,6 +142,14 @@ describe('DeadLetterRouter', () => {
     // Not counted: claiming a dead letter that never landed would hide the one failure mode this
     // path cannot recover from.
     expect(recordDeadLetter).not.toHaveBeenCalled();
-    expect(logError).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('redis gone'));
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: MESSAGE_ID,
+        eventType: 'order.placed',
+        reason: 'attempts_exhausted',
+        err: expect.objectContaining({ message: 'redis gone' }) as unknown,
+      }),
+      'failed to move a domain event to the dead-letter queue',
+    );
   });
 });

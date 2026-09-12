@@ -5,6 +5,7 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@shared/mail/mail-transport.port';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob, PostCommitEffect } from '@shared/messaging/queue/domain-event.job';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 
 const LOG_CONTEXT = 'OrderPaidMailHandler';
@@ -21,7 +22,9 @@ export class OrderPaidMailHandler {
     @Inject(MAIL_TRANSPORT) private readonly transport: MailTransportPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async prepare(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect> {
     const { orderId, userId } = job.payload;
@@ -45,7 +48,7 @@ export class OrderPaidMailHandler {
       } catch (error: unknown) {
         this.metrics.recordMailSendFailure('order_paid');
         this.logger.error(
-          { context: LOG_CONTEXT, orderId, messageId: job.outboxId, err: error },
+          { orderId, messageId: job.outboxId, err: toError(error) },
           'order confirmation mail was not delivered and will not be retried',
         );
       }

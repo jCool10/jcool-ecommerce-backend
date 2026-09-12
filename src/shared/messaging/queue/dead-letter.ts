@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { UnrecoverableError, type Job, type Queue } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type DeadLetterReason, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { DomainEventJob } from './domain-event.job';
@@ -27,7 +28,9 @@ export class DeadLetterRouter {
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly dispatcher: DomainEventDispatcher,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async route(job: Job<DomainEventJob>, error: Error): Promise<void> {
     // `job.name` is the event type straight off the wire; only the dispatch table bounds it.
@@ -37,8 +40,8 @@ export class DeadLetterRouter {
     if (job.finishedOn === undefined) {
       this.metrics.recordConsumeRetry(eventType);
       this.logger.warn(
-        { context: LOG_CONTEXT, err: error, eventType: job.name, messageId, attemptsMade: job.attemptsMade },
-        `domain event consume failed, will retry: ${error.message}`,
+        { err: error, eventType: job.name, messageId, attemptsMade: job.attemptsMade },
+        'domain event consume failed, will retry',
       );
       return;
     }
@@ -63,16 +66,16 @@ export class DeadLetterRouter {
       await this.dlq.add(job.name, dead, { jobId: messageId });
       this.metrics.recordDeadLetter(eventType, reason);
       this.logger.error(
-        { context: LOG_CONTEXT, err: error, eventType: job.name, messageId, attemptsMade: job.attemptsMade, reason },
-        `domain event moved to the dead-letter queue: ${error.message}`,
+        { err: error, eventType: job.name, messageId, attemptsMade: job.attemptsMade, reason },
+        'domain event moved to the dead-letter queue',
       );
     } catch (caught: unknown) {
       // Best effort by construction — one more write to the Redis that just failed us. The main
       // queue keeps the failed job for a week, so a lost move costs visibility, not the message.
       // Logged at error because a swallowed move is only ever noticed by a human reading this line.
       this.logger.error(
-        { context: LOG_CONTEXT, err: caught, eventType: job.name, messageId, reason },
-        `failed to move a domain event to the dead-letter queue: ${caught instanceof Error ? caught.message : String(caught)}`,
+        { err: toError(caught), eventType: job.name, messageId, reason },
+        'failed to move a domain event to the dead-letter queue',
       );
     }
   }

@@ -30,7 +30,9 @@ export class PaymentEventsHandler {
     private readonly finalizeOrder: FinalizeOrderUseCase,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async settle(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect | void> {
     const outcome = OUTCOME_BY_EVENT[job.eventType];
@@ -54,7 +56,7 @@ export class PaymentEventsHandler {
       // Loud, because a settled payment with no order to settle is a refund decision.
       if (outcome === 'PAID') this.metrics.recordRefundOwed('settlement_event');
       this.logger.error(
-        { context: LOG_CONTEXT, orderId, eventType: job.eventType, messageId: job.outboxId },
+        { orderId, eventType: job.eventType, messageId: job.outboxId },
         'payment settled for an order that does not exist',
       );
     } else if (result.status === 'ignored') {
@@ -63,7 +65,7 @@ export class PaymentEventsHandler {
       if (outcome === 'PAID') this.metrics.recordRefundOwed('settlement_event');
       const level = outcome === 'PAID' ? 'error' : 'info';
       this.logger[level](
-        { context: LOG_CONTEXT, orderId, eventType: job.eventType, status: result.order?.status },
+        { orderId, eventType: job.eventType, status: result.order?.status },
         'payment settled for an order that was already in a terminal state',
       );
     }

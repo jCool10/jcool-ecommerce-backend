@@ -1,6 +1,8 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Meilisearch, type Index } from 'meilisearch';
+import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@shared/kernel/to-error';
 import type {
   CatalogSearchPort,
   SearchCriteria,
@@ -14,6 +16,8 @@ import {
   PRODUCTS_INDEX_UID,
   SEARCH_MAX_TOTAL_HITS,
 } from './index-settings';
+
+const LOG_CONTEXT = 'MeilisearchCatalogSearch';
 
 const HIGHLIGHT_PRE_TAG = '<em>';
 const HIGHLIGHT_POST_TAG = '</em>';
@@ -60,13 +64,16 @@ function quoted(value: string): string {
  */
 @Injectable()
 export class MeilisearchCatalogSearch implements CatalogSearchPort {
-  private readonly logger = new Logger(MeilisearchCatalogSearch.name);
   // Stateless HTTP client — nothing to open or close, hence no shutdown hook.
   private readonly client: Meilisearch | null;
 
   // Explicit @Inject rather than type reflection: the reindex CLI builds this under tsx/esbuild,
   // which emits no decorator metadata, so an inferred constructor type resolves to undefined there.
-  constructor(@Inject(ConfigService) config: ConfigService) {
+  constructor(
+    @Inject(ConfigService) config: ConfigService,
+    @Inject(PinoLogger) private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
     const enabled = config.get<boolean>('search.enabled') ?? false;
     this.client = enabled
       ? new Meilisearch({
@@ -147,7 +154,7 @@ export class MeilisearchCatalogSearch implements CatalogSearchPort {
         total: Math.min(response.estimatedTotalHits ?? response.hits.length, SEARCH_MAX_TOTAL_HITS),
       };
     } catch (err) {
-      this.logger.warn(`catalog search failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn({ err: toError(err) }, 'catalog search failed');
       return { items: [], total: 0 };
     }
   }

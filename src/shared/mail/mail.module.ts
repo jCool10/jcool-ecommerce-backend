@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
 import { CircuitBreakerFactory, ResilienceModule } from '@shared/resilience';
 import { LogMailTransport } from './log-mail.transport';
 import { MAIL_TRANSPORT, type MailTransportPort } from './mail-transport.port';
@@ -20,7 +21,11 @@ function isLoopbackRelay(url: string): boolean {
  * The presence of `SMTP_URL` is the switch, the way `SENTRY_DSN` is: a separate MAIL_ENABLED flag
  * could disagree with it.
  */
-export function createMailTransport(config: ConfigService, breakers: CircuitBreakerFactory): MailTransportPort {
+export function createMailTransport(
+  config: ConfigService,
+  breakers: CircuitBreakerFactory,
+  logger: PinoLogger,
+): MailTransportPort {
   const url = config.get<string>('mail.smtpUrl')?.trim();
   const isProduction = config.get<string>('app.env') === 'production';
 
@@ -30,7 +35,7 @@ export function createMailTransport(config: ConfigService, breakers: CircuitBrea
     if (isProduction) {
       throw new Error('SMTP_URL is required in production: without it mail is written to the log and never delivered');
     }
-    return new LogMailTransport();
+    return new LogMailTransport(logger);
   }
 
   // `.env.example` ships a loopback URL, so this is what a copied dev file looks like on a server:
@@ -61,7 +66,7 @@ export function createMailTransport(config: ConfigService, breakers: CircuitBrea
   providers: [
     {
       provide: MAIL_TRANSPORT,
-      inject: [ConfigService, CircuitBreakerFactory],
+      inject: [ConfigService, CircuitBreakerFactory, PinoLogger],
       useFactory: createMailTransport,
     },
   ],

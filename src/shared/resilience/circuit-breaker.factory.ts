@@ -111,6 +111,7 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
       rollingCountTimeout: config.getOrThrow<number>('resilience.breaker.rollingWindowMs'),
       volumeThreshold: config.getOrThrow<number>('resilience.breaker.volumeThreshold'),
     };
+    logger.setContext(LOG_CONTEXT);
   }
 
   /**
@@ -163,7 +164,7 @@ export class CircuitBreakerFactory implements OnApplicationShutdown {
       // Present only for a transition a call caused — the only case where hanging it off a span says anything.
       trace.getActiveSpan()?.addEvent('breaker.state_changed', { 'breaker.name': name, 'breaker.state': state });
     };
-    const fields = (state: BreakerState): Record<string, string> => ({ context: LOG_CONTEXT, breaker: name, state });
+    const fields = (state: BreakerState): Record<string, string> => ({ breaker: name, state });
 
     breaker.on('open', () => {
       entered('open');

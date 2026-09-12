@@ -1,7 +1,7 @@
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { DeadLetterRouter } from './dead-letter';
 import type { DomainEventProcessor } from './domain-event.processor';
 import { DomainEventsWorker } from './domain-events.worker';
@@ -23,7 +23,7 @@ function build(overrides: Record<string, unknown> = {}) {
     config,
     // Pass-through: correlation is asserted in job-context.spec.ts.
     { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
-    logger as unknown as PinoLogger,
+    fakePinoLogger(logger),
   );
   return { worker, logger };
 }
@@ -42,7 +42,7 @@ describe('DomainEventsWorker', () => {
 
     worker.onModuleInit();
 
-    expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'domain events worker disabled');
+    expect(logger.info).toHaveBeenCalledWith('domain events worker disabled');
     // Shutdown of a worker that never started must stay a no-op — with the deploy default off, this
     // is the path every process without QUEUE_WORKER_ENABLED takes on SIGTERM.
     await expect(worker.beforeApplicationShutdown()).resolves.toBeUndefined();
@@ -53,6 +53,6 @@ describe('DomainEventsWorker', () => {
 
     worker.onModuleInit();
 
-    expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'domain events worker disabled');
+    expect(logger.info).toHaveBeenCalledWith('domain events worker disabled');
   });
 });

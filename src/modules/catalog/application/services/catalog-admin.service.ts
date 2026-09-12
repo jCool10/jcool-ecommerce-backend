@@ -1,5 +1,7 @@
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { MediaAssetUnavailableError } from '@modules/media/application/public/media-facade.port';
+import { toError } from '@shared/kernel/to-error';
 import { Slug } from '../../domain/slug.vo';
 import type { AdminProduct, Category, Price, ProductImage, Sku } from '../../domain/entities';
 import { toSearchableProduct } from '../catalog-search.mapper';
@@ -22,14 +24,14 @@ import {
 
 const DEFAULT_CURRENCY = 'VND';
 
+const LOG_CONTEXT = 'CatalogAdminService';
+
 /**
  * One service rather than ~10 near-identical use-case classes: the operations share the same
  * ref-existence checks (404) and archive guard (409).
  */
 @Injectable()
 export class CatalogAdminService {
-  private readonly logger = new Logger(CatalogAdminService.name);
-
   constructor(
     @Inject(CATALOG_ADMIN_REPOSITORY)
     private readonly repo: CatalogAdminRepositoryPort,
@@ -37,7 +39,10 @@ export class CatalogAdminService {
     private readonly products: ProductRepositoryPort,
     @Inject(CATALOG_SEARCH)
     private readonly search: CatalogSearchPort,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   createCategory(data: CreateCategoryData): Promise<Category> {
     // Uniqueness is enforced by the DB; the adapter maps 23505 -> 409.
@@ -53,7 +58,7 @@ export class CatalogAdminService {
     // A rename lands in the category fields denormalized into every product document underneath —
     // an unbounded fan-out this request deliberately does not run; `search:reindex` converges them.
     if (data.name !== undefined || data.slug !== undefined) {
-      this.logger.warn(`category ${id} renamed; its product search documents stay stale until a reindex`);
+      this.logger.warn({ categoryId: id }, 'category renamed; its product search documents stay stale until a reindex');
     }
     return updated;
   }
@@ -214,9 +219,7 @@ export class CatalogAdminService {
         await this.search.deleteProduct(productId);
       }
     } catch (error) {
-      this.logger.warn(
-        `search index sync failed for product ${productId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      this.logger.warn({ productId, err: toError(error) }, 'search index sync failed for product');
     }
   }
 }

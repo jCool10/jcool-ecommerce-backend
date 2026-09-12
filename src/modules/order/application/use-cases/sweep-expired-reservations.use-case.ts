@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { OrderStatus } from '../../domain/order-status';
 import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/inventory-reservation.port';
@@ -35,7 +36,9 @@ export class SweepExpiredReservationsUseCase {
     private readonly finalizeOrder: FinalizeOrderUseCase,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async execute({ graceSec, batchSize }: SweepInput): Promise<SweepSummary> {
     const holds = await this.inventory.findExpiredHolds({
@@ -65,14 +68,13 @@ export class SweepExpiredReservationsUseCase {
         // with it. A hold that genuinely outlives its settled order returns every tick, so it is the
         // same orderId at an `expiresAt` that keeps receding into the past that signals divergence.
         this.logger.warn(
-          { context: LOG_CONTEXT, orderId, expiresAt, status: result.order?.status, finalize: result.status },
+          { orderId, expiresAt, status: result.order?.status, finalize: result.status },
           'expired hold belongs to an order that is no longer pending',
         );
       } catch (error) {
         summary.errors += 1;
         // One unhappy order must not cost the rest of the batch its tick.
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn({ context: LOG_CONTEXT, orderId }, `expiry sweep failed for order: ${message}`);
+        this.logger.warn({ orderId, err: toError(error) }, 'expiry sweep failed for order');
       }
     }
 

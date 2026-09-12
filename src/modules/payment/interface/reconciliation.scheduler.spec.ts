@@ -103,7 +103,7 @@ describe('ReconciliationScheduler', () => {
 
       expect(registry.addInterval).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
-      expect(logger.info).toHaveBeenCalledWith(expect.anything(), 'reconciliation sweep disabled');
+      expect(logger.info).toHaveBeenCalledWith('reconciliation sweep disabled');
     });
   });
 
@@ -139,7 +139,7 @@ describe('ReconciliationScheduler', () => {
       await scheduler.tick();
 
       expect(execute).toHaveBeenCalledOnce();
-      expect(logger.warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('tick skipped'));
+      expect(logger.warn).toHaveBeenCalledWith('previous reconciliation sweep still running — tick skipped');
       release();
       await first;
     });
@@ -160,7 +160,10 @@ describe('ReconciliationScheduler', () => {
 
       const scheduler = make();
       await expect(scheduler.tick()).resolves.toBeUndefined();
-      expect(logger.error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('orders query failed'));
+      expect(logger.error).toHaveBeenCalledWith(
+        { err: expect.objectContaining({ message: 'orders query failed' }) as unknown },
+        'reconciliation sweep failed',
+      );
 
       // The guard is released, so the failure costs one tick and not the whole schedule.
       await scheduler.tick();

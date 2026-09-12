@@ -1,11 +1,13 @@
 import type { ExecutionContext } from '@nestjs/common';
 import type { ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER, USER_THROTTLER } from './throttler.constants';
 
-// generateKey uses only the context/body, so placeholder framework deps are enough to exercise it.
+// generateKey uses only the context/body, so placeholder framework deps are enough to exercise it —
+// except the logger, which the constructor labels with setContext.
 function makeGuard(storage: ThrottlerStorage = {} as never): AccountAwareThrottlerGuard {
-  return new AccountAwareThrottlerGuard({ throttlers: [] }, storage, {} as never, {} as never, {} as never);
+  return new AccountAwareThrottlerGuard({ throttlers: [] }, storage, {} as never, {} as never, fakePinoLogger());
 }
 
 // generateKey reads class/handler names and, for the account tier, the request body; an enforced

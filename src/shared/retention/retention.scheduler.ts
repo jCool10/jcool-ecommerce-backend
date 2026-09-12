@@ -5,6 +5,7 @@ import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import { runInJobContext } from '@shared/observability/correlation/job-context';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { toError } from '@shared/kernel/to-error';
 import { withSpan } from '@shared/observability/tracing/tracer';
 import type { RetentionSweep } from './retention-sweep.port';
 import { RetentionSweepRegistry } from './retention-sweep.registry';
@@ -41,18 +42,18 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
     this.intervalMs = requireInt(config, 'retention.intervalMs', 1);
     this.batchSize = requireInt(config, 'retention.batchSize', 1);
     this.sweepTimeoutMs = requireInt(config, 'retention.sweepTimeoutMs', 1);
+    logger.setContext(LOG_CONTEXT);
   }
 
   onApplicationBootstrap(): void {
     if (!this.enabled) {
-      this.logger.info({ context: LOG_CONTEXT }, 'retention sweeps disabled');
+      this.logger.info('retention sweeps disabled');
       return;
     }
     const interval = setInterval(() => void this.tick(), this.intervalMs);
     this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
     this.logger.info(
       {
-        context: LOG_CONTEXT,
         intervalMs: this.intervalMs,
         batchSize: this.batchSize,
         sweeps: this.registry.names(),
@@ -77,7 +78,7 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
       // A sweep that was never registered produces no error and no metric. This roster is the only
       // place "swept nothing" and "was never asked to sweep" are distinguishable.
       this.logger.info(
-        { context: LOG_CONTEXT, sweeps: sweeps.map((s) => s.name), count: sweeps.length },
+        { sweeps: sweeps.map((s) => s.name), count: sweeps.length },
         'retention sweeps running for the first time',
       );
     }
@@ -94,8 +95,7 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
         ),
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error({ context: LOG_CONTEXT }, `retention tick failed outside any single sweep: ${message}`);
+      this.logger.error({ err: toError(error) }, 'retention tick failed outside any single sweep');
     }
   }
 
@@ -105,7 +105,7 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
       // tick from here on, and the timeout already recorded its one failure — so without this the
       // sweep goes flat in metrics, indistinguishable from a table with nothing to collect.
       this.metrics.recordRetentionSweepFailure(sweep.name);
-      this.logger.warn({ context: LOG_CONTEXT, sweep: sweep.name }, 'previous retention sweep still running — skipped');
+      this.logger.warn({ sweep: sweep.name }, 'previous retention sweep still running — skipped');
       return;
     }
     this.running.add(sweep.name);
@@ -131,16 +131,15 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
         // A full batch means the table had more to give. Once is a backlog being worked off; every
         // tick forever means rows arrive faster than this reclaims them.
         this.logger.warn(
-          { context: LOG_CONTEXT, sweep: sweep.name, deleted, batchSize: this.batchSize, seconds },
+          { sweep: sweep.name, deleted, batchSize: this.batchSize, seconds },
           'retention sweep filled its batch — more rows are waiting than one tick can reclaim',
         );
         return;
       }
-      this.logger.info({ context: LOG_CONTEXT, sweep: sweep.name, deleted, seconds }, 'retention sweep completed');
+      this.logger.info({ sweep: sweep.name, deleted, seconds }, 'retention sweep completed');
     } catch (error) {
       this.metrics.recordRetentionSweepFailure(sweep.name);
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error({ context: LOG_CONTEXT, sweep: sweep.name }, `retention sweep failed: ${message}`);
+      this.logger.error({ sweep: sweep.name, err: toError(error) }, 'retention sweep failed');
     }
   }
 }

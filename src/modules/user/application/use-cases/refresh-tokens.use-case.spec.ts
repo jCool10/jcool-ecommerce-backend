@@ -1,4 +1,6 @@
-import { Logger, UnauthorizedException } from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
+import type { Mock } from 'vitest';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type {
   ActiveSession,
   AuthAuditPort,
@@ -91,13 +93,23 @@ describe('RefreshTokensUseCase', () => {
   let audit: MockAuthAudit;
   let sessionEpoch: MockSessionEpoch;
   let useCase: RefreshTokensUseCase;
+  let warn: Mock;
+  let debug: Mock;
 
   beforeEach(() => {
     repo = new MockRefreshTokenRepository();
     authTokens = new MockAuthTokensService();
     audit = new MockAuthAudit();
     sessionEpoch = new MockSessionEpoch();
-    useCase = new RefreshTokensUseCase(repo, authTokens as unknown as AuthTokensService, audit, sessionEpoch);
+    warn = vi.fn();
+    debug = vi.fn();
+    useCase = new RefreshTokensUseCase(
+      repo,
+      authTokens as unknown as AuthTokensService,
+      audit,
+      sessionEpoch,
+      fakePinoLogger({ warn, debug }),
+    );
   });
 
   it('rotates a valid token: hashes the presented token, passes the successor, returns the new pair', async () => {
@@ -127,11 +139,13 @@ describe('RefreshTokensUseCase', () => {
 
   it('reuse of a SUPERSEDED token (replaced) warns loud (theft signal) and issues no token', async () => {
     repo.outcome = { status: 'reuse', userId: 'u1', familyId: 'fam1', replaced: true };
-    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
 
     await expect(useCase.execute(PRESENTED_RAW)).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(warn).toHaveBeenCalledTimes(1);
+    // The user and family are fields: a theft alert is only actionable if it can be pivoted on.
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      { userId: 'u1', familyId: 'fam1' },
+      'refresh token reuse detected — session revoked',
+    );
     expect(debug).not.toHaveBeenCalled();
     expect(authTokens.signAccessCalls).toHaveLength(0);
     expect(audit.records).toEqual([
@@ -144,34 +158,28 @@ describe('RefreshTokensUseCase', () => {
       },
     ]);
     expect(sessionEpoch.bumps).toEqual(['u1']);
-
-    vi.restoreAllMocks();
   });
 
   it('replay of a merely-revoked token (logout/killed family) logs debug, not a theft warn', async () => {
     repo.outcome = { status: 'reuse', userId: 'u1', familyId: 'fam1', replaced: false };
-    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
 
     await expect(useCase.execute(PRESENTED_RAW)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(warn).not.toHaveBeenCalled();
-    expect(debug).toHaveBeenCalledTimes(1);
+    expect(debug).toHaveBeenCalledExactlyOnceWith(
+      { userId: 'u1', familyId: 'fam1' },
+      'revoked refresh token replayed — session already ended',
+    );
     expect(audit.records).toHaveLength(0);
     // No epoch bump, so the user's other live sessions stay signed in.
     expect(sessionEpoch.bumps).toHaveLength(0);
-
-    vi.restoreAllMocks();
   });
 
   it('uses the same generic 401 message for invalid and reuse (no reason leaked)', async () => {
-    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-
     repo.outcome = { status: 'invalid' };
     const invalid = await useCase.execute(PRESENTED_RAW).catch((e: Error) => e);
     repo.outcome = { status: 'reuse', userId: 'u1', familyId: 'fam1', replaced: true };
     const reuse = await useCase.execute(PRESENTED_RAW).catch((e: Error) => e);
 
     expect((invalid as Error).message).toBe((reuse as Error).message);
-    vi.restoreAllMocks();
   });
 });

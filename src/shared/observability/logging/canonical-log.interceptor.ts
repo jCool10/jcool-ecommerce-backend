@@ -13,6 +13,8 @@ import { formatDevRequestLine } from './dev-request-line.format';
 // Skip high-frequency probes (health, metrics scrape) — a canonical line each is pure noise.
 const SKIP_ROUTE_PREFIXES = ['/health', '/metrics'];
 
+const LOG_CONTEXT = 'CanonicalLogInterceptor';
+
 /**
  * One canonical line per SUCCESSFUL request only: errors are logged by HttpExceptionFilter
  * instead, so a request never yields two summary lines.
@@ -28,6 +30,7 @@ export class CanonicalLogInterceptor implements NestInterceptor {
     config: ConfigService,
   ) {
     this.devPretty = config.get<string>('app.env') === 'development';
+    logger.setContext(LOG_CONTEXT);
   }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
@@ -76,7 +79,6 @@ export class CanonicalLogInterceptor implements NestInterceptor {
 
         this.logger.info(
           {
-            context: CanonicalLogInterceptor.name,
             method: request.method,
             route,
             statusCode,

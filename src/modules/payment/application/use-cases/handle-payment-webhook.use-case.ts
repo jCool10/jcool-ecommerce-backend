@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { mapPaymentToOrderOutcome } from '../mappers/map-payment-to-order-outcome';
@@ -20,7 +21,9 @@ export class HandlePaymentWebhookUseCase {
     private readonly finalizeOrder: FinalizeOrderUseCase,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
     const result = await this.processEvent.execute(rawBody, headers);
@@ -30,14 +33,14 @@ export class HandlePaymentWebhookUseCase {
         // Money moved on a payment we had already closed. A refund decision, not a retry.
         this.metrics.recordRefundOwed('webhook_direct');
         this.logger.error(
-          { context: LOG_CONTEXT, ...result.conflict },
+          { ...result.conflict },
           'gateway reported a success on an already-settled payment — funds may be captured with no matching order',
         );
       }
       if (result.outcome === 'skipped' && result.charge) {
         // The signature was ours, the charge was not. Deliberately left unsettled for a human.
         this.logger.error(
-          { context: LOG_CONTEXT, ...result.charge },
+          { ...result.charge },
           'gateway reported a charge that does not match the recorded payment — payment left unsettled for manual review',
         );
       }
@@ -48,7 +51,7 @@ export class HandlePaymentWebhookUseCase {
     if (outcome === null) {
       // Unreachable today, but a future settled status must never strand a paid order silently.
       this.logger.warn(
-        { context: LOG_CONTEXT, orderId: result.orderId, status: result.status },
+        { orderId: result.orderId, status: result.status },
         'settled payment status maps to no order outcome — order not finalized',
       );
       return result;
@@ -70,15 +73,14 @@ export class HandlePaymentWebhookUseCase {
         if (outcome === 'PAID') this.metrics.recordRefundOwed('webhook_direct');
         const level = outcome === 'PAID' ? 'error' : 'warn';
         this.logger[level](
-          { context: LOG_CONTEXT, orderId: result.orderId, outcome, finalize: finalize.status },
+          { orderId: result.orderId, outcome, finalize: finalize.status },
           'payment settled but the order did not move',
         );
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
-        { context: LOG_CONTEXT, orderId: result.orderId, outcome },
-        `order finalize failed after payment settled — settlement event will settle it: ${message}`,
+        { orderId: result.orderId, outcome, err: toError(error) },
+        'order finalize failed after payment settled — settlement event will settle it',
       );
     }
 

@@ -6,6 +6,7 @@ import { ClsModule } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import configuration from '@shared/config/configuration';
 import { METRICS } from '@shared/observability/metrics/metrics.port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { CircuitBreakerFactory } from './circuit-breaker.factory';
 import { ResilienceModule } from './resilience.module';
 
@@ -24,7 +25,7 @@ class FakeMetricsModule {}
 
 @Global()
 @Module({
-  providers: [{ provide: PinoLogger, useValue: { warn: vi.fn(), info: vi.fn() } }],
+  providers: [{ provide: PinoLogger, useFactory: () => fakePinoLogger() }],
   exports: [PinoLogger],
 })
 class FakeLoggerModule {}

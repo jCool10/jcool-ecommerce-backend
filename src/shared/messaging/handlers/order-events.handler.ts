@@ -11,12 +11,13 @@ const LOG_CONTEXT = 'OrderEventsHandler';
  */
 @Injectable()
 export class OrderEventsHandler {
-  constructor(private readonly logger: PinoLogger) {}
+  constructor(private readonly logger: PinoLogger) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   record(job: DomainEventJob): Promise<void> {
     this.logger.info(
       {
-        context: LOG_CONTEXT,
         eventType: job.eventType,
         orderId: job.aggregateId,
         messageId: job.outboxId,

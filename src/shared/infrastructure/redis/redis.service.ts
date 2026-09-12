@@ -1,13 +1,20 @@
-import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
+import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
+import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@shared/kernel/to-error';
+
+const LOG_CONTEXT = 'RedisService';
 
 @Injectable()
 export class RedisService implements OnApplicationShutdown {
-  private readonly logger = new Logger(RedisService.name);
   private readonly client: Redis;
 
-  constructor(config: ConfigService) {
+  constructor(
+    config: ConfigService,
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
     this.client = new Redis(config.getOrThrow<string>('redis.url'), {
       // Reject commands while disconnected instead of queueing, so readiness fails fast and cache
       // reads fall through to Postgres rather than hanging.
@@ -18,7 +25,7 @@ export class RedisService implements OnApplicationShutdown {
     // Without an 'error' listener a lost connection crashes the process; log and let ioredis
     // reconnect so boot survives Redis being down.
     this.client.on('error', (err: Error) => {
-      this.logger.error(`Redis client error: ${err.message}`);
+      this.logger.error({ err: toError(err) }, 'redis client error');
     });
   }
 

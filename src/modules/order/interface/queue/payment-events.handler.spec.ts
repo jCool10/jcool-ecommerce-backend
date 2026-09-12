@@ -1,9 +1,9 @@
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { FinalizeOrderUseCase } from '../../application/use-cases';
 import { PaymentEventsHandler } from './payment-events.handler';
 
@@ -36,10 +36,7 @@ function build(
   const handler = new PaymentEventsHandler(
     { execute } as unknown as FinalizeOrderUseCase,
     { recordRefundOwed } as unknown as MetricsPort,
-    {
-      error,
-      info,
-    } as unknown as PinoLogger,
+    fakePinoLogger({ error, info }),
   );
   return { handler, execute, error, info, recordRefundOwed };
 }

@@ -1,5 +1,7 @@
-import { BadGatewayException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { v7 as uuidv7 } from 'uuid';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
@@ -25,6 +27,8 @@ const ORDER_STATUS_PENDING = 'PENDING';
 // open a fresh session.
 const ACTIVE_PAYMENT_STATUSES: readonly PaymentStatus[] = [PaymentStatus.PENDING, PaymentStatus.SUCCEEDED];
 
+const LOG_CONTEXT = 'CreatePaymentSession';
+
 export interface CreatePaymentSessionResult {
   paymentId: string;
   providerSessionId: string;
@@ -35,14 +39,15 @@ export interface CreatePaymentSessionResult {
 /** Opens a payment and nothing more: the order is settled by the webhook or the reconciliation sweep. */
 @Injectable()
 export class CreatePaymentSessionUseCase {
-  private readonly logger = new Logger(CreatePaymentSessionUseCase.name);
-
   constructor(
     @Inject(ORDER_READ_PORT) private readonly orders: OrderReadPort,
     @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async execute(orderId: string, userId: string): Promise<CreatePaymentSessionResult> {
     const order = await this.orders.findForPayment(orderId);
@@ -77,10 +82,9 @@ export class CreatePaymentSessionUseCase {
       // is undiagnosable. A failed saga step, because the order is left with its stock still held.
       this.metrics.recordSagaStep('payment_session', 'failed');
       if (error instanceof PaymentGatewayError) {
-        this.logger.error(
-          `createSession failed for order ${orderId}: ${error.message}`,
-          error.cause instanceof Error ? error.cause.stack : undefined,
-        );
+        // `err` carries the gateway error AND its `cause` chain, which is where the provider's own
+        // status and body live — the part a checkout outage is actually diagnosed from.
+        this.logger.error({ orderId, err: error }, 'gateway createSession failed');
         throw new BadGatewayException('Payment provider is temporarily unavailable', { cause: error });
       }
       throw error;
@@ -140,8 +144,8 @@ export class CreatePaymentSessionUseCase {
       // Left PENDING deliberately — marking it EXPIRED would claim a session was closed that is
       // still live. Nothing retries this, so the gateway's own expiry is the backstop.
       this.logger.error(
-        `order ${orderId} settled as ${status} while its checkout session was being opened, and the ` +
-          `session could not be closed: ${error instanceof Error ? error.message : String(error)}`,
+        { orderId, status, err: toError(error) },
+        'order settled while its checkout session was being opened, and the session could not be closed',
       );
       throw new ConflictException(`Order is not payable in status ${status}`);
     }

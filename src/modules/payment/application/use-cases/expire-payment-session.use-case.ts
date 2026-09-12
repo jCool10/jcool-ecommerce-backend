@@ -11,6 +11,9 @@ const LOG_CONTEXT = 'ExpirePaymentSession';
 /** Why the order stopped being payable. It changes nothing this does — only what the logs say. */
 export type ExpireSessionTrigger = 'ttl' | 'cancel';
 
+/** Which way the payment had already moved past the point this could undo. A log field, not a message. */
+type RefundCause = 'payment_already_succeeded' | 'session_already_submitted';
+
 export type ExpireSessionResult =
   | 'no_payment'
   /** A webhook or the reconcile sweep got there first; the money row is already terminal. */
@@ -33,7 +36,9 @@ export class ExpirePaymentSessionUseCase {
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async execute(orderId: string, tx: DrizzleTx, trigger: ExpireSessionTrigger = 'ttl'): Promise<ExpireSessionResult> {
     const payment = await this.payments.findByOrderId(orderId, tx);
@@ -42,7 +47,7 @@ export class ExpirePaymentSessionUseCase {
     if (payment.status !== PaymentStatus.PENDING) {
       if (payment.status === PaymentStatus.SUCCEEDED) {
         // The buyer paid between the order dying and this running. Nothing downstream repairs that.
-        this.refundOwed(orderId, payment.id, trigger, 'its payment had already succeeded');
+        this.refundOwed(orderId, payment.id, trigger, 'payment_already_succeeded');
         return 'refund_owed';
       }
       return 'already_settled';
@@ -56,7 +61,7 @@ export class ExpirePaymentSessionUseCase {
       // Acknowledged, not retried: no redelivery un-pays a session, and this is the only signal there
       // is if the webhook never arrives. "Submitted", not "paid": an async method can still be
       // clearing behind a `complete` session.
-      this.refundOwed(orderId, payment.id, trigger, 'its checkout session had already been submitted for payment');
+      this.refundOwed(orderId, payment.id, trigger, 'session_already_submitted');
       return 'refund_owed';
     }
     // `already_closed` continues: an unpayable session is what this needed, whether this call closed
@@ -70,7 +75,7 @@ export class ExpirePaymentSessionUseCase {
       // A webhook committed inside the round-trip above. It owns the outcome; the session it settled
       // is now expired at the gateway either way, which is the part that had to happen.
       this.logger.info(
-        { context: LOG_CONTEXT, orderId, paymentId: payment.id, trigger },
+        { orderId, paymentId: payment.id, trigger },
         'payment was settled by a webhook while its session was being expired',
       );
       return 'raced';
@@ -79,12 +84,13 @@ export class ExpirePaymentSessionUseCase {
     return 'expired';
   }
 
-  // `trigger` rides as a field, not in the message, so filtering for this line needs one spelling.
-  private refundOwed(orderId: string, paymentId: string, trigger: ExpireSessionTrigger, because: string): void {
+  // `trigger` and `because` ride as fields, not in the message, so filtering for this line needs one
+  // spelling and grouping by cause stays a field match rather than a substring one.
+  private refundOwed(orderId: string, paymentId: string, trigger: ExpireSessionTrigger, because: RefundCause): void {
     this.metrics.recordRefundOwed('expire_session');
     this.logger.error(
-      { context: LOG_CONTEXT, orderId, paymentId, trigger },
-      `order will not be fulfilled but ${because} — refund owed`,
+      { orderId, paymentId, trigger, because },
+      'order will not be fulfilled but its payment had progressed — refund owed',
     );
   }
 }

@@ -1,6 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { SearchableProduct } from '../../application/ports';
 import { PRODUCTS_INDEX_SETTINGS, SEARCH_MAX_TOTAL_HITS } from './index-settings';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
@@ -20,7 +21,7 @@ const DOC: SearchableProduct = {
 };
 
 describe('MeilisearchCatalogSearch (disabled)', () => {
-  const adapter = new MeilisearchCatalogSearch(fakeConfigService({ 'search.enabled': false }));
+  const adapter = new MeilisearchCatalogSearch(fakeConfigService({ 'search.enabled': false }), fakePinoLogger());
 
   it('search resolves to an empty result', async () => {
     await expect(adapter.search({ q: 'anything', page: 1, pageSize: 20 })).resolves.toEqual({
@@ -68,6 +69,7 @@ describe('MeilisearchCatalogSearch (engine task outcome)', () => {
     const { port } = server.address() as AddressInfo;
     adapter = new MeilisearchCatalogSearch(
       fakeConfigService({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
+      fakePinoLogger(),
     );
   });
 
@@ -126,6 +128,7 @@ describe('MeilisearchCatalogSearch (query construction)', () => {
     const { port } = server.address() as AddressInfo;
     adapter = new MeilisearchCatalogSearch(
       fakeConfigService({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
+      fakePinoLogger(),
     );
   });
 
@@ -218,6 +221,7 @@ describe('MeilisearchCatalogSearch (engine failure degrades)', () => {
     // Port 1 is privileged and unbound in the test environment, so the connection fails immediately.
     const adapter = new MeilisearchCatalogSearch(
       fakeConfigService({ 'search.enabled': true, 'search.url': 'http://127.0.0.1:1' }),
+      fakePinoLogger(),
     );
 
     await expect(adapter.search({ q: 'widget', page: 1, pageSize: 20 })).resolves.toEqual({
@@ -236,6 +240,7 @@ describe('MeilisearchCatalogSearch (engine failure degrades)', () => {
     const { port } = server.address() as AddressInfo;
     const adapter = new MeilisearchCatalogSearch(
       fakeConfigService({ 'search.enabled': true, 'search.url': `http://127.0.0.1:${port}` }),
+      fakePinoLogger(),
     );
 
     try {

@@ -1,7 +1,7 @@
-import type { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import type { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { DomainEventJob, PostCommitEffect } from './domain-event.job';
 import { DomainEventProcessor } from './domain-event.processor';
@@ -39,7 +39,7 @@ function build({
   const label = vi.fn((eventType: string) => (known ? eventType : 'unregistered'));
   const recordEventConsumed = vi.fn();
   const error = vi.fn();
-  const logger = { debug: vi.fn(), error } as unknown as PinoLogger;
+  const logger = fakePinoLogger({ error });
 
   const processor = new DomainEventProcessor(
     { transaction } as unknown as DrizzleDB,

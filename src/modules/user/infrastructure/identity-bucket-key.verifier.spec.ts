@@ -1,9 +1,9 @@
-import { Logger } from '@nestjs/common';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bucketForEmail, encode, identityKeyFingerprint } from '@shared/identity';
 import type { DrizzleDB } from '@shared/infrastructure/database';
 import { normalizeEmail } from '@shared/kernel';
 import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { IdentityBucketKeyVerifier } from './identity-bucket-key.verifier';
 import { identityKeyPin } from './schema/user.schema';
 
@@ -44,14 +44,9 @@ function fakeDb(options: FakeDbOptions = {}) {
 }
 
 const verifier = (db: DrizzleDB, key = KEY): IdentityBucketKeyVerifier =>
-  new IdentityBucketKeyVerifier(db, fakeConfigService({ 'identity.bucketKey': key }));
+  new IdentityBucketKeyVerifier(db, fakeConfigService({ 'identity.bucketKey': key }), fakePinoLogger());
 
 describe('IdentityBucketKeyVerifier', () => {
-  beforeEach(() => {
-    vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();

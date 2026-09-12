@@ -5,6 +5,7 @@ import { asc, eq, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
+import { toError } from '@shared/kernel/to-error';
 import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
 import { extractTraceContext, injectTraceContext } from '@shared/observability/tracing/propagation';
 import { withSpan } from '@shared/observability/tracing/tracer';
@@ -40,7 +41,9 @@ export class OutboxRelay {
     // here means events are heading straight for the DLQ, a full retry budget before it says so.
     private readonly dispatcher: DomainEventDispatcher,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async runOnce(batchSize: number): Promise<RelayTickSummary> {
     // Cheap short-circuit only: with no offline buffer every publish throws while Redis is away, so
@@ -61,7 +64,7 @@ export class OutboxRelay {
         .for('update', { skipLocked: true });
 
       const refused: OutboxRow[] = [];
-      let lastError = '';
+      let lastError: Error | undefined;
       let published = 0;
 
       for (const row of rows) {
@@ -71,7 +74,7 @@ export class OutboxRelay {
         } catch (error) {
           this.metrics.recordEventPublished(eventType, 'refused');
           refused.push(row);
-          lastError = error instanceof Error ? error.message : String(error);
+          lastError = toError(error);
           // Several refusals in one tick is the queue failing, not that many bad rows. Stop rather
           // than pay its timeout again for every row left in the batch.
           if (refused.length >= MAX_REFUSALS_PER_TICK) break;
@@ -99,8 +102,8 @@ export class OutboxRelay {
         }
         // One line per tick, not one per row: an outage refuses the whole batch every time.
         this.logger.warn(
-          { context: LOG_CONTEXT, refused: refused.length, charged: published > 0, outboxId: refused[0].id },
-          `outbox publish refused: ${lastError}`,
+          { refused: refused.length, charged: published > 0, outboxId: refused[0].id, err: lastError },
+          'outbox publish refused',
         );
       }
 

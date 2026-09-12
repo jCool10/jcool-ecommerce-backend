@@ -91,9 +91,11 @@ describe('ExpirePaymentSessionUseCase', () => {
     // Nothing to expire — the session was consumed — and no retry recovers stock already resold.
     expect(expireSession).not.toHaveBeenCalled();
     expect(recordRefundOwed).toHaveBeenCalledExactlyOnceWith('expire_session');
+    // `because` is a field, not part of the message: every refund-owed line groups under one
+    // message and the branch that produced it stays filterable.
     expect(logger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId: ORDER_ID }),
-      expect.stringContaining('already succeeded'),
+      expect.objectContaining({ orderId: ORDER_ID, because: 'payment_already_succeeded' }),
+      'order will not be fulfilled but its payment had progressed — refund owed',
     );
   });
 

@@ -1,9 +1,11 @@
-import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { desc, eq } from 'drizzle-orm';
+import { PinoLogger } from 'nestjs-pino';
 import { bucketForEmail, bucketOf, identityKeyFingerprint } from '@shared/identity';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { normalizeEmail } from '@shared/kernel';
+import { toError } from '@shared/kernel/to-error';
 import { identityKeyPin, users } from './schema/user.schema';
 
 const PIN_ROW_ID = 1;
@@ -12,9 +14,7 @@ const PIN_ROW_ID = 1;
 // hang `onApplicationBootstrap` forever, turning a fail-open check into a hard boot dependency.
 const DB_CHECK_TIMEOUT_MS = 5_000;
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+const LOG_CONTEXT = 'IdentityBucketKeyVerifier';
 
 /**
  * Refuses to boot when the running `IDENTITY_BUCKET_KEY` is not the one this database was built
@@ -27,12 +27,13 @@ function reason(error: unknown): string {
  */
 @Injectable()
 export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
-  private readonly logger = new Logger(IdentityBucketKeyVerifier.name);
-
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     private readonly config: ConfigService,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async onApplicationBootstrap(): Promise<void> {
     const key = this.config.getOrThrow<string>('identity.bucketKey');
@@ -72,7 +73,7 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
           .returning({ fingerprint: identityKeyPin.fingerprint }),
       );
       if (persisted) {
-        this.logger.log(`Pinned identity bucket key ${fingerprint} — no key was pinned here before`);
+        this.logger.info({ fingerprint }, 'identity bucket key pinned — no key was pinned here before');
         return;
       }
 
@@ -84,12 +85,12 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
       );
       pinned = row?.fingerprint;
     } catch (error) {
-      this.logger.warn(`Identity bucket key pin not verified: ${reason(error)}`);
+      this.logger.warn({ err: toError(error) }, 'identity bucket key pin not verified');
       return;
     }
 
     if (pinned === undefined) {
-      this.logger.warn('Identity bucket key pin disappeared while being read; not verified');
+      this.logger.warn('identity bucket key pin disappeared while being read — not verified');
       return;
     }
     if (pinned !== fingerprint) {
@@ -113,7 +114,7 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
         this.db.select({ id: users.id, email: users.email }).from(users).orderBy(desc(users.id)).limit(1),
       );
     } catch (error) {
-      this.logger.warn(`Identity routing canary not checked: ${reason(error)}`);
+      this.logger.warn({ err: toError(error) }, 'identity routing canary not checked');
       return;
     }
 

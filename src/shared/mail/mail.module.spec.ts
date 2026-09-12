@@ -1,6 +1,7 @@
 import { fakeConfigService } from '@shared/testing/fake-config.service';
 import { describe, expect, it, vi } from 'vitest';
 import type { CircuitBreakerFactory } from '@shared/resilience';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { LogMailTransport } from './log-mail.transport';
 import { createMailTransport } from './mail.module';
 import { MAIL_BREAKER, SmtpMailTransport } from './smtp-mail.transport';
@@ -8,55 +9,55 @@ import { MAIL_BREAKER, SmtpMailTransport } from './smtp-mail.transport';
 function build(values: Record<string, unknown>) {
   const create = vi.fn().mockReturnValue({ run: vi.fn() });
   const config = fakeConfigService(values);
-  return { config, breakers: { create } as unknown as CircuitBreakerFactory, create };
+  return { config, breakers: { create } as unknown as CircuitBreakerFactory, create, logger: fakePinoLogger() };
 }
 
 describe('createMailTransport', () => {
   it('falls back to the log sink outside production', () => {
-    const { config, breakers } = build({ 'app.env': 'development' });
-    expect(createMailTransport(config, breakers)).toBeInstanceOf(LogMailTransport);
+    const { config, breakers, logger } = build({ 'app.env': 'development' });
+    expect(createMailTransport(config, breakers, logger)).toBeInstanceOf(LogMailTransport);
   });
 
   it('refuses to boot in production without an SMTP URL', () => {
-    const { config, breakers } = build({ 'app.env': 'production' });
-    expect(() => createMailTransport(config, breakers)).toThrow(/SMTP_URL is required in production/);
+    const { config, breakers, logger } = build({ 'app.env': 'production' });
+    expect(() => createMailTransport(config, breakers, logger)).toThrow(/SMTP_URL is required in production/);
   });
 
   it('refuses an SMTP URL with no sender, which most relays reject anyway', () => {
-    const { config, breakers } = build({ 'app.env': 'development', 'mail.smtpUrl': 'smtp://mail.test:1025' });
-    expect(() => createMailTransport(config, breakers)).toThrow(/MAIL_FROM is required/);
+    const { config, breakers, logger } = build({ 'app.env': 'development', 'mail.smtpUrl': 'smtp://mail.test:1025' });
+    expect(() => createMailTransport(config, breakers, logger)).toThrow(/MAIL_FROM is required/);
   });
 
   // The loopback default is what `.env.example` ships, so this is the copied-dev-file case.
   it('refuses to boot in production against a loopback relay', () => {
-    const { config, breakers } = build({
+    const { config, breakers, logger } = build({
       'app.env': 'production',
       'mail.smtpUrl': 'smtp://localhost:1025',
       'mail.from': 'shop@test.local',
       'mail.timeoutMs': 10_000,
     });
-    expect(() => createMailTransport(config, breakers)).toThrow(/loopback relay in production/);
+    expect(() => createMailTransport(config, breakers, logger)).toThrow(/loopback relay in production/);
   });
 
   it('leaves the loopback relay alone outside production', () => {
-    const { config, breakers } = build({
+    const { config, breakers, logger } = build({
       'app.env': 'development',
       'mail.smtpUrl': 'smtp://127.0.0.1:1025',
       'mail.from': 'shop@test.local',
       'mail.timeoutMs': 10_000,
     });
-    expect(createMailTransport(config, breakers)).toBeInstanceOf(SmtpMailTransport);
+    expect(createMailTransport(config, breakers, logger)).toBeInstanceOf(SmtpMailTransport);
   });
 
   it('gives SMTP its own breaker and timeout, so a slow relay cannot open the checkout circuit', () => {
-    const { config, breakers, create } = build({
+    const { config, breakers, create, logger } = build({
       'app.env': 'production',
       'mail.smtpUrl': 'smtp://mail.test:1025',
       'mail.from': 'shop@test.local',
       'mail.timeoutMs': 7000,
     });
 
-    expect(createMailTransport(config, breakers)).toBeInstanceOf(SmtpMailTransport);
+    expect(createMailTransport(config, breakers, logger)).toBeInstanceOf(SmtpMailTransport);
     expect(create).toHaveBeenCalledWith(MAIL_BREAKER, { timeoutMs: 7000 });
   });
 });

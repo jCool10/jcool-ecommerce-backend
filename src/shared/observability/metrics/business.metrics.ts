@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { PinoLogger } from 'nestjs-pino';
 import type { Counter, Gauge, Histogram } from 'prom-client';
+import { toError } from '@shared/kernel/to-error';
 import type {
   BreakerCallResult,
   BreakerState,
@@ -78,7 +79,9 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(CIRCUIT_BREAKER_CALLS_TOTAL) private readonly breakerCalls: Counter<string>,
     @InjectMetric(RATE_LIMIT_REJECTIONS_TOTAL) private readonly rateLimitRejections: Counter<string>,
     private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   recordOrderCreated(status: string): void {
     this.safely('orders_created', () => this.ordersCreated.inc({ status }));
@@ -180,8 +183,7 @@ export class BusinessMetrics implements MetricsPort {
     try {
       fn();
     } catch (caught) {
-      const err = caught instanceof Error ? caught : new Error(String(caught));
-      this.logger.warn({ context: LOG_CONTEXT, op, err }, 'metric record failed');
+      this.logger.warn({ op, err: toError(caught) }, 'metric record failed');
     }
   }
 }

@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
-import type { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RedisService } from '@shared/infrastructure/redis';
+import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
 import { SingleFlightLock } from './single-flight.lock';
 
 const DOWN = new Error("Stream isn't writeable and enableOfflineQueue options is false");
@@ -10,9 +10,7 @@ function build() {
   const client = { set: vi.fn(), eval: vi.fn(), exists: vi.fn() };
   const lock = new SingleFlightLock(
     { getClient: () => client as unknown as Redis } as unknown as RedisService,
-    {
-      warn: vi.fn(),
-    } as unknown as PinoLogger,
+    fakePinoLogger(),
   );
   return { lock, client };
 }

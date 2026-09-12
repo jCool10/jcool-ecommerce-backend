@@ -1,8 +1,12 @@
-import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@shared/kernel/to-error';
 import type { User } from '../../domain/entities/user.entity';
 import { Email } from '../../domain';
 import { PASSWORD_HASHER, type PasswordHasherPort, USER_REPOSITORY, type UserRepositoryPort } from '../ports';
 import { EmailVerificationService } from '../services';
+
+const LOG_CONTEXT = 'RegisterUser';
 
 export interface RegisterUserInput {
   email: string;
@@ -11,13 +15,14 @@ export interface RegisterUserInput {
 
 @Injectable()
 export class RegisterUserUseCase {
-  private readonly logger = new Logger(RegisterUserUseCase.name);
-
   constructor(
     @Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort,
     @Inject(PASSWORD_HASHER) private readonly hasher: PasswordHasherPort,
     private readonly emailVerification: EmailVerificationService,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async execute(input: RegisterUserInput): Promise<User> {
     const email = Email.of(input.email).value;
@@ -34,8 +39,7 @@ export class RegisterUserUseCase {
     // Not awaited, so a slow mail server cannot stretch an already-persisted signup. The mailer
     // itself swallows delivery failures; the .catch is only what `void` needs.
     void this.emailVerification.issueAndSend(user).catch((err: unknown) => {
-      const reason = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Verification email failed for user ${user.id}: ${reason}`);
+      this.logger.warn({ userId: user.id, err: toError(err) }, 'verification email failed');
     });
     return user;
   }
