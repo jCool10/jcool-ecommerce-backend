@@ -9,7 +9,7 @@ import {
 import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio';
 
 // Same image the local stack runs, so a suite proves the storage that ships rather than a nearby one.
-const STORAGE_IMAGE = 'minio/minio:RELEASE.2025-09-07T16-13-09Z';
+const STORAGE_IMAGE = 'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z';
 const BUCKET = 'jcool-media-test';
 const ACCESS_KEY = 'jcool_test';
 const SECRET_KEY = 'jcool_test_pw';
