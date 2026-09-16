@@ -1,8 +1,6 @@
 # JCool E-commerce Backend
 
-Single-store e-commerce backend built as a **NestJS modular monolith** — seven bounded contexts,
-Clean Architecture layering enforced by a build gate, and a deliberate focus on the parts of
-commerce that are hard: **never oversell, never double-charge, never lose an event**.
+Single-store e-commerce backend built as a **NestJS modular monolith** — seven bounded contexts, Clean Architecture layering enforced by a build gate, and a deliberate focus on the parts of commerce that are hard: **never oversell, never double-charge, never lose an event**.
 
 <p>
   <a href="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml/badge.svg"></a>
@@ -33,13 +31,13 @@ commerce that are hard: **never oversell, never double-charge, never lose an eve
 - [Testing](#testing) · [Measured performance](#measured-performance) · [Observability](#observability)
 - [Operations](#operations) · [Known limits](#known-limits) · [Scripts](#scripts)
 
+Changing the code: [`docs/engineering-rules.md`](./docs/engineering-rules.md). Running the deployed system: [`RUNBOOK.md`](./RUNBOOK.md). What is documented where: [`docs/`](./docs/README.md).
+
 ---
 
 ## What this is
 
-A backend for a **single-store** (not multi-vendor) shop, built as one deployable process split into
-independent bounded contexts with boundaries a build step enforces — so a context can be extracted
-into its own service as a bounded piece of work rather than a rewrite.
+A backend for a **single-store** (not multi-vendor) shop, built as one deployable process split into independent bounded contexts with boundaries a build step enforces — so a context can be extracted into its own service as a bounded piece of work rather than a rewrite.
 
 Four invariants drive nearly every design decision in the repository:
 
@@ -50,8 +48,7 @@ Four invariants drive nearly every design decision in the repository:
 | **Money and stock stay consistent with order state** | Order, stock hold, outbox event and idempotency result commit or roll back as one transaction; settlement does the same for the status flip |
 | **The order is the transaction source of truth** | Order snapshots each line's price and name; the cart never does — a later reprice cannot move a placed order |
 
-**Not in scope, deliberately:** multi-vendor, automatic refunds, and a deployed tracing collector.
-Where a guarantee is weaker than it looks, [Known limits](#known-limits) says so.
+**Not in scope, deliberately:** multi-vendor, automatic refunds, and a deployed tracing collector. Where a guarantee is weaker than it looks, [Known limits](#known-limits) says so.
 
 ---
 
@@ -126,9 +123,7 @@ flowchart TB
 | **Payment** | Gateway sessions, webhook sink, reconciliation | — (settles Order through Order's own use case) |
 | **Media** | Upload lifecycle, presigned URLs, reclaim sweep | `MEDIA_QUERY`, `MEDIA_FACADE` |
 
-No context reads another's tables. Cross-context calls go through an anti-corruption adapter the
-*calling* context owns, bound to the target's published port — there are no cross-context foreign
-keys anywhere in the schema, which is what keeps an extraction from becoming a schema migration.
+No context reads another's tables. Cross-context calls go through an anti-corruption adapter the *calling* context owns, bound to the target's published port — there are no cross-context foreign keys anywhere in the schema, which is what keeps an extraction from becoming a schema migration.
 
 ### Layering
 
@@ -140,19 +135,9 @@ interface  ──▶  application  ──▶  domain          (framework-free, n
                      └──── implements ─┴──── infrastructure   (Drizzle, Redis, S3, Stripe, SMTP)
 ```
 
-`npm run arch:check` (dependency-cruiser, 7 error-severity rules) fails the build when `domain`
-imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one
-context reaches into another for anything but its `application/public` surface — internal use cases
-included, which is the crossing a boundary rule usually forgets — or when `domain`/`application`
-import **any** telemetry
-package. That last rule is mechanical because the leak is easy: the observability barrel transitively
-pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity.
-ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no
-`uuid`/`randomUUID` in user infrastructure.
+`npm run arch:check` (dependency-cruiser, 7 error-severity rules) fails the build when `domain` imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one context reaches into another for anything but its `application/public` surface — internal use cases included, which is the crossing a boundary rule usually forgets — or when `domain`/`application` import **any** telemetry package. That last rule is mechanical because the leak is easy: the observability barrel transitively pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no `uuid`/`randomUUID` in user infrastructure.
 
-Two composition roots are exempt from the "shared may not import a context" rule, because wiring
-contexts together is precisely their job: `shared/messaging` (registers context event handlers) and
-the schema barrel (collects every context's tables for the migrator).
+Two composition roots are exempt from the "shared may not import a context" rule, because wiring contexts together is precisely their job: `shared/messaging` (registers context event handlers) and the schema barrel (collects every context's tables for the migrator).
 
 ### Project layout
 
@@ -269,21 +254,15 @@ npm run start:dev
 - Mail inbox (Mailpit) → <http://localhost:8025> · MinIO console → <http://localhost:9001>
 - Postgres → `localhost:5433` · Redis → `localhost:6380` · Meilisearch → `localhost:7700`
 
-`minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh
-`docker compose up` has a bucket before the first upload. Meilisearch is only needed with
-`SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships
-`SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
+`minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Meilisearch is only needed with `SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
-Full stack in-network (app included): `docker compose up -d --build`.
-Tear down including volumes: `docker compose down -v`.
+Full stack in-network (app included): `docker compose up -d --build`. Tear down including volumes: `docker compose down -v`.
 
 ---
 
 ## Configuration
 
-Environment is validated **once at startup** and the process refuses to boot on anything invalid —
-a missing secret is a crash, not a runtime surprise. `.env.example` is the complete, commented
-reference for all ~105 variables; these are the ones without a default:
+Environment is validated **once at startup** and the process refuses to boot on anything invalid — a missing secret is a crash, not a runtime surprise. `.env.example` is the complete, commented reference for all ~105 variables; these are the ones without a default:
 
 | Variable | Notes |
 | --- | --- |
@@ -294,40 +273,25 @@ reference for all ~105 variables; these are the ones without a default:
 | `IDENTITY_BUCKET_KEY` | HMAC key for id routing buckets. **Permanent** — the DB pins its fingerprint on first boot and refuses a later boot under a different key. See [RUNBOOK.md](./RUNBOOK.md) |
 | `STRIPE_SUCCESS_URL` | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
 
-Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY`
-(`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`,
-`STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`,
-`METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`.
+Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`.
 
-`MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it
-because it ships `migrations/` without a `src/` tree.
+`MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it because it ships `migrations/` without a `src/` tree.
 
-> **`TRUST_PROXY` is required behind a platform load balancer, including Railway.** It defaults to
-> off — correct for a direct deploy, where trusting `X-Forwarded-For` would let any client spoof its
-> own rate-limit key. Behind a proxy the same default inverts the problem: `req.ip` becomes the
-> proxy's peer address, which changes per connection, so the IP-keyed throttle tiers count
-> per-connection instead of per-client and stop binding. Set `TRUST_PROXY=1`. See
-> [Known limits](#known-limits).
+> **`TRUST_PROXY` is required behind a platform load balancer, including Railway.** It defaults to off — correct for a direct deploy, where trusting `X-Forwarded-For` would let any client spoof its own rate-limit key. Behind a proxy the same default inverts the problem: `req.ip` becomes the proxy's peer address, which changes per connection, so the IP-keyed throttle tiers count per-connection instead of per-client and stop binding. Set `TRUST_PROXY=1`. See [Known limits](#known-limits).
 
 ---
 
 ## API
 
-No global prefix; routes are served at the root. The always-current contract is **`/docs`**
-(Swagger UI) when `SWAGGER_ENABLED` is on.
+No global prefix; routes are served at the root. The always-current contract is **`/docs`** (Swagger UI) when `SWAGGER_ENABLED` is on.
 
-**Applies to every route unless noted:** `401` without a valid access token, `403` on an `ADMIN`
-route without the role (and on a CSRF failure), `429` when throttled, `400` when a request body
-carries an unknown property — the global `ValidationPipe` runs with `whitelist` and
-`forbidNonWhitelisted` — and `422` when a value passes DTO validation but breaks a domain rule
-(`Email`, `Slug`, `Money`, the state machines). Every error answers with one envelope:
+**Applies to every route unless noted:** `401` without a valid access token, `403` on an `ADMIN` route without the role (and on a CSRF failure), `429` when throttled, `400` when a request body carries an unknown property — the global `ValidationPipe` runs with `whitelist` and `forbidNonWhitelisted` — and `422` when a value passes DTO validation but breaks a domain rule (`Email`, `Slug`, `Money`, the state machines). Every error answers with one envelope:
 
 ```json
 { "statusCode": 409, "path": "/orders", "timestamp": "…", "requestId": "…", "traceId": "…", "message": "…" }
 ```
 
-`5xx` bodies are masked to a generic message and the real error is logged; `requestId` is echoed as
-the `x-request-id` response header on every response, error or not.
+`5xx` bodies are masked to a generic message and the real error is logged; `requestId` is echoed as the `x-request-id` response header on every response, error or not.
 
 ### Auth — `/auth`
 
@@ -347,9 +311,7 @@ the `x-request-id` response header on every response, error or not.
 | `POST` | `/auth/refresh` | Refresh cookie + CSRF | Rotate the token pair; reuse of a retired token revokes the family |
 | `POST` | `/auth/logout` | Bearer + CSRF | Denylist the access token, revoke the refresh token, clear cookies (`204`) |
 
-Only `/auth/refresh` is cookie-authenticated. `/auth/logout` is Bearer-authenticated and *also*
-CSRF-guarded because it consumes the refresh cookie when one is present. To call either, read the
-readable `csrf_token` cookie and echo it in the `x-csrf-token` header.
+Only `/auth/refresh` is cookie-authenticated. `/auth/logout` is Bearer-authenticated and *also* CSRF-guarded because it consumes the refresh cookie when one is present. To call either, read the readable `csrf_token` cookie and echo it in the `x-csrf-token` header.
 
 ### Catalog — `/products`, `/admin`
 
@@ -362,14 +324,9 @@ readable `csrf_token` cookie and echo it in the `x-csrf-token` header.
 | `PUT` | `/admin/skus/:skuId/price` | `ADMIN` | Set SKU price (idempotent upsert) |
 | `GET` `POST` `DELETE` `PATCH` | `/admin/products/:productId/images` | `ADMIN` | List, attach a `READY` asset, detach, reorder |
 
-`DELETE` on categories, products and SKUs is a **soft delete**: `200` with the archived entity, the
-row stays and disappears from the public `ACTIVE` projection. Archiving a category that still holds
-active products is `409`. There is no admin read endpoint — reads go through the public paths.
+`DELETE` on categories, products and SKUs is a **soft delete**: `200` with the archived entity, the row stays and disappears from the public `ACTIVE` projection. Archiving a category that still holds active products is `409`. There is no admin read endpoint — reads go through the public paths.
 
-`/products/search` is always mounted and **degrades to an empty page**: with `SEARCH_ENABLED` off, or
-the engine unreachable, it answers `200` with zero hits rather than a `5xx`. A client cannot
-distinguish "search is off" from "nothing matched". Reordering images requires the body to list every
-image on the product exactly once (`409` otherwise), so none is left at a stale position.
+`/products/search` is always mounted and **degrades to an empty page**: with `SEARCH_ENABLED` off, or the engine unreachable, it answers `200` with zero hits rather than a `5xx`. A client cannot distinguish "search is off" from "nothing matched". Reordering images requires the body to list every image on the product exactly once (`409` otherwise), so none is left at a stale position.
 
 ### Cart — `/cart` (Bearer)
 
@@ -380,9 +337,7 @@ image on the product exactly once (`409` otherwise), so none is left at a stale 
 | `PATCH` | `/cart/items/:skuId` | Set an absolute quantity (`404` if not in the cart) |
 | `DELETE` | `/cart/items/:skuId` · `/cart` | Remove one line (idempotent) · clear |
 
-The cart is scratch space, not a transaction: prices are never snapshotted, and stock is validated
-only when an order is placed. An item whose product was archived stays in the cart, flagged
-`isActive: false`.
+The cart is scratch space, not a transaction: prices are never snapshotted, and stock is validated only when an order is placed. An item whose product was archived stays in the cart, flagged `isActive: false`.
 
 ### Order — `/orders`, `/admin/orders`
 
@@ -394,15 +349,9 @@ only when an order is placed. An item whose product was archived stays in the ca
 | `POST` | `/orders/:id/cancel` | Bearer | Cancel a `PENDING` order and release its stock. Re-cancelling answers `200` — no idempotency key needed |
 | `GET` `POST` | `/admin/orders`, `/admin/orders/:id`, `/admin/orders/:id/cancel` | `ADMIN` | Any buyer's orders, plus force-cancel through the identical use case |
 
-There is no separate "place" call: `POST /orders` goes **DRAFT → PENDING inside one transaction**,
-which is what lets the order, its stock hold, its `order.placed` event and its idempotency result
-commit or roll back together. Every edge is wired: `DRAFT → PENDING | CANCELLED` and
-`PENDING → PAID | FAILED | EXPIRED | CANCELLED`; the four settled states are terminal, which is the
-guard that turns an at-least-once webhook into an exactly-once effect. Legal edges live in one
-table; a use case translates a refused transition into `409` at its boundary.
+There is no separate "place" call: `POST /orders` goes **DRAFT → PENDING inside one transaction**, which is what lets the order, its stock hold, its `order.placed` event and its idempotency result commit or roll back together. Every edge is wired: `DRAFT → PENDING | CANCELLED` and `PENDING → PAID | FAILED | EXPIRED | CANCELLED`; the four settled states are terminal, which is the guard that turns an at-least-once webhook into an exactly-once effect. Legal edges live in one table; a use case translates a refused transition into `409` at its boundary.
 
-An admin cannot reach an outcome a buyer's own cancel could not — only the audit reason differs
-(`admin:cancel` vs `user:cancel`).
+An admin cannot reach an outcome a buyer's own cancel could not — only the audit reason differs (`admin:cancel` vs `user:cancel`).
 
 ### Payment — `/orders/:id/pay`, `/webhooks/payment`
 
@@ -410,11 +359,7 @@ An admin cannot reach an outcome a buyer's own cancel could not — only the aud
 | --- | --- | --- | --- |
 | `POST` | `/webhooks/payment` | HMAC signature | Gateway event sink. `200` with `{ status: processed \| duplicate \| skipped \| ignored }`; `401` on a bad signature or a timestamp outside the tolerance window |
 
-Cancelling deliberately does **not** call the gateway — that transaction holds an order row lock.
-Payment closes the checkout session by consuming the `order.cancelled` event instead. Until that
-lands, a buyer with the hosted page still open can pay for stock already released; the money then has
-to be refunded by hand, and both the log line and `payment_refund_owed_total` say so.
-**Automatic refunds are out of scope.**
+Cancelling deliberately does **not** call the gateway — that transaction holds an order row lock. Payment closes the checkout session by consuming the `order.cancelled` event instead. Until that lands, a buyer with the hosted page still open can pay for stock already released; the money then has to be refunded by hand, and both the log line and `payment_refund_owed_total` say so. **Automatic refunds are out of scope.**
 
 ### Inventory, Media, Health
 
@@ -425,13 +370,9 @@ to be refunded by hand, and both the log line and `payment_refund_owed_total` sa
 | `GET` | `/health/live` · `/health/ready` | Public | Liveness · readiness (`503` if Postgres or Redis is unreachable, **or** while draining after `SIGTERM`). Never rate-limited, so a Redis outage is reported rather than masked |
 | `GET` | `/metrics` | `METRICS_TOKEN` | Prometheus text format |
 
-A rejected `complete` leaves the asset `PENDING` on purpose — the sweep already reclaims exactly
-that, and a second cleanup path is a second thing to get wrong. A v4 presigned signature pins
-`Content-Type` (the bucket refuses any other with `403` before a byte is stored) but cannot express a
-size *ceiling*, so `MEDIA_MAX_BYTES` is checked by `HEAD` at `complete`.
+A rejected `complete` leaves the asset `PENDING` on purpose — the sweep already reclaims exactly that, and a second cleanup path is a second thing to get wrong. A v4 presigned signature pins `Content-Type` (the bucket refuses any other with `403` before a byte is stored) but cannot express a size *ceiling*, so `MEDIA_MAX_BYTES` is checked by `HEAD` at `complete`.
 
-`GET /debug/boom` also exists, to prove the error pipeline end to end; it is `404` outside
-development and test.
+`GET /debug/boom` also exists, to prove the error pipeline end to end; it is `404` outside development and test.
 
 ---
 
@@ -445,56 +386,32 @@ npm run test:cov   # same, with the coverage floor CI enforces
 npm run test:e2e   # 68 integration suites, 522 tests — requires Docker
 ```
 
-`E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1`
-serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the
-number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
+`E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
 
-- **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated
-  ids are stable within a run.
-- **Integration** (`test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB
-  mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed
-  migrations to a template database and clones one database per worker from it; the media, search and
-  mail suites additionally boot **MinIO, Meilisearch and Mailpit**
-  per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't
-  use. So the suite exercises real S3, a real search engine and a real SMTP server.
+- **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated ids are stable within a run.
+- **Integration** (`test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
 
-Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot
-change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by
-the **production** signer, so verification runs unmocked against a test secret; and Redis outages are
-scripted rather than mocked.
+Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
-The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 /
-lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are
-covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual
-fix for that is to lower the floor until it means nothing. The numbers are the measured values minus
-two points, not a round 80.
+The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
 
-Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit
-`emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the
-app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
+Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit `emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
 
 ---
 
 ## Measured performance
 
-Numbers below are from k6 against the **live Railway deployment**, not a local run and not a
-projection. Reproduce with:
+Numbers below are from k6 against the **live Railway deployment**, not a local run and not a projection. Reproduce with:
 
 ```bash
 BASE_URL=https://jcool-ecommerce.up.railway.app PROFILE=steady npm run load:public-read
 ```
 
-**Read this before reading the numbers.** They are client-side timings taken from a single machine
-in Vietnam against a deployment in another region, so **the round trip dominates every figure**.
-The measured TCP connect time is **≈90 ms**, and `GET /health/live` — which touches no database, no
-cache, and no authentication — still costs **≈305 ms**. That ~305 ms is the floor of the path, not
-the cost of the application. What the application costs is the *gap above that floor*, and the whole
-point of the table is that there barely is one.
+**Read this before reading the numbers.** They are client-side timings taken from a single machine in Vietnam against a deployment in another region, so **the round trip dominates every figure**. The measured TCP connect time is **≈90 ms**, and `GET /health/live` — which touches no database, no cache, and no authentication — still costs **≈305 ms**. That ~305 ms is the floor of the path, not the cost of the application. What the application costs is the *gap above that floor*, and the whole point of the table is that there barely is one.
 
 ### Steady read profile — 1.5 req/s, 4 min, 361 requests
 
-Offered under the app-wide IP throttle so the app is measured rather than the rate limiter.
-**0 × `429`, 0 × `5xx`, 0 dropped iterations.**
+Offered under the app-wide IP throttle so the app is measured rather than the rate limiter. **0 × `429`, 0 × `5xx`, 0 dropped iterations.**
 
 | Route | Work it does | min | med | p90 | p95 |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -502,16 +419,11 @@ Offered under the app-wide IP throttle so the app is measured rather than the ra
 | `GET /products` | cached list, page 1 | 296.1 ms | 311.9 ms | 422.5 ms | 622.5 ms |
 | `GET /products/:slug` | cached detail | 297.1 ms | 310.4 ms | 449.9 ms | 639.2 ms |
 
-**A cached catalog read is within ~1.5 ms of a no-op liveness probe at the median**, and within
-~7 ms at the minimum. The SWR cache and the generation-counter invalidation are doing what
-[Performance and caching](#performance-and-caching) claims: at steady state a product read does not
-reach Postgres, and the residual cost is too small to separate from network jitter.
+**A cached catalog read is within ~1.5 ms of a no-op liveness probe at the median**, and within ~7 ms at the minimum. The SWR cache and the generation-counter invalidation are doing what [Performance and caching](#performance-and-caching) claims: at steady state a product read does not reach Postgres, and the residual cost is too small to separate from network jitter.
 
 ### Load — 50 req/s, 30 s, 1,500 requests
 
-**0 × `429`, 0 × `5xx`, 0 dropped iterations.** A **32×** increase in offered load left every median
-unchanged within ~5 ms — all three, in fact, came in marginally *faster* than at 1.5 req/s, which is
-the signature of a system nowhere near its knee:
+**0 × `429`, 0 × `5xx`, 0 dropped iterations.** A **32×** increase in offered load left every median unchanged within ~5 ms — all three, in fact, came in marginally *faster* than at 1.5 req/s, which is the signature of a system nowhere near its knee:
 
 | Route | min | med | p90 | p95 |
 | --- | ---: | ---: | ---: | ---: |
@@ -521,91 +433,46 @@ the signature of a system nowhere near its knee:
 
 ### Saturation — 150 req/s offered, 30 s
 
-Achieved **≈81 req/s**; the remaining **28 % answered `429`** and one request returned `5xx`. Latency
-on the requests that *were* served stayed flat (median 306 ms, p95 640 ms) — the deployment sheds
-load rather than degrading under it, which is the correct failure mode.
+Achieved **≈81 req/s**; the remaining **28 % answered `429`** and one request returned `5xx`. Latency on the requests that *were* served stayed flat (median 306 ms, p95 640 ms) — the deployment sheds load rather than degrading under it, which is the correct failure mode.
 
-Those `429`s are also where the `TRUST_PROXY` gap in [Known limits](#known-limits) showed itself: k6
-reuses connections, so many requests share one proxy peer address and *do* trip the 100/60 s tier —
-while a client opening a fresh connection per request never does. Same offered load, opposite
-outcome, decided by connection reuse rather than by who is calling.
+Those `429`s are also where the `TRUST_PROXY` gap in [Known limits](#known-limits) showed itself: k6 reuses connections, so many requests share one proxy peer address and *do* trip the 100/60 s tier — while a client opening a fresh connection per request never does. Same offered load, opposite outcome, decided by connection reuse rather than by who is calling.
 
-**The ceiling here is not attributed.** It could be the single Railway container, the platform edge,
-the client, or the WAN path, and a single-client run from one continent away cannot tell them apart.
-Calling ~81 req/s "the application's capacity" would be dishonest. The experiments that *can*
-attribute a bottleneck run against the local stack, where Prometheus is scrapable and the
-`route:http_request_duration_seconds:p99` recording rules are authoritative — see
-[`test/load/`](./test/load) and `load:breakpoint` / `load:cache-stampede` / `load:sku-contention`.
+**The ceiling here is not attributed.** It could be the single Railway container, the platform edge, the client, or the WAN path, and a single-client run from one continent away cannot tell them apart. Calling ~81 req/s "the application's capacity" would be dishonest. The experiments that *can* attribute a bottleneck run against the local stack, where Prometheus is scrapable and the `route:http_request_duration_seconds:p99` recording rules are authoritative — see [`test/load/`](./test/load) and `load:breakpoint` / `load:cache-stampede` / `load:sku-contention`.
 
-> `/metrics` answers `404` on the deployment (no `METRICS_TOKEN` is configured), so no server-side
-> latency, cache-hit or pool figures were available to corroborate these client-side numbers.
+> `/metrics` answers `404` on the deployment (no `METRICS_TOKEN` is configured), so no server-side latency, cache-hit or pool figures were available to corroborate these client-side numbers.
 
 ---
 
 ## Observability
 
-Three pillars plus error tracking, wired **around** the Clean Architecture core — `domain` and
-`application` import none of it, and `arch:check` fails the build if they start to.
+Three pillars plus error tracking, wired **around** the Clean Architecture core — `domain` and `application` import none of it, and `arch:check` fails the build if they start to.
 
-- **Logs** — structured JSON via `nestjs-pino`. Every line of a request carries the same `requestId`
-  (`nestjs-cls` + `AsyncLocalStorage`), echoed as `x-request-id`, so a support ticket quoting a
-  header reaches the exact lines that served it. Email is deliberately *not* in the shared redaction
-  list — the auth audit trail is supposed to record it, and the Sentry sink strips it separately.
-- **Metrics** — `GET /metrics`, token-guarded. Default process metrics, RED HTTP metrics with
-  `route` as a path template rather than a raw id (cardinality is a cost that only shows up later, in
-  a Prometheus that has stopped being queryable), and business counters. Metric emission can never
-  throw into a business flow: a telemetry failure must not become an order failure.
-- **Traces** — OpenTelemetry, off by default. The SDK loads via `node --import ./dist/instrumentation.js`
-  *before* Nest boots, so auto-instrumentation patches `http`/`express`/`pg`/`ioredis` before those
-  modules are required.
-- **Errors** — Sentry, off unless `SENTRY_DSN` is set; it reuses the app's own OTel SDK
-  (`skipOpenTelemetrySetup`) rather than starting a second one, which would duplicate every span.
+- **Logs** — structured JSON via `nestjs-pino`. Every line of a request carries the same `requestId` (`nestjs-cls` + `AsyncLocalStorage`), echoed as `x-request-id`, so a support ticket quoting a header reaches the exact lines that served it. Email is deliberately *not* in the shared redaction list — the auth audit trail is supposed to record it, and the Sentry sink strips it separately.
+- **Metrics** — `GET /metrics`, token-guarded. Default process metrics, RED HTTP metrics with `route` as a path template rather than a raw id (cardinality is a cost that only shows up later, in a Prometheus that has stopped being queryable), and business counters. Metric emission can never throw into a business flow: a telemetry failure must not become an order failure.
+- **Traces** — OpenTelemetry, off by default. The SDK loads via `node --import ./dist/instrumentation.js` *before* Nest boots, so auto-instrumentation patches `http`/`express`/`pg`/`ioredis` before those modules are required.
+- **Errors** — Sentry, off unless `SENTRY_DSN` is set; it reuses the app's own OTel SDK (`skipOpenTelemetrySetup`) rather than starting a second one, which would duplicate every span.
 
-Alerting ships as code: three Prometheus rule files (multi-window burn-rate SLOs, resilience,
-identity clock) with matching `promtool` unit tests that pin both **firing and clearing** behaviour,
-run in CI. The local stack is profile-gated and binds to loopback only:
+Alerting ships as code: three Prometheus rule files (multi-window burn-rate SLOs, resilience, identity clock) with matching `promtool` unit tests that pin both **firing and clearing** behaviour, run in CI. The local stack is profile-gated and binds to loopback only:
 
 ```bash
 docker compose --profile observability up -d   # Collector + Prometheus + Grafana + Jaeger
 ```
 
-Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger <http://localhost:16686>.
-Scraping the app locally needs `infra/prometheus/secrets/metrics-token` to match `METRICS_TOKEN`
-(gitignored; only the `.example` is committed), and `npm run alerts:*` needs `promtool` on `PATH` —
-it is not an npm dependency, CI installs it from the pinned Prometheus release.
+Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger <http://localhost:16686>. Scraping the app locally needs `infra/prometheus/secrets/metrics-token` to match `METRICS_TOKEN` (gitignored; only the `.example` is committed), and `npm run alerts:*` needs `promtool` on `PATH` — it is not an npm dependency, CI installs it from the pinned Prometheus release.
 
 ---
 
 ## Operations
 
-[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express:
-never rotating `IDENTITY_BUCKET_KEY`, backup/restore (including restoring a dump into a database
-pinned to a different key fingerprint), rebuilding the search index, replaying the dead-letter queue,
-reconciling the object bucket against `media_assets`, retention horizons, and what to do when a
-refund is owed.
+[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: never rotating `IDENTITY_BUCKET_KEY`, backup/restore (including restoring a dump into a database pinned to a different key fingerprint), rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
 
-**Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with
-production dependencies only. The runtime stage copies `dist/` **and** the migration `.sql` files, so
-the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*,
-separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the
-app and taking down the version that was serving fine.
+**Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only. The runtime stage copies `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
 
-**CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first:
-`lint:check` → `typecheck` → `arch:check` → `npm audit --omit=dev --audit-level=high` → `build` →
-promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is
-runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed
-process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
+**CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first: `lint:check` → `typecheck` → `arch:check` → `npm audit --omit=dev --audit-level=high` → `build` → promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
 
-**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and
-pinned to the CI-verified SHA. Railway builds the image, applies migrations as a `preDeployCommand`,
-gates the traffic switch on `/health/ready` from inside the network, then smokes the **public** URL —
-which covers what the internal gate cannot see: domain, TLS, edge routing.
+**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. Railway builds the image, applies migrations as a `preDeployCommand`, gates the traffic switch on `/health/ready` from inside the network, then smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
 
-**Shutdown** is staged: `SIGTERM` flips `/health/ready` to `503` and holds for
-`SHUTDOWN_GRACE_PERIOD_MS` so a load balancer drains this instance, the HTTP server closes, and only
-then do the pg pool and Redis client drain and the telemetry buffers flush. The flush runs the OTel
-and Sentry exports concurrently under a fixed ceiling, so a collector dying in the same rollout
-delays the exit by a bounded amount instead of the exporter's own timeout.
+**Shutdown** is staged: `SIGTERM` flips `/health/ready` to `503` and holds for `SHUTDOWN_GRACE_PERIOD_MS` so a load balancer drains this instance, the HTTP server closes, and only then do the pg pool and Redis client drain and the telemetry buffers flush. The flush runs the OTel and Sentry exports concurrently under a fixed ceiling, so a collector dying in the same rollout delays the exit by a bounded amount instead of the exporter's own timeout.
 
 ---
 
@@ -613,51 +480,16 @@ delays the exit by a bounded amount instead of the exporter's own timeout.
 
 Stated plainly, because a reviewer will find them anyway.
 
-- **Run exactly one app instance.** The id generator holds a fixed node id for the whole fleet, so
-  two replicas mint the same `(timestamp, node, sequence)` triples. Ids stay *unique* — 40 random
-  bits see to that, and no insert fails — but the ordered per-writer sequence is lost on the four
-  User-context tables. The real problem is that **nothing detects it**: no error, no metric, no
-  failed insert. `railway.json` sets `numReplicas: 1`, but its `overlapSeconds: 20` means every
-  rollout runs two instances for ~20s by design. Lifting this properly needs a node-id lease.
-- **Order confirmation mail is at-most-once.** Applied exactly once in the database, attempted at
-  most once outside it, and on failure counted (`mail_send_failures_total`) rather than retried —
-  because a retry would roll back the inbox claim and, under a breaker timeout that abandons the wait
-  without cancelling the in-flight request, send up to eight confirmations for one order. A lost
-  confirmation is worse than nothing and better than that. The fix, if the tolerance changes, is a
-  separate `mail_outbox` table — not SMTP back inside the transaction.
-- **Auth mail is sent synchronously, outside the outbox**, because it carries a raw redeemable token
-  and the token tables store only hashes. Putting the token in an outbox payload would write it to
-  Postgres in plaintext.
-- **Context extraction is bounded work, not free.** One edge would have to change: Payment settles
-  through Order's published `order-finalization.port` inside a shared transaction. The surface is
-  already the only thing that crosses, so extraction is a transport change — across a process
-  boundary that call becomes a saga step.
-- **A money mismatch parks an order forever.** If the gateway reports a paid session whose charge
-  does not match the recorded payment, reconcile refuses to settle it (guessing would move a buyer's
-  money against the wrong order) and a `PAID` probe never ages into `EXPIRED`. The order stays
-  `PENDING` with its stock still held, re-probed every tick, and logs `stuck: true` once past twice
-  the TTL. Because the sweep reads oldest-first, enough of these would starve newer orders out of the
-  batch. Resolving it properly needs a terminal `NEEDS_REVIEW` state that leaves the sweep's queue.
-- **A password change has a race the ordering cannot close.** Sessions are revoked before the new
-  hash is written, so a crash between the two fails safe. But a login that verified the old password
-  can insert its refresh-token family just after the revoke `UPDATE` has passed, and no later write
-  to the user row reaches it. Closing it needs both writes in one transaction.
-- **No `CHECK` on the id layout.** Version and variant nibbles are validated in the codec on decode;
-  a raw-SQL writer is not blocked at the database. The honest reason is that nothing writes those
-  tables but this process.
-- **The IP-keyed throttle tiers are only as good as `req.ip`.** With `TRUST_PROXY` unset behind a
-  platform load balancer, `req.ip` is the proxy's peer address rather than the client's, and that
-  address changes per connection — so the `default` tier (100/60 s app-wide) and the IP half of the
-  auth tiers count per *connection* and never accumulate. Measured on the live deployment: a client
-  opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten
-  consecutive failed logins against one email never tripped the 5-per-15-min account block; a client
-  reusing one connection does get throttled. The guards are right — [the composition is unit-tested
-  three ways](./src/shared/infrastructure/throttler) — and the knob is documented; the failure is
-  that nothing at boot notices the combination of "production" and "untrusted proxy" and says so.
-- **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2`
-  rather than reinterpret an existing path.
-- **The observability stack is local-only.** No collector is deployed — a hosted one is an
-  operational commitment this project does not need to make its point.
+- **Run exactly one app instance.** The id generator holds a fixed node id for the whole fleet, so two replicas mint the same `(timestamp, node, sequence)` triples. Ids stay *unique* — 40 random bits see to that, and no insert fails — but the ordered per-writer sequence is lost on the four User-context tables. The real problem is that **nothing detects it**: no error, no metric, no failed insert. `railway.json` sets `numReplicas: 1`, but its `overlapSeconds: 20` means every rollout runs two instances for ~20s by design. Lifting this properly needs a node-id lease.
+- **Order confirmation mail is at-most-once.** Applied exactly once in the database, attempted at most once outside it, and on failure counted (`mail_send_failures_total`) rather than retried — because a retry would roll back the inbox claim and, under a breaker timeout that abandons the wait without cancelling the in-flight request, send up to eight confirmations for one order. A lost confirmation is worse than nothing and better than that. The fix, if the tolerance changes, is a separate `mail_outbox` table — not SMTP back inside the transaction.
+- **Auth mail is sent synchronously, outside the outbox**, because it carries a raw redeemable token and the token tables store only hashes. Putting the token in an outbox payload would write it to Postgres in plaintext.
+- **Context extraction is bounded work, not free.** One edge would have to change: Payment settles through Order's published `order-finalization.port` inside a shared transaction. The surface is already the only thing that crosses, so extraction is a transport change — across a process boundary that call becomes a saga step.
+- **A money mismatch parks an order forever.** If the gateway reports a paid session whose charge does not match the recorded payment, reconcile refuses to settle it (guessing would move a buyer's money against the wrong order) and a `PAID` probe never ages into `EXPIRED`. The order stays `PENDING` with its stock still held, re-probed every tick, and logs `stuck: true` once past twice the TTL. Because the sweep reads oldest-first, enough of these would starve newer orders out of the batch. Resolving it properly needs a terminal `NEEDS_REVIEW` state that leaves the sweep's queue.
+- **A password change has a race the ordering cannot close.** Sessions are revoked before the new hash is written, so a crash between the two fails safe. But a login that verified the old password can insert its refresh-token family just after the revoke `UPDATE` has passed, and no later write to the user row reaches it. Closing it needs both writes in one transaction.
+- **No `CHECK` on the id layout.** Version and variant nibbles are validated in the codec on decode; a raw-SQL writer is not blocked at the database. The honest reason is that nothing writes those tables but this process.
+- **The IP-keyed throttle tiers are only as good as `req.ip`.** With `TRUST_PROXY` unset behind a platform load balancer, `req.ip` is the proxy's peer address rather than the client's, and that address changes per connection — so the `default` tier (100/60 s app-wide) and the IP half of the auth tiers count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./src/shared/infrastructure/throttler) — and the knob is documented; the failure is that nothing at boot notices the combination of "production" and "untrusted proxy" and says so.
+- **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2` rather than reinterpret an existing path.
+- **The observability stack is local-only.** No collector is deployed — a hosted one is an operational commitment this project does not need to make its point.
 
 ---
 
@@ -680,8 +512,7 @@ Stated plainly, because a reviewer will find them anyway.
 | `load:public-read` | Anonymous read profile for a **deployed** instance (`BASE_URL=…`, `PROFILE=steady` \| `burst`). No Prometheus and no write journey — see [Measured performance](#measured-performance) for what it can and cannot answer |
 | `db:seed:perf` · `seed:users:bulk` · `db:metrics:users` | Planner-oriented perf seed · bulk identity seed · DB benchmark capture |
 
-`:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `storage:verify:prod`) run the compiled
-CLI from `dist/`, because `tsx` is a devDependency and is not installed in the image.
+`:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `storage:verify:prod`) run the compiled CLI from `dist/`, because `tsx` is a devDependency and is not installed in the image.
 
 ---
 

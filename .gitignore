@@ -34,8 +34,13 @@ logs
 
 
 !README.md
+
+# Working records, not documentation authority: plans, phase files and audit reports are
+# stateful and local. Committed docs live in docs/ and are indexed by docs/README.md.
 plans/
-docs/
+docs/*.html
+docs/interview-*
+docs/test-dedup-backlog.md
 
 .agentkit/
 .claude/
