@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "baseUrl": "./",
+    // Workspace packages resolve to source here; `nest build` output still requires their dist.
+    "customConditions": ["@jcool/source"],
+    "paths": {
+      "@modules/*": ["src/modules/*"],
+      "@shared/*": ["src/shared/*"],
+      "@/*": ["src/*"]
+    },
+    "types": ["node", "vitest/globals"],
+    "incremental": true
+  }
+}

@@ -63,7 +63,7 @@ export default tseslint.config(
   // the unsafe-* family. Relaxed here only; the correctness rules stay on — an un-awaited supertest
   // request is never sent, and the spec goes green having asserted nothing.
   {
-    files: ['test/**/*.ts'],
+    files: ['apps/*/test/**/*.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
@@ -77,9 +77,9 @@ export default tseslint.config(
   // `generate()` runs through; callers above it hold no clock state and are free to await.
   {
     files: [
-      'src/shared/identity/uuid-v8.generator.ts',
-      'src/shared/identity/entropy-pool.ts',
-      'src/shared/identity/uuid-v8.codec.ts',
+      'packages/identity/src/uuid-v8.generator.ts',
+      'packages/identity/src/entropy-pool.ts',
+      'packages/identity/src/uuid-v8.codec.ts',
     ],
     rules: {
       'fence/sync-id-mint': [
@@ -104,9 +104,9 @@ export default tseslint.config(
   // be able to mint a non-v8 id to prove it is rejected. `scripts/` is in because it inserts over raw SQL.
   {
     files: [
-      'src/modules/user/infrastructure/**/*.ts',
-      'src/shared/identity/identity.service.ts',
-      'scripts/**/*.ts',
+      'apps/checkout-core/src/modules/user/infrastructure/**/*.ts',
+      'packages/identity/src/identity.service.ts',
+      'apps/checkout-core/scripts/**/*.ts',
     ],
     ignores: ['**/*.spec.ts'],
     rules: {
@@ -135,7 +135,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/domain/**/*.ts'],
+    files: ['apps/*/src/**/domain/**/*.ts'],
     rules: {
       'fence/pure-domain-imports': [
         'error',
@@ -165,8 +165,8 @@ export default tseslint.config(
   // event a distinct message string, so no aggregator can group them. main.ts is the exception: the
   // bootstrap logger runs before the pino provider exists.
   {
-    files: ['src/**/*.ts'],
-    ignores: ['src/main.ts'],
+    files: ['apps/*/src/**/*.ts', 'packages/*/src/**/*.ts'],
+    ignores: ['apps/*/src/main.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -184,7 +184,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/*.ts'],
+    files: ['apps/*/src/**/*.ts', 'packages/*/src/**/*.ts'],
     rules: {
       'no-restricted-syntax': [
         'error',
@@ -213,13 +213,14 @@ export default tseslint.config(
   },
   {
     files: [
-      'src/shared/infrastructure/database/migrate.ts',
-      'src/shared/infrastructure/database/migrate-cli.ts',
-      'src/shared/infrastructure/database/seed.ts',
-      'src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
-      'src/shared/messaging/queue/replay-dlq.cli.ts',
-      'src/modules/catalog/infrastructure/search/reindex.ts',
-      'src/**/*.spec.ts',
+      'apps/checkout-core/src/shared/infrastructure/database/migrate.ts',
+      'apps/checkout-core/src/shared/infrastructure/database/migrate-cli.ts',
+      'apps/checkout-core/src/shared/infrastructure/database/seed.ts',
+      'apps/checkout-core/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
+      'apps/checkout-core/src/shared/messaging/queue/replay-dlq.cli.ts',
+      'apps/checkout-core/src/modules/catalog/infrastructure/search/reindex.ts',
+      'apps/*/src/**/*.spec.ts',
+      'packages/*/src/**/*.spec.ts',
     ],
     rules: {
       'no-console': 'off',

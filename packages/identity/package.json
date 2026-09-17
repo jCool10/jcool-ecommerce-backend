@@ -1,0 +1,24 @@
+{
+  "name": "@jcool/identity",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "exports": {
+    ".": {
+      "@jcool/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./errors": {
+      "@jcool/source": "./src/identity.errors.ts",
+      "types": "./dist/identity.errors.d.ts",
+      "default": "./dist/identity.errors.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jcool/kernel": "*"
+  }
+}

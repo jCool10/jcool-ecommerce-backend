@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "customConditions": ["@jcool/source"],
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src", "vitest.config.mts"]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@jcool/kernel",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "exports": {
+    ".": {
+      "@jcool/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
