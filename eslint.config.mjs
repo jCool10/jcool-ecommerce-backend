@@ -1,12 +1,34 @@
 // @ts-check
 import eslint from '@eslint/js';
+import { builtinRules } from 'eslint/use-at-your-own-risk';
 import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+// Fences run core rules under their own ids: a later block configuring the same rule id replaces its
+// options, which silently erased them.
+function coreRule(id) {
+  const rule = builtinRules.get(id);
+  if (!rule) throw new Error(`ESLint no longer ships ${id}; the fences built on it would stop linting`);
+  return rule;
+}
+
+const fence = {
+  meta: { name: 'fence' },
+  rules: {
+    'sync-id-mint': coreRule('no-restricted-syntax'),
+    'bucketed-id-imports': coreRule('no-restricted-imports'),
+    'bucketed-id-calls': coreRule('no-restricted-syntax'),
+    'pure-domain-imports': coreRule('no-restricted-imports'),
+  },
+};
+
 export default tseslint.config(
   {
     ignores: ['eslint.config.mjs'],
+  },
+  {
+    plugins: { fence },
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -60,7 +82,7 @@ export default tseslint.config(
       'src/shared/identity/uuid-v8.codec.ts',
     ],
     rules: {
-      'no-restricted-syntax': [
+      'fence/sync-id-mint': [
         'error',
         {
           selector: 'AwaitExpression',
@@ -88,7 +110,7 @@ export default tseslint.config(
     ],
     ignores: ['**/*.spec.ts'],
     rules: {
-      'no-restricted-imports': [
+      'fence/bucketed-id-imports': [
         'error',
         {
           patterns: [
@@ -99,7 +121,7 @@ export default tseslint.config(
           ],
         },
       ],
-      'no-restricted-syntax': [
+      'fence/bucketed-id-calls': [
         'error',
         {
           selector: "ImportSpecifier[imported.name='randomUUID']",
@@ -115,7 +137,7 @@ export default tseslint.config(
   {
     files: ['src/**/domain/**/*.ts'],
     rules: {
-      'no-restricted-imports': [
+      'fence/pure-domain-imports': [
         'error',
         {
           patterns: [
