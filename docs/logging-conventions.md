@@ -1,6 +1,6 @@
 # Logging conventions
 
-One logger, one call shape. Everything here is enforced by `eslint.config.mjs` — the rules are named at the end of each section so a failing build points back to the reasoning.
+One logger, one call shape. Everything here is enforced by `eslint.config.mjs` — the rules are named at the end of each section so a failing build points back to the reasoning. Paths are relative to `apps/api/`.
 
 ## The call shape
 

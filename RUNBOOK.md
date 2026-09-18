@@ -4,7 +4,7 @@ Procedures an operator needs that the code cannot express on its own. Everything
 
 Conventions used below:
 
-- **local** — a developer machine with the repo, `npm ci` done, and `.env` pointing at the target.
+- **local** — a developer machine with the repo, `pnpm install` and `pnpm dev:link-env` done, and `.env` pointing at the target. Arguments go without `--` (`pnpm queue:replay-dlq --apply`): pnpm forwards a literal `--` to the command.
 - **container** — a shell inside the deployed image (`railway ssh --service "$RAILWAY_SERVICE"`), where `dist/` exists and `devDependencies` (including `tsx`) do **not**.
 
 ---
@@ -20,6 +20,7 @@ Conventions used below:
 - [Retention sweeps](#retention-sweeps)
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
+- [Change Railway service config](#change-railway-service-config)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -30,7 +31,7 @@ Conventions used below:
 
 Every user-context id embeds a 12-bit routing bucket derived by HMAC from the account's normalized email, under this key. The bucket is what a future `users` shard split routes on. Rotating the key does not invalidate anything visibly — it mints *new* ids into buckets their emails no longer hash to, and nothing reads a bucket until the split. The damage would surface years after the key that caused it was lost.
 
-The application defends this on every boot, in two layers (`src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
+The application defends this on every boot, in two layers (`apps/api/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use the same wrong key).
 2. **Key pin** — a fingerprint of the key stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. Runs *after* the canary on purpose: the pin **writes**, so pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
@@ -104,10 +105,10 @@ Consequences to plan for:
 
 ```bash
 # local — requires SEARCH_ENABLED=true, SEARCH_URL and (if the engine is keyed) SEARCH_API_KEY
-npm run search:reindex
+pnpm search:reindex
 
 # drop the index and rebuild it from scratch (schema/settings changes)
-npm run search:reindex -- --reset
+pnpm search:reindex --reset
 ```
 
 The command boots a **minimal** Nest context — config + database + the search adapter only — so no queue consumers or scheduled sweeps run for its lifetime.
@@ -124,10 +125,10 @@ Stores that must agree and cannot all be kept in one transaction. Three ways the
 
 ```bash
 # local — needs DATABASE_URL and the four STORAGE_* settings
-npm run storage:verify
+pnpm storage:verify
 
 # narrow the scan
-npm run storage:verify -- --prefix media/ --limit 5000
+pnpm storage:verify --prefix media/ --limit 5000
 
 # container — the compiled twin, since `tsx` is a devDependency and is not installed there
 npm run storage:verify:prod
@@ -201,10 +202,10 @@ What replay **cannot** fix in any case is the reason the message failed. Each li
 
 ```bash
 # local — dry run is the default, because this puts real traffic back on a live queue
-npm run queue:replay-dlq
-npm run queue:replay-dlq -- --apply
-npm run queue:replay-dlq -- --apply --limit 20
-npm run queue:replay-dlq -- --apply --force   # past the retention horizon; read above first
+pnpm queue:replay-dlq
+pnpm queue:replay-dlq --apply
+pnpm queue:replay-dlq --apply --limit 20
+pnpm queue:replay-dlq --apply --force   # past the retention horizon; read above first
 ```
 
 ```bash
@@ -344,13 +345,33 @@ npm run db:migrate:prod
 ```
 
 ```bash
-# local — drizzle-kit, reads drizzle.config.ts
-npm run db:migrate
+# local — drizzle-kit, reads apps/api/drizzle.config.ts
+pnpm db:migrate
 ```
 
 The compiled CLI fails loudly if its migrations directory resolves to a readable but wrong path: a directory with zero `.sql` files would otherwise make drizzle report "nothing pending" and exit 0 — a green deploy onto an empty schema. In the image `MIGRATIONS_DIR=/app/migrations`, absolute because the image ships no `src/` tree.
 
 **Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why there is a single deployable service.
+
+---
+
+## Change Railway service config
+
+`.railway/railway.ts` owns the service's build and deploy settings and the **names** of its variables; values stay in Railway (`preserve()`). CD runs `railway config apply --yes` before every deploy, so:
+
+- **Settings** (healthcheck, pre-deploy command, overlap, replicas) change only in that file. A dashboard edit is reverted by the next deploy.
+- **New variable**: add its name to `API_VARIABLES` in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the apply into a delete, which CD refuses: the deploy stops at "Apply Railway config". This includes one set by hand during an incident.
+- **Removing a variable** is the one destructive path. Drop the name and merge. CD then stops at the apply. From an up-to-date `main`, run:
+
+```bash
+# local, after `railway link` to the production service
+railway config plan                          # the only destroy must be that variable
+railway config apply --confirm-destructive
+```
+
+Then re-run the failed CD job.
+
+Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs.
 
 ---
 
@@ -360,4 +381,4 @@ Anything here that suppresses a gate must carry an expiry date and an owner. An 
 
 | Gate | Exception | Expires | Reason |
 | ---- | --------- | ------- | ------ |
-| — | none | — | `npm audit --omit=dev --audit-level=high` is clean as of 2026-09-07 |
+| — | none | — | `pnpm audit --prod --audit-level high` is clean as of 2026-09-18 |

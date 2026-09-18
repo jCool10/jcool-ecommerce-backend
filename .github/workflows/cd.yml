@@ -28,13 +28,15 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     environment: production
+    # RAILWAY_TOKEN is scoped to the steps that call Railway, so install scripts never see it.
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
       RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT || 'production' }}
       APP_PUBLIC_URL: ${{ vars.APP_PUBLIC_URL }}
     steps:
       - name: Check deploy configuration
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           missing=()
           [ -n "$RAILWAY_TOKEN" ] || missing+=("secrets.RAILWAY_TOKEN")
@@ -51,14 +53,40 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       # Pinned: an unattended deploy should not pick up CLI behaviour changes on its own.
-      - run: npm install -g @railway/cli@5.49.2
+      - run: npm install -g @railway/cli@5.49.6
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # the Railway SDK needs node >=22
+          cache: pnpm
+      # Root only: .railway/railway.ts imports the Railway SDK; the app itself is built by Railway.
+      - run: pnpm install --frozen-lockfile --filter .
+
+      # Without --confirm-destructive, a plan that would delete a resource or variable is refused, so
+      # a variable missing from .railway/railway.ts stops the deploy instead of being wiped.
+      - name: Apply Railway config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway config apply --yes
+
+      # Exit 2 means something is still pending: the apply did not land (token scope, staged
+      # changes), and `railway up` would deploy on the old settings.
+      - name: Verify Railway config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway config plan --detailed-exit-code
 
       # `--ci` returns once the image is built. The pre-deploy migration and the /health/ready gate
       # both run after that, so a green step here is not yet a live deploy — the next step is.
       - name: Upload and build
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: railway up --ci --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
 
       - name: Wait for the rollout to finish
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           set -euo pipefail
           deadline=$(( $(date +%s) + 900 ))

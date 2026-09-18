@@ -22,7 +22,7 @@ These exist in the working tree and are deliberately not committed or cited as c
 - `plans/` — plans, phase files and audit reports. Stateful records of a decision at a point in time; a completed phase does not make one evergreen.
 - `docs/test-dedup-backlog.md` — a stateful audit residue whose source reports no longer exist. The one durable rule it carried is recorded in [`engineering-rules.md`](./engineering-rules.md) under *Tests*.
 - `docs/interview-*` and rendered `*.html` — personal study artifacts, unrelated to the service.
-- `libs/` and `.nx/` — empty scaffolding from an extraction that was never carried out. `src/` is the only source tree; the build, the path aliases in `tsconfig.json` and the architecture rules all target it.
+- `libs/` and `.nx/` — empty scaffolding from an extraction that was never carried out. `apps/api/src/` is the only source tree; the build, the path aliases in `apps/api/tsconfig.json` and the architecture rules all target it.
 
 ## Adding a document
 

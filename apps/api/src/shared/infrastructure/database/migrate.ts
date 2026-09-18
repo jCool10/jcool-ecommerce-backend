@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
-// The default stays CWD-relative, which is what the repo root gives the test harness and
+// The default stays CWD-relative, which is what the app directory gives the test harness and
 // drizzle-kit; the production image has no `src/` tree and sets MIGRATIONS_DIR to an absolute path.
 // An env override rather than a directory expression: this file compiles to CJS for the app but is
 // transformed to ESM under vitest, so neither __dirname nor import.meta works in both.

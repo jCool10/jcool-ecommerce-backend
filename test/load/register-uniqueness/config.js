@@ -15,7 +15,7 @@ export const JSON_HDR = { 'Content-Type': 'application/json' };
 // Passes the register DTO (email + password, min length 8).
 export const PW = __ENV.PW || 'correct horse battery staple';
 
-// Must match the seeder (scripts/seed-users-bulk.ts): the duplicate mix and the
+// Must match the seeder (apps/api/scripts/seed-users-bulk.ts): the duplicate mix and the
 // write mix's duplicate fraction target these pre-seeded rows to force 409s.
 export const SEED_PREFIX = __ENV.SEED_PREFIX || 'loadtest+';
 export const SEED_DOMAIN = __ENV.SEED_DOMAIN || 'loadtest.jcool.local';

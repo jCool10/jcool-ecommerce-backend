@@ -3,10 +3,10 @@
 //
 // Preconditions common to every experiment here (same as k6/baseline.js):
 //   - stack up:  docker compose --profile observability up -d
-//   - catalog seeded at perf scale:  npm run db:seed:perf  (scripts/perf-seed.ts)
+//   - catalog seeded at perf scale:  pnpm db:seed:perf  (apps/api/scripts/perf-seed.ts)
 //   - THROTTLE_ENABLED=false — every measured route is throttled otherwise:
 //     /auth/* at 20 req/60s per IP with a FIVE-MINUTE block once tripped, and POST /orders
-//     at 10 req/60s PER USER (src/shared/infrastructure/throttler/throttler.constants.ts:24-45).
+//     at 10 req/60s PER USER (apps/api/src/shared/infrastructure/throttler/throttler.constants.ts:24-45).
 //     A 429 is rejected in a guard, ahead of the RED interceptor, so the run would look green
 //     and fast while measuring the rate limiter. In a split topology set it on the auth service
 //     too — that is the one a load script hits first, in setup(), before anything is measured.
@@ -29,7 +29,7 @@ export const JSON_HDR = { 'Content-Type': 'application/json' };
 export const AUTH_BASE = __ENV.AUTH_BASE_URL || BASE;
 
 // Throwaway credential for accounts these scripts create in a load database. Same policy as
-// scripts/perf-seed.ts:38-40 — overridable from the environment, and the committed default is
+// apps/api/scripts/perf-seed.ts:38-40 — overridable from the environment, and the committed default is
 // self-evidently not a real secret. Passes the register DTO (min length 8).
 export const LOAD_PASSWORD = __ENV.LOAD_PASSWORD || 'load-test-not-a-real-secret';
 
