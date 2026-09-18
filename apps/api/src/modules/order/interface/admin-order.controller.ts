@@ -11,8 +11,8 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { ORDER_THROTTLE, UserThrottlerGuard } from '@shared/infrastructure/throttler';
-import { Role, Roles } from '@shared/rbac';
+import { ORDER_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
+import { Role, Roles } from '@jcool/platform/rbac';
 import { CancelOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
 import { ListAdminOrdersQueryDto } from './dto/list-orders-query.dto';

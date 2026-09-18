@@ -1,6 +1,6 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
+import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import {
   EMAIL_VERIFICATION_TOKEN_REPOSITORY,
   PASSWORD_RESET_TOKEN_REPOSITORY,

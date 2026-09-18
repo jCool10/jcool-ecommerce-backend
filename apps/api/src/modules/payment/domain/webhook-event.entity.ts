@@ -1,4 +1,4 @@
-import { assertNonEmpty } from '@shared/kernel';
+import { assertNonEmpty } from '@jcool/kernel';
 import { WebhookEventStatus } from './webhook-event-status';
 
 /**

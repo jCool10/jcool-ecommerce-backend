@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OrderStatus } from '../../domain/order-status';
 import type { Order } from '../../domain/order.entity';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
-import { useFakeClock } from '@shared/testing/fake-clock';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { useFakeClock } from '@jcool/testing/fake-clock';
 import type { ExpiredHold, InventoryReservationPort } from '../ports/inventory-reservation.port';
 import type { FinalizeOrderUseCase } from './finalize-order.use-case';
 import type { FinalizeResult } from './finalize-order.types';

@@ -1,4 +1,4 @@
-import { assertInteger, assertNonEmpty, assertPositive, DomainError, Money } from '@shared/kernel';
+import { assertInteger, assertNonEmpty, assertPositive, DomainError, Money } from '@jcool/kernel';
 
 /**
  * A price SNAPSHOT: unlike a cart line, which carries only { skuId, quantity } and reads price live,

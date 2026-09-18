@@ -25,7 +25,7 @@ export default defineConfig({
       // of raw pools — comfortably inside the container's max_connections=300. Capping it lower
       // starves the 12-16 contender races, which serialize on a stock row lock while each in-flight
       // request holds a pool client: once the queue outlives `DB_POOL_CONNECTION_TIMEOUT_MS`
-      // (5000ms, configuration.ts:75) the acquire throws and the request 500s, breaking the
+      // (5000ms default, @jcool/platform database.config) the acquire throws and the request 500s, breaking the
       // "every non-winner answered a clean 409, none errored" assertions.
       DB_POOL_MAX: '10',
     },
@@ -36,6 +36,8 @@ export default defineConfig({
       '@shared': fileURLToPath(new URL('../src/shared', import.meta.url)),
       '@': fileURLToPath(new URL('../src', import.meta.url)),
     },
+    // Same reason as the unit config: one instance of every workspace package, the native one.
+    server: { deps: { external: [/\/packages\/[^/]+\/dist\//] } },
     // Boot Postgres + Redis containers once per run and migrate; connection URLs
     // reach tests via provide()/inject() (globalSetup runs in its own process).
     globalSetup: ['./test/setup/global-setup.ts'],

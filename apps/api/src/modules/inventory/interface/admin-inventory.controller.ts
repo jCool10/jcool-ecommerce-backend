@@ -10,7 +10,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Role, Roles } from '@shared/rbac';
+import { Role, Roles } from '@jcool/platform/rbac';
 import { AdjustStockUseCase } from '../application/adjust-stock.use-case';
 import { AdjustStockDto, SetStockDto, StockLevelResponseDto } from './dto';
 

@@ -1,9 +1,9 @@
 import { inspect } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MailMessage } from '@shared/mail/mail-transport.port';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import type { MailMessage } from '@jcool/platform/mail';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { MailerAdapter } from './mailer.adapter';
 
 const TOKEN = 'tok en/+raw';

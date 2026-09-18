@@ -1,4 +1,4 @@
-import { assertInteger, assertNonEmpty, assertPositive } from '@shared/kernel';
+import { assertInteger, assertNonEmpty, assertPositive } from '@jcool/kernel';
 
 // `skuId` is a product-variant id.
 export class CartItem {

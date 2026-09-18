@@ -1,4 +1,4 @@
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import type { SessionEpochPort, TokenDenylistPort } from '../../application/ports';
 import { JwtStrategy } from './jwt.strategy';
 

@@ -1,6 +1,6 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
+import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { IDEMPOTENCY_STORE, type IdempotencyStorePort } from '../ports/idempotency-store.port';
 
 /**

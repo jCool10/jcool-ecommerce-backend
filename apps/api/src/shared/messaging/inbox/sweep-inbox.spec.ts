@@ -1,7 +1,7 @@
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database';
-import { RetentionSweepRegistry } from '@shared/retention';
+import { RetentionSweepRegistry } from '@jcool/platform/retention';
 import { MIN_INBOX_RETENTION_DAYS } from '../queue/queue.constants';
 import { SweepInbox } from './sweep-inbox';
 

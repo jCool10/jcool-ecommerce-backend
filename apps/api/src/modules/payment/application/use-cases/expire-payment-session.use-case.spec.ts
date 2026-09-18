@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { PaymentStatus } from '../../domain/payment-status';
 import { Payment } from '../../domain/payment.entity';
 import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';

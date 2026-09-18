@@ -7,7 +7,7 @@ import { CATALOG_CACHE_VERSION_KEY } from '../../src/modules/catalog/infrastruct
 import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
 import { CacheService } from '../../src/shared/cache';
 import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { RedisService } from '@jcool/platform/redis';
 import { authHeader } from '../setup/auth.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdmin } from '../setup/fixtures/user.fixture';

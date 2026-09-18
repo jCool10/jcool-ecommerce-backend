@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { ReserveStockUseCase } from './reserve-stock.use-case';
 
 const TX = {} as unknown as DrizzleTx;

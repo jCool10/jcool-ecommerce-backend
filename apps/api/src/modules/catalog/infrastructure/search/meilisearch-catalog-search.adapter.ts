@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Meilisearch, type Index } from 'meilisearch';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 import type {
   CatalogSearchPort,
   SearchCriteria,

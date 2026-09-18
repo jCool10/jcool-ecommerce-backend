@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { RedisService } from '@jcool/platform/redis';
 import {
   buildJobOptions,
   DOMAIN_EVENTS_QUEUE,

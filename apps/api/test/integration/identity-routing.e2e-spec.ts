@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { bucketOf } from '../../src/shared/identity';
+import { bucketOf } from '@jcool/id-codec';
 import { loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';

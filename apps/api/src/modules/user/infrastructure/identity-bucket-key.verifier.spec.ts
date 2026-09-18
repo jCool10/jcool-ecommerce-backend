@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { bucketForEmail, encode, identityKeyFingerprint } from '@shared/identity';
+import { bucketForEmail, encode, identityKeyFingerprint } from '@jcool/id-codec';
 import type { DrizzleDB } from '@shared/infrastructure/database';
-import { normalizeEmail } from '@shared/kernel';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { normalizeEmail } from '@jcool/kernel';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { IdentityBucketKeyVerifier } from './identity-bucket-key.verifier';
 import { identityKeyPin } from './schema/user.schema';
 

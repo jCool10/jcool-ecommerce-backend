@@ -1,4 +1,4 @@
-import { ValueObject, DomainError, type NormalizedEmail, normalizeEmail } from '@shared/kernel';
+import { ValueObject, DomainError, type NormalizedEmail, normalizeEmail } from '@jcool/kernel';
 
 interface EmailProps {
   value: NormalizedEmail;

@@ -19,7 +19,7 @@ module.exports = {
       name: 'domain-is-pure',
       severity: 'error',
       comment:
-        'The domain layer must not depend on frameworks, the DB, or outer layers. It may use shared/kernel and shared/rbac (pure).',
+        'The domain layer must not depend on frameworks, the DB, or outer layers. It may use @jcool/kernel, and types such as Role from @jcool/platform/rbac.',
       from: { path: '^src/modules/[^/]+/domain/' },
       to: {
         path: 'node_modules/(@nestjs|drizzle-orm|pg)/|^src/modules/[^/]+/(application|infrastructure|interface)/',
@@ -37,11 +37,10 @@ module.exports = {
       name: 'app-domain-telemetry-free',
       severity: 'error',
       comment:
-        'domain/application stay telemetry-free: no OTel/pino/prom-client/Sentry, and observability only through the pure metrics port. The shared/observability barrel now transitively pulls @opentelemetry/api, so this keeps a stray `withSpan`/logger/captureException import from leaking telemetry into the core.',
+        'domain/application stay telemetry-free: no OTel/pino/prom-client/Sentry, and observability only through the pure metrics port. The @jcool/platform observability and metrics subpaths transitively pull @opentelemetry/api and prom-client, so this keeps a stray `withSpan`/logger/captureException import from leaking telemetry into the core.',
       from: { path: '^src/modules/[^/]+/(domain|application)/' },
       to: {
-        path: 'node_modules/(@opentelemetry|@sentry|pino|nestjs-pino|prom-client)/|^src/shared/observability/',
-        pathNot: '^src/shared/observability/metrics/metrics\\.port',
+        path: 'node_modules/(@opentelemetry|@sentry|pino|nestjs-pino|prom-client)/|^node_modules/@jcool/platform/dist/observability/',
       },
     },
     {
@@ -54,13 +53,6 @@ module.exports = {
         path: '^src/shared/messaging/',
         pathNot: '^src/shared/messaging/outbox/outbox-writer\\.port',
       },
-    },
-    {
-      name: 'kernel-pure',
-      severity: 'error',
-      comment: 'shared/kernel is the pure DDD building-block layer: it may import only itself.',
-      from: { path: '^src/shared/kernel/' },
-      to: { pathNot: '^src/shared/kernel/' },
     },
     {
       name: 'shared-no-module-internals',
@@ -93,13 +85,25 @@ module.exports = {
       },
       to: {},
     },
+    {
+      name: 'no-reach-outside-package',
+      severity: 'error',
+      comment: 'Another package or app is reached through its published name, never a relative path out of this one.',
+      from: {},
+      to: { path: '^\\.\\./' },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },
+    // Keeps workspace links under node_modules/@jcool, so only a genuine escape resolves to ../
+    preserveSymlinks: true,
+    // Workspace packages publish only `exports`, keyed on `default`, which the resolver skips unless named.
+    enhancedResolveOptions: { exportsFields: ['exports'], conditionNames: ['require', 'node', 'default'] },
     tsConfig: { fileName: './tsconfig.json' },
     tsPreCompilationDeps: true,
     exclude: {
-      path: 'node_modules|^src/shared/infrastructure/database/migrations/',
+      // @jcool packages stay in the graph so rules can match edges into them.
+      path: 'node_modules/(?!@jcool/)|^src/shared/infrastructure/database/migrations/',
     },
   },
 };

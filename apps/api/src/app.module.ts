@@ -5,14 +5,15 @@ import { SentryModule } from '@sentry/nestjs/setup';
 import { ClsModule } from 'nestjs-cls';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
-import { RedisModule } from '@shared/infrastructure/redis';
+import * as schema from '@shared/infrastructure/database/schema';
+import { RedisModule } from '@jcool/platform/redis';
 import { MessagingModule } from '@shared/messaging';
-import { RetentionModule } from '@shared/retention';
-import { ThrottlerSecurityModule } from '@shared/infrastructure/throttler';
-import { HealthModule } from '@shared/health';
-import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } from '@shared/observability';
-import { MetricsModule } from '@shared/observability/metrics/metrics.module';
-import { HttpExceptionFilter } from '@shared/interface/filters/http-exception.filter';
+import { RetentionModule } from '@jcool/platform/retention';
+import { ThrottlerSecurityModule } from '@jcool/platform/throttler';
+import { HealthModule } from '@jcool/platform/health';
+import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } from '@jcool/platform/observability';
+import { MetricsModule } from '@jcool/platform/metrics';
+import { HttpExceptionFilter } from '@jcool/platform/interface';
 import { DebugController } from '@shared/interface/controllers/debug.controller';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { CartModule } from '@modules/cart/cart.module';
@@ -33,7 +34,7 @@ import { AuthModule } from '@modules/user/auth.module';
     ObservabilityLoggerModule,
     MetricsModule,
     SentryModule.forRoot(),
-    DrizzleModule,
+    DrizzleModule.forRoot({ schema }),
     RedisModule,
     // @Global, so position is readability only: a complete sweep roster is guaranteed by
     // registration happening in onModuleInit while the scheduler waits for onApplicationBootstrap.

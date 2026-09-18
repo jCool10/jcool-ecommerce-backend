@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, InternalServerErrorException } 
 import type { ClsService } from 'nestjs-cls';
 import { describe, expect, it, vi } from 'vitest';
 import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
+import type { MetricsPort } from '@jcool/metrics-port';
 import type { OutboxRecord, OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { Order } from '../../domain/order.entity';

@@ -1,4 +1,4 @@
-import type { DomainEvent } from '@shared/kernel';
+import type { DomainEvent } from '@jcool/kernel';
 
 /** `paymentRef` is null when the outcome carried no gateway handle — the sweep can confirm PAID without echoing one. */
 export class OrderPaidEvent implements DomainEvent {

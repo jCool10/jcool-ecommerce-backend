@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import type {
   AuthAuditPort,
   AuthAuditRecord,

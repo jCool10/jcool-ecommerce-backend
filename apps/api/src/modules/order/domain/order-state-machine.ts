@@ -1,4 +1,4 @@
-import { DomainError } from '@shared/kernel';
+import { DomainError } from '@jcool/kernel';
 import { OrderStatus } from './order-status';
 
 /**

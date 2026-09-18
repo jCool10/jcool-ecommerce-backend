@@ -1,4 +1,4 @@
-import { DomainError } from '@shared/kernel';
+import { DomainError } from '@jcool/kernel';
 
 /**
  * The SKU still has stock but writers are contending. Distinct from InsufficientStockError so the

@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiNotFoundResponse, ApiOkResponse, ApiParam, ApiTags } from '@nestjs/swagger';
-import { Public } from '@shared/rbac';
+import { Public } from '@jcool/platform/rbac';
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from '../application/use-cases';
 import {
   ListProductsQueryDto,

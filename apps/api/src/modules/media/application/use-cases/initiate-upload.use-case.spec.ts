@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectStoragePort } from '@shared/infrastructure/storage';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { UnsupportedContentTypeError } from '../../domain/asset-content-type';
 import type { MediaAsset } from '../../domain/media-asset.entity';
 import type { MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';

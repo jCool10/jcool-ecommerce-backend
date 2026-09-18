@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
-import { toError } from '@shared/kernel/to-error';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { toError } from '@jcool/kernel';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { mapPaymentToOrderOutcome } from '../mappers/map-payment-to-order-outcome';
 import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';

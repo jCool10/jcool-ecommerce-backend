@@ -1,4 +1,4 @@
-import { assertInteger, assertNonEmpty } from '@shared/kernel';
+import { assertInteger, assertNonEmpty } from '@jcool/kernel';
 import { InsufficientStockError } from './errors/insufficient-stock.error';
 
 /**

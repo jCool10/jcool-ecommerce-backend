@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { injectTraceContext } from '@shared/observability/tracing/propagation';
+import { injectTraceContext } from '@jcool/platform/observability';
 import type { OutboxRecord, OutboxWriterPort } from './outbox-writer.port';
 import { outbox } from './schema/outbox.schema';
 

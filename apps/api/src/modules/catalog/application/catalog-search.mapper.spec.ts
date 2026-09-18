@@ -1,4 +1,4 @@
-import { Money } from '@shared/kernel';
+import { Money } from '@jcool/kernel';
 import { Product, type ProductVariant } from '../domain/entities';
 import { toSearchableProduct } from './catalog-search.mapper';
 

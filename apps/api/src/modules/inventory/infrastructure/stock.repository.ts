@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, eq, lt, sql } from 'drizzle-orm';
-import { durationToMs } from '@shared/kernel';
+import { durationToMs } from '@jcool/kernel';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';

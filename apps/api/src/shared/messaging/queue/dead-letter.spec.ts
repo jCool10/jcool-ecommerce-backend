@@ -1,7 +1,7 @@
 import type { Job, Queue } from 'bullmq';
 import { describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import type { MetricsPort } from '@jcool/metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { PermanentError, UnhandledEventError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';

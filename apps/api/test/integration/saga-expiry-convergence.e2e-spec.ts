@@ -16,7 +16,7 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
 import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
-import { METRICS, type MetricsPort } from '../../src/shared/observability/metrics/metrics.port';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import {
   placeAndOpenSession,
   postWebhook,

@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RedisService } from '@shared/infrastructure/redis';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import type { RedisService } from '@jcool/platform/redis';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { SingleFlightLock } from './single-flight.lock';
 
 const DOWN = new Error("Stream isn't writeable and enableOfflineQueue options is false");

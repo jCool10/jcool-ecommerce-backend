@@ -19,7 +19,7 @@ import type {
   ResendVerificationUseCase,
 } from '../application/use-cases';
 import { AuthController } from './auth.controller';
-import type { AuthenticatedUser } from '@shared/rbac';
+import type { AuthenticatedUser } from '@jcool/platform/rbac';
 import type { AuthCookieService } from './security';
 
 class MockAudit implements AuthAuditPort {

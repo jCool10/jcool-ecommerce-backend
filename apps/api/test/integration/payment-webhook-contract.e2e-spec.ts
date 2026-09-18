@@ -156,7 +156,7 @@ describe('Payment webhook contract at the edges (integration, real Postgres, rea
   //   `webhook_events` unique index then makes the gateway's redelivery a `duplicate` that re-reads
   //   nothing. The event is burnt: the money is settled at the gateway and PENDING here, and the only
   //   remaining path is the reconcile poll, which by default will not look at the order for
-  //   ORDER_STALE_THRESHOLD_SEC (configuration.ts:172, 120s) — long after the gateway's own retry.
+  //   ORDER_STALE_THRESHOLD_SEC (configuration.ts, 120s) — long after the gateway's own retry.
   // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — WH-2.
   it('burns a settling event that overtakes the payment insert, leaving reconcile as the only way out', async () => {
     const token = await buyerWithCart(app, sku.variantId, 1);

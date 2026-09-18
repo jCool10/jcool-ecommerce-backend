@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import type { DrizzleTx } from '@shared/infrastructure/database';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from '../ports/payment-gateway.port';
 import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';

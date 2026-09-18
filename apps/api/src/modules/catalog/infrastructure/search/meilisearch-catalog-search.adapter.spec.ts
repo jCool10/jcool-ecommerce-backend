@@ -1,7 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { SearchableProduct } from '../../application/ports';
 import { PRODUCTS_INDEX_SETTINGS, SEARCH_MAX_TOTAL_HITS } from './index-settings';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';

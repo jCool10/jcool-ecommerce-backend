@@ -1,4 +1,4 @@
-import { Money } from '@shared/kernel';
+import { Money } from '@jcool/kernel';
 import { CartItem } from './cart-item.entity';
 
 export class Cart {

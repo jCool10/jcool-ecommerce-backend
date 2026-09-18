@@ -1,7 +1,7 @@
 import type { ClsService } from 'nestjs-cls';
 import { describe, expect, it, vi } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { DeadLetterRouter } from './dead-letter';
 import type { DomainEventProcessor } from './domain-event.processor';
 import { DomainEventsWorker } from './domain-events.worker';

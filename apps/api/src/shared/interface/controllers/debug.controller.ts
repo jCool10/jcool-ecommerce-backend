@@ -1,8 +1,8 @@
 import { Controller, Get, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
-import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@shared/infrastructure/throttler';
-import { Public } from '@shared/rbac';
+import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@jcool/platform/throttler';
+import { Public } from '@jcool/platform/rbac';
 
 /**
  * Intentional-error endpoint that exercises the error pipeline end to end: exception filter →

@@ -1,32 +1,19 @@
-import { plainToInstance, Type } from 'class-transformer';
-import {
-  IsBooleanString,
-  IsEnum,
-  IsInt,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  Max,
-  Min,
-  MinLength,
-  validateSync,
-} from 'class-validator';
-import { MIN_BUCKET_KEY_LENGTH } from '@shared/identity/email-bucket';
+import { Type } from 'class-transformer';
+import { IsBooleanString, IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { MIN_BUCKET_KEY_LENGTH } from '@jcool/id-codec';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
-
-export enum NodeEnv {
-  Development = 'development',
-  Test = 'test',
-  Production = 'production',
-}
-
-export enum LogLevel {
-  Trace = 'trace',
-  Debug = 'debug',
-  Info = 'info',
-  Warn = 'warn',
-  Error = 'error',
-}
+import {
+  AppEnv,
+  DatabaseEnv,
+  EmptyEnv,
+  MailEnv,
+  ObservabilityEnv,
+  RedisEnv,
+  ResilienceEnv,
+  RetentionEnv,
+  ThrottleEnv,
+  validateEnv,
+} from '@jcool/platform/config';
 
 export enum InventoryLockStrategy {
   Pessimistic = 'pessimistic',
@@ -39,59 +26,13 @@ export enum PaymentProvider {
   Stripe = 'stripe',
 }
 
+const PlatformEnv = RetentionEnv(
+  MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
+);
+
 /** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS. */
-export class EnvironmentVariables {
-  @IsEnum(NodeEnv)
-  NODE_ENV!: NodeEnv;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(65535)
-  PORT?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  SHUTDOWN_GRACE_PERIOD_MS?: number;
-
-  @IsString()
-  @IsNotEmpty()
-  DATABASE_URL!: string;
-
-  // The production image sets this because it ships migrations/ without the src/ tree. Read by the
-  // migrate CLI outside Nest, declared here so a blank value fails the boot.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  MIGRATIONS_DIR?: string;
-
-  // The timeouts allow 0, which opts back into pg's native behaviour (wait forever / never reap idle).
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  DB_POOL_MAX?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  DB_POOL_CONNECTION_TIMEOUT_MS?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  DB_POOL_IDLE_TIMEOUT_MS?: number;
-
-  @IsString()
-  @IsNotEmpty()
-  REDIS_URL!: string;
-
+export class EnvironmentVariables extends PlatformEnv {
   // @IsNotEmpty because a blank prefix would silently produce a different, colliding key layout
   // rather than falling back to the default.
   @IsOptional()
@@ -153,67 +94,6 @@ export class EnvironmentVariables {
 
   @IsOptional()
   @IsBooleanString()
-  SWAGGER_ENABLED?: string;
-
-  @IsOptional()
-  @IsEnum(LogLevel)
-  LOG_LEVEL?: LogLevel;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  METRICS_TOKEN?: string;
-
-  // The OTel SDK (instrumentation.ts) starts only when this is "true".
-  @IsOptional()
-  @IsBooleanString()
-  OTEL_ENABLED?: string;
-
-  // service.name on every span; read in instrumentation.ts, declared here so a bad value fails boot.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  OTEL_SERVICE_NAME?: string;
-
-  // Base endpoint of the Collector; the traces path (/v1/traces) is appended to it.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  OTEL_EXPORTER_OTLP_ENDPOINT?: string;
-
-  // Unset (dev/test) → the SDK never initializes and captureException is a silent no-op. Read in
-  // instrumentation.ts; declared here so a blank value fails boot.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  SENTRY_DSN?: string;
-
-  // Plain string, not @IsUrl, so localhost and other non-TLD hosts validate.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  APP_PUBLIC_URL?: string;
-
-  @IsOptional()
-  @IsBooleanString()
-  COOKIE_SECURE?: string;
-
-  @IsOptional()
-  @IsString()
-  CORS_ORIGINS?: string;
-
-  // A hop count, a subnet/CSV, or "true"/"false".
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  TRUST_PROXY?: string;
-
-  @IsOptional()
-  @IsBooleanString()
-  THROTTLE_ENABLED?: string;
-
-  @IsOptional()
-  @IsBooleanString()
   RECONCILE_ENABLED?: string;
 
   // Min 1000 so a typo can't turn the sweep into a busy loop hammering the payment gateway.
@@ -269,33 +149,6 @@ export class EnvironmentVariables {
   @IsInt()
   @Min(0)
   RESERVATION_SWEEP_GRACE_SEC?: number;
-
-  @IsOptional()
-  @IsBooleanString()
-  RETENTION_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn hourly housekeeping into a loop issuing DELETEs as fast as the
-  // pool allows.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1000)
-  RETENTION_INTERVAL_MS?: number;
-
-  // Capped because a larger batch holds row locks on a table the request path is writing to for
-  // proportionally longer.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(10_000)
-  RETENTION_BATCH_SIZE?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(100)
-  RETENTION_SWEEP_TIMEOUT_MS?: number;
 
   // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
@@ -464,50 +317,6 @@ export class EnvironmentVariables {
   MEDIA_MAX_BYTES?: number;
 
   @IsOptional()
-  @IsBooleanString()
-  BREAKER_ENABLED?: string;
-
-  // Min 100 so a typo cannot make every call time out before the downstream can possibly answer.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(100)
-  BREAKER_TIMEOUT_MS?: number;
-
-  // The share is compared strictly, so 100 never opens however many calls fail — capped at 99 so a
-  // breaker that reads as configured cannot in fact be switched off. At the low end 1 opens on the
-  // first failure once the window holds enough calls to count.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(99)
-  BREAKER_ERROR_THRESHOLD_PCT?: number;
-
-  // Min 100 keeps the open state from being so brief it never sheds any load.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(100)
-  BREAKER_RESET_TIMEOUT_MS?: number;
-
-  // Min 1000 — a window shorter than the calls it counts would forget each failure before the next
-  // arrives.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1000)
-  BREAKER_ROLLING_WINDOW_MS?: number;
-
-  // 0 and 1 behave identically — one failure is then the whole window — so the floor only rules out
-  // the value that reads as "no gate at all".
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  BREAKER_VOLUME_THRESHOLD?: number;
-
-  @IsOptional()
   @IsEnum(InventoryLockStrategy)
   INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
 
@@ -596,27 +405,6 @@ export class EnvironmentVariables {
   @IsBooleanString()
   AUTH_REQUIRE_VERIFIED_EMAIL?: string;
 
-  // Connection URL (smtp://user:pass@host:587).
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  SMTP_URL?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  MAIL_FROM?: string;
-
-  // Capped below BullMQ's 30s job lock, which the order-confirmation send runs inside: past that the
-  // queue reclaims the job mid-send, and the original delivery — already applied, already sent —
-  // finishes without its lock and is filed as a dead letter.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(100)
-  @Max(25_000)
-  MAIL_TIMEOUT_MS?: number;
-
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -637,21 +425,5 @@ export class EnvironmentVariables {
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {
-  const validated = plainToInstance(EnvironmentVariables, config, {
-    enableImplicitConversion: false,
-  });
-
-  const errors = validateSync(validated, { skipMissingProperties: false });
-
-  if (errors.length > 0) {
-    const details = errors
-      .map((error) => {
-        const constraints = Object.values(error.constraints ?? {}).join(', ');
-        return `${error.property}: ${constraints}`;
-      })
-      .join('; ');
-    throw new Error(`Environment validation failed -> ${details}`);
-  }
-
-  return validated;
+  return validateEnv(EnvironmentVariables, config);
 }

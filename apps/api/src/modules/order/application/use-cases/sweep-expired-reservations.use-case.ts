@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { toError } from '@jcool/kernel';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OrderStatus } from '../../domain/order-status';
 import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/inventory-reservation.port';
 import { FinalizeOrderUseCase } from './finalize-order.use-case';

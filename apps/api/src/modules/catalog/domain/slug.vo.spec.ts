@@ -1,5 +1,5 @@
 import { Slug } from './slug.vo';
-import { DomainError } from '@shared/kernel';
+import { DomainError } from '@jcool/kernel';
 
 describe('Slug', () => {
   it('accepts a valid kebab slug', () => {

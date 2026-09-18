@@ -1,4 +1,4 @@
-import type { DomainEvent } from '@shared/kernel';
+import type { DomainEvent } from '@jcool/kernel';
 
 /** Same stock effect as FAILED, kept distinct so a consumer can tell a timeout from a rejection. */
 export class OrderExpiredEvent implements DomainEvent {

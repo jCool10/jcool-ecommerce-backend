@@ -1,8 +1,8 @@
 import { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { bucketForEmail, identityKeyFingerprint } from '../../src/shared/identity';
-import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
+import { bucketForEmail, identityKeyFingerprint } from '@jcool/id-codec';
+import { normalizeEmail } from '@jcool/kernel';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabaseBeforeEach } from '../setup/harness';
 import { E2E_IDENTITY_BUCKET_KEY, WRONG_IDENTITY_BUCKET_KEY } from '../setup/identity.helper';

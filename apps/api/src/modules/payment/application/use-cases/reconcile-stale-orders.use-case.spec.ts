@@ -1,5 +1,5 @@
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
-import { useFakeClock } from '@shared/testing/fake-clock';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { useFakeClock } from '@jcool/testing/fake-clock';
 import { describe, expect, it, vi } from 'vitest';
 import type { FinalizeOrderUseCase, FinalizeResult } from '@modules/order/application/public/order-finalization.port';
 import { Payment } from '../../domain/payment.entity';

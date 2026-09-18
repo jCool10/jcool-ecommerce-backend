@@ -1,4 +1,4 @@
-import { assertInteger, assertNonEmpty, assertPositive } from '@shared/kernel';
+import { assertInteger, assertNonEmpty, assertPositive } from '@jcool/kernel';
 import { ReservationStatus } from './reservation-status';
 
 // `expiresAt` marks when a TTL sweep may release an unpaid hold.

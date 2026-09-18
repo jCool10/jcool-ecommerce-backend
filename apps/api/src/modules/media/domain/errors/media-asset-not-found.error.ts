@@ -1,4 +1,4 @@
-import { DomainError } from '@shared/kernel';
+import { DomainError } from '@jcool/kernel';
 
 export class MediaAssetNotFoundError extends DomainError {
   constructor(readonly assetId: string) {

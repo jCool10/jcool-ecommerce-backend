@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 import type { User } from '../../domain/entities/user.entity';
 import { Email } from '../../domain';
 import { PASSWORD_HASHER, type PasswordHasherPort, USER_REPOSITORY, type UserRepositoryPort } from '../ports';

@@ -1,9 +1,9 @@
 import { context, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CacheService } from './cache.service';
 import type { SingleFlightLock } from './single-flight.lock';

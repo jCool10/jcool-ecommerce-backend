@@ -1,9 +1,9 @@
 import type { ClsService } from 'nestjs-cls';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { describe, expect, it, vi } from 'vitest';
-import { CircuitBreakerFactory, DownstreamUnavailableError, type OutboundCall } from '@shared/resilience';
+import { CircuitBreakerFactory, DownstreamUnavailableError, type OutboundCall } from '@jcool/platform/resilience';
 import {
   PaymentGatewayError,
   type GatewaySession,

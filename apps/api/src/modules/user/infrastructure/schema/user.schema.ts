@@ -3,7 +3,7 @@ import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid
 
 // Infrastructure only: nothing in the domain layer may import this file.
 
-// Matches the Role union (src/shared/rbac/role.enum.ts).
+// Matches the Role union (@jcool/platform/rbac).
 export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 
 // No default: every id here carries a routing bucket only the writer can compute, so a fallback

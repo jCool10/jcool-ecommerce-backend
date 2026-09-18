@@ -1,6 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
-import { Money } from '@shared/kernel';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { Money } from '@jcool/kernel';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { type Mock, vi } from 'vitest';
 import { Product } from '../../domain/entities';
 import type { AdminProduct, Category, Price, Sku } from '../../domain/entities';

@@ -4,7 +4,7 @@ import { count, eq } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 import type { Gauge } from 'prom-client';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 import { AssetStatus } from '../domain/asset-status';
 import { mediaAssets } from './schema/media.schema';
 

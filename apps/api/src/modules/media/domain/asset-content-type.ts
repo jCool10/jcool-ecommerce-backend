@@ -1,4 +1,4 @@
-import { DomainError } from '@shared/kernel';
+import { DomainError } from '@jcool/kernel';
 
 /**
  * An allowlist rather than a denylist, and raster formats only. `image/svg+xml` is excluded on

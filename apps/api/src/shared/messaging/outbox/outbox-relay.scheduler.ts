@@ -3,8 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
-import { runInJobContext } from '@shared/observability/correlation/job-context';
-import { toError } from '@shared/kernel/to-error';
+import { runInJobContext } from '@jcool/platform/observability';
+import { toError } from '@jcool/kernel';
 import { OutboxRelay } from './outbox-relay';
 
 const LOG_CONTEXT = 'OutboxRelayScheduler';

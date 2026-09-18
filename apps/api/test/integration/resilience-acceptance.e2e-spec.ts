@@ -4,9 +4,9 @@ import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
 import { PAYMENT_GATEWAY_BREAKER } from '../../src/modules/payment/infrastructure/gateway/breaker-payment-gateway.adapter';
-import { RedisService } from '../../src/shared/infrastructure/redis';
-import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '../../src/shared/infrastructure/throttler';
-import { CircuitBreakerFactory } from '../../src/shared/resilience';
+import { RedisService } from '@jcool/platform/redis';
+import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '@jcool/platform/throttler';
+import { CircuitBreakerFactory } from '@jcool/platform/resilience';
 import { authHeader } from '../setup/auth.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import {

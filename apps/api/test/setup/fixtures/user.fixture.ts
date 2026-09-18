@@ -9,8 +9,8 @@ import {
 } from '../../../src/modules/user/application/ports/user-repository.port';
 import { AuthTokensService } from '../../../src/modules/user/application/services/auth-tokens.service';
 import type { User } from '../../../src/modules/user/domain/entities/user.entity';
-import { normalizeEmail } from '../../../src/shared/kernel/normalize-email';
-import type { Role } from '../../../src/shared/rbac/role.enum';
+import { normalizeEmail } from '@jcool/kernel';
+import type { Role } from '@jcool/platform/rbac';
 
 let seq = 0;
 

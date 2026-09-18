@@ -1,4 +1,4 @@
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { Argon2PasswordHasher } from './argon2-password-hasher';
 
 // Real argon2 rather than a mock — the roundtrip is the point, and it stays fast at the low params below.

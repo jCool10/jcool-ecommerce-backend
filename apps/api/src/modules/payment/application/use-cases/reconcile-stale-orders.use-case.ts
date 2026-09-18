@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 import { PaymentStatus } from '../../domain/payment-status';
 import type { Payment } from '../../domain/payment.entity';
 import { ORDER_READ_PORT, type OrderReadPort, type StalePendingOrderView } from '../ports/order-read.port';

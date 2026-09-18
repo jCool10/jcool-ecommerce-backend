@@ -42,8 +42,8 @@ import {
 import { AuthController } from './interface/auth.controller';
 import { JwtAuthGuard } from './interface/guards/jwt-auth.guard';
 import { IdentityModule } from '@shared/identity/identity.module';
-import { MailModule } from '@shared/mail';
-import { RolesGuard } from '@shared/rbac';
+import { MailModule } from '@jcool/platform/mail';
+import { RolesGuard } from '@jcool/platform/rbac';
 import { AuthCookieService, CsrfGuard, CsrfTokenService } from './interface/security';
 import { JwtStrategy } from './interface/strategies/jwt.strategy';
 import { UserModule } from './user.module';

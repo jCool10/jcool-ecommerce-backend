@@ -141,7 +141,7 @@ Two composition roots are exempt from the "shared may not import a context" rule
 
 ### Project layout
 
-pnpm workspace, tasks run through Turborepo. The app is `apps/api` (`@jcool/api`); `packages/` holds shared workspace packages.
+pnpm workspace, tasks run through Turborepo. The app is `apps/api` (`@jcool/api`); `packages/` holds the code the future services share.
 
 ```
 apps/api/
@@ -152,25 +152,32 @@ apps/api/
 │   ├── modules/             # bounded contexts — each: domain / application / infrastructure / interface
 │   │   ├── cart/  catalog/  inventory/  media/  order/  payment/  user/
 │   └── shared/
-│       ├── kernel/          # framework-free DDD building blocks (Money, Entity, DomainError, Result)
-│       ├── config/          # env validation (fail-fast) + typed config factory
+│       ├── config/          # the api's env schema (platform fragments + its own keys) + config factory
 │       ├── messaging/       # outbox, relay, BullMQ queue, inbox, DLQ + replay CLI
-│       ├── observability/   # correlation, pino logging, OTel tracing, Prometheus metrics, Sentry
-│       ├── infrastructure/  # pg pool + Drizzle, Redis, object storage, throttler, migrations
+│       ├── infrastructure/  # Drizzle schema + migrations, the api's DrizzleDB alias, object storage
 │       ├── cache/           # stale-while-revalidate cache + single-flight rebuild lock
 │       ├── idempotency/     # request fingerprint + CLS carrier
-│       ├── identity/        # UUIDv8 generator/codec, HMAC email buckets
-│       ├── rbac/  health/  mail/  retention/  resilience/  interface/
+│       ├── identity/        # IdentityService: mints user-context ids with the node's generator
+│       └── interface/       # debug controller
 ├── test/
 │   ├── integration/         # 68 e2e suites on real infrastructure (Testcontainers)
 │   └── setup/               # global setup, app factory, fixtures, per-suite side containers
 └── scripts/                 # seeds, identity verification, DB metrics
-packages/                    # shared workspace packages
+packages/
+├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
+├── id-codec/                # @jcool/id-codec — UUIDv8 layout, HMAC email buckets
+├── id-generator/            # @jcool/id-generator — monotonic UUIDv8 generator, entropy pool, node ids
+├── metrics-port/            # @jcool/metrics-port — the metrics seam domain and application code depend on
+├── platform/                # @jcool/platform — Nest infrastructure: env fragments, pg + Drizzle, Redis, observability,
+│                            #   health, throttler, rbac, mail, resilience, retention; one subpath export each
+└── testing/                 # @jcool/testing — test doubles, source-only, dev dependency only
 test/load/  k6/              # k6 mixes
 infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector
 .railway/railway.ts          # Railway deploy config (infrastructure as code)
 turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflows/
 ```
+
+Packages compile to CommonJS `dist/` with `tsc` and are consumed the way production consumes them, tests included. Every Turborepo task depends on `^build`, so the packages are built first, in dependency order: `kernel` and `metrics-port`, then `id-codec`, then `id-generator`, then `platform`, then the api. `@jcool/testing` is never built. Scripts forwarded straight to the api (`start:dev`, `test:watch`, `db:*`, the CLIs) skip Turborepo and read the last build, so run `pnpm build` after changing a package. Nest, nestjs-pino, prom-client, ioredis and drizzle-orm are peer dependencies of `platform`. The lockfile resolves each to a single install shared by the app and the package, and `apps/api/src/platform-peer-dependencies.spec.ts` fails once the two manifests drift apart.
 
 ---
 
@@ -197,7 +204,7 @@ The parts worth reading the code for. Each row names the file to open.
 | **Sweeping the inbox safely** | Inbox claims are swept on a schedule (`RETENTION_INBOX_DAYS`, default 30d), and the app **refuses to boot** if that retention is shorter than the queue's failed-job horizon — deleting a claim while its message can still be redelivered would apply the effect twice | `shared/messaging/inbox/sweep-inbox.ts` |
 | **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
 | **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts` |
-| **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `shared/observability/tracing/propagation.ts` |
+| **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `packages/platform/src/observability/tracing/propagation.ts` |
 
 ### Performance and caching
 
@@ -216,18 +223,18 @@ The parts worth reading the code for. Each row names the file to open.
 | --- | --- | --- |
 | **Immediate JWT revocation** | Stateless HS256 access tokens carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user `token_epoch` counter (every token issued before a logout-all or password change) | `modules/user/interface/strategies/jwt.strategy.ts` |
 | **Token delivery and CSRF** | The access token goes in the JSON body (Bearer is CSRF-immune). The refresh token goes **only** in an `httpOnly; SameSite=Strict; Path=/auth` cookie (`Secure` in production, per `COOKIE_SECURE`), paired with a signed double-submit CSRF cookie enforced on the two routes that consume it | `modules/user/interface/security/csrf.guard.ts` |
-| **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `shared/infrastructure/throttler/throttler.constants.ts` |
+| **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `packages/platform/src/throttler/throttler.constants.ts` |
 | **User enumeration** | `forgot-password` and `resend-verification` always answer `202`. Login runs a real argon2 verify against a cached dummy hash on the unknown-email branch, so the timing of "no such user" matches "wrong password" | `modules/user/application/use-cases/login-user.use-case.ts` |
 | **Webhook authenticity** | HMAC-SHA256 over the **raw request bytes** (`rawBody: true` — the JSON parser would re-serialize and break the signature), constant-time compare, plus a `±PAYMENT_WEBHOOK_TOLERANCE_SEC` replay window. Exempt from both throttle tiers so a burst of legitimate gateway retries is never rate-limited away | `modules/payment/infrastructure/gateway/hmac-signature.ts` |
-| **Metrics endpoint disclosure** | A wrong or missing `METRICS_TOKEN` returns a plain `404`, never `401` — a `401` confirms the endpoint exists to anyone probing. (With no token configured at all, `/metrics` is open in development and `404` in production.) | `shared/observability/metrics/metrics.guard.ts` |
+| **Metrics endpoint disclosure** | A wrong or missing `METRICS_TOKEN` returns a plain `404`, never `401` — a `401` confirms the endpoint exists to anyone probing. (With no token configured at all, `/metrics` is open in development and `404` in production.) | `packages/platform/src/observability/metrics/metrics.guard.ts` |
 
 ### Data modelling
 
 | Problem | Approach | Where |
 | --- | --- | --- |
-| **Sharding-ready user ids** | Every user-context id is a UUIDv8 (RFC 9562 §5.8) laid out `48 ts_ms │ 4 ver │ 12 bucket │ 2 var │ 10 node │ 12 seq │ 40 random`. The 12-bit routing bucket is `HMAC(IDENTITY_BUCKET_KEY, normalized_email) mod 4096` — derived from the same normalized email the `UNIQUE(email)` index sees, so a future shard split routes from the id alone, with no lookup table, and email uniqueness survives it | `shared/identity/uuid-v8.generator.ts` |
+| **Sharding-ready user ids** | Every user-context id is a UUIDv8 (RFC 9562 §5.8) laid out `48 ts_ms │ 4 ver │ 12 bucket │ 2 var │ 10 node │ 12 seq │ 40 random`. The 12-bit routing bucket is `HMAC(IDENTITY_BUCKET_KEY, normalized_email) mod 4096` — derived from the same normalized email the `UNIQUE(email)` index sees, so a future shard split routes from the id alone, with no lookup table, and email uniqueness survives it | `packages/id-generator/src/uuid-v8.generator.ts` |
 | **Why HMAC, not a hash** | `users.id` is public. An unkeyed digest would turn every published id into an offline oracle for "does this address have an account here". The key is **permanent**: the database pins its fingerprint on first boot and refuses a later boot under a different key | `modules/user/infrastructure/identity-bucket-key.verifier.ts` |
-| **Money** | Integer minor units (VND đồng, USD cents) in a `Money` value object — never a float. Cross-currency operations throw rather than coerce. The order total is computed once from the lines and then persisted, never recomputed against a live price | `shared/kernel/money.vo.ts` |
+| **Money** | Integer minor units (VND đồng, USD cents) in a `Money` value object — never a float. Cross-currency operations throw rather than coerce. The order total is computed once from the lines and then persisted, never recomputed against a live price | `packages/kernel/src/money.vo.ts` |
 | **Media lifecycle as stock reservation** | An upload commits to something before knowing whether the caller will finish, so it is modelled like a stock hold: `PENDING → READY → ATTACHED → DETACHED`, plus `SWEEPING` as a terminal claim. `expires_at` is `NULL` in exactly one state (`ATTACHED`) — an asset no sweep can select is exactly what that state needs and exactly the leak every other state must not have | `modules/media/domain/asset-state-machine.ts` |
 | **Deleting bytes safely** | The sweep commits its `SWEEPING` claim **first**, then deletes the object, then the row. A crash mid-way leaves an orphan row whose object is gone — re-scannable, and deleting an absent object is a no-op. The other order leaves bytes nobody has a pointer to: unfindable and paid for indefinitely | `modules/media/application/use-cases/sweep-abandoned-assets.use-case.ts` |
 | **Deadlock avoidance** | Attaching an image claims the asset and writes the link row in one transaction, always taking `product_images` before `media_assets`, so two concurrent edits of the same asset cannot deadlock | `modules/catalog/infrastructure/drizzle-catalog-admin.repository.ts` |
@@ -495,7 +502,7 @@ Stated plainly, because a reviewer will find them anyway.
 - **A money mismatch parks an order forever.** If the gateway reports a paid session whose charge does not match the recorded payment, reconcile refuses to settle it (guessing would move a buyer's money against the wrong order) and a `PAID` probe never ages into `EXPIRED`. The order stays `PENDING` with its stock still held, re-probed every tick, and logs `stuck: true` once past twice the TTL. Because the sweep reads oldest-first, enough of these would starve newer orders out of the batch. Resolving it properly needs a terminal `NEEDS_REVIEW` state that leaves the sweep's queue.
 - **A password change has a race the ordering cannot close.** Sessions are revoked before the new hash is written, so a crash between the two fails safe. But a login that verified the old password can insert its refresh-token family just after the revoke `UPDATE` has passed, and no later write to the user row reaches it. Closing it needs both writes in one transaction.
 - **No `CHECK` on the id layout.** Version and variant nibbles are validated in the codec on decode; a raw-SQL writer is not blocked at the database. The honest reason is that nothing writes those tables but this process.
-- **The IP-keyed throttle tiers are only as good as `req.ip`.** With `TRUST_PROXY` unset behind a platform load balancer, `req.ip` is the proxy's peer address rather than the client's, and that address changes per connection — so the `default` tier (100/60 s app-wide) and the IP half of the auth tiers count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./apps/api/src/shared/infrastructure/throttler) — and the knob is documented; the failure is that nothing at boot notices the combination of "production" and "untrusted proxy" and says so.
+- **The IP-keyed throttle tiers are only as good as `req.ip`.** With `TRUST_PROXY` unset behind a platform load balancer, `req.ip` is the proxy's peer address rather than the client's, and that address changes per connection — so the `default` tier (100/60 s app-wide) and the IP half of the auth tiers count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./packages/platform/src/throttler) — and the knob is documented; the failure is that nothing at boot notices the combination of "production" and "untrusted proxy" and says so.
 - **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2` rather than reinterpret an existing path.
 - **The observability stack is local-only.** No collector is deployed — a hosted one is an operational commitment this project does not need to make its point.
 
@@ -503,7 +510,7 @@ Stated plainly, because a reviewer will find them anyway.
 
 ## Scripts
 
-Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lint:check`, `arch:check`, `test`, `test:cov` and `test:e2e` go through Turborepo; the other app scripts (`test:watch` / `test:debug` included) forward to `@jcool/api`, and `alerts:*` / `load:*` run at the root. Turborepo scripts take arguments after `--` (`pnpm test -- src/shared/kernel`, paths relative to `apps/api`); the others take them directly (`pnpm queue:replay-dlq --apply`), since pnpm forwards a literal `--` to the command.
+Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lint:check`, `arch:check`, `test`, `test:cov` and `test:e2e` go through Turborepo; the other app scripts (`test:watch` / `test:debug` included) forward to `@jcool/api`, and `alerts:*` / `load:*` run at the root. Turborepo scripts run in every workspace project, so arguments go to one project at a time (`pnpm turbo run test --filter=@jcool/api -- src/modules/cart`, paths relative to that project); the others take them directly (`pnpm queue:replay-dlq --apply`), since pnpm forwards a literal `--` to the command.
 
 | Script | Purpose |
 | --- | --- |

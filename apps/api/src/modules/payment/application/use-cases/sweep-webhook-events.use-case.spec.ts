@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { useFakeClock } from '@shared/testing/fake-clock';
-import { RetentionSweepRegistry } from '@shared/retention';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { useFakeClock } from '@jcool/testing/fake-clock';
+import { RetentionSweepRegistry } from '@jcool/platform/retention';
 import type { WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import { SweepWebhookEventsUseCase } from './sweep-webhook-events.use-case';
 

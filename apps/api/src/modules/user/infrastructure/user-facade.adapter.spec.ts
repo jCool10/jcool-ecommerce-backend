@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database';
-import { Role } from '@shared/rbac';
+import { Role } from '@jcool/platform/rbac';
 import { User } from '../domain/entities/user.entity';
 import type { UserRepositoryPort } from '../application/ports';
 import { UserFacadeAdapter } from './user-facade.adapter';

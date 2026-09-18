@@ -1,4 +1,4 @@
-import { DomainError } from '@shared/kernel';
+import { DomainError } from '@jcool/kernel';
 // Type-only, from the tokens file rather than the barrel: importing the barrel would pull the
 // runtime drizzle module into the application layer.
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';

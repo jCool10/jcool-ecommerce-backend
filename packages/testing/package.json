@@ -1,0 +1,38 @@
+{
+  "name": "@jcool/testing",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Test doubles shared by every app's specs, consumed as TypeScript source by the test runner",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint \"src/**/*.ts\" --fix",
+    "lint:check": "eslint \"src/**/*.ts\"",
+    "arch:check": "depcruise --config .dependency-cruiser.cjs src"
+  },
+  "dependencies": {
+    "@jcool/metrics-port": "workspace:*"
+  },
+  "peerDependencies": {
+    "@nestjs/config": "^4.0.4",
+    "nestjs-pino": "^4.6.1",
+    "vitest": "^5.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@nestjs/config": "^4.0.4",
+    "dependency-cruiser": "^18.2.0",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.2",
+    "globals": "^17.12.0",
+    "nestjs-pino": "^4.6.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^5.0.0"
+  }
+}

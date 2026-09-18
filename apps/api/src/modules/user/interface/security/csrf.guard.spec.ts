@@ -1,6 +1,6 @@
 import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { CSRF_HEADER, CSRF_TOKEN_COOKIE } from './auth-cookie.constants';
 import { CsrfGuard } from './csrf.guard';
 import { CsrfTokenService } from './csrf-token.service';

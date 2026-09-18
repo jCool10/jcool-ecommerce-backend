@@ -1,83 +1,21 @@
 // Env is already validated (env.validation.ts); the defaults for omitted vars live here.
-
-// `true` trusts every hop and makes req.ip spoofable; a hop count or a subnet/CSV is the safe form.
-function parseTrustProxy(raw: string | undefined): boolean | number | string {
-  if (!raw || raw === 'false') return false;
-  if (raw === 'true') return true;
-  const hops = Number(raw);
-  return Number.isInteger(hops) && hops >= 0 ? hops : raw;
-}
-
-// class-validator coerces "" to 0 and passes @Min(0), so the blank-string guard must live here,
-// where the raw string is read. A NaN pool timeout is falsy to pg, which silently reverts to
-// wait-forever/never-reap — defeating the bound.
-function intEnv(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const parsed = parseInt(raw, 10);
-  return Number.isNaN(parsed) ? fallback : parsed;
-}
-
-// parseInt that falls back on absent/empty/non-numeric input. Without the guard the empty-string→NaN
-// env gotcha registers a 0ms interval or silently disables the window the value was there to bound.
-function parseIntOr(raw: string | undefined, fallback: number): number {
-  const parsed = parseInt(raw ?? '', 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+import {
+  appConfig,
+  databaseConfig,
+  mailConfig,
+  observabilityConfig,
+  parseIntOr,
+  redisConfig,
+  resilienceConfig,
+  retentionConfig,
+  throttleConfig,
+} from '@jcool/platform/config';
 
 export default () => ({
-  app: {
-    env: process.env.NODE_ENV,
-    port: parseInt(process.env.PORT ?? '3000', 10),
-    swaggerEnabled:
-      process.env.SWAGGER_ENABLED === 'true' ||
-      (process.env.SWAGGER_ENABLED !== 'false' && process.env.NODE_ENV !== 'production'),
-    // Off outside production so auth cookies survive an http dev/e2e round-trip.
-    cookieSecure: process.env.COOKIE_SECURE
-      ? process.env.COOKIE_SECURE === 'true'
-      : process.env.NODE_ENV === 'production',
-    // Empty → CORS off (same-origin only), the safe default.
-    corsOrigins: (process.env.CORS_ORIGINS ?? '')
-      .split(',')
-      .map((origin) => origin.trim())
-      .filter(Boolean),
-    // Base URL for links in outbound email (verification, reset).
-    publicUrl: process.env.APP_PUBLIC_URL ?? 'http://localhost:3000',
-    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
-    // How long /health/ready keeps 503-ing after SIGTERM before the server closes (graceful drain).
-    // 0 = shut down immediately (tests/dev); set ~5000 under a load balancer.
-    shutdownGracePeriodMs: parseInt(process.env.SHUTDOWN_GRACE_PERIOD_MS ?? '0', 10),
-  },
-  log: {
-    level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
-  },
-  metrics: {
-    // Undefined → /metrics is open in dev and hidden in prod (MetricsTokenGuard).
-    token: process.env.METRICS_TOKEN,
-  },
-  tracing: {
-    // A typed mirror of instrumentation.ts, which reads process.env directly because it runs first.
-    enabled: process.env.OTEL_ENABLED === 'true',
-    serviceName: process.env.OTEL_SERVICE_NAME ?? 'jcool-api',
-    otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
-  },
-  sentry: {
-    enabled: Boolean(process.env.SENTRY_DSN),
-    dsn: process.env.SENTRY_DSN,
-    environment: process.env.NODE_ENV,
-  },
-  database: {
-    url: process.env.DATABASE_URL,
-    // The stack has no external pooler (a PgBouncer drop-in is owned by deploy), so this caps the
-    // backend connections Postgres faces.
-    poolMax: intEnv(process.env.DB_POOL_MAX, 10),
-    // Fail an acquire after this long instead of pg's default of waiting forever, so a saturated
-    // pool surfaces as a fast failure rather than an unbounded request backlog.
-    connectionTimeoutMs: intEnv(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 5000),
-    idleTimeoutMs: intEnv(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10000),
-  },
-  redis: {
-    url: process.env.REDIS_URL,
-  },
+  ...appConfig(),
+  ...observabilityConfig({ serviceName: 'jcool-api' }),
+  ...databaseConfig(),
+  ...redisConfig(),
   queue: {
     // Namespaces every queue key, so one Redis can serve several environments without a job written
     // by one being consumed by another.
@@ -125,26 +63,14 @@ export default () => ({
     // No default, like jwtAccessSecret: the env schema requires it, so a boot reaching here has it.
     bucketKey: process.env.IDENTITY_BUCKET_KEY,
   },
-  mail: {
-    // Presence is the switch, like SENTRY_DSN: set → real SMTP, unset → the log sink (and a refused
-    // boot in production, where that sink would deliver nothing while looking healthy).
-    smtpUrl: process.env.SMTP_URL,
-    // Required once SMTP_URL is set — most relays reject a message without an envelope sender.
-    from: process.env.MAIL_FROM,
-    // Its own timeout, well above the shared breaker default: a mail server taking seconds is
-    // normal, and nobody waits on it — mail is sent after its transaction has already committed.
-    timeoutMs: parseIntOr(process.env.MAIL_TIMEOUT_MS, 10_000),
-  },
+  ...mailConfig(),
   argon2: {
     // OWASP-minimum argon2id params (m=19 MiB, t=2, p=1).
     memoryCost: parseInt(process.env.ARGON2_MEMORY_COST ?? '19456', 10),
     timeCost: parseInt(process.env.ARGON2_TIME_COST ?? '2', 10),
     parallelism: parseInt(process.env.ARGON2_PARALLELISM ?? '1', 10),
   },
-  throttle: {
-    // Kill-switch for load tests and e2e suites.
-    enabled: process.env.THROTTLE_ENABLED !== 'false',
-  },
+  ...throttleConfig(),
   payment: {
     // Declared but never dispatched on: payment.module.ts constructs Stripe unconditionally. This
     // survives as a boot-time assertion — env.validation rejects anything but 'stripe', so a deploy
@@ -183,14 +109,7 @@ export default () => ({
     graceSec: parseIntOr(process.env.RESERVATION_SWEEP_GRACE_SEC, 900),
   },
   retention: {
-    enabled: process.env.RETENTION_ENABLED !== 'false',
-    // Housekeeping, not correctness — sized to keep load off the hot path, not to meet a deadline.
-    intervalMs: parseIntOr(process.env.RETENTION_INTERVAL_MS, 3_600_000),
-    // Rows one sweep may delete per tick — also the bound on how long one DELETE holds row locks.
-    batchSize: parseIntOr(process.env.RETENTION_BATCH_SIZE, 500),
-    // Ends the scheduler's wait, not the statement, so its job is to stop one blocked table from
-    // holding the tick.
-    sweepTimeoutMs: parseIntOr(process.env.RETENTION_SWEEP_TIMEOUT_MS, 30_000),
+    ...retentionConfig().retention,
     // Extra age past an idempotency key's own `expires_at`. Its TTL is already the retry window, so
     // this is only slack for clock skew between app and database.
     idempotencyGraceSec: parseIntOr(process.env.RETENTION_IDEMPOTENCY_GRACE_SEC, 3_600),
@@ -267,26 +186,7 @@ export default () => ({
     // an oversized object is refused a place in the catalog and reclaimed by the sweep.
     maxBytes: parseIntOr(process.env.MEDIA_MAX_BYTES, 5 * 1024 * 1024),
   },
-  resilience: {
-    breaker: {
-      // Off makes every guarded call a direct pass-through, dropping the timeout below with it, so
-      // calls go back to waiting out the provider SDK's own far longer one.
-      enabled: process.env.BREAKER_ENABLED !== 'false',
-      // How long one call may run before it is abandoned and counted as a failure. Without it a
-      // downstream that hangs rather than errors never trips anything: nothing ever fails, we just
-      // stop having request slots. Shorter than the provider SDK's own timeout on purpose.
-      timeoutMs: parseIntOr(process.env.BREAKER_TIMEOUT_MS, 3000),
-      errorThresholdPercentage: parseIntOr(process.env.BREAKER_ERROR_THRESHOLD_PCT, 50),
-      // Calls fail fast for this long before one trial call is allowed through.
-      resetTimeoutMs: parseIntOr(process.env.BREAKER_RESET_TIMEOUT_MS, 10_000),
-      // The breaker's memory: past this, errors are forgotten, so a slow trickle of failures never
-      // accumulates into an open circuit.
-      rollingWindowMs: parseIntOr(process.env.BREAKER_ROLLING_WINDOW_MS, 10_000),
-      // Calls the window must hold before the share means anything, so one failure on a quiet route
-      // cannot read as 100% and open the circuit. The flip side: below this rate it never opens.
-      volumeThreshold: parseIntOr(process.env.BREAKER_VOLUME_THRESHOLD, 5),
-    },
-  },
+  ...resilienceConfig(),
   inventory: {
     // 'pessimistic' (SELECT ... FOR UPDATE) or 'optimistic' (version CAS + retry).
     lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',

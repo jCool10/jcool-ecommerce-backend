@@ -1,9 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PinoLogger } from 'nestjs-pino';
-import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@shared/mail/mail-transport.port';
-import { toError } from '@shared/kernel/to-error';
-import { METRICS, type MailKind, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@jcool/platform/mail';
+import { toError } from '@jcool/kernel';
+import { METRICS, type MailKind, type MetricsPort } from '@jcool/metrics-port';
 import type { EmailVerificationMessage, MailerPort, PasswordResetMessage } from '../application/ports';
 
 const LOG_CONTEXT = 'MailerAdapter';

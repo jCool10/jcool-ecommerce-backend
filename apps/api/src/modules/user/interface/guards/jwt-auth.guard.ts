@@ -1,7 +1,7 @@
 import { Injectable, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { IS_PUBLIC_KEY } from '@shared/rbac';
+import { IS_PUBLIC_KEY } from '@jcool/platform/rbac';
 
 /**
  * Registered globally, so every route is protected unless `@Public()` opts out: forgetting a

@@ -9,8 +9,8 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { PAYMENT_SESSION_THROTTLE, UserThrottlerGuard } from '@shared/infrastructure/throttler';
-import { CurrentUser, type AuthenticatedUser } from '@shared/rbac';
+import { PAYMENT_SESSION_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
+import { CurrentUser, type AuthenticatedUser } from '@jcool/platform/rbac';
 import { CreatePaymentSessionUseCase } from '../application/use-cases';
 import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
 

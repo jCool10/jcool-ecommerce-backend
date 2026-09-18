@@ -1,4 +1,4 @@
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { describe, expect, it, vi } from 'vitest';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';

@@ -10,7 +10,7 @@ import {
 } from '../../src/modules/media/application/public/media-facade.port';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { RetentionSweepRegistry, type RetentionSweep } from '../../src/shared/retention';
+import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { createTestAdmin } from '../setup/fixtures/user.fixture';
 import { createTestAppWithObjectStorage } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';

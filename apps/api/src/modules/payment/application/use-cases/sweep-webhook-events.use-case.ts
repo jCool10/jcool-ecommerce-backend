@@ -1,6 +1,6 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
+import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 
 const DAY_MS = 86_400_000;

@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { RedisService } from '@jcool/platform/redis';
 import { CATALOG_CACHE_VERSION_KEY } from '../../src/modules/catalog/infrastructure/catalog-cache.keys';
 
 /**

@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { Money } from '@shared/kernel';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { Money } from '@jcool/kernel';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { Cart } from '../domain/cart.entity';
 import { CART_REPOSITORY, type CartRepositoryPort } from './ports/cart-repository.port';
 import { CATALOG_QUERY, type CartSkuView, type CatalogQueryPort } from './ports/catalog-query.port';

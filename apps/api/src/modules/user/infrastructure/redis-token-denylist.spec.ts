@@ -1,4 +1,4 @@
-import type { RedisService } from '@shared/infrastructure/redis';
+import type { RedisService } from '@jcool/platform/redis';
 import { RedisTokenDenylist } from './redis-token-denylist';
 
 class FakeRedisClient {

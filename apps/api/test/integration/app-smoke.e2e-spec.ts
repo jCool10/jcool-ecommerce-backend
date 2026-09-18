@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { RedisService } from '../../src/shared/infrastructure/redis/redis.service';
+import { RedisService } from '@jcool/platform/redis';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';

@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
+import * as schema from '@shared/infrastructure/database/schema';
 import type { CatalogSearchPort, ProductRepositoryPort } from '../../application/ports';
 import { DrizzleProductRepository } from '../drizzle-product.repository';
 import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
@@ -16,7 +17,7 @@ import { reindexAll } from './reindex-runner';
 // `inject` array): tsx compiles with esbuild, which emits no decorator metadata, so a dependency
 // inferred from a constructor's parameter type arrives as undefined and only fails at runtime.
 @Module({
-  imports: [ConfigModule, ClsModule.forRoot({ global: true }), DrizzleModule],
+  imports: [ConfigModule, ClsModule.forRoot({ global: true }), DrizzleModule.forRoot({ schema })],
   providers: [DrizzleProductRepository, MeilisearchCatalogSearch],
 })
 class ReindexContext {}

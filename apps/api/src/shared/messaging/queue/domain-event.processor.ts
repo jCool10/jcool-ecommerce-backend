@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
-import { toError } from '@shared/kernel/to-error';
-import { METRICS, type ConsumeResult, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { toError } from '@jcool/kernel';
+import { METRICS, type ConsumeResult, type MetricsPort } from '@jcool/metrics-port';
 import { InboxStore } from '../inbox/inbox.store';
 import { PermanentError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';

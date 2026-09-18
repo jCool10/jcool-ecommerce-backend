@@ -3,7 +3,7 @@ import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
 import { UserModule } from '@modules/user/user.module';
-import { MailModule } from '@shared/mail';
+import { MailModule } from '@jcool/platform/mail';
 import {
   CancelOrderUseCase,
   CheckoutOrderUseCase,

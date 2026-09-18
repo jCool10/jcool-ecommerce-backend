@@ -1,4 +1,4 @@
-import type { Role } from '@shared/rbac';
+import type { Role } from '@jcool/platform/rbac';
 
 /** Shared contract between signing (AuthTokensService) and verifying (JwtStrategy). */
 export interface AccessTokenClaims {

@@ -1,4 +1,4 @@
-import { DomainError } from '@shared/kernel';
+import { DomainError } from '@jcool/kernel';
 import { PaymentStatus } from './payment-status';
 
 // Terminal states (SUCCEEDED / FAILED / EXPIRED) have no outgoing edge, so a late or conflicting

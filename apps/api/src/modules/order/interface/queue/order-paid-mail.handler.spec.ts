@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import type { MailMessage } from '@shared/mail/mail-transport.port';
+import type { MailMessage } from '@jcool/platform/mail';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
-import { Role } from '@shared/rbac';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import type { MetricsPort } from '@jcool/metrics-port';
+import { Role } from '@jcool/platform/rbac';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { OrderPaidMailHandler } from './order-paid-mail.handler';
 
 const ORDER_ID = '0198f0d8-1111-7000-8000-000000000001';

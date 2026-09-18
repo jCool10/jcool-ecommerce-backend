@@ -1,4 +1,4 @@
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { describe, expect, it } from 'vitest';
 import { ObjectStorageNotConfiguredError } from './object-storage.port';
 import { S3ObjectStorageAdapter } from './s3-object-storage.adapter';

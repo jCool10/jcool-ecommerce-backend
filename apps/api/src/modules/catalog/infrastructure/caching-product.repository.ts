@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CacheService, SwrCacheService, type CacheCodec, type TtlPolicy } from '@shared/cache';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import type { Product } from '../domain/entities';
 import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../application/ports';
 import type { SkuView } from '../application/public/catalog-sku-query.port';

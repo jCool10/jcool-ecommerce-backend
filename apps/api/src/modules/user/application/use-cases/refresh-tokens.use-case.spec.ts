@@ -1,6 +1,6 @@
 import { UnauthorizedException } from '@nestjs/common';
 import type { Mock } from 'vitest';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type {
   ActiveSession,
   AuthAuditPort,

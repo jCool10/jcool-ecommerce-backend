@@ -157,7 +157,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
   // Violated at: src/shared/messaging/outbox/outbox-relay.ts:94-97 — `attempts` is incremented and
   //   read by NOTHING: no threshold, no dead-letter, no branch anywhere in `src/` selects on it. The
   //   only escalation is the backlog gauge pair in
-  //   src/shared/observability/metrics/outbox-backlog.collector.ts:11-12 (`outbox_backlog_pending`
+  //   src/shared/messaging/outbox/outbox-backlog.collector.ts:15-16 (`outbox_backlog_pending`
   //   and `outbox_oldest_age_seconds`), which needs an alert rule outside this repository to matter.
   // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — OBX-2.
   it('retries a permanently refused row forever without ever escalating it', async () => {

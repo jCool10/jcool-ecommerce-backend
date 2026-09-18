@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { ObjectStoragePort } from '@shared/infrastructure/storage';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { AssetTransitionError } from '../../domain/asset-state-machine';
 import { AssetStatus } from '../../domain/asset-status';
 import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-found.error';

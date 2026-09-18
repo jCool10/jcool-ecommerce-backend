@@ -2,7 +2,7 @@ import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, inArray, isNotNull, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
-import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
+import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { outbox } from './schema/outbox.schema';
 
 const DAY_MS = 86_400_000;

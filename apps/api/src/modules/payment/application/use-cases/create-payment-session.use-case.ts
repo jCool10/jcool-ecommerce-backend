@@ -1,8 +1,8 @@
 import { BadGatewayException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { v7 as uuidv7 } from 'uuid';
-import { toError } from '@shared/kernel/to-error';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { toError } from '@jcool/kernel';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
 import { ORDER_READ_PORT, type OrderReadPort } from '../ports/order-read.port';

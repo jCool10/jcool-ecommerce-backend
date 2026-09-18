@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { UnrecoverableError, type Job, type Queue } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
-import { METRICS, type DeadLetterReason, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { toError } from '@jcool/kernel';
+import { METRICS, type DeadLetterReason, type MetricsPort } from '@jcool/metrics-port';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { DomainEventJob } from './domain-event.job';
 import { DOMAIN_EVENTS_DLQ_QUEUE } from './queue.constants';

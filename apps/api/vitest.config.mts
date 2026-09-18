@@ -10,6 +10,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.spec.ts'],
+    // Workspace packages resolve outside node_modules, so Vitest would inline their dist and mint a
+    // second copy of a token such as METRICS next to the one natively loaded packages hold.
+    server: { deps: { external: [/\/packages\/[^/]+\/dist\//] } },
     alias: {
       // Real uuid v7 is timestamp+random; the deterministic double keeps unit runs reproducible
       // (exact values are never asserted). e2e uses the real one.
@@ -29,7 +32,6 @@ export default defineConfig({
         'src/**/*.spec.ts',
         'src/**/*.module.ts',
         'src/main.ts',
-        'src/shared/testing/**',
         'src/modules/*/testing/**',
       ],
       // Glob-scoped, not global: `test:cov` runs the unit tier only, and repositories, adapters and

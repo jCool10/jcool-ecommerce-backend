@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { useFakeClock } from '@shared/testing/fake-clock';
-import { RetentionSweepRegistry } from '@shared/retention';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { useFakeClock } from '@jcool/testing/fake-clock';
+import { RetentionSweepRegistry } from '@jcool/platform/retention';
 import type { IdempotencyStorePort } from '../ports/idempotency-store.port';
 import { SweepIdempotencyKeysUseCase } from './sweep-idempotency-keys.use-case';
 

@@ -1,6 +1,6 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../application/ports';
 
 // Long enough for a merely slow engine, short enough that an unreachable one never holds a deploy open.

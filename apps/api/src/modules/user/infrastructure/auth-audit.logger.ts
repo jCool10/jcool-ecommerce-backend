@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
-import { getCorrelationId } from '@shared/observability';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { getCorrelationId } from '@jcool/platform/observability';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import type { AuthAuditPort, AuthAuditRecord } from '../application/ports';
 
 /** pino `context` label for the audit trail — the SIEM filters the whole trail on this one key. */

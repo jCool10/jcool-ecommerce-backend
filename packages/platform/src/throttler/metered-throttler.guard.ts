@@ -1,0 +1,70 @@
+import { Inject, Injectable, type ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import {
+  ThrottlerException,
+  ThrottlerGuard,
+  type ThrottlerModuleOptions,
+  type ThrottlerRequest,
+  type ThrottlerStorage,
+} from '@nestjs/throttler';
+import type { Request } from 'express';
+import { PinoLogger } from 'nestjs-pino';
+import { resolveRouteTemplate } from '../observability/http-route.util';
+import { createLogSampler } from '../observability/logging/log-sampler';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
+import { DEFAULT_THROTTLER } from './throttler.constants';
+
+const LOG_CONTEXT = 'RateLimit';
+const LOG_SAMPLE_WINDOW_MS = 10_000;
+
+// Holds the kill-switch and the rejection counter; subclasses decide only what a request is keyed by.
+@Injectable()
+export class MeteredThrottlerGuard extends ThrottlerGuard {
+  private readonly shouldLog = createLogSampler(LOG_SAMPLE_WINDOW_MS);
+
+  constructor(
+    options: ThrottlerModuleOptions,
+    storageService: ThrottlerStorage,
+    reflector: Reflector,
+    @Inject(METRICS) protected readonly metrics: MetricsPort,
+    protected readonly logger: PinoLogger,
+  ) {
+    super(options, storageService, reflector);
+    logger.setContext(LOG_CONTEXT);
+  }
+
+  // Global kill-switch (load tests / e2e). Read per request rather than resolved once into the
+  // module's `skipIf`, so a test can flip it around a single call without rebuilding the app.
+  override canActivate(context: ExecutionContext): Promise<boolean> {
+    if (process.env.THROTTLE_ENABLED === 'false') {
+      return Promise.resolve(true);
+    }
+    return super.canActivate(context);
+  }
+
+  // Counted around the per-tier call rather than in throwThrottlingException, which isn't told
+  // which tier ran out — and the tier is what makes a 429 spike readable.
+  protected override async handleRequest(request: ThrottlerRequest): Promise<boolean> {
+    try {
+      return await super.handleRequest(request);
+    } catch (error) {
+      if (error instanceof ThrottlerException) {
+        this.recordRejection(request);
+      }
+      throw error;
+    }
+  }
+
+  private recordRejection(request: ThrottlerRequest): void {
+    const { context } = request;
+    const path = context.switchToHttp().getRequest<Request>().path;
+    const tier = request.throttler.name ?? DEFAULT_THROTTLER;
+    const route = resolveRouteTemplate(this.reflector, context, path);
+    this.metrics.recordRateLimitRejection(tier, route);
+    // The exception filter already logs every 429; what it cannot say is which tier ran out.
+    // Sampled because a flood is the case this exists for, and each rejection already costs a line.
+    if (this.shouldLog(`${tier}|${route}`)) {
+      this.logger.warn({ tier, route }, 'rate limit exceeded');
+    }
+  }
+}

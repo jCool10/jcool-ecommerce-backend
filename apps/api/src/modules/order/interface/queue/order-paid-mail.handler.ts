@@ -2,11 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { USER_FACADE, type UserFacade } from '@modules/user/application/public/user-facade.port';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@shared/mail/mail-transport.port';
+import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@jcool/platform/mail';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob, PostCommitEffect } from '@shared/messaging/queue/domain-event.job';
-import { toError } from '@shared/kernel/to-error';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { toError } from '@jcool/kernel';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 
 const LOG_CONTEXT = 'OrderPaidMailHandler';
 

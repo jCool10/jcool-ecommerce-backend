@@ -1,4 +1,4 @@
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { CatalogSearchPort } from '../../application/ports';
 import { SearchIndexBootstrap } from './search-index-bootstrap';
 

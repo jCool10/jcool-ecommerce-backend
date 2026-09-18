@@ -1,4 +1,4 @@
-import { Money } from '@shared/kernel';
+import { Money } from '@jcool/kernel';
 import { Product, type ProductStatus, type ProductVariant } from '../domain/entities';
 
 // Nullability mirrors the join shape: product/category are inner-joined, variant/price left-joined.

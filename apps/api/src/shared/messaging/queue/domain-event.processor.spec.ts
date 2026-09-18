@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
-import type { MetricsPort } from '@shared/observability/metrics/metrics.port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import type { MetricsPort } from '@jcool/metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { DomainEventJob, PostCommitEffect } from './domain-event.job';
 import { DomainEventProcessor } from './domain-event.processor';

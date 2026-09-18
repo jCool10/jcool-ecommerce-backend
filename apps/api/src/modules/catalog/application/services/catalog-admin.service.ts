@@ -1,7 +1,7 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { MediaAssetUnavailableError } from '@modules/media/application/public/media-facade.port';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 import { Slug } from '../../domain/slug.vo';
 import type { AdminProduct, Category, Price, ProductImage, Sku } from '../../domain/entities';
 import { toSearchableProduct } from '../catalog-search.mapper';

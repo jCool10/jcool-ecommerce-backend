@@ -11,7 +11,7 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { METRICS, type MetricsPort } from '../../src/shared/observability/metrics/metrics.port';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { authHeader } from '../setup/auth.helper';
 import {
   buyerWithCart,

@@ -1,4 +1,4 @@
-import type { DomainEvent } from '@shared/kernel';
+import type { DomainEvent } from '@jcool/kernel';
 
 /** Same stock effect as FAILED/EXPIRED, kept distinct: a cancellation is a decision, not a payment result. */
 export class OrderCancelledEvent implements DomainEvent {

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OrderModule } from '@modules/order/order.module';
-import { CircuitBreakerFactory, ResilienceModule } from '@shared/resilience';
+import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
 import { PAYMENT_REPOSITORY } from './application/ports/payment-repository.port';
 import { WEBHOOK_EVENT_REPOSITORY } from './application/ports/webhook-event-repository.port';
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './application/ports/payment-gateway.port';

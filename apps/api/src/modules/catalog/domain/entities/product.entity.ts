@@ -1,4 +1,4 @@
-import { Money } from '@shared/kernel';
+import { Money } from '@jcool/kernel';
 
 // Pure domain — no framework/DB imports.
 

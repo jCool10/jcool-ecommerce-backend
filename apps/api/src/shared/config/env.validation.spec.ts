@@ -1,6 +1,7 @@
 import 'reflect-metadata'; // class-validator decorators; the app gets it from @nestjs/core's bootstrap.
 import { describe, expect, it } from 'vitest';
-import { NodeEnv, validate } from './env.validation';
+import { NodeEnv } from '@jcool/platform/config';
+import { validate } from './env.validation';
 
 // The minimum a boot needs to get past every other required var, so each case below isolates one.
 const BASE_ENV = {

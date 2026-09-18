@@ -2,10 +2,9 @@ import { Inject, Injectable, type OnApplicationBootstrap } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config';
 import { desc, eq } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
-import { bucketForEmail, bucketOf, identityKeyFingerprint } from '@shared/identity';
+import { bucketForEmail, bucketOf, identityKeyFingerprint } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
-import { normalizeEmail } from '@shared/kernel';
-import { toError } from '@shared/kernel/to-error';
+import { normalizeEmail, toError } from '@jcool/kernel';
 import { identityKeyPin, users } from './schema/user.schema';
 
 const PIN_ROW_ID = 1;

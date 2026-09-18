@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { RedisService } from '@shared/infrastructure/redis';
+import { RedisService } from '@jcool/platform/redis';
 // The leaf module, never the barrel: a one-line error normalizer must not pull the interceptor,
 // tracing and CLS graph into every service that logs a failure.
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 
 const LOG_CONTEXT = 'CacheService';
 

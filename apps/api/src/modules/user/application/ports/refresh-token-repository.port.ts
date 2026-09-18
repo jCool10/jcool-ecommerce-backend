@@ -1,4 +1,4 @@
-import type { Role } from '@shared/rbac';
+import type { Role } from '@jcool/platform/rbac';
 
 export const REFRESH_TOKEN_REPOSITORY = Symbol('REFRESH_TOKEN_REPOSITORY');
 

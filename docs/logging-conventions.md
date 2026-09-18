@@ -1,13 +1,13 @@
 # Logging conventions
 
-One logger, one call shape. Everything here is enforced by `eslint.config.mjs` — the rules are named at the end of each section so a failing build points back to the reasoning. Paths are relative to `apps/api/`.
+One logger, one call shape. Everything here is enforced by `eslint.config.mjs` in `apps/api/` and `packages/platform/` — the rules are named at the end of each section so a failing build points back to the reasoning. Paths are relative to `apps/api/`.
 
 ## The call shape
 
 ```ts
 import { Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 
 const LOG_CONTEXT = 'FinalizeOrder';
 
@@ -33,7 +33,7 @@ Three rules, in order of how often they are broken:
 2. **Values go in the fields object**, the *first* argument. `{ orderId }` is queryable (`orderId:"abc"`); `` `order ${orderId} failed` `` is a substring search that also matches the order id appearing in an unrelated message.
 3. **A caught error goes in `err`**, normalized through `toError`. pino applies `stdSerializers.err` to that exact key, so the type, message and stack land as separate fields. `${error.message}` throws the stack away — the one thing you actually wanted at 3am.
 
-`toError` lives in `@shared/kernel/to-error`, not beside the logger: application-layer use cases log too, and the `app-domain-telemetry-free` architecture rule keeps them out of `@shared/observability`.
+`toError` lives in `@jcool/kernel`, not beside the logger: application-layer use cases log too, and the `app-domain-telemetry-free` architecture rule keeps them out of `@jcool/platform/observability`.
 
 Enforced by `no-restricted-syntax` (template literal passed to `this.logger.*`).
 
@@ -59,7 +59,7 @@ export function createQueueConnection(url: string, logger: PinoLogger): Redis {
 }
 ```
 
-The lint rule matches `this.logger.*` only, so `logger.*` in a free function is deliberately not fenced. Current instances: `src/shared/messaging/queue/queue-connection.ts`, `src/shared/observability/metrics/outbox-backlog.collector.ts`, `src/modules/media/infrastructure/media-sweeping.collector.ts` — the last two are prom-client `collect` hooks, which are plain closures registered on a gauge.
+The lint rule matches `this.logger.*` only, so `logger.*` in a free function is deliberately not fenced. Current instances: `src/shared/messaging/queue/queue-connection.ts`, `src/shared/messaging/outbox/outbox-backlog.collector.ts`, `src/modules/media/infrastructure/media-sweeping.collector.ts` — the last two are prom-client `collect` hooks, which are plain closures registered on a gauge.
 
 ## Levels
 
@@ -103,7 +103,7 @@ Enforced by `no-restricted-imports` (the `Logger` ban) and `no-console` (also of
 
 ## Testing
 
-Use `fakePinoLogger()` from `@shared/testing/fake-pino-logger`, never a partial `{ warn: vi.fn() } as unknown as PinoLogger`: a partial stub answers `undefined` for the level the code actually picked, and the cast is what hides it — the spec then passes while nothing was logged. It also has no `setContext`, which now throws in every constructor.
+Use `fakePinoLogger()` from `@jcool/testing/fake-pino-logger`, never a partial `{ warn: vi.fn() } as unknown as PinoLogger`: a partial stub answers `undefined` for the level the code actually picked, and the cast is what hides it — the spec then passes while nothing was logged. It also has no `setContext`, which now throws in every constructor.
 
 ```ts
 const warn = vi.fn();

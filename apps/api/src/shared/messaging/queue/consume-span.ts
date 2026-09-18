@@ -1,6 +1,5 @@
 import { context } from '@opentelemetry/api';
-import { extractTraceContext } from '@shared/observability/tracing/propagation';
-import { withSpan } from '@shared/observability/tracing/tracer';
+import { extractTraceContext, withSpan } from '@jcool/platform/observability';
 
 /**
  * Auto-instrumentation cannot follow an async hop, so without this the work a queued event triggers

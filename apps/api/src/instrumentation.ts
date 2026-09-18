@@ -6,8 +6,9 @@ import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentation
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
-import { scrubPii } from './shared/observability/error-tracking/scrub-pii';
-import type { TelemetryFlushGlobal } from './shared/observability/telemetry-flush.service';
+// Not the observability barrel: it would load Nest and nestjs-pino before the SDK can patch them.
+import { scrubPii } from '@jcool/platform/error-tracking';
+import type { TelemetryFlushGlobal } from '@jcool/platform/observability';
 
 const sentryEnabled = Boolean(process.env.SENTRY_DSN);
 

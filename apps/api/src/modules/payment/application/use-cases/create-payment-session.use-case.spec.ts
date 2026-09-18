@@ -2,8 +2,8 @@ import { BadGatewayException, ConflictException, NotFoundException } from '@nest
 import { describe, expect, it, vi } from 'vitest';
 import { Payment } from '../../domain/payment.entity';
 import { PaymentStatus } from '../../domain/payment-status';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { OrderReadPort, OrderView } from '../ports/order-read.port';
 import { DuplicateActivePaymentError } from '../ports/payment-repository.port';
 import { PaymentGatewayError, type GatewaySession } from '../ports/payment-gateway.port';

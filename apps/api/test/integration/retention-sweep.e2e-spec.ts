@@ -5,9 +5,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { IdentityService } from '../../src/shared/identity';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { normalizeEmail } from '../../src/shared/kernel/normalize-email';
-import { RetentionSweepRegistry, type RetentionSweep } from '../../src/shared/retention';
-import { RetentionScheduler } from '../../src/shared/retention/retention.scheduler';
+import { normalizeEmail } from '@jcool/kernel';
+import { RetentionScheduler, RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 

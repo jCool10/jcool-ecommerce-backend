@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { CsrfTokenService } from './csrf-token.service';
 
 function serviceWithSecret(secret: string): CsrfTokenService {

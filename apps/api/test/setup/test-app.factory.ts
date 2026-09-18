@@ -9,7 +9,7 @@ import { Logger } from 'nestjs-pino';
 import { expect } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { CSRF_HEADER } from '../../src/modules/user/interface/security/auth-cookie.constants';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { RedisService } from '@jcool/platform/redis';
 import { E2E_IDENTITY_BUCKET_KEY } from './identity.helper';
 import { waitForRedisReady } from './redis-ready';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';

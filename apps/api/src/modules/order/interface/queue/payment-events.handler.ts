@@ -3,7 +3,7 @@ import { PinoLogger } from 'nestjs-pino';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob, PostCommitEffect } from '@shared/messaging/queue/domain-event.job';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { FinalizeOrderUseCase, type FinalizeOutcome } from '../../application/use-cases';
 
 const LOG_CONTEXT = 'PaymentEventsHandler';

@@ -1,7 +1,6 @@
-import type { NormalizedEmail } from '@shared/kernel';
-import { MIN_BUCKET_KEY_LENGTH, bucketForEmail } from './email-bucket';
-import { bucketOf } from './uuid-v8.codec';
-import type { UuidV8Generator } from './uuid-v8.generator';
+import type { NormalizedEmail } from '@jcool/kernel';
+import { MIN_BUCKET_KEY_LENGTH, bucketForEmail, bucketOf } from '@jcool/id-codec';
+import type { UuidV8Generator } from '@jcool/id-generator';
 
 /**
  * A user's bucket comes from their email — the same normalized bytes the unique index sees, which is

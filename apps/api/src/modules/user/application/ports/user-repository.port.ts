@@ -1,8 +1,8 @@
 // Type-only, from the tokens file rather than the barrel: importing the barrel would pull the
 // runtime drizzle module into the application layer.
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import type { NormalizedEmail } from '@shared/kernel';
-import type { Role } from '@shared/rbac';
+import type { NormalizedEmail } from '@jcool/kernel';
+import type { Role } from '@jcool/platform/rbac';
 import type { User } from '../../domain/entities/user.entity';
 
 // Application must not import drizzle-orm/schema; the adapter lives in infrastructure/.

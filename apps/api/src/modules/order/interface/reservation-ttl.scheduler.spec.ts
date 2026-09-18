@@ -2,8 +2,8 @@ import type { ConfigService } from '@nestjs/config';
 import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { ClsService } from 'nestjs-cls';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { SweepExpiredReservationsUseCase, SweepSummary } from '../application/use-cases';
 import { ReservationTtlScheduler } from './reservation-ttl.scheduler';
 

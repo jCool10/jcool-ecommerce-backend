@@ -25,8 +25,9 @@ import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/catalog/infrastructure
 import { cartItems, carts } from '../src/modules/cart/infrastructure/schema/cart.schema';
 import { stockLevels } from '../src/modules/inventory/infrastructure/schema/inventory.schema';
 import { users } from '../src/modules/user/infrastructure/schema/user.schema';
-import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '../src/shared/identity';
-import { normalizeEmail } from '../src/shared/kernel/normalize-email';
+import { SCRIPTS_NODE_ID, UuidV8Generator } from '@jcool/id-generator';
+import { IdentityService } from '../src/shared/identity';
+import { normalizeEmail } from '@jcool/kernel';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';

@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { SingleFlightLock, SwrCacheService, type TtlPolicy } from '../../src/shared/cache';
-import { RedisService } from '../../src/shared/infrastructure/redis';
+import { RedisService } from '@jcool/platform/redis';
 import { closeAppAfterAll } from '../setup/harness';
 import { withRedisDown } from '../setup/redis-outage';
 import { sleep } from '../setup/sleep';

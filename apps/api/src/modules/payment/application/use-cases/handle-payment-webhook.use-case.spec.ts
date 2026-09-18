@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FinalizeOrderUseCase } from '@modules/order/application/public/order-finalization.port';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { PaymentStatus } from '../../domain/payment-status';
 import { HandlePaymentWebhookUseCase } from './handle-payment-webhook.use-case';
 import type { ProcessWebhookEventUseCase, WebhookProcessResult } from './process-webhook-event.use-case';

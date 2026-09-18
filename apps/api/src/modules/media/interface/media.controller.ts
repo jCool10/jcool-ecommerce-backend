@@ -22,7 +22,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { type AuthenticatedUser, CurrentUser, Role, Roles } from '@shared/rbac';
+import { type AuthenticatedUser, CurrentUser, Role, Roles } from '@jcool/platform/rbac';
 import { UnsupportedContentTypeError } from '../domain/asset-content-type';
 import { AssetTransitionError } from '../domain/asset-state-machine';
 import { MediaAssetNotFoundError } from '../domain/errors/media-asset-not-found.error';

@@ -4,7 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { AccessTokenClaims } from '../../application';
 import { SESSION_EPOCH, type SessionEpochPort, TOKEN_DENYLIST, type TokenDenylistPort } from '../../application/ports';
-import type { AuthenticatedUser } from '@shared/rbac';
+import type { AuthenticatedUser } from '@jcool/platform/rbac';
 
 interface AccessTokenPayload extends AccessTokenClaims {
   iat: number;

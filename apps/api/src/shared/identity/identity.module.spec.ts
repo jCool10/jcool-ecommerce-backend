@@ -1,17 +1,15 @@
-import { Injectable, Module, type FactoryProvider, type INestApplication } from '@nestjs/common';
+import { Injectable, Module, type INestApplication } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { register } from 'prom-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import configuration from '@shared/config/configuration';
-import { normalizeEmail } from '@shared/kernel';
-import { ID_CLOCK_DRIFT_MS, IDENTITY_CLOCK_PROVIDERS } from '@shared/observability/metrics/identity-clock.collector';
-import { bucketForEmail } from './email-bucket';
+import { normalizeEmail } from '@jcool/kernel';
+import { bucketForEmail, bucketOf, decode } from '@jcool/id-codec';
+import { APP_NODE_ID, UuidV8Generator } from '@jcool/id-generator';
+import { ID_CLOCK_DRIFT_MS } from './identity-clock.collector';
 import { IdentityModule } from './identity.module';
 import { IdentityService } from './identity.service';
-import { APP_NODE_ID } from './node-ids';
-import { bucketOf, decode } from './uuid-v8.codec';
-import { UuidV8Generator } from './uuid-v8.generator';
 
 const KEY = 'identity-module-spec-bucket-key-not-a-real-secret';
 
@@ -38,12 +36,6 @@ class AuthSideWriter {
 
 @Module({ imports: [IdentityModule], providers: [AuthSideWriter] })
 class AuthSideModule {}
-
-// Registered in the default registry, as MetricsModule does it; asserted here for the module's
-// binding lifecycle, not the collector's own behaviour.
-for (const provider of IDENTITY_CLOCK_PROVIDERS as FactoryProvider[]) {
-  provider.useFactory(undefined);
-}
 
 async function driftSample(): Promise<string | undefined> {
   return (await register.metrics()).split('\n').find((line) => line.startsWith(`${ID_CLOCK_DRIFT_MS} `));

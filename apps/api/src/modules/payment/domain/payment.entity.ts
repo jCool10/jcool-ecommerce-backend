@@ -1,4 +1,4 @@
-import { assertNonEmpty, assertPositive, Money } from '@shared/kernel';
+import { assertNonEmpty, assertPositive, Money } from '@jcool/kernel';
 import { PaymentStatus } from './payment-status';
 import { assertTransition } from './payment-state-machine';
 

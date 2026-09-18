@@ -1,6 +1,6 @@
 import { Redis, type RedisOptions } from 'ioredis';
 import type { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 
 const LOG_CONTEXT = 'QueueConnection';
 

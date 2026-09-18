@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { useFakeClock } from '@shared/testing/fake-clock';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { RetentionSweepRegistry } from '@shared/retention';
+import { useFakeClock } from '@jcool/testing/fake-clock';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { RetentionSweepRegistry } from '@jcool/platform/retention';
 import type {
   EmailVerificationTokenRepositoryPort,
   PasswordResetTokenRepositoryPort,

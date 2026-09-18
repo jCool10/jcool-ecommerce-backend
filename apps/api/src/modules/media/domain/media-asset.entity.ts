@@ -1,4 +1,4 @@
-import { assertNonEmpty } from '@shared/kernel';
+import { assertNonEmpty } from '@jcool/kernel';
 import type { AllowedContentType } from './asset-content-type';
 import { AssetStatus } from './asset-status';
 

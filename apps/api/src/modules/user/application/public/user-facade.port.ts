@@ -1,7 +1,7 @@
 // Type-only, from the tokens file rather than the barrel: importing the barrel would pull the
 // runtime drizzle module into the application layer.
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import type { Role } from '@shared/rbac';
+import type { Role } from '@jcool/platform/rbac';
 
 /**
  * The only surface other bounded contexts may import (enforced by `.dependency-cruiser.cjs`).

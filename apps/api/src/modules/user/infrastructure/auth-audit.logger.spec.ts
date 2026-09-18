@@ -1,7 +1,7 @@
 import type { ClsService } from 'nestjs-cls';
 import { describe, expect, it, vi } from 'vitest';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { AuthAuditRecord } from '../application/ports';
 import { AuthAuditLogger } from './auth-audit.logger';
 

@@ -1,7 +1,7 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, eq, max, ne, sql } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
-import { Money } from '@shared/kernel';
+import { Money } from '@jcool/kernel';
 import { MEDIA_FACADE, type MediaFacade } from '@modules/media/application/public/media-facade.port';
 import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
 import type { AdminProduct, Category, Price, ProductImage, Sku } from '../domain/entities';

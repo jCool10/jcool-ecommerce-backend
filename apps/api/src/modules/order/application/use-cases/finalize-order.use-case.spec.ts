@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { OrderStatus } from '../../domain/order-status';
 import type { InventoryReservationPort } from '../ports/inventory-reservation.port';
 import type { OrderRepositoryPort } from '../ports/order-repository.port';

@@ -2,7 +2,7 @@ import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
-import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
+import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { MIN_INBOX_RETENTION_DAYS, REMOVE_ON_FAIL_AGE_SEC } from '../queue/queue.constants';
 import { inbox } from './schema/inbox.schema';
 

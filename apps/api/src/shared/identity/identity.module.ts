@@ -1,12 +1,12 @@
 import { Module, type OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { APP_NODE_ID, UuidV8Generator } from '@jcool/id-generator';
 import {
+  IDENTITY_CLOCK_PROVIDERS,
   bindIdentityClockMetrics,
   unbindIdentityClockMetrics,
-} from '@shared/observability/metrics/identity-clock.collector';
+} from './identity-clock.collector';
 import { IdentityService } from './identity.service';
-import { APP_NODE_ID } from './node-ids';
-import { UuidV8Generator } from './uuid-v8.generator';
 
 /** A provider, not a constant at the construction site, so swapping in a leased id later is a
  * one-provider change. */
@@ -18,6 +18,7 @@ export const IDENTITY_NODE_ID = Symbol('IDENTITY_NODE_ID');
  */
 @Module({
   providers: [
+    ...IDENTITY_CLOCK_PROVIDERS,
     { provide: IDENTITY_NODE_ID, useValue: APP_NODE_ID },
     {
       provide: UuidV8Generator,

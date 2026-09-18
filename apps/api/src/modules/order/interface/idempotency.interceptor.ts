@@ -12,7 +12,7 @@ import type { Response } from 'express';
 import { ClsService } from 'nestjs-cls';
 import { type Observable, catchError, concatMap, from, of, throwError } from 'rxjs';
 import { computeRequestHash, setIdempotencyContext } from '@shared/idempotency';
-import type { AuthenticatedUser } from '@shared/rbac';
+import type { AuthenticatedUser } from '@jcool/platform/rbac';
 import {
   IDEMPOTENCY_STORE,
   type IdempotencyRecord,

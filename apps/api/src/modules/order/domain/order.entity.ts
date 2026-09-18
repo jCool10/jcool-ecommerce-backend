@@ -1,4 +1,4 @@
-import { assertNonEmpty, DomainError, Money } from '@shared/kernel';
+import { assertNonEmpty, DomainError, Money } from '@jcool/kernel';
 import { OrderItem } from './order-item.entity';
 import { OrderStatus } from './order-status';
 import { assertTransition, isTerminal } from './order-state-machine';

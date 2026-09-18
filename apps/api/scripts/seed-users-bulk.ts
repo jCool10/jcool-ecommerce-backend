@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import * as argon2 from 'argon2';
 import { Pool } from 'pg';
-import { IdentityService, SCRIPTS_NODE_ID, UuidV8Generator } from '../src/shared/identity';
-import { normalizeEmail, type NormalizedEmail } from '../src/shared/kernel/normalize-email';
+import { SCRIPTS_NODE_ID, UuidV8Generator } from '@jcool/id-generator';
+import { IdentityService } from '../src/shared/identity';
+import { normalizeEmail, type NormalizedEmail } from '@jcool/kernel';
 
 // Grows `users` and its unique-email index to a target row count WITHOUT going through the API, so
 // the benchmark can read index size / cache residency / autovacuum behavior at scale. Every row

@@ -2,7 +2,7 @@ import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@shared/kernel/to-error';
+import { toError } from '@jcool/kernel';
 import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from './queue.constants';
 
 const LOG_CONTEXT = 'QueueLifecycle';

@@ -1,4 +1,4 @@
-import { Money } from '@shared/kernel';
+import { Money } from '@jcool/kernel';
 import { describe, expect, it } from 'vitest';
 import { Product } from '../domain/entities';
 import { fromProductSnapshot, toProductSnapshot, type ProductSnapshot } from './product-cache.codec';

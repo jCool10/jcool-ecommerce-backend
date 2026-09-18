@@ -1,4 +1,4 @@
-import { DownstreamUnavailableError, type OutboundCall } from '@shared/resilience';
+import { DownstreamUnavailableError, type OutboundCall } from '@jcool/platform/resilience';
 import {
   PaymentGatewayError,
   type CreateSessionInput,

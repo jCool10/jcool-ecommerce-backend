@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
-import { METRICS, type CompensationTrigger, type MetricsPort } from '@shared/observability/metrics/metrics.port';
+import { METRICS, type CompensationTrigger, type MetricsPort } from '@jcool/metrics-port';
 import { OrderStatus } from '../../domain/order-status';
 import { canTransition } from '../../domain/order-state-machine';
 import type { FinalizeOutcome } from '../../domain/order.entity';

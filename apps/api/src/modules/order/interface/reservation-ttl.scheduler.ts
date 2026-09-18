@@ -3,10 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
-import { durationToMs } from '@shared/kernel';
-import { runInJobContext } from '@shared/observability/correlation/job-context';
-import { toError } from '@shared/kernel/to-error';
-import { withSpan } from '@shared/observability/tracing/tracer';
+import { durationToMs, toError } from '@jcool/kernel';
+import { runInJobContext, withSpan } from '@jcool/platform/observability';
 import { SweepExpiredReservationsUseCase, type SweepInput } from '../application/use-cases';
 
 const LOG_CONTEXT = 'ReservationTtlScheduler';

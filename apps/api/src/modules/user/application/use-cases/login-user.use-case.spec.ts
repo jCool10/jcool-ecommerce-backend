@@ -1,6 +1,6 @@
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { User } from '../../domain/entities/user.entity';
 import type { PasswordHasherPort, UserRepositoryPort } from '../ports';
 import type { AuthTokens, AuthTokensService } from '../services';

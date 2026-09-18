@@ -23,7 +23,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Role, Roles } from '@shared/rbac';
+import { Role, Roles } from '@jcool/platform/rbac';
 import { CatalogAdminService } from '../application/services/catalog-admin.service';
 import {
   AdminCategoryResponseDto,

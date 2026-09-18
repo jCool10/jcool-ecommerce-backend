@@ -9,8 +9,8 @@
  */
 import 'dotenv/config';
 import { Pool } from 'pg';
-import { bucketForEmail, bucketOf, identityKeyFingerprint } from '../src/shared/identity';
-import { normalizeEmail } from '../src/shared/kernel/normalize-email';
+import { bucketForEmail, bucketOf, identityKeyFingerprint } from '@jcool/id-codec';
+import { normalizeEmail } from '@jcool/kernel';
 
 const BATCH = 10_000;
 const OFFENDERS_SHOWN = 20;

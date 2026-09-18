@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { RedisService } from '@shared/infrastructure/redis';
-import { toError } from '@shared/kernel/to-error';
+import { RedisService } from '@jcool/platform/redis';
+import { toError } from '@jcool/kernel';
 
 const LOG_CONTEXT = 'SingleFlightLock';
 

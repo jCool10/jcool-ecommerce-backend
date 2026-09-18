@@ -10,8 +10,8 @@ import {
 import { ApiOkResponse, ApiTags, ApiUnauthorizedResponse } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
-import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@shared/infrastructure/throttler';
-import { Public } from '@shared/rbac';
+import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@jcool/platform/throttler';
+import { Public } from '@jcool/platform/rbac';
 import { HandlePaymentWebhookUseCase } from '../application/use-cases';
 
 /**

@@ -1,8 +1,8 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OBJECT_STORAGE, type ObjectStoragePort } from '@shared/infrastructure/storage';
-import { METRICS, type MetricsPort } from '@shared/observability/metrics/metrics.port';
-import { RetentionSweepRegistry, type RetentionSweep } from '@shared/retention';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
+import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
 
 /**

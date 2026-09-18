@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ShutdownService } from '../../src/shared/health/shutdown.service';
+import { ShutdownService } from '@jcool/platform/health';
 import { closeAppAfterAll } from '../setup/harness';
 import { createTestApp } from '../setup/test-app.factory';
 

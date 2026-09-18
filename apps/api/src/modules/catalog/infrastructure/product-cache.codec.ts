@@ -1,4 +1,4 @@
-import { Money } from '@shared/kernel';
+import { Money } from '@jcool/kernel';
 import { Product, PRODUCT_STATUSES, type ProductStatus, type ProductVariant } from '../domain/entities';
 
 /**

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import type { RetentionSweepRegistry } from '@shared/retention';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import type { RetentionSweepRegistry } from '@jcool/platform/retention';
 import type { ClaimedAsset } from '../ports/media-asset-repository.port';
 import { fakeMediaAssetRepository, fakeObjectStorage } from '../../testing/media-port.doubles';
 import { SweepAbandonedAssetsUseCase } from './sweep-abandoned-assets.use-case';

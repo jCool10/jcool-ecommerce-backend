@@ -7,7 +7,7 @@ import { FinalizeOrderUseCase } from '../../src/modules/order/application/use-ca
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import { METRICS, type MetricsPort } from '../../src/shared/observability/metrics/metrics.port';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '../../domain/entities/user.entity';
 import type { ActiveSession, CreateRefreshTokenInput, RefreshTokenRepositoryPort, RotateOutcome } from '../ports';

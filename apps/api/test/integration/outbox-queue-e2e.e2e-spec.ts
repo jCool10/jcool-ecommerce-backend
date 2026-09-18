@@ -15,7 +15,7 @@ import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
-import { withSpan } from '../../src/shared/observability/tracing/tracer';
+import { withSpan } from '@jcool/platform/observability';
 import { authHeader } from '../setup/auth.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import {

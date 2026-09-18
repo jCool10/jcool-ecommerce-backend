@@ -1,7 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Response } from 'express';
 import { describe, expect, it } from 'vitest';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { AUTH_COOKIE_PATH, CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from './auth-cookie.constants';
 import { AuthCookieService } from './auth-cookie.service';
 import type { CsrfTokenService } from './csrf-token.service';

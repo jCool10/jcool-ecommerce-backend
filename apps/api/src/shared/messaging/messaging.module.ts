@@ -6,6 +6,7 @@ import { OrderEventsHandler } from './handlers/order-events.handler';
 import { InboxStore } from './inbox/inbox.store';
 import { SweepInbox } from './inbox/sweep-inbox';
 import { DrizzleOutboxWriter } from './outbox/drizzle-outbox.writer';
+import { OUTBOX_BACKLOG_PROVIDERS } from './outbox/outbox-backlog.collector';
 import { SweepPublishedOutbox } from './outbox/sweep-published-outbox';
 import { OutboxRelay } from './outbox/outbox-relay';
 import { OutboxRelayScheduler } from './outbox/outbox-relay.scheduler';
@@ -28,6 +29,7 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
   // the architecture rules would not catch.
   providers: [
     { provide: OUTBOX_WRITER, useClass: DrizzleOutboxWriter },
+    ...OUTBOX_BACKLOG_PROVIDERS,
     ...QUEUE_PROVIDERS,
     QueueLifecycle,
     OutboxRelay,

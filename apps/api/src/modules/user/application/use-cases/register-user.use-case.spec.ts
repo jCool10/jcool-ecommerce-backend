@@ -1,5 +1,5 @@
 import { ConflictException } from '@nestjs/common';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { User } from '../../domain/entities/user.entity';
 import type { CreateUserInput, PasswordHasherPort, UserRepositoryPort } from '../ports';
 import type { EmailVerificationService, VerificationRecipient } from '../services';

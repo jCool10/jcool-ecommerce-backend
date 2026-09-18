@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fakeMetricsPort } from '@shared/testing/fake-metrics-port';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { CartItem } from '../domain/cart-item.entity';
 import type { CartRepositoryPort } from './ports/cart-repository.port';
 import type { CartSkuView, CatalogQueryPort } from './ports/catalog-query.port';

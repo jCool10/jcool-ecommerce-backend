@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { normalizeEmail } from '@shared/kernel';
-import { MIN_BUCKET_KEY_LENGTH, bucketForEmail } from './email-bucket';
+import { normalizeEmail } from '@jcool/kernel';
+import { MIN_BUCKET_KEY_LENGTH, bucketForEmail, bucketOf, decode } from '@jcool/id-codec';
+import { UuidV8Generator } from '@jcool/id-generator';
 import { IdentityService } from './identity.service';
-import { UuidV8Generator } from './uuid-v8.generator';
-import { bucketOf, decode } from './uuid-v8.codec';
 
 const KEY = 'identity-service-spec-key-not-a-real-secret';
 const OTHER_KEY = 'identity-service-spec-other-key-not-a-real-secret';

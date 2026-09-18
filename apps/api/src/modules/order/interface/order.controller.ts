@@ -24,8 +24,8 @@ import {
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { ORDER_THROTTLE, UserThrottlerGuard } from '@shared/infrastructure/throttler';
-import { CurrentUser, type AuthenticatedUser } from '@shared/rbac';
+import { ORDER_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
+import { CurrentUser, type AuthenticatedUser } from '@jcool/platform/rbac';
 import { CancelOrderUseCase, CheckoutOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';

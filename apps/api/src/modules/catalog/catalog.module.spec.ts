@@ -2,7 +2,7 @@ import { MODULE_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import { PinoLogger } from 'nestjs-pino';
 import { describe, expect, it, vi } from 'vitest';
-import { fakePinoLogger } from '@shared/testing/fake-pino-logger';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import {
   CATALOG_ADMIN_REPOSITORY,
   CATALOG_SEARCH,

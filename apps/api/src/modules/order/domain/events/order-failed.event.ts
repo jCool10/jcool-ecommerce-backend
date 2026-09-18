@@ -1,4 +1,4 @@
-import type { DomainEvent } from '@shared/kernel';
+import type { DomainEvent } from '@jcool/kernel';
 
 export class OrderFailedEvent implements DomainEvent {
   readonly eventName = 'order.failed';

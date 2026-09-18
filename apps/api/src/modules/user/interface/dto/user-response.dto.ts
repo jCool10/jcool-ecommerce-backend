@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type { User } from '../../domain/entities/user.entity';
-import { ROLES } from '@shared/rbac';
+import { ROLES } from '@jcool/platform/rbac';
 
 /** Always build through `fromEntity`: naming the safe fields is what keeps `passwordHash` from leaking. */
 export class UserResponseDto {

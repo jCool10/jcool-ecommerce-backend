@@ -34,7 +34,7 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
-import { LOGIN_THROTTLE, REFRESH_THROTTLE, REGISTER_THROTTLE } from '@shared/infrastructure/throttler';
+import { LOGIN_THROTTLE, REFRESH_THROTTLE, REGISTER_THROTTLE } from '@jcool/platform/throttler';
 import { AUTH_AUDIT, type AuthAuditPort } from '../application/ports';
 import { EmailVerificationService, PasswordResetService, SessionService } from '../application/services';
 import {
@@ -47,7 +47,7 @@ import {
   RegisterUserUseCase,
   ResendVerificationUseCase,
 } from '../application/use-cases';
-import { CurrentUser, Public, type AuthenticatedUser } from '@shared/rbac';
+import { CurrentUser, Public, type AuthenticatedUser } from '@jcool/platform/rbac';
 import { RefreshTokenCookie } from './decorators';
 import {
   AuthTokensResponseDto,

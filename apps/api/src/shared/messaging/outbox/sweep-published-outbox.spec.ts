@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database';
-import { fakeConfigService } from '@shared/testing/fake-config.service';
-import { useFakeClock } from '@shared/testing/fake-clock';
-import { RetentionSweepRegistry } from '@shared/retention';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { useFakeClock } from '@jcool/testing/fake-clock';
+import { RetentionSweepRegistry } from '@jcool/platform/retention';
 import { SweepPublishedOutbox } from './sweep-published-outbox';
 
 const DAY_MS = 86_400_000;
