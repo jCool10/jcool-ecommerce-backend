@@ -2,8 +2,9 @@ import { Controller, Get, Res, UseGuards } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { register } from 'prom-client';
-import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '../../throttler';
-import { Public } from '../../rbac';
+// By file: the throttler barrel drags in its Redis storage, which a service without Redis never installs.
+import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '../../throttler/throttler.constants';
+import { Public } from '../../rbac/public.decorator';
 import { MetricsTokenGuard } from './metrics.guard';
 
 // `@Public()` opts out of the global JwtAuthGuard — auth here is the bearer token in

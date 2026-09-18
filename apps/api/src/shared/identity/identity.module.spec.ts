@@ -7,7 +7,7 @@ import configuration from '@shared/config/configuration';
 import { normalizeEmail } from '@jcool/kernel';
 import { bucketForEmail, bucketOf, decode } from '@jcool/id-codec';
 import { APP_NODE_ID, UuidV8Generator } from '@jcool/id-generator';
-import { ID_CLOCK_DRIFT_MS } from './identity-clock.collector';
+import { ID_CLOCK_DRIFT_MS } from '@jcool/platform/metrics';
 import { IdentityModule } from './identity.module';
 import { IdentityService } from './identity.service';
 

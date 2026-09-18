@@ -5,7 +5,7 @@ import {
   IDENTITY_CLOCK_PROVIDERS,
   bindIdentityClockMetrics,
   unbindIdentityClockMetrics,
-} from './identity-clock.collector';
+} from '@jcool/platform/metrics';
 import { IdentityService } from './identity.service';
 
 /** A provider, not a constant at the construction site, so swapping in a leased id later is a

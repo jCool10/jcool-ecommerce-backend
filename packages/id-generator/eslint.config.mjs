@@ -44,13 +44,24 @@ export default tseslint.config(
   // (timestamp, node, sequence) triple. Callers above `generate()` hold no clock state and may await.
   {
     files: ['src/**/*.ts'],
-    ignores: ['src/**/*.spec.ts'],
+    ignores: ['src/**/*.spec.ts', 'src/node-lease.ts'],
     rules: {
       'no-restricted-syntax': [
         'error',
         { selector: 'AwaitExpression', message: SYNC_ONLY },
         { selector: '[async=true]', message: SYNC_ONLY },
         { selector: 'ForOfStatement[await=true]', message: SYNC_ONLY },
+      ],
+    },
+  },
+  // The lease awaits its store, but its mint path, including the fence check, stays synchronous.
+  {
+    files: ['src/node-lease.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        { selector: 'MethodDefinition[key.name=/^(generate|fenced)$/] AwaitExpression', message: SYNC_ONLY },
+        { selector: 'MethodDefinition[key.name=/^(generate|fenced)$/] > [async=true]', message: SYNC_ONLY },
       ],
     },
   },

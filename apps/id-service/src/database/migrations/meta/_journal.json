@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789722908356,
+      "tag": "0000_node_leases",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789722908879,
+      "tag": "0001_seed_node_pool",
+      "breakpoints": true
+    }
+  ]
+}

@@ -181,6 +181,93 @@ services:
     networks:
       - jcool-net
 
+  # The id-service's own database: it holds the node leases and nothing else.
+  id-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-id-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ids
+      POSTGRES_PASSWORD: ${ID_POSTGRES_PASSWORD:-ids}
+      POSTGRES_DB: ids
+    volumes:
+      - idpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ids -d ids"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # The pre-deploy step: a migration that fails keeps the replicas from starting.
+  id-migrate:
+    build:
+      context: .
+      dockerfile: apps/id-service/Dockerfile
+    image: jcool-id-service:local
+    container_name: jcool-id-migrate
+    command: ['node', 'dist/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://ids:${ID_POSTGRES_PASSWORD:-ids}@id-postgres:5432/ids
+    depends_on:
+      id-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  # Three replicas under one name, which Docker's DNS answers with every replica's IP: the shape the
+  # gateway's `dynamic a` upstream resolves on Railway's private network. Unpublished, as there.
+  id-service:
+    image: jcool-id-service:local
+    pull_policy: never
+    restart: unless-stopped
+    deploy:
+      replicas: 3
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://ids:${ID_POSTGRES_PASSWORD:-ids}@id-postgres:5432/ids
+      # Keeps minting this long after SIGTERM, then releases its node; stop_grace_period must outlast it.
+      SHUTDOWN_GRACE_PERIOD_MS: 8000
+    stop_grace_period: 20s
+    depends_on:
+      id-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+  # Only the health listener is published; the id-service load balancer (4000) stays on the network.
+  gateway:
+    build:
+      context: apps/gateway
+    container_name: jcool-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_HOST_PORT:-8080}:8080"
+    environment:
+      PORT: 8080
+      ID_LB_PORT: 4000
+      ID_SERVICE_HOST: id-service
+      ID_SERVICE_PORT: 3000
+    depends_on:
+      id-service:
+        condition: service_started
+    networks:
+      - jcool-net
+
   # Receives OTLP from the app, redacts PII, forwards to Jaeger. Distroless (no shell) → no
   # healthcheck; started, not waited on.
   otel-collector:
@@ -257,6 +344,7 @@ services:
 
 volumes:
   pgdata:
+  idpgdata:
   redisdata:
   meilidata:
   miniodata:

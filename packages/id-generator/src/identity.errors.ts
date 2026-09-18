@@ -13,3 +13,11 @@ export class ClockStalledError extends Error {
     this.name = 'ClockStalledError';
   }
 }
+
+/** The process holds no node id it may mint under right now. Another replica can, hence 503. */
+export class LeaseNotHeldError extends Error {
+  constructor(readonly state: string) {
+    super(`No node lease to mint under (${state})`);
+    this.name = 'LeaseNotHeldError';
+  }
+}

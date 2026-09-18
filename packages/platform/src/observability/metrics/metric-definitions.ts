@@ -75,7 +75,7 @@ export const RETENTION_SWEEP_BUCKETS = [0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10, 30]
  * Eager DI providers, so every metric appears in `/metrics` (HELP/TYPE) before its first
  * observation rather than popping into existence when something happens to touch it.
  */
-export const METRIC_PROVIDERS: Provider[] = [
+export const HTTP_METRIC_PROVIDERS: Provider[] = [
   makeHistogramProvider({
     name: HTTP_REQUEST_DURATION_SECONDS,
     help: 'HTTP request duration in seconds (RED). Labels: method, route (template), status_code.',
@@ -87,6 +87,9 @@ export const METRIC_PROVIDERS: Provider[] = [
     help: 'Total HTTP requests (RED). Labels: method, route (template), status_code.',
     labelNames: ['method', 'route', 'status_code'],
   }),
+];
+
+export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: ORDERS_CREATED_TOTAL,
     help: 'Orders placed (DRAFT → PENDING), by resulting status.',

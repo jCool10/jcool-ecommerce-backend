@@ -1,7 +1,9 @@
-import { hrtime } from 'node:process';
 import { EntropyPool } from './entropy-pool';
+import { type IdentityClock, systemClock } from './identity-clock';
 import { type ClockStallReason, ClockStalledError } from './identity.errors';
 import { MAX_TIMESTAMP_MS, NODE_COUNT, RANDOM_BITS, SEQUENCE_COUNT, encode } from '@jcool/id-codec';
+
+export type { IdentityClock } from './identity-clock';
 
 const RANDOM_BYTES = RANDOM_BITS / 8;
 const NS_PER_MS = 1_000_000n;
@@ -14,22 +16,6 @@ const SPIN_DEADLINE_NS = 10n * NS_PER_MS;
 const SPIN_LOOP_CAP = 40_000;
 
 const NO_STALL = -1;
-
-/** @internal Clock seam. Production always uses `systemClock`; nothing but a test may supply another. */
-export interface IdentityClock {
-  /** Wall-clock milliseconds. May step in either direction when NTP adjusts it. */
-  wallMs(): number;
-  /** Non-decreasing milliseconds from an arbitrary origin. */
-  monotonicMs(): number;
-  /** Real elapsed nanoseconds, bounding how long a spin may block. */
-  elapsedNs(): bigint;
-}
-
-const systemClock: IdentityClock = {
-  wallMs: () => Date.now(),
-  monotonicMs: () => Number(hrtime.bigint() / NS_PER_MS),
-  elapsedNs: () => hrtime.bigint(),
-};
 
 /**
  * Synchronous by design and lint-enforced to stay that way — an await between reading the clock and
@@ -90,6 +76,11 @@ export class UuidV8Generator {
 
   get stallCount(): number {
     return this.stalls;
+  }
+
+  /** Timestamp of the last id minted, 0 before the first. */
+  get lastTimestampMs(): number {
+    return this.lastMs;
   }
 
   generate(bucket: number): string {

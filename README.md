@@ -141,7 +141,7 @@ Two composition roots are exempt from the "shared may not import a context" rule
 
 ### Project layout
 
-pnpm workspace, tasks run through Turborepo. The app is `apps/api` (`@jcool/api`); `packages/` holds the code the future services share.
+pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id and is not called by anything yet; `apps/gateway` is the Caddy load balancer in front of it ([id-service README](./apps/id-service/README.md)). `packages/` holds the code the services share.
 
 ```
 apps/api/
@@ -163,6 +163,8 @@ apps/api/
 │   ├── integration/         # 68 e2e suites on real infrastructure (Testcontainers)
 │   └── setup/               # global setup, app factory, fixtures, per-suite side containers
 └── scripts/                 # seeds, identity verification, DB metrics
+apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replicas; unit / e2e / system tests
+apps/gateway/                # Caddyfile: private LB over the id-service replicas; system tests against fake upstreams
 packages/
 ├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
 ├── id-codec/                # @jcool/id-codec — UUIDv8 layout, HMAC email buckets
@@ -409,6 +411,8 @@ pnpm test:e2e       # 68 integration suites, 522 tests — requires Docker
 Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
 The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
+
+`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service` and `gateway`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced.
 
 Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit `emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
 

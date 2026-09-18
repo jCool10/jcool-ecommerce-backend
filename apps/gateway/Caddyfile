@@ -1,0 +1,54 @@
+{
+	admin off
+	# Railway's edge terminates TLS in front of us; certificates here would only fight it.
+	auto_https off
+}
+
+# The only port the platform exposes. Health only for now: no route here may reach the load balancer.
+:{$PORT:8080} {
+	handle /health {
+		respond "ok" 200
+	}
+	handle {
+		respond 404
+	}
+}
+
+# Private: reachable over the internal network only, never published.
+:{$ID_LB_PORT:4000} {
+	reverse_proxy {
+		# Re-resolved on a timer, so replicas that come and go (every deploy) are picked up by IP.
+		dynamic a {$ID_SERVICE_HOST:id-service} {$ID_SERVICE_PORT:3000} {
+			refresh {$ID_LB_DNS_REFRESH:5s}
+		}
+		lb_policy round_robin
+		# A failed dial is always retried. A request that reached a replica is retried only if it
+		# matches below: minting is safe to repeat, since an unanswered batch is never handed out.
+		lb_retries {$ID_LB_RETRIES:1}
+		lb_try_duration {$ID_LB_TRY_DURATION:1s}
+		lb_try_interval {$ID_LB_TRY_INTERVAL:50ms}
+		lb_retry_match {
+			method POST
+			path /v1/ids
+		}
+		# A set with an expression is matched against the response. A 503 is a replica without a
+		# usable lease, which minted nothing, so another replica takes the request.
+		lb_retry_match {
+			method POST
+			path /v1/ids
+			expression `{rp.status_code} == 503`
+		}
+		# Only a body held whole in this buffer can be sent again; unbuffered, a retry goes out empty.
+		request_buffers 4KiB
+		# Passive health only (active checks do not apply to dynamic upstreams): a replica that
+		# answered 503 or failed a try sits out fail_duration. Short, because a 503 is retried anyway
+		# and the whole fleet sits out together after a shared outage.
+		fail_duration {$ID_LB_FAIL_DURATION:2s}
+		max_fails 1
+		unhealthy_status 503
+		transport http {
+			dial_timeout {$ID_LB_DIAL_TIMEOUT:200ms}
+			response_header_timeout {$ID_LB_RESPONSE_HEADER_TIMEOUT:300ms}
+		}
+	}
+}

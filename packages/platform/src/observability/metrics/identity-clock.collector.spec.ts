@@ -87,6 +87,23 @@ describe('identity clock collector', () => {
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBe(1_500);
   });
 
+  // A lease swaps its generator whenever it moves to another node. Dropping back to the new one's
+  // zero would read as a counter reset to `increase()`, hiding exactly the stalls around the swap.
+  it('carries the stall count across a rebind and an unbind', async () => {
+    const baseline = (await scrape(ID_CLOCK_STALL_TOTAL)) ?? 0;
+    const first = UuidV8Generator.createWithClock({ nodeId: 1, clock: fakeClock().clock });
+    bindIdentityClockMetrics(first);
+    stall(first);
+
+    const second = UuidV8Generator.createWithClock({ nodeId: 2, clock: fakeClock().clock });
+    bindIdentityClockMetrics(second);
+    stall(second);
+    await expect(scrape(ID_CLOCK_STALL_TOTAL)).resolves.toBe(baseline + 2);
+
+    unbindIdentityClockMetrics(second);
+    await expect(scrape(ID_CLOCK_STALL_TOTAL)).resolves.toBe(baseline + 2);
+  });
+
   // Apps do not close in build order, so an unguarded release lets a shutting-down app blind the
   // metrics for the one still serving.
   it('releases only the generator that is actually bound', async () => {

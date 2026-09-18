@@ -10,10 +10,13 @@ export const ID_CLOCK_STALL_TOTAL = 'id_clock_stall_total';
 
 // Module-level rather than captured in the collect closures: the registry get-or-creates a metric by
 // name, so a closure over an injected generator would pin the FIRST app built in the process and
-// report one nothing mints through (same hazard as `outbox-backlog.collector.ts`).
+// report one nothing mints through (the api's outbox backlog collector has the same hazard).
 let bound: UuidV8Generator | null = null;
+// Stalls counted by generators no longer bound, so a swap never drops the total back to zero.
+let retiredStalls = 0;
 
 export function bindIdentityClockMetrics(generator: UuidV8Generator): void {
+  if (bound !== null && bound !== generator) retiredStalls += bound.stallCount;
   bound = generator;
 }
 
@@ -22,7 +25,9 @@ export function bindIdentityClockMetrics(generator: UuidV8Generator): void {
  * app's shutdown must not tear down the newer app's binding.
  */
 export function unbindIdentityClockMetrics(generator: UuidV8Generator): void {
-  if (bound === generator) bound = null;
+  if (bound !== generator) return;
+  retiredStalls += generator.stallCount;
+  bound = null;
 }
 
 export const IDENTITY_CLOCK_PROVIDERS: Provider[] = [
@@ -39,15 +44,12 @@ export const IDENTITY_CLOCK_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: ID_CLOCK_STALL_TOTAL,
     help: 'Times the generator refused to mint because the clock stopped advancing (each one answered a request with 503).',
-    // Left at 0 while unbound, unlike the gauge: 0 stalls says the same thing either way, and a
+    // Kept while unbound, unlike the gauge: a stall total says the same thing either way, and a
     // counter that appears mid-scrape gives `increase()` no baseline.
     collect(this: Counter<string>) {
-      if (!bound) return;
-      // Mirrors a value the generator owns, so the total stays monotonic for as long as one stays
-      // bound. Rebinding restarts at zero and `increase()` reads that as a counter reset — only a
-      // test process that builds a second app ever sees it.
+      // Mirrors values the generators own; the retired share keeps it monotonic across rebinds.
       this.reset();
-      this.inc(bound.stallCount);
+      this.inc(retiredStalls + (bound?.stallCount ?? 0));
     },
   }),
 ];

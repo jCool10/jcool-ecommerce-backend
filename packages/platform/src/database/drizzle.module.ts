@@ -29,6 +29,7 @@ export class DrizzleModule implements OnApplicationShutdown {
               max: config.get<number>('database.poolMax'),
               connectionTimeoutMillis: config.get<number>('database.connectionTimeoutMs'),
               idleTimeoutMillis: config.get<number>('database.idleTimeoutMs'),
+              query_timeout: config.get<number>('database.queryTimeoutMs'),
             });
             // Without an 'error' listener a dead idle client crashes the process;
             // log and let pg discard it (DB restart, failover, idle timeout).

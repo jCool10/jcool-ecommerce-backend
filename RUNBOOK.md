@@ -97,6 +97,23 @@ Consequences to plan for:
 - A dump restored into a database that already has a *different* pin row will fail on the primary key of `identity_key_pin` during `pg_restore`, not at boot. Restore into an empty database.
 - Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the pinned key; changing the pin makes the database lie about its own history.
 
+### Restoring or recreating the id-service database
+
+`id-postgres` holds only node leases. A restored dump, like a freshly migrated database, can sit behind ids the replicas already minted, and a new holder of a node would then mint at those timestamps again. Before any replica starts against it:
+
+1. Stop every id-service replica, then wait `ID_LEASE_TTL_MS` (5 minutes by default). No id was stamped past its holder's lease end, so once every lease the old rows knew of has ended, the database clock is above every id minted.
+2. Lift every floor to that clock:
+
+   ```sql
+   -- psql against id-service's DATABASE_URL
+   UPDATE node_leases
+   SET holder = NULL,
+       lease_until = LEAST(lease_until, now()),
+       max_ts_ms = GREATEST(COALESCE(max_ts_ms, 0), (extract(epoch FROM now()) * 1000)::bigint);
+   ```
+
+3. Start the replicas.
+
 ---
 
 ## Rebuild the search index
