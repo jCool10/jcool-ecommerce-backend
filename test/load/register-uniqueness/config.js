@@ -4,7 +4,8 @@
 //   - stack up: docker compose up -d  (postgres on :5433)
 //   - app running with THROTTLE_ENABLED=false  (single-host load otherwise trips
 //     the per-IP register limiter and the run measures the throttle, not the DB)
-//   - table pre-seeded for the duplicate mix: npm run seed:users:bulk
+//   - table pre-seeded for the duplicate mix: pnpm seed:users:bulk. It writes the user-service
+//     database, so BASE_URL must reach whichever service owns /auth/register.
 //
 // Authoritative latency comes from the app's own Prometheus histogram
 // (route:http_request_duration_seconds:p99), not k6 client timing — k6 only drives load.
@@ -15,7 +16,7 @@ export const JSON_HDR = { 'Content-Type': 'application/json' };
 // Passes the register DTO (email + password, min length 8).
 export const PW = __ENV.PW || 'correct horse battery staple';
 
-// Must match the seeder (apps/api/scripts/seed-users-bulk.ts): the duplicate mix and the
+// Must match the seeder (apps/user-service/scripts/seed-users-bulk.ts): the duplicate mix and the
 // write mix's duplicate fraction target these pre-seeded rows to force 409s.
 export const SEED_PREFIX = __ENV.SEED_PREFIX || 'loadtest+';
 export const SEED_DOMAIN = __ENV.SEED_DOMAIN || 'loadtest.jcool.local';
@@ -31,7 +32,7 @@ export function existingEmail() {
 }
 
 // A never-before-seen email (expected → 201). Unique across VUs/iterations/runs;
-// same prefix so `npm run seed:users:bulk -- --clean` removes it afterwards.
+// same prefix so `pnpm seed:users:bulk --clean` removes it afterwards.
 export function freshEmail(runId) {
   return `${SEED_PREFIX}w-${__VU}-${__ITER}-${runId}@${SEED_DOMAIN}`;
 }

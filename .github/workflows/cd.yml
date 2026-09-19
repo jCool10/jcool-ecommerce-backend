@@ -110,3 +110,11 @@ jobs:
           curl --fail --silent --show-error --location \
             --retry 10 --retry-delay 6 --retry-all-errors --max-time 20 \
             "${APP_PUBLIC_URL%/}/health/ready"
+
+      # Dark, so it goes last: nothing public waits on it.
+      - name: Deploy user-service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --ci --service user-service --environment "$RAILWAY_ENVIRONMENT"
+          scripts/railway-wait-for-rollout.sh user-service

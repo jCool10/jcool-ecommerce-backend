@@ -14,6 +14,7 @@ export const redactPaths: string[] = [
   ...wildcardPaths,
   'req.headers.authorization',
   'req.headers.cookie',
+  'req.headers["x-csrf-token"]',
   'res.headers["set-cookie"]',
   'req.body.password',
   'req.body.newPassword',

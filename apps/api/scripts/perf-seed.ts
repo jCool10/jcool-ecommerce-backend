@@ -9,9 +9,11 @@
  *
  * Leaves Redis alone: the public read path is cached behind a generation counter only an admin write
  * bumps, so an app already serving pre-seed pages keeps serving them — the final log line says how.
+ *
+ * The perf account itself lives in user-service (`db:seed:perf-user` there); its id is read back
+ * over HTTP, the way any client learns it, so user-service must be running.
  */
 import 'dotenv/config';
-import * as argon2 from 'argon2';
 import { and, eq, inArray, like, notInArray, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
@@ -24,29 +26,33 @@ import {
 import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/catalog/infrastructure/catalog-cache.keys';
 import { cartItems, carts } from '../src/modules/cart/infrastructure/schema/cart.schema';
 import { stockLevels } from '../src/modules/inventory/infrastructure/schema/inventory.schema';
-import { users } from '../src/modules/user/infrastructure/schema/user.schema';
-import { SCRIPTS_NODE_ID, UuidV8Generator } from '@jcool/id-generator';
-import { IdentityService } from '../src/shared/identity';
-import { normalizeEmail } from '@jcool/kernel';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';
 const SKU_PREFIX = 'PERF-';
-// Normalized here so the insert, the lookups, the cleanup and the bucket derivation share bytes.
-const PERF_USER_EMAIL = normalizeEmail('perf@loadtest.jcool.local');
+const PERF_USER_EMAIL = 'perf@loadtest.jcool.local';
 
-// This account authenticates over HTTP (unlike the bulk seeder's rows), so the credential is
-// overridable rather than fixed in a committed file. The default is for a throwaway database only.
+// Same default as user-service's seed; overridable because the account authenticates over HTTP.
 function perfUserPassword(): string {
   return process.env.PERF_USER_PASSWORD ?? 'perf-load-not-a-real-secret';
 }
 
-// Must be the app's own key: seeding under another writes an account whose id routes to a bucket its
-// email does not, which nothing notices until a shard split. Refuse rather than invent a default.
-function identity(): IdentityService {
-  const bucketKey = process.env.IDENTITY_BUCKET_KEY;
-  if (!bucketKey) throw new Error('IDENTITY_BUCKET_KEY is required to mint the perf user id');
-  return new IdentityService(UuidV8Generator.create({ nodeId: SCRIPTS_NODE_ID }), bucketKey);
+async function perfUserId(): Promise<string> {
+  const base = process.env.USER_SERVICE_URL ?? 'http://localhost:3002';
+  const login = await fetch(new URL('/auth/login', base), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: PERF_USER_EMAIL, password: perfUserPassword() }),
+  });
+  if (!login.ok) {
+    throw new Error(
+      `Perf user login at ${base} answered ${login.status}; run \`pnpm --filter @jcool/user-service db:seed:perf-user\` first`,
+    );
+  }
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  const me = await fetch(new URL('/auth/me', base), { headers: { authorization: `Bearer ${accessToken}` } });
+  if (!me.ok) throw new Error(`GET ${base}/auth/me answered ${me.status}`);
+  return ((await me.json()) as { id: string }).id;
 }
 
 const CATEGORY_COUNT = 20;
@@ -188,26 +194,10 @@ async function seedPricesAndStock(db: Db, variantIds: readonly string[]): Promis
 
 // The cart is deliberately fat, so `GET /cart` shows the per-line SKU fan-out.
 async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: string; lines: number }> {
-  let [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
-  if (!user) {
-    // Hashed only when the account is actually being created — argon2id is deliberately slow, and
-    // a re-run must not burn that cost to produce a digest ON CONFLICT would discard anyway.
-    const passwordHash = await argon2.hash(perfUserPassword(), { type: argon2.argon2id });
-    await db
-      .insert(users)
-      .values({
-        id: identity().mintUserId(PERF_USER_EMAIL),
-        email: PERF_USER_EMAIL,
-        passwordHash,
-        emailVerifiedAt: new Date(),
-      })
-      .onConflictDoNothing();
-    [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
-  }
-  if (!user) throw new Error(`Seed precondition failed: user ${PERF_USER_EMAIL} not found`);
+  const userId = await perfUserId();
 
-  await db.insert(carts).values({ userId: user.id }).onConflictDoNothing();
-  const [cart] = await db.select({ id: carts.id }).from(carts).where(eq(carts.userId, user.id));
+  await db.insert(carts).values({ userId }).onConflictDoNothing();
+  const [cart] = await db.select({ id: carts.id }).from(carts).where(eq(carts.userId, userId));
   if (!cart) throw new Error(`Seed precondition failed: cart for ${PERF_USER_EMAIL} not found`);
 
   // Priced, live SKUs only: an unpriced or archived line still renders, but it would not exercise
@@ -241,7 +231,7 @@ async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: st
     .select({ value: sql<number>`count(*)::int` })
     .from(cartItems)
     .where(eq(cartItems.cartId, cart.id));
-  return { userId: user.id, lines };
+  return { userId, lines };
 }
 
 async function clean(db: Db): Promise<void> {
@@ -251,12 +241,12 @@ async function clean(db: Db): Promise<void> {
     .where(like(productVariants.sku, `${SKU_PREFIX}%`));
   const variantIds = perfVariants.map((v) => v.id);
 
-  const [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, PERF_USER_EMAIL));
-  if (user) {
-    // cart_items cascade from carts; the user row has no FK to either (cross-context boundary).
-    await db.delete(carts).where(eq(carts.userId, user.id));
-    await db.delete(users).where(eq(users.id, user.id));
-  }
+  // cart_items cascade from carts. The account itself is user-service's to remove.
+  const userId = await perfUserId().catch((error: unknown) => {
+    console.warn(`Perf cart left in place, its owner could not be looked up: ${String(error)}`);
+    return null;
+  });
+  if (userId) await db.delete(carts).where(eq(carts.userId, userId));
 
   // Children before parents: prices and stock levels reference the variants being removed, and
   // stock_levels has no FK to enforce that order for us.

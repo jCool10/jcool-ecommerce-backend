@@ -4,6 +4,7 @@ import { ClsService } from 'nestjs-cls';
 import { LoggerModule, type Params } from 'nestjs-pino';
 import { JOB_NAME_KEY } from '../correlation/job-context';
 import { redactPaths } from './redact-paths';
+import { requestWithoutQuery } from './request-serializer';
 
 const REDACT_CENSOR = '[Redacted]';
 
@@ -22,6 +23,7 @@ export const ObservabilityLoggerModule = LoggerModule.forRootAsync({
         level,
         autoLogging: false,
         redact: { paths: redactPaths, censor: REDACT_CENSOR },
+        serializers: { req: requestWithoutQuery },
         mixin(): Record<string, string> {
           const fields: Record<string, string> = {};
           if (cls.isActive()) {

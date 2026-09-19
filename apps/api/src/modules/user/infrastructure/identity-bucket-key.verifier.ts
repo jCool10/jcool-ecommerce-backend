@@ -135,7 +135,7 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
       throw new Error(
         `User ${sample.id} does not route to the bucket its email hashes to under the current ` +
           `IDENTITY_BUCKET_KEY (expected ${expected}, id carries ${actual ?? 'no routing bucket'}). ` +
-          `Run \`npm run identity:verify\` to size the damage before restarting.`,
+          `Run \`pnpm --filter @jcool/api identity:verify\` to size the damage before restarting.`,
       );
     }
   }

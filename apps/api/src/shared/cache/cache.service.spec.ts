@@ -54,6 +54,12 @@ describe('CacheService', () => {
       ctx.client.set.mockRejectedValue(DOWN);
       await expect(ctx.cache.write('k', { a: 1 }, 60)).resolves.toBe(false);
     });
+
+    // The shared instance runs `noeviction`: full, it refuses writes and keeps answering reads.
+    it('reports a write a full Redis refuses as a failed write', async () => {
+      ctx.client.set.mockRejectedValue(new Error("OOM command not allowed when used memory > 'maxmemory'."));
+      await expect(ctx.cache.writeMs('k', { a: 1 }, 60_000)).resolves.toBe(false);
+    });
   });
 
   describe('readCounter', () => {

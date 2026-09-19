@@ -116,6 +116,7 @@ Deployed on Railway, once the public domain moves onto the gateway ([RUNBOOK](./
 ```
 client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ api            every route but /internal/*
                               gateway :4000 ─▶ id-service ×3 ─▶ id-postgres   private network only
+                user-service ─▶ gateway :4000                 dark: no domain, nothing routes to it yet
 ```
 
 ### Bounded contexts
@@ -148,7 +149,7 @@ Two composition roots are exempt from the "shared may not import a context" rule
 
 ### Project layout
 
-pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id and is not called by anything yet ([id-service README](./apps/id-service/README.md)). `apps/gateway` is Caddy: the public entry that passes every route to the api, and the private load balancer in front of the id-service replicas. `packages/` holds the code the services share.
+pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id ([id-service README](./apps/id-service/README.md)). `apps/user-service` serves the api's `/auth` contract from its own Postgres, mints its ids through the id-service and signs ES256 tokens; it runs dark until the cutover ([user-service README](./apps/user-service/README.md)). `apps/gateway` is Caddy: the public entry that passes every route to the api, and the private load balancer in front of the id-service replicas. `packages/` holds the code the services share.
 
 ```
 apps/api/
@@ -171,6 +172,7 @@ apps/api/
 │   └── setup/               # global setup, app factory, fixtures, per-suite side containers
 └── scripts/                 # seeds, identity verification, DB metrics
 apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replicas; unit / e2e / system tests
+apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e / system tests
 apps/gateway/                # Caddyfile: public site in front of the api, private LB over the id-service replicas
 packages/
 ├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
@@ -280,7 +282,7 @@ pnpm start:dev
 
 `minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Meilisearch is only needed with `SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
-Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose down -v`.
+Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose down -v`. The user-service is opt-in, since it needs `apps/user-service/.env`: `docker compose --profile user-service up -d --build user-service` serves it on <http://127.0.0.1:3002>, with its Postgres on 127.0.0.1:5434. Redis runs with AOF on, which the user-service requires.
 
 ---
 
@@ -419,7 +421,7 @@ Details worth stealing: the e2e app factory quarantines the developer's `.env` s
 
 The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
 
-`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service` and `gateway`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log.
+`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service`, `gateway` and `user-service`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log. For the user-service, it runs the api image beside it and checks the same `/auth` OpenAPI operations, the same answers to a set of requests and to a whole session, and ids minted through the gateway.
 
 Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit `emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
 
@@ -496,7 +498,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 **CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first: `lint:check` → `typecheck` → `arch:check` → `pnpm audit --prod --audit-level high` → `build` → promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
 
-**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. It first applies `.railway/railway.ts` (every service's build and deploy settings; hand-set variables are listed by name with `preserve()`, so their values stay in Railway, and a plan that would delete anything is refused), then re-plans and fails if anything is still pending. It then deploys id-service, the api and the gateway in that order, each live before the next starts. For each, Railway builds the image, applies migrations as a `preDeployCommand`, and gates the traffic switch on `/health/ready` from inside the network. Last, CD smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
+**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. It first applies `.railway/railway.ts` (every service's build and deploy settings; hand-set variables are listed by name with `preserve()`, so their values stay in Railway, and a plan that would delete anything is refused), then re-plans and fails if anything is still pending. It then deploys id-service, the api and the gateway in that order, each live before the next starts, and the dark user-service after the public smoke test. For each, Railway builds the image, applies migrations as a `preDeployCommand`, and gates the traffic switch on `/health/ready` from inside the network. Last, CD smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
 
 **Shutdown** is staged: `SIGTERM` flips `/health/ready` to `503` and holds for `SHUTDOWN_GRACE_PERIOD_MS` so a load balancer drains this instance, the HTTP server closes, and only then do the pg pool and Redis client drain and the telemetry buffers flush. The flush runs the OTel and Sentry exports concurrently under a fixed ceiling, so a collector dying in the same rollout delays the exit by a bounded amount instead of the exporter's own timeout.
 
@@ -534,12 +536,13 @@ Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lin
 | `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | Drizzle migration workflow (`:prod` runs the compiled CLI — the image's release command) |
 | `search:reindex` | Rebuild the Meilisearch index from Postgres |
 | `queue:replay-dlq` | Inspect the dead-letter queue; `--apply` to replay (dry run is the default) |
-| `identity:verify` | Scan every user row for an id that does not route to its email's bucket |
+| `identity:verify` | Scan every user-service user row for an id that does not route to its email's bucket (`pnpm --filter @jcool/api identity:verify` scans the api's table until cutover) |
 | `storage:verify` | Reconcile bucket against `media_assets` three ways: orphan objects, `ATTACHED` rows whose object is gone, and `product_images` rows whose asset row is gone |
 | `load:baseline` · `load:register:*` | k6 mixes |
 | `load:cache-stampede` · `load:breakpoint` · `load:sku-contention` | Performance-experiment mixes (`test/load/`): cache stampede arms, open-model breakpoint ramp, single-SKU reservation contention. Each exports `--summary-export` JSON; authoritative numbers come from Prometheus, not k6 timing |
 | `load:public-read` | Anonymous read profile for a **deployed** instance (`BASE_URL=…`, `PROFILE=steady` \| `burst`). No Prometheus and no write journey — see [Measured performance](#measured-performance) for what it can and cannot answer |
-| `db:seed:perf` · `seed:users:bulk` · `db:metrics:users` | Planner-oriented perf seed · bulk identity seed · DB benchmark capture |
+| `db:seed:perf-user` · `db:seed:perf` | Perf user in user-service · catalog and that user's cart in the api (resolves the user by logging in to user-service, so seed the user first) |
+| `seed:users:bulk` · `db:metrics:users` | Bulk identity seed · DB benchmark capture, both against the user-service database |
 
 `:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `storage:verify:prod`) run the compiled CLI from `dist/`, because `tsx` is a devDependency and is not installed in the image.
 

@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { Pool } from 'pg';
 
 // Postgres-side metric capture for the register-uniqueness benchmark; run after a seed and/or a k6

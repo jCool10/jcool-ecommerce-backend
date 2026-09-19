@@ -5,6 +5,8 @@ export const partial = 'api';
 const API_SERVICE = 'jcool-ecommerce-backend';
 const API_PORT = '8080';
 const ID_SERVICE_PORT = '3000';
+const ID_LB_PORT = '4000';
+const USER_SERVICE_PORT = '3000';
 
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
@@ -44,6 +46,34 @@ const API_VARIABLES = [
   'THROTTLE_ENABLED',
   // Flipped by hand with the public domain (RUNBOOK), so an apply never reverts it.
   'TRUST_PROXY',
+];
+
+const USER_SERVICE_VARIABLES = [
+  'APP_PUBLIC_URL',
+  'ARGON2_MEMORY_COST',
+  'ARGON2_PARALLELISM',
+  'ARGON2_TIME_COST',
+  'AUTH_HS256_ENABLED',
+  'CSRF_SECRET',
+  'EMAIL_VERIFICATION_TTL',
+  'IDENTITY_BUCKET_KEY',
+  'IDENTITY_PIN_BOOTSTRAP',
+  'INTERNAL_API_TOKEN',
+  'INTERNAL_API_TOKEN_PREVIOUS',
+  'JWT_ACCESS_SECRET',
+  'JWT_ACCESS_TTL',
+  'JWT_AUDIENCE',
+  'JWT_ES256_ACTIVE_KID',
+  'JWT_ES256_PRIVATE_KEYS',
+  'JWT_ISSUER',
+  'LOG_LEVEL',
+  'MAIL_FROM',
+  'PASSWORD_RESET_TTL',
+  // The api's instance: auth:* is read there.
+  'REDIS_URL',
+  'REFRESH_TOKEN_TTL',
+  'SMTP_URL',
+  'THROTTLE_ENABLED',
 ];
 
 const preserved = (names: string[]) => Object.fromEntries(names.map((name) => [name, preserve()]));
@@ -114,11 +144,43 @@ export default defineRailway(() => {
       API_UPSTREAM: `tcp6/\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
       ID_SERVICE_HOST: idService.env.RAILWAY_PRIVATE_DOMAIN,
       ID_SERVICE_PORT,
+      ID_LB_PORT,
       ID_LB_IP_VERSIONS: 'ipv6',
       // Set by hand: the edge ranges come from a probe, the auth flip from its RUNBOOK step.
       ...preserved(['TRUSTED_PROXY_CIDRS', 'AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED']),
     },
   });
 
-  return project('jcool ecommerce backend', { resources: [api, idPostgres, idService, gateway] });
+  const userPostgres = database('user-postgres', 'postgres', {
+    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    defaultMountPath: '/var/lib/postgresql/data',
+  });
+
+  // Dark: no domain, and the gateway's AUTH_UPSTREAM still names the api.
+  const userService = service('user-service', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/user-service/Dockerfile' },
+    deploy: {
+      numReplicas: 1,
+      preDeployCommand: ['node dist/database/migrate-cli.js'],
+      healthcheckPath: '/health/ready',
+      healthcheckTimeout: 60,
+      restartPolicyType: 'ON_FAILURE',
+      restartPolicyMaxRetries: 5,
+      overlapSeconds: 20,
+      drainingSeconds: 15,
+    },
+    env: {
+      ...preserved(USER_SERVICE_VARIABLES),
+      NODE_ENV: 'production',
+      PORT: USER_SERVICE_PORT,
+      DATABASE_URL: userPostgres.env.DATABASE_URL,
+      ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
+      // Only ever reached over the private network.
+      TRUST_PROXY: 'fd12::/16',
+    },
+  });
+
+  return project('jcool ecommerce backend', {
+    resources: [api, idPostgres, idService, gateway, userPostgres, userService],
+  });
 });

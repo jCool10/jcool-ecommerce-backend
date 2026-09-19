@@ -36,6 +36,12 @@ describe('redactPaths', () => {
     expect(line).not.toContain('"password":"pw"');
   });
 
+  // The double-submit value is redacted in the cookie, so it must not leak through the header.
+  it('redacts the CSRF header', () => {
+    const line = serialize({ req: { headers: { 'x-csrf-token': 'csrf-value' } } });
+    expect(line).not.toContain('csrf-value');
+  });
+
   it('leaves non-sensitive fields intact', () => {
     const line = serialize({ orderId: 'ord-42', route: '/orders/:id' });
     expect(line).toContain('ord-42');

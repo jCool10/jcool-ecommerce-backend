@@ -22,6 +22,7 @@ Conventions used below:
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
+- [Run the user-service dark](#run-the-user-service-dark)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -378,7 +379,7 @@ The compiled CLI fails loudly if its migrations directory resolves to a readable
 `.railway/railway.ts` owns every service's build and deploy settings and the **names** of their variables. Values set by hand stay in Railway (`preserve()`); the rest are literals or references in the file. CD runs `railway config apply --yes` before every deploy, so:
 
 - **Settings** (healthcheck, pre-deploy command, overlap, replicas) change only in that file. A dashboard edit is reverted by the next deploy.
-- **Deploys** go id-service → api → gateway, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`). id-service and gateway have no repo source, so only CD's `railway up` deploys them; a dashboard redeploy rebuilds their last upload.
+- **Deploys** go id-service → api → gateway → user-service, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`). Only the api has a repo source, so only CD's `railway up` deploys the others; a dashboard redeploy rebuilds their last upload.
 - **New variable**: add its name to the service's `env` (for the api, `API_VARIABLES`) in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the apply into a delete, which CD refuses: the deploy stops at "Apply Railway config". This includes one set by hand during an incident.
 - **Removing a variable** is the one destructive path. Drop the name and merge. CD then stops at the apply. From an up-to-date `main`, run:
 
@@ -475,6 +476,102 @@ If the direct domain is already gone, create one with `railway domain --service 
 - Setting `AUTH_UPSTREAM` on the gateway sends `/auth`, `/auth/*` and `/.well-known/jwks.json` there. While it is unset, those routes go to the api. Give it as `tcp6/<private domain>:<port>`, for the same reason as `API_UPSTREAM`.
 - Once auth has left the api, also set `AUTH_UPSTREAM_REQUIRED=true`. The gateway then refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of serving auth from tables that nothing writes any more.
 - Both variables are set by hand and kept across every apply.
+
+---
+
+## Run the user-service dark
+
+`apps/user-service` serves the same `/auth` contract as the api from its own Postgres (`user-postgres`). It has no public domain, and the gateway does not route to it while `AUTH_UPSTREAM` is unset, so production auth stays on the api. It is deployed last by CD, after the smoke test of the public URL.
+
+### Redis durability
+
+The user-service writes `auth:epoch:{userId}` and `auth:denylist:{jti}` to the api's Redis, and refuses to boot unless that Redis cannot silently lose them:
+
+```
+Redis cannot hold auth state: maxmemory-policy is allkeys-lru, not noeviction; appendonly is off. See RUNBOOK.md, "Redis durability".
+```
+
+An evicted denylist entry revives a logged-out token, and an evicted epoch lets a revoked session back in. The boot reads both settings from `INFO`, since managed Redis often disables `CONFIG`. Check the instance the same way before the user-service change reaches `main`:
+
+```bash
+railway connect <redis service>             # opens redis-cli on the production instance
+INFO memory                                 # maxmemory_policy must be noeviction; note maxmemory and used_memory
+INFO persistence                            # aof_enabled must be 1
+```
+
+To turn AOF on, do it live first, then make it permanent:
+
+1. `CONFIG SET appendonly yes`. Redis writes the AOF from what it holds in memory. Wait until `INFO persistence` shows `aof_enabled:1` and `aof_rewrite_in_progress:0`.
+2. `CONFIG SET maxmemory-policy noeviction` if it is not already.
+3. Put both in the Redis service's start command (Settings → Custom Start Command), for example `redis-server --appendonly yes --maxmemory-policy noeviction` plus whatever the command already carried, so a restart keeps them.
+
+Doing it in this order matters: a Redis that restarts with AOF newly enabled and no AOF file on disk can come up empty instead of loading its RDB snapshot.
+
+`noeviction` means a full Redis refuses writes. The catalog cache already reads through to Postgres when a `SET` fails, but the throttler writes on every request and answers 500 when it cannot. Keep `used_memory` under 80% of `maxmemory` and alert on it.
+
+Locally, `docker-compose.yml` starts Redis with `--appendonly yes`. If the `redisdata` volume holds something you want to keep, run `docker exec jcool-redis redis-cli CONFIG SET appendonly yes` before recreating the container.
+
+### Before the user-service change reaches `main`
+
+CD's apply creates `user-postgres` and `user-service`, but the service will not boot until its variables have values. Create them first from the branch, then fill them in:
+
+```bash
+# local, on the branch, after `railway link` to production
+railway config plan                         # creates user-postgres and user-service; adds ID_LB_PORT to the gateway
+railway config apply --yes
+```
+
+The values that must equal the api's are references, so no secret passes through a shell. First drop from the list every name the api's Variables tab does not show: a reference to a missing variable can reach the user-service as an empty value, which its env validation refuses, where leaving it unset gives the default the api also uses.
+
+```bash
+for name in IDENTITY_BUCKET_KEY JWT_ACCESS_SECRET JWT_ACCESS_TTL REFRESH_TOKEN_TTL EMAIL_VERIFICATION_TTL \
+            PASSWORD_RESET_TTL REDIS_URL SMTP_URL MAIL_FROM APP_PUBLIC_URL THROTTLE_ENABLED \
+            ARGON2_MEMORY_COST ARGON2_TIME_COST ARGON2_PARALLELISM; do
+  railway variable set "$name=\${{jcool-ecommerce-backend.$name}}" --service user-service --skip-deploys
+done
+railway variable set 'CSRF_SECRET=${{jcool-ecommerce-backend.JWT_ACCESS_SECRET}}' --service user-service --skip-deploys
+```
+
+- `CSRF_SECRET` is the api's `JWT_ACCESS_SECRET`, so CSRF cookies the api issued stay valid after the cutover.
+- `IDENTITY_BUCKET_KEY` must be the api's: see [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key). Leave `IDENTITY_PIN_BOOTSTRAP` unset. A dark boot then compares the pin and never writes one, and the api's pin is copied over at the cutover.
+- `JWT_ISSUER` and `JWT_AUDIENCE`: the public URL and `jcool-api`. The api pins the same pair when it starts verifying ES256 tokens, so pick them once.
+
+Generate the new secrets locally, and paste them in the dashboard (user-service → Variables), never on a command line:
+
+```bash
+openssl rand -hex 32                                                   # INTERNAL_API_TOKEN
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out es256.pem
+awk '{printf "%s\\n", $0}' es256.pem                                   # the PEM on one line
+rm es256.pem
+```
+
+`JWT_ES256_PRIVATE_KEYS` is `<kid>:<pem>`, for example `2026-09:-----BEGIN PRIVATE KEY-----\n…`, and `JWT_ES256_ACTIVE_KID` is that kid.
+
+Then merge. CD deploys the user-service last. Check it from inside, since it has no domain:
+
+```bash
+railway ssh --service user-service
+node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"
+node -e "fetch('http://127.0.0.1:3000/.well-known/jwks.json').then(r => r.text()).then(console.log)"
+```
+
+`curl -s "$API/.well-known/jwks.json"` from outside must still answer 404 from the api: nothing public reaches the user-service yet.
+
+To take it down, remove the service's deployment in the dashboard. Nothing routes to it, so nothing else changes.
+
+### Rotate the ES256 signing key
+
+Verifiers fetch `/.well-known/jwks.json`, which is cached for 5 minutes, so a new key must be published before anything is signed with it:
+
+1. Append the new `kid:pem` to `JWT_ES256_PRIVATE_KEYS` (comma-separated) and deploy. Both keys are now published; tokens are still signed with the old one.
+2. Wait at least 10 minutes, then set `JWT_ES256_ACTIVE_KID` to the new kid and deploy.
+3. Once `JWT_ACCESS_TTL` has passed, remove the old entry and deploy.
+
+A key that leaked is the exception: drop it at once. Every token it signed is then refused, and clients log in again.
+
+### Rotate `INTERNAL_API_TOKEN`
+
+Move the current value to `INTERNAL_API_TOKEN_PREVIOUS`, set a new `INTERNAL_API_TOKEN`, and deploy. Both are accepted. Once every caller sends the new value, delete `INTERNAL_API_TOKEN_PREVIOUS` (see [Change Railway service config](#change-railway-service-config) for removing a variable).
 
 ---
 

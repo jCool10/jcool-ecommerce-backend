@@ -34,6 +34,8 @@ services:
     image: redis:7-alpine
     container_name: jcool-redis
     restart: unless-stopped
+    # user-service refuses to boot without AOF: its session epochs and denylist must survive a restart.
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "${REDIS_HOST_PORT:-6380}:6379"
     volumes:
@@ -252,6 +254,88 @@ services:
     networks:
       - jcool-net
 
+  # Opt-in (`--profile user-service`): needs apps/user-service/.env. Published on loopback so the
+  # operator scripts run from the host.
+  user-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-user-postgres
+    profiles: [user-service]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${USER_POSTGRES_HOST_PORT:-5434}:5432"
+    environment:
+      POSTGRES_USER: users
+      POSTGRES_PASSWORD: ${USER_POSTGRES_PASSWORD:-users}
+      POSTGRES_DB: users
+    volumes:
+      - userpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U users -d users"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  user-migrate:
+    build:
+      context: .
+      dockerfile: apps/user-service/Dockerfile
+    image: jcool-user-service:local
+    container_name: jcool-user-migrate
+    profiles: [user-service]
+    command: ['node', 'dist/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://users:${USER_POSTGRES_PASSWORD:-users}@user-postgres:5432/users
+    depends_on:
+      user-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  # Dark: the gateway does not route /auth here yet. Loopback only, for direct checks.
+  user-service:
+    image: jcool-user-service:local
+    pull_policy: never
+    container_name: jcool-user-service
+    profiles: [user-service]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${USER_SERVICE_HOST_PORT:-3002}:3000"
+    env_file:
+      - apps/user-service/.env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Reached directly, so the socket address is the client.
+      TRUST_PROXY: "false"
+      APP_PUBLIC_URL: http://localhost:${GATEWAY_HOST_PORT:-8080}
+      DATABASE_URL: postgresql://users:${USER_POSTGRES_PASSWORD:-users}@user-postgres:5432/users
+      REDIS_URL: redis://redis:6379
+      SMTP_URL: smtp://mailpit:1025
+      ID_SERVICE_URL: http://gateway:4000
+    depends_on:
+      user-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
   # The public site is published; the id-service load balancer (4000) stays on the network.
   gateway:
     build:
@@ -353,6 +437,7 @@ services:
 volumes:
   pgdata:
   idpgdata:
+  userpgdata:
   redisdata:
   meilidata:
   miniodata:

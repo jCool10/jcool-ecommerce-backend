@@ -1,6 +1,6 @@
 /**
  * Full scan of `users`, checking that every id routes to the bucket its email hashes to:
- *   npm run identity:verify
+ *   pnpm --filter @jcool/api identity:verify
  *
  * The boot canary samples one row; this reads all of them, answering what a sample cannot: does this
  * database agree with a freshly provisioned key, and how many rows did a drift hit. Only `users` —

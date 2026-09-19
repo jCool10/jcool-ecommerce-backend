@@ -30,8 +30,6 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/shared/infrastructure/database/seed.ts",
     "db:seed:perf": "tsx scripts/perf-seed.ts",
-    "seed:users:bulk": "tsx scripts/seed-users-bulk.ts",
-    "db:metrics:users": "tsx scripts/capture-db-metrics.ts",
     "identity:verify": "tsx scripts/verify-identity-buckets.ts",
     "queue:replay-dlq": "tsx src/shared/messaging/queue/replay-dlq.cli.ts",
     "queue:replay-dlq:prod": "node dist/shared/messaging/queue/replay-dlq.cli.js",
