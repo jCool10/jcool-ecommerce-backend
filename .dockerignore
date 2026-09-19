@@ -1,18 +1,19 @@
 # Keep the build context small and never leak secrets into the image.
 
-node_modules
+**/node_modules
 npm-debug.log*
-dist
+**/dist
 build
-coverage
+**/coverage
 .nyc_output
+**/.turbo
 
 .git
 .gitignore
 
 # Secrets: only the committed template is allowed in.
-.env
-.env.*
+**/.env
+**/.env.*
 !.env.example
 
 .DS_Store
@@ -22,6 +23,7 @@ coverage
 
 # Repo-only material not needed to build or run the app.
 .claude
+.railway
 plans
 docs
 README.md
@@ -39,3 +41,5 @@ k6
 # Not compiled into the image — tsconfig.build.json already excludes both.
 test
 scripts
+apps/*/test
+apps/*/scripts

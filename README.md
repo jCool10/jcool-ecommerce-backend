@@ -20,7 +20,7 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — seven
 | --- | --- |
 | **Scale** | 7 bounded contexts · 566 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
 | **Tests** | 1,131 unit tests (160 files, hermetic) + 68 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers, run four workers wide |
-| **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `npm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
+| **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
 
@@ -111,6 +111,14 @@ flowchart TB
     classDef ext fill:#7c2d12,stroke:#9a3412,color:#ffedd5
 ```
 
+Deployed on Railway, once the public domain moves onto the gateway ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)):
+
+```
+client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ api            every route but /internal/*
+                              gateway :4000 ─▶ id-service ×3 ─▶ id-postgres   private network only
+                user-service ─▶ gateway :4000                 dark: no domain, nothing routes to it yet
+```
+
 ### Bounded contexts
 
 | Context | Owns | Publishes to other contexts |
@@ -135,36 +143,52 @@ interface  ──▶  application  ──▶  domain          (framework-free, n
                      └──── implements ─┴──── infrastructure   (Drizzle, Redis, S3, Stripe, SMTP)
 ```
 
-`npm run arch:check` (dependency-cruiser, 7 error-severity rules) fails the build when `domain` imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one context reaches into another for anything but its `application/public` surface — internal use cases included, which is the crossing a boundary rule usually forgets — or when `domain`/`application` import **any** telemetry package. That last rule is mechanical because the leak is easy: the observability barrel transitively pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no `uuid`/`randomUUID` in user infrastructure.
+`pnpm arch:check` (dependency-cruiser, 7 error-severity rules) fails the build when `domain` imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one context reaches into another for anything but its `application/public` surface — internal use cases included, which is the crossing a boundary rule usually forgets — or when `domain`/`application` import **any** telemetry package. That last rule is mechanical because the leak is easy: the observability barrel transitively pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no `uuid`/`randomUUID` in user infrastructure.
 
 Two composition roots are exempt from the "shared may not import a context" rule, because wiring contexts together is precisely their job: `shared/messaging` (registers context event handlers) and the schema barrel (collects every context's tables for the migrator).
 
 ### Project layout
 
+pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id ([id-service README](./apps/id-service/README.md)). `apps/user-service` serves the api's `/auth` contract from its own Postgres, mints its ids through the id-service and signs ES256 tokens; it runs dark until the cutover ([user-service README](./apps/user-service/README.md)). `apps/gateway` is Caddy: the public entry that passes every route to the api, and the private load balancer in front of the id-service replicas. `packages/` holds the code the services share.
+
 ```
-src/
-├── main.ts                  # bootstrap: helmet, CORS, cookies, ValidationPipe, Swagger, shutdown hooks
-├── instrumentation.ts       # OTel + Sentry, preloaded via `node --import` before Nest boots
-├── app.module.ts
-├── modules/                 # bounded contexts — each: domain / application / infrastructure / interface
-│   ├── cart/  catalog/  inventory/  media/  order/  payment/  user/
-└── shared/
-    ├── kernel/              # framework-free DDD building blocks (Money, Entity, DomainError, Result)
-    ├── config/              # env validation (fail-fast) + typed config factory
-    ├── messaging/           # outbox, relay, BullMQ queue, inbox, DLQ + replay CLI
-    ├── observability/       # correlation, pino logging, OTel tracing, Prometheus metrics, Sentry
-    ├── infrastructure/      # pg pool + Drizzle, Redis, object storage, throttler, migrations
-    ├── cache/               # stale-while-revalidate cache + single-flight rebuild lock
-    ├── idempotency/         # request fingerprint + CLS carrier
-    ├── identity/            # UUIDv8 generator/codec, HMAC email buckets
-    ├── rbac/  health/  mail/  retention/  resilience/  interface/
-test/
-├── integration/             # 60 e2e suites on real infrastructure (Testcontainers)
-├── setup/                   # global setup, app factory, fixtures, per-suite side containers
-└── load/                    # k6 mixes
+apps/api/
+├── src/
+│   ├── main.ts              # bootstrap: helmet, CORS, cookies, ValidationPipe, Swagger, shutdown hooks
+│   ├── instrumentation.ts   # OTel + Sentry, preloaded via `node --import` before Nest boots
+│   ├── app.module.ts
+│   ├── modules/             # bounded contexts — each: domain / application / infrastructure / interface
+│   │   ├── cart/  catalog/  inventory/  media/  order/  payment/  user/
+│   └── shared/
+│       ├── config/          # the api's env schema (platform fragments + its own keys) + config factory
+│       ├── messaging/       # outbox, relay, BullMQ queue, inbox, DLQ + replay CLI
+│       ├── infrastructure/  # Drizzle schema + migrations, the api's DrizzleDB alias, object storage
+│       ├── cache/           # stale-while-revalidate cache + single-flight rebuild lock
+│       ├── idempotency/     # request fingerprint + CLS carrier
+│       ├── identity/        # IdentityService: mints user-context ids with the node's generator
+│       └── interface/       # debug controller
+├── test/
+│   ├── integration/         # 68 e2e suites on real infrastructure (Testcontainers)
+│   └── setup/               # global setup, app factory, fixtures, per-suite side containers
+└── scripts/                 # seeds, identity verification, DB metrics
+apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replicas; unit / e2e / system tests
+apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e / system tests
+apps/gateway/                # Caddyfile: public site in front of the api, private LB over the id-service replicas
+packages/
+├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
+├── id-codec/                # @jcool/id-codec — UUIDv8 layout, HMAC email buckets
+├── id-generator/            # @jcool/id-generator — monotonic UUIDv8 generator, entropy pool, node ids
+├── metrics-port/            # @jcool/metrics-port — the metrics seam domain and application code depend on
+├── platform/                # @jcool/platform — Nest infrastructure: env fragments, pg + Drizzle, Redis, observability,
+│                            #   health, throttler, rbac, mail, resilience, retention; one subpath export each
+└── testing/                 # @jcool/testing — test doubles, source-only, dev dependency only
+test/load/  k6/              # k6 mixes
 infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector
-k6/  scripts/  .github/workflows/
+.railway/railway.ts          # Railway deploy config (infrastructure as code)
+turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflows/
 ```
+
+Packages compile to CommonJS `dist/` with `tsc` and are consumed the way production consumes them, tests included. Every Turborepo task depends on `^build`, so the packages are built first, in dependency order: `kernel` and `metrics-port`, then `id-codec`, then `id-generator`, then `platform`, then the api. `@jcool/testing` is never built. Scripts forwarded straight to the api (`start:dev`, `test:watch`, `db:*`, the CLIs) skip Turborepo and read the last build, so run `pnpm build` after changing a package. Nest, nestjs-pino, prom-client, ioredis and drizzle-orm are peer dependencies of `platform`. The lockfile resolves each to a single install shared by the app and the package, and `apps/api/src/platform-peer-dependencies.spec.ts` fails once the two manifests drift apart.
 
 ---
 
@@ -189,9 +213,9 @@ The parts worth reading the code for. Each row names the file to open.
 | **The dual-write problem** | Events are rows written by the same transaction as the change they describe. A relay polls `published_at IS NULL` with `FOR UPDATE SKIP LOCKED`, publishes to BullMQ and marks the row published in one transaction — at-least-once, safe on every replica, no leader election | `shared/messaging/outbox/outbox-relay.ts` |
 | **At-least-once → exactly-once** | The consumer claims `message_id = outbox.id` in an `inbox` table (`UNIQUE (consumer, message_id)`) and runs the handler **in that same transaction**. A redelivery loses the claim and does nothing; a handler that throws takes its claim down with it, so the redelivery does the work | `shared/messaging/queue/domain-event.processor.ts` |
 | **Sweeping the inbox safely** | Inbox claims are swept on a schedule (`RETENTION_INBOX_DAYS`, default 30d), and the app **refuses to boot** if that retention is shorter than the queue's failed-job horizon — deleting a claim while its message can still be redelivered would apply the effect twice | `shared/messaging/inbox/sweep-inbox.ts` |
-| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery), then routes to `domain-events-dlq`. `npm run queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
+| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
 | **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts` |
-| **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `shared/observability/tracing/propagation.ts` |
+| **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `packages/platform/src/observability/tracing/propagation.ts` |
 
 ### Performance and caching
 
@@ -210,18 +234,18 @@ The parts worth reading the code for. Each row names the file to open.
 | --- | --- | --- |
 | **Immediate JWT revocation** | Stateless HS256 access tokens carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user `token_epoch` counter (every token issued before a logout-all or password change) | `modules/user/interface/strategies/jwt.strategy.ts` |
 | **Token delivery and CSRF** | The access token goes in the JSON body (Bearer is CSRF-immune). The refresh token goes **only** in an `httpOnly; SameSite=Strict; Path=/auth` cookie (`Secure` in production, per `COOKIE_SECURE`), paired with a signed double-submit CSRF cookie enforced on the two routes that consume it | `modules/user/interface/security/csrf.guard.ts` |
-| **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `shared/infrastructure/throttler/throttler.constants.ts` |
+| **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `packages/platform/src/throttler/throttler.constants.ts` |
 | **User enumeration** | `forgot-password` and `resend-verification` always answer `202`. Login runs a real argon2 verify against a cached dummy hash on the unknown-email branch, so the timing of "no such user" matches "wrong password" | `modules/user/application/use-cases/login-user.use-case.ts` |
 | **Webhook authenticity** | HMAC-SHA256 over the **raw request bytes** (`rawBody: true` — the JSON parser would re-serialize and break the signature), constant-time compare, plus a `±PAYMENT_WEBHOOK_TOLERANCE_SEC` replay window. Exempt from both throttle tiers so a burst of legitimate gateway retries is never rate-limited away | `modules/payment/infrastructure/gateway/hmac-signature.ts` |
-| **Metrics endpoint disclosure** | A wrong or missing `METRICS_TOKEN` returns a plain `404`, never `401` — a `401` confirms the endpoint exists to anyone probing. (With no token configured at all, `/metrics` is open in development and `404` in production.) | `shared/observability/metrics/metrics.guard.ts` |
+| **Metrics endpoint disclosure** | A wrong or missing `METRICS_TOKEN` returns a plain `404`, never `401` — a `401` confirms the endpoint exists to anyone probing. (With no token configured at all, `/metrics` is open in development and `404` in production.) | `packages/platform/src/observability/metrics/metrics.guard.ts` |
 
 ### Data modelling
 
 | Problem | Approach | Where |
 | --- | --- | --- |
-| **Sharding-ready user ids** | Every user-context id is a UUIDv8 (RFC 9562 §5.8) laid out `48 ts_ms │ 4 ver │ 12 bucket │ 2 var │ 10 node │ 12 seq │ 40 random`. The 12-bit routing bucket is `HMAC(IDENTITY_BUCKET_KEY, normalized_email) mod 4096` — derived from the same normalized email the `UNIQUE(email)` index sees, so a future shard split routes from the id alone, with no lookup table, and email uniqueness survives it | `shared/identity/uuid-v8.generator.ts` |
+| **Sharding-ready user ids** | Every user-context id is a UUIDv8 (RFC 9562 §5.8) laid out `48 ts_ms │ 4 ver │ 12 bucket │ 2 var │ 10 node │ 12 seq │ 40 random`. The 12-bit routing bucket is `HMAC(IDENTITY_BUCKET_KEY, normalized_email) mod 4096` — derived from the same normalized email the `UNIQUE(email)` index sees, so a future shard split routes from the id alone, with no lookup table, and email uniqueness survives it | `packages/id-generator/src/uuid-v8.generator.ts` |
 | **Why HMAC, not a hash** | `users.id` is public. An unkeyed digest would turn every published id into an offline oracle for "does this address have an account here". The key is **permanent**: the database pins its fingerprint on first boot and refuses a later boot under a different key | `modules/user/infrastructure/identity-bucket-key.verifier.ts` |
-| **Money** | Integer minor units (VND đồng, USD cents) in a `Money` value object — never a float. Cross-currency operations throw rather than coerce. The order total is computed once from the lines and then persisted, never recomputed against a live price | `shared/kernel/money.vo.ts` |
+| **Money** | Integer minor units (VND đồng, USD cents) in a `Money` value object — never a float. Cross-currency operations throw rather than coerce. The order total is computed once from the lines and then persisted, never recomputed against a live price | `packages/kernel/src/money.vo.ts` |
 | **Media lifecycle as stock reservation** | An upload commits to something before knowing whether the caller will finish, so it is modelled like a stock hold: `PENDING → READY → ATTACHED → DETACHED`, plus `SWEEPING` as a terminal claim. `expires_at` is `NULL` in exactly one state (`ATTACHED`) — an asset no sweep can select is exactly what that state needs and exactly the leak every other state must not have | `modules/media/domain/asset-state-machine.ts` |
 | **Deleting bytes safely** | The sweep commits its `SWEEPING` claim **first**, then deletes the object, then the row. A crash mid-way leaves an orphan row whose object is gone — re-scannable, and deleting an absent object is a no-op. The other order leaves bytes nobody has a pointer to: unfindable and paid for indefinitely | `modules/media/application/use-cases/sweep-abandoned-assets.use-case.ts` |
 | **Deadlock avoidance** | Attaching an image claims the asset and writes the link row in one transaction, always taking `product_images` before `media_assets`, so two concurrent edits of the same asset cannot deadlock | `modules/catalog/infrastructure/drizzle-catalog-admin.repository.ts` |
@@ -230,24 +254,26 @@ The parts worth reading the code for. Each row names the file to open.
 
 ## Quick start
 
-**Prerequisites:** Node ≥ 22.9, npm, Docker (for infrastructure and the integration tests).
+**Prerequisites:** Node ≥ 22.9, pnpm (any recent install switches itself to the version pinned in `packageManager`), Docker (for infrastructure and the integration tests).
 
 ```bash
 # 1. install
-npm ci
+pnpm install
 
-# 2. configure — the template boots as-is against the Compose stack below
+# 2. configure — the template boots as-is against the Compose stack below. The app runs from
+#    apps/api, so link the root .env there.
 cp .env.example .env
+pnpm dev:link-env
 
 # 3. infrastructure (the ports below are the host-mapped ones)
 docker compose up -d postgres redis meilisearch mailpit minio minio-init
 
 # 4. schema + sample data
-npm run db:migrate
-npm run db:seed
+pnpm db:migrate
+pnpm db:seed
 
 # 5. run
-npm run start:dev
+pnpm start:dev
 ```
 
 - API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs>
@@ -256,7 +282,7 @@ npm run start:dev
 
 `minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Meilisearch is only needed with `SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
-Full stack in-network (app included): `docker compose up -d --build`. Tear down including volumes: `docker compose down -v`.
+Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose down -v`. The user-service is opt-in, since it needs `apps/user-service/.env`: `docker compose --profile user-service up -d --build user-service` serves it on <http://127.0.0.1:3002>, with its Postgres on 127.0.0.1:5434. Redis runs with AOF on, which the user-service requires.
 
 ---
 
@@ -277,7 +303,7 @@ Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_
 
 `MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it because it ships `migrations/` without a `src/` tree.
 
-> **`TRUST_PROXY` is required behind a platform load balancer, including Railway.** It defaults to off — correct for a direct deploy, where trusting `X-Forwarded-For` would let any client spoof its own rate-limit key. Behind a proxy the same default inverts the problem: `req.ip` becomes the proxy's peer address, which changes per connection, so the IP-keyed throttle tiers count per-connection instead of per-client and stop binding. Set `TRUST_PROXY=1`. See [Known limits](#known-limits).
+> **`TRUST_PROXY` is required in production**, and the app refuses to boot without it. Off is correct for a direct deploy, where trusting `X-Forwarded-For` would let any client spoof its own rate-limit key. Behind a proxy, off inverts the problem: `req.ip` becomes the proxy's address and every IP-keyed throttle tier counts the proxy instead of the client. Prefer the proxy's subnet to a hop count, because then only a peer inside it is believed. On Railway the value is `fd12::/16`, the private network the gateway calls from. A hop count does not work directly behind Railway's edge, whose `X-Forwarded-For` does not end in the client. See [Known limits](#known-limits).
 
 ---
 
@@ -381,19 +407,21 @@ A rejected `complete` leaves the asset `PENDING` on purpose — the sweep alread
 Two tiers, kept separate on purpose.
 
 ```bash
-npm test           # 1,131 unit tests, 160 files — hermetic, no Docker
-npm run test:cov   # same, with the coverage floor CI enforces
-npm run test:e2e   # 68 integration suites, 522 tests — requires Docker
+pnpm test           # 1,131 unit tests, 160 files — hermetic, no Docker
+pnpm test:cov       # same, with the coverage floor CI enforces
+pnpm test:e2e       # 68 integration suites, 522 tests — requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
 
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated ids are stable within a run.
-- **Integration** (`test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
+- **Integration** (`apps/api/test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
 
 Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
 The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
+
+`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service`, `gateway` and `user-service`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log. For the user-service, it runs the api image beside it and checks the same `/auth` OpenAPI operations, the same answers to a set of requests and to a whole session, and ids minted through the gateway.
 
 Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit `emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
 
@@ -404,7 +432,7 @@ Vitest runs through **SWC**, not its default esbuild, because esbuild does not e
 Numbers below are from k6 against the **live Railway deployment**, not a local run and not a projection. Reproduce with:
 
 ```bash
-BASE_URL=https://jcool-ecommerce.up.railway.app PROFILE=steady npm run load:public-read
+BASE_URL=https://jcool-ecommerce.up.railway.app PROFILE=steady pnpm load:public-read
 ```
 
 **Read this before reading the numbers.** They are client-side timings taken from a single machine in Vietnam against a deployment in another region, so **the round trip dominates every figure**. The measured TCP connect time is **≈90 ms**, and `GET /health/live` — which touches no database, no cache, and no authentication — still costs **≈305 ms**. That ~305 ms is the floor of the path, not the cost of the application. What the application costs is the *gap above that floor*, and the whole point of the table is that there barely is one.
@@ -458,7 +486,7 @@ Alerting ships as code: three Prometheus rule files (multi-window burn-rate SLOs
 docker compose --profile observability up -d   # Collector + Prometheus + Grafana + Jaeger
 ```
 
-Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger <http://localhost:16686>. Scraping the app locally needs `infra/prometheus/secrets/metrics-token` to match `METRICS_TOKEN` (gitignored; only the `.example` is committed), and `npm run alerts:*` needs `promtool` on `PATH` — it is not an npm dependency, CI installs it from the pinned Prometheus release.
+Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger <http://localhost:16686>. Scraping the app locally needs `infra/prometheus/secrets/metrics-token` to match `METRICS_TOKEN` (gitignored; only the `.example` is committed), and `pnpm alerts:*` needs `promtool` on `PATH` — it is not an npm dependency, CI installs it from the pinned Prometheus release.
 
 ---
 
@@ -466,11 +494,11 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 [**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: never rotating `IDENTITY_BUCKET_KEY`, backup/restore (including restoring a dump into a database pinned to a different key fingerprint), rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
 
-**Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only. The runtime stage copies `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
+**Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only: the builder runs `pnpm deploy --prod` for `@jcool/api`, and the runtime stage takes its `node_modules` plus the app's `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
 
-**CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first: `lint:check` → `typecheck` → `arch:check` → `npm audit --omit=dev --audit-level=high` → `build` → promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
+**CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first: `lint:check` → `typecheck` → `arch:check` → `pnpm audit --prod --audit-level high` → `build` → promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
 
-**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. Railway builds the image, applies migrations as a `preDeployCommand`, gates the traffic switch on `/health/ready` from inside the network, then smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
+**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. It first applies `.railway/railway.ts` (every service's build and deploy settings; hand-set variables are listed by name with `preserve()`, so their values stay in Railway, and a plan that would delete anything is refused), then re-plans and fails if anything is still pending. It then deploys id-service, the api and the gateway in that order, each live before the next starts, and the dark user-service after the public smoke test. For each, Railway builds the image, applies migrations as a `preDeployCommand`, and gates the traffic switch on `/health/ready` from inside the network. Last, CD smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
 
 **Shutdown** is staged: `SIGTERM` flips `/health/ready` to `503` and holds for `SHUTDOWN_GRACE_PERIOD_MS` so a load balancer drains this instance, the HTTP server closes, and only then do the pg pool and Redis client drain and the telemetry buffers flush. The flush runs the OTel and Sentry exports concurrently under a fixed ceiling, so a collector dying in the same rollout delays the exit by a bounded amount instead of the exporter's own timeout.
 
@@ -480,14 +508,14 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 Stated plainly, because a reviewer will find them anyway.
 
-- **Run exactly one app instance.** The id generator holds a fixed node id for the whole fleet, so two replicas mint the same `(timestamp, node, sequence)` triples. Ids stay *unique* — 40 random bits see to that, and no insert fails — but the ordered per-writer sequence is lost on the four User-context tables. The real problem is that **nothing detects it**: no error, no metric, no failed insert. `railway.json` sets `numReplicas: 1`, but its `overlapSeconds: 20` means every rollout runs two instances for ~20s by design. Lifting this properly needs a node-id lease.
+- **Run exactly one app instance.** The id generator holds a fixed node id for the whole fleet, so two replicas mint the same `(timestamp, node, sequence)` triples. Ids stay *unique* — 40 random bits see to that, and no insert fails — but the ordered per-writer sequence is lost on the four User-context tables. The real problem is that **nothing detects it**: no error, no metric, no failed insert. `.railway/railway.ts` sets `numReplicas: 1`, but its `overlapSeconds: 20` means every rollout runs two instances for ~20s by design. Lifting this properly needs a node-id lease.
 - **Order confirmation mail is at-most-once.** Applied exactly once in the database, attempted at most once outside it, and on failure counted (`mail_send_failures_total`) rather than retried — because a retry would roll back the inbox claim and, under a breaker timeout that abandons the wait without cancelling the in-flight request, send up to eight confirmations for one order. A lost confirmation is worse than nothing and better than that. The fix, if the tolerance changes, is a separate `mail_outbox` table — not SMTP back inside the transaction.
 - **Auth mail is sent synchronously, outside the outbox**, because it carries a raw redeemable token and the token tables store only hashes. Putting the token in an outbox payload would write it to Postgres in plaintext.
 - **Context extraction is bounded work, not free.** One edge would have to change: Payment settles through Order's published `order-finalization.port` inside a shared transaction. The surface is already the only thing that crosses, so extraction is a transport change — across a process boundary that call becomes a saga step.
 - **A money mismatch parks an order forever.** If the gateway reports a paid session whose charge does not match the recorded payment, reconcile refuses to settle it (guessing would move a buyer's money against the wrong order) and a `PAID` probe never ages into `EXPIRED`. The order stays `PENDING` with its stock still held, re-probed every tick, and logs `stuck: true` once past twice the TTL. Because the sweep reads oldest-first, enough of these would starve newer orders out of the batch. Resolving it properly needs a terminal `NEEDS_REVIEW` state that leaves the sweep's queue.
 - **A password change has a race the ordering cannot close.** Sessions are revoked before the new hash is written, so a crash between the two fails safe. But a login that verified the old password can insert its refresh-token family just after the revoke `UPDATE` has passed, and no later write to the user row reaches it. Closing it needs both writes in one transaction.
 - **No `CHECK` on the id layout.** Version and variant nibbles are validated in the codec on decode; a raw-SQL writer is not blocked at the database. The honest reason is that nothing writes those tables but this process.
-- **The IP-keyed throttle tiers are only as good as `req.ip`.** With `TRUST_PROXY` unset behind a platform load balancer, `req.ip` is the proxy's peer address rather than the client's, and that address changes per connection — so the `default` tier (100/60 s app-wide) and the IP half of the auth tiers count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./src/shared/infrastructure/throttler) — and the knob is documented; the failure is that nothing at boot notices the combination of "production" and "untrusted proxy" and says so.
+- **The IP-keyed throttle tiers are only as good as `req.ip`, and until the public domain moves onto the gateway they count connections.** Directly behind Railway's edge, no `TRUST_PROXY` value names the client, so the api believes no forwarding header and `req.ip` is the edge's address, which changes per connection. The `default` tier (100/60 s app-wide) and the IP half of the auth tiers then count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./packages/platform/src/throttler). The fix is the gateway: it takes the client from the edge's `X-Real-IP` and hands the api a single entry, and the system tests prove the throttle then keys on the client ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)). Production now refuses to boot with `TRUST_PROXY` unset, so the setting can no longer be forgotten silently.
 - **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2` rather than reinterpret an existing path.
 - **The observability stack is local-only.** No collector is deployed — a hosted one is an operational commitment this project does not need to make its point.
 
@@ -495,8 +523,11 @@ Stated plainly, because a reviewer will find them anyway.
 
 ## Scripts
 
+Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lint:check`, `arch:check`, `test`, `test:cov` and `test:e2e` go through Turborepo; the other app scripts (`test:watch` / `test:debug` included) forward to `@jcool/api`, and `alerts:*` / `load:*` run at the root. Turborepo scripts run in every workspace project, so arguments go to one project at a time (`pnpm turbo run test --filter=@jcool/api -- src/modules/cart`, paths relative to that project); the others take them directly (`pnpm queue:replay-dlq --apply`), since pnpm forwards a literal `--` to the command.
+
 | Script | Purpose |
 | --- | --- |
+| `dev:link-env` | Symlink the root `.env` into `apps/api` |
 | `start:dev` · `start:prod` · `build` | Watch mode · compiled run (`node --import ./dist/instrumentation.js dist/main`) · Nest SWC build |
 | `typecheck` · `lint` / `lint:check` · `format` | `tsc --noEmit` · ESLint with / without `--fix` · Prettier |
 | `arch:check` | dependency-cruiser boundary rules |
@@ -504,13 +535,14 @@ Stated plainly, because a reviewer will find them anyway.
 | `test` · `test:cov` · `test:e2e` | Unit · unit with the coverage floor · integration (needs Docker) |
 | `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | Drizzle migration workflow (`:prod` runs the compiled CLI — the image's release command) |
 | `search:reindex` | Rebuild the Meilisearch index from Postgres |
-| `queue:replay-dlq` | Inspect the dead-letter queue; `-- --apply` to replay (dry run is the default) |
-| `identity:verify` | Scan every user row for an id that does not route to its email's bucket |
+| `queue:replay-dlq` | Inspect the dead-letter queue; `--apply` to replay (dry run is the default) |
+| `identity:verify` | Scan every user-service user row for an id that does not route to its email's bucket (`pnpm --filter @jcool/api identity:verify` scans the api's table until cutover) |
 | `storage:verify` | Reconcile bucket against `media_assets` three ways: orphan objects, `ATTACHED` rows whose object is gone, and `product_images` rows whose asset row is gone |
 | `load:baseline` · `load:register:*` | k6 mixes |
 | `load:cache-stampede` · `load:breakpoint` · `load:sku-contention` | Performance-experiment mixes (`test/load/`): cache stampede arms, open-model breakpoint ramp, single-SKU reservation contention. Each exports `--summary-export` JSON; authoritative numbers come from Prometheus, not k6 timing |
 | `load:public-read` | Anonymous read profile for a **deployed** instance (`BASE_URL=…`, `PROFILE=steady` \| `burst`). No Prometheus and no write journey — see [Measured performance](#measured-performance) for what it can and cannot answer |
-| `db:seed:perf` · `seed:users:bulk` · `db:metrics:users` | Planner-oriented perf seed · bulk identity seed · DB benchmark capture |
+| `db:seed:perf-user` · `db:seed:perf` | Perf user in user-service · catalog and that user's cart in the api (resolves the user by logging in to user-service, so seed the user first) |
+| `seed:users:bulk` · `db:metrics:users` | Bulk identity seed · DB benchmark capture, both against the user-service database |
 
 `:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `storage:verify:prod`) run the compiled CLI from `dist/`, because `tsx` is a devDependency and is not installed in the image.
 

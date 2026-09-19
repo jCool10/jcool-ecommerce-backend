@@ -2,7 +2,7 @@ name: CD
 
 # Deploy is chained off CI rather than off `push` so that a direct push to main — which no branch
 # protection rule can gate — still cannot reach Railway with red code. Railway's own autodeploy must
-# stay OFF for this service, or every push deploys twice.
+# stay OFF for the api (the one service with a repo source), or every push deploys it twice.
 on:
   workflow_run:
     workflows: [CI]
@@ -28,13 +28,15 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     environment: production
+    # RAILWAY_TOKEN is scoped to the steps that call Railway, so install scripts never see it.
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
       RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT || 'production' }}
       APP_PUBLIC_URL: ${{ vars.APP_PUBLIC_URL }}
     steps:
       - name: Check deploy configuration
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           missing=()
           [ -n "$RAILWAY_TOKEN" ] || missing+=("secrets.RAILWAY_TOKEN")
@@ -51,64 +53,53 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       # Pinned: an unattended deploy should not pick up CLI behaviour changes on its own.
-      - run: npm install -g @railway/cli@5.49.2
+      - run: npm install -g @railway/cli@5.49.6
 
-      # `--ci` returns once the image is built. The pre-deploy migration and the /health/ready gate
-      # both run after that, so a green step here is not yet a live deploy — the next step is.
-      - name: Upload and build
-        run: railway up --ci --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # the Railway SDK needs node >=22
+          cache: pnpm
+      # Root only: .railway/railway.ts imports the Railway SDK; the app itself is built by Railway.
+      - run: pnpm install --frozen-lockfile --filter .
 
-      - name: Wait for the rollout to finish
+      # Without --confirm-destructive, a plan that would delete a resource or variable is refused, so
+      # a variable missing from .railway/railway.ts stops the deploy instead of being wiped.
+      - name: Apply Railway config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway config apply --yes
+
+      # Exit 2 means something is still pending: the apply did not land (token scope, staged
+      # changes), and `railway up` would deploy on the old settings.
+      - name: Verify Railway config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway config plan --detailed-exit-code
+
+      # One at a time, each live before the next starts; a failure stops the rest. The gateway goes
+      # last because its healthcheck is the api's: an api release that fixes a broken api must not
+      # wait behind it.
+      - name: Deploy id-service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          set -euo pipefail
-          deadline=$(( $(date +%s) + 900 ))
-          watched=""
-          while :; do
-            raw=$(railway deployment list --json --limit 1 \
-              --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT")
-            entry=$(printf '%s' "$raw" \
-              | jq -r '(if type == "array" then .[0] else (.deployments // .data // [])[0] end)
-                       | "\(.id // .deploymentId // empty)\t\(.status // empty)"')
-            id=${entry%%$'\t'*}
-            status=${entry##*$'\t'}
+          railway up --ci --service id-service --environment "$RAILWAY_ENVIRONMENT"
+          scripts/railway-wait-for-rollout.sh id-service
 
-            # An unreadable payload must fail loudly: treating "no status" as "not yet" would let a
-            # CLI output change turn every deploy green on a 15-minute timeout instead.
-            if [ -z "$status" ]; then
-              echo "::error::cannot read deployment status from the CLI response"
-              printf '%s\n' "$raw"
-              exit 1
-            fi
+      - name: Deploy api
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --ci --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+          scripts/railway-wait-for-rollout.sh "$RAILWAY_SERVICE"
 
-            # Latch the first deployment seen and refuse to follow a different one. Without this the
-            # loop polls "whatever is newest", so a rollout triggered while this one is in flight
-            # would be reported as this run's result.
-            if [ -z "$watched" ]; then
-              watched=$id
-              echo "watching deployment ${watched:-<unknown id>} (status $status)"
-            elif [ "$id" != "$watched" ]; then
-              echo "::error::deployment $watched was superseded by $id — this run cannot report on it"
-              exit 1
-            fi
-
-            case "$status" in
-              SUCCESS)
-                echo "deployment is live"
-                exit 0
-                ;;
-              FAILED|CRASHED|REMOVED|SKIPPED)
-                echo "::error::deployment ended as $status — traffic stays on the previous version"
-                echo "logs: railway logs --deployment --service $RAILWAY_SERVICE"
-                exit 1
-                ;;
-            esac
-
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::timed out after 15m, last status was $status"
-              exit 1
-            fi
-            sleep 10
-          done
+      - name: Deploy gateway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --ci --service gateway --environment "$RAILWAY_ENVIRONMENT"
+          scripts/railway-wait-for-rollout.sh gateway
 
       # Railway already gated the traffic switch on /health/ready from inside its network. This hits
       # the same probe from outside, so it covers what that gate cannot see: domain, TLS, and edge
@@ -119,3 +110,11 @@ jobs:
           curl --fail --silent --show-error --location \
             --retry 10 --retry-delay 6 --retry-all-errors --max-time 20 \
             "${APP_PUBLIC_URL%/}/health/ready"
+
+      # Dark, so it goes last: nothing public waits on it.
+      - name: Deploy user-service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --ci --service user-service --environment "$RAILWAY_ENVIRONMENT"
+          scripts/railway-wait-for-rollout.sh user-service

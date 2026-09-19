@@ -23,42 +23,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # version from package.json `packageManager`
       - uses: actions/setup-node@v7
         with:
-          node-version: 24 # ships npm 11 (matches committed lockfile); satisfies devDep engines (testcontainers/dependency-cruiser need node >=22)
-          cache: npm
-      - run: npm ci
+          node-version: 24 # satisfies devDep engines (testcontainers/dependency-cruiser need node >=22)
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       # Ordered fastest-failing first: lint → typecheck → boundary check → build.
-      - run: npm run lint:check # eslint, no --fix (CI must report, not mutate)
-      - run: npm run typecheck # tsc --noEmit (SWC build emits without checking types)
-      - run: npm run arch:check # dependency-cruiser: layer/context boundaries
+      - run: pnpm turbo run lint:check # eslint, no --fix (CI must report, not mutate)
+      - run: pnpm turbo run typecheck # tsc --noEmit (SWC build emits without checking types)
+      - run: pnpm turbo run arch:check # dependency-cruiser: layer/context boundaries
       # Runtime dependencies only: a devDependency CVE cannot be reached by the deployed process,
       # and letting one turn the build red teaches everyone to ignore the gate. `high` rather than
       # `moderate` for the same reason — a floor that fires constantly is a floor nobody reads.
-      - run: npm audit --omit=dev --audit-level=high
-      - run: npm run build
+      - run: pnpm audit --prod --audit-level high
+      - run: pnpm turbo run build
       # Pinned to the deployed Prometheus so a rule that parses here cannot fail to load there.
       - name: Install promtool
         run: |
           curl -sSfL "https://github.com/prometheus/prometheus/releases/download/v2.55.1/prometheus-2.55.1.linux-amd64.tar.gz" \
             | tar -xz --strip-components=1 -C /usr/local/bin prometheus-2.55.1.linux-amd64/promtool
-      - run: npm run alerts:check # alert rules parse
-      - run: npm run alerts:test # and fire (and clear) on the timelines they claim to
+      - run: pnpm alerts:check # alert rules parse
+      - run: pnpm alerts:test # and fire (and clear) on the timelines they claim to
 
   test:
     name: Test (unit + integration · Testcontainers)
     runs-on: ubuntu-latest # GitHub-hosted runner ships a Docker daemon → Testcontainers works
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
-      # Coverage, not a bare `npm test`: same unit run, plus the floor on domain/application
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Coverage, not a bare `test`: same unit run, plus the floor on domain/application
       # declared in vitest.config.mts. Running both would just run the suite twice.
-      - run: npm run test:cov # unit (Vitest) — fast, hermetic, no Docker; fails under the coverage floor
-      - run: npm run test:e2e # integration — Testcontainers spins real Postgres/Redis + programmatic migrate
+      - run: pnpm turbo run test:cov # unit (Vitest) — fast, hermetic, no Docker; fails under the coverage floor
+      # Turbo's strict env mode drops unlisted vars: a new one here also goes in turbo.json `passThroughEnv`.
+      - run: pnpm turbo run test:e2e # integration — Testcontainers spins real Postgres/Redis + programmatic migrate
         env:
           # Job is ephemeral (fresh runner, torn down after), so skip Ryuk's reaper
           # container. Trades auto-cleanup (unneeded here) for reliability on runners
@@ -68,3 +71,20 @@ jobs:
           # ubuntu-latest is 4 vCPU, and the boot cost the parallelism hides is CPU-bound, so more
           # workers than cores buys contention rather than wall clock.
           E2E_WORKERS: '4'
+
+  system:
+    name: System (built images · id-service replicas behind the gateway)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # One package at a time: the suites assert latency bounds that a second stack on the same
+      # runner would eat into.
+      - run: pnpm turbo run test:system --concurrency=1
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: 'true'

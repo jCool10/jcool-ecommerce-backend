@@ -4,7 +4,7 @@ Procedures an operator needs that the code cannot express on its own. Everything
 
 Conventions used below:
 
-- **local** — a developer machine with the repo, `npm ci` done, and `.env` pointing at the target.
+- **local** — a developer machine with the repo, `pnpm install` and `pnpm dev:link-env` done, and `.env` pointing at the target. Arguments go without `--` (`pnpm queue:replay-dlq --apply`): pnpm forwards a literal `--` to the command.
 - **container** — a shell inside the deployed image (`railway ssh --service "$RAILWAY_SERVICE"`), where `dist/` exists and `devDependencies` (including `tsx`) do **not**.
 
 ---
@@ -20,6 +20,9 @@ Conventions used below:
 - [Retention sweeps](#retention-sweeps)
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
+- [Change Railway service config](#change-railway-service-config)
+- [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
+- [Run the user-service dark](#run-the-user-service-dark)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -30,7 +33,7 @@ Conventions used below:
 
 Every user-context id embeds a 12-bit routing bucket derived by HMAC from the account's normalized email, under this key. The bucket is what a future `users` shard split routes on. Rotating the key does not invalidate anything visibly — it mints *new* ids into buckets their emails no longer hash to, and nothing reads a bucket until the split. The damage would surface years after the key that caused it was lost.
 
-The application defends this on every boot, in two layers (`src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
+The application defends this on every boot, in two layers (`apps/api/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use the same wrong key).
 2. **Key pin** — a fingerprint of the key stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. Runs *after* the canary on purpose: the pin **writes**, so pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
@@ -96,6 +99,23 @@ Consequences to plan for:
 - A dump restored into a database that already has a *different* pin row will fail on the primary key of `identity_key_pin` during `pg_restore`, not at boot. Restore into an empty database.
 - Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the pinned key; changing the pin makes the database lie about its own history.
 
+### Restoring or recreating the id-service database
+
+`id-postgres` holds only node leases. A restored dump, like a freshly migrated database, can sit behind ids the replicas already minted, and a new holder of a node would then mint at those timestamps again. Before any replica starts against it:
+
+1. Stop every id-service replica, then wait `ID_LEASE_TTL_MS` (5 minutes by default). No id was stamped past its holder's lease end, so once every lease the old rows knew of has ended, the database clock is above every id minted.
+2. Lift every floor to that clock:
+
+   ```sql
+   -- psql against id-service's DATABASE_URL
+   UPDATE node_leases
+   SET holder = NULL,
+       lease_until = LEAST(lease_until, now()),
+       max_ts_ms = GREATEST(COALESCE(max_ts_ms, 0), (extract(epoch FROM now()) * 1000)::bigint);
+   ```
+
+3. Start the replicas.
+
 ---
 
 ## Rebuild the search index
@@ -104,10 +124,10 @@ Consequences to plan for:
 
 ```bash
 # local — requires SEARCH_ENABLED=true, SEARCH_URL and (if the engine is keyed) SEARCH_API_KEY
-npm run search:reindex
+pnpm search:reindex
 
 # drop the index and rebuild it from scratch (schema/settings changes)
-npm run search:reindex -- --reset
+pnpm search:reindex --reset
 ```
 
 The command boots a **minimal** Nest context — config + database + the search adapter only — so no queue consumers or scheduled sweeps run for its lifetime.
@@ -124,10 +144,10 @@ Stores that must agree and cannot all be kept in one transaction. Three ways the
 
 ```bash
 # local — needs DATABASE_URL and the four STORAGE_* settings
-npm run storage:verify
+pnpm storage:verify
 
 # narrow the scan
-npm run storage:verify -- --prefix media/ --limit 5000
+pnpm storage:verify --prefix media/ --limit 5000
 
 # container — the compiled twin, since `tsx` is a devDependency and is not installed there
 npm run storage:verify:prod
@@ -201,10 +221,10 @@ What replay **cannot** fix in any case is the reason the message failed. Each li
 
 ```bash
 # local — dry run is the default, because this puts real traffic back on a live queue
-npm run queue:replay-dlq
-npm run queue:replay-dlq -- --apply
-npm run queue:replay-dlq -- --apply --limit 20
-npm run queue:replay-dlq -- --apply --force   # past the retention horizon; read above first
+pnpm queue:replay-dlq
+pnpm queue:replay-dlq --apply
+pnpm queue:replay-dlq --apply --limit 20
+pnpm queue:replay-dlq --apply --force   # past the retention horizon; read above first
 ```
 
 ```bash
@@ -344,13 +364,214 @@ npm run db:migrate:prod
 ```
 
 ```bash
-# local — drizzle-kit, reads drizzle.config.ts
-npm run db:migrate
+# local — drizzle-kit, reads apps/api/drizzle.config.ts
+pnpm db:migrate
 ```
 
 The compiled CLI fails loudly if its migrations directory resolves to a readable but wrong path: a directory with zero `.sql` files would otherwise make drizzle report "nothing pending" and exit 0 — a green deploy onto an empty schema. In the image `MIGRATIONS_DIR=/app/migrations`, absolute because the image ships no `src/` tree.
 
-**Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why there is a single deployable service.
+**Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why the api is a single Railway service.
+
+---
+
+## Change Railway service config
+
+`.railway/railway.ts` owns every service's build and deploy settings and the **names** of their variables. Values set by hand stay in Railway (`preserve()`); the rest are literals or references in the file. CD runs `railway config apply --yes` before every deploy, so:
+
+- **Settings** (healthcheck, pre-deploy command, overlap, replicas) change only in that file. A dashboard edit is reverted by the next deploy.
+- **Deploys** go id-service → api → gateway → user-service, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`). Only the api has a repo source, so only CD's `railway up` deploys the others; a dashboard redeploy rebuilds their last upload.
+- **New variable**: add its name to the service's `env` (for the api, `API_VARIABLES`) in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the apply into a delete, which CD refuses: the deploy stops at "Apply Railway config". This includes one set by hand during an incident.
+- **Removing a variable** is the one destructive path. Drop the name and merge. CD then stops at the apply. From an up-to-date `main`, run:
+
+```bash
+# local, after `railway link` to the production service
+railway config plan                          # the only destroy must be that variable
+railway config apply --confirm-destructive
+```
+
+Then re-run the failed CD job.
+
+Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs.
+
+---
+
+## Put the gateway in front of the api
+
+The `gateway` service (Caddy, `apps/gateway`) hands every public route to the api unchanged, answers `/internal/*` with 404, and tells the api who the client is. CD creates and deploys it without a public domain. Moving `jcool-ecommerce.up.railway.app` onto it is this manual step. Do it off-peak, because between the two renames the name routes nowhere for a few seconds.
+
+**How the client address travels.** Railway's edge reaches the gateway from `100.64.0.0/10` and names the client in `X-Real-IP`. That is the only header Railway documents: its `X-Forwarded-For` arrives with two entries, and the last one is not the client. The gateway believes `X-Real-IP` only from `TRUSTED_PROXY_CIDRS`, and sends the api `X-Forwarded-For` with one entry, the client. It dials the api over IPv6 (`API_UPSTREAM=tcp6/…`): the private DNS also answers IPv4, and Go would dial that first. The api believes the header only from the private network's IPv6 range (`TRUST_PROXY=fd12::/16`), and the edge is not in it. So the same api value is right before the flip, after it, and after a rollback.
+
+### Before the gateway change reaches `main`
+
+Production refuses to boot without `TRUST_PROXY`:
+
+```bash
+railway variable set 'TRUST_PROXY=fd12::/16' --service jcool-ecommerce-backend --skip-deploys
+```
+
+Until the flip, nothing on the private network sends the api requests, so clients see no change.
+
+### Probe on a temporary domain
+
+```bash
+railway domain --service gateway --port 8080     # prints gateway-….up.railway.app
+GW=https://gateway-….up.railway.app
+API=https://jcool-ecommerce.up.railway.app
+```
+
+1. **Contract.**
+   - `curl -fsS "$GW/health/ready"` answers.
+   - `diff <(curl -fsS "$API/docs-json") <(curl -fsS "$GW/docs-json")` prints nothing.
+   - `curl -s -o /dev/null -w '%{http_code}\n' "$GW/internal/x"` prints `404`.
+2. **The edge's range.**
+   - Send `curl -fsS "$GW/health/live?probe=1"`, then find that request's access-log line in `railway logs --service gateway --lines 100`.
+   - With `TRUSTED_PROXY_CIDRS` unset, `remote_ip` and `client_ip` both hold the edge's address. Check that it falls inside `100.64.0.0/10`, then trust that range (a redeploy follows):
+
+   ```bash
+   railway variable set 'TRUSTED_PROXY_CIDRS=100.64.0.0/10' --service gateway
+   ```
+
+   Separate several ranges with spaces. Never use `0.0.0.0/0` or `private_ranges`: they would let any client pick its own throttle key.
+3. **Forged headers.**
+   - Send `curl -fsS -H 'X-Real-IP: 203.0.113.9' -H 'X-Forwarded-For: 203.0.113.9' "$GW/health/live?probe=2"`.
+   - The log line must show your own public IP (`curl -s https://api.ipify.org`) as `client_ip`, never `203.0.113.9`.
+   - If it shows the forged address, the edge passes `X-Real-IP` through unchecked. Delete `TRUSTED_PROXY_CIDRS` and do not flip.
+4. **Two clients stay two clients.**
+   - From two networks (a laptop and a phone hotspot), take turns running `curl -si "$GW/products" | grep -i x-ratelimit-remaining`.
+   - Each network must count down on its own.
+   - If they count down together, the api is not believing the gateway. Either `API_UPSTREAM` lost its `tcp6/` prefix, or the gateway's private address is outside `TRUST_PROXY`. Fix that before going on.
+
+### Flip
+
+```bash
+railway domain update jcool-ecommerce.up.railway.app --service jcool-ecommerce-backend --domain jcool-ecommerce-direct
+railway domain update "${GW#https://}" --service gateway --domain jcool-ecommerce
+```
+
+Then check the result:
+
+- `curl -fsS "$API/health/ready"` answers.
+- Step 4 passes against `$API`.
+- The 429 rate per route stays normal for the next hour.
+
+`APP_PUBLIC_URL` and the CD smoke test need no change, because the name stayed the same. Once the flip has held for a day, delete the direct domain, so the api can only be reached through the gateway:
+
+```bash
+railway domain delete jcool-ecommerce-direct.up.railway.app --service jcool-ecommerce-backend --yes
+```
+
+### Roll back
+
+Reverse the renames. `TRUST_PROXY` stays as it is.
+
+```bash
+railway domain update jcool-ecommerce.up.railway.app --service gateway --domain jcool-ecommerce-gateway
+railway domain update jcool-ecommerce-direct.up.railway.app --service jcool-ecommerce-backend --domain jcool-ecommerce
+```
+
+If the direct domain is already gone, create one with `railway domain --service jcool-ecommerce-backend --port 8080` and rename it the same way.
+
+### Route `/auth` to another service
+
+- Setting `AUTH_UPSTREAM` on the gateway sends `/auth`, `/auth/*` and `/.well-known/jwks.json` there. While it is unset, those routes go to the api. Give it as `tcp6/<private domain>:<port>`, for the same reason as `API_UPSTREAM`.
+- Once auth has left the api, also set `AUTH_UPSTREAM_REQUIRED=true`. The gateway then refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of serving auth from tables that nothing writes any more.
+- Both variables are set by hand and kept across every apply.
+
+---
+
+## Run the user-service dark
+
+`apps/user-service` serves the same `/auth` contract as the api from its own Postgres (`user-postgres`). It has no public domain, and the gateway does not route to it while `AUTH_UPSTREAM` is unset, so production auth stays on the api. It is deployed last by CD, after the smoke test of the public URL.
+
+### Redis durability
+
+The user-service writes `auth:epoch:{userId}` and `auth:denylist:{jti}` to the api's Redis, and refuses to boot unless that Redis cannot silently lose them:
+
+```
+Redis cannot hold auth state: maxmemory-policy is allkeys-lru, not noeviction; appendonly is off. See RUNBOOK.md, "Redis durability".
+```
+
+An evicted denylist entry revives a logged-out token, and an evicted epoch lets a revoked session back in. The boot reads both settings from `INFO`, since managed Redis often disables `CONFIG`. Check the instance the same way before the user-service change reaches `main`:
+
+```bash
+railway connect <redis service>             # opens redis-cli on the production instance
+INFO memory                                 # maxmemory_policy must be noeviction; note maxmemory and used_memory
+INFO persistence                            # aof_enabled must be 1
+```
+
+To turn AOF on, do it live first, then make it permanent:
+
+1. `CONFIG SET appendonly yes`. Redis writes the AOF from what it holds in memory. Wait until `INFO persistence` shows `aof_enabled:1` and `aof_rewrite_in_progress:0`.
+2. `CONFIG SET maxmemory-policy noeviction` if it is not already.
+3. Put both in the Redis service's start command (Settings → Custom Start Command), for example `redis-server --appendonly yes --maxmemory-policy noeviction` plus whatever the command already carried, so a restart keeps them.
+
+Doing it in this order matters: a Redis that restarts with AOF newly enabled and no AOF file on disk can come up empty instead of loading its RDB snapshot.
+
+`noeviction` means a full Redis refuses writes. The catalog cache already reads through to Postgres when a `SET` fails, but the throttler writes on every request and answers 500 when it cannot. Keep `used_memory` under 80% of `maxmemory` and alert on it.
+
+Locally, `docker-compose.yml` starts Redis with `--appendonly yes`. If the `redisdata` volume holds something you want to keep, run `docker exec jcool-redis redis-cli CONFIG SET appendonly yes` before recreating the container.
+
+### Before the user-service change reaches `main`
+
+CD's apply creates `user-postgres` and `user-service`, but the service will not boot until its variables have values. Create them first from the branch, then fill them in:
+
+```bash
+# local, on the branch, after `railway link` to production
+railway config plan                         # creates user-postgres and user-service; adds ID_LB_PORT to the gateway
+railway config apply --yes
+```
+
+The values that must equal the api's are references, so no secret passes through a shell. First drop from the list every name the api's Variables tab does not show: a reference to a missing variable can reach the user-service as an empty value, which its env validation refuses, where leaving it unset gives the default the api also uses.
+
+```bash
+for name in IDENTITY_BUCKET_KEY JWT_ACCESS_SECRET JWT_ACCESS_TTL REFRESH_TOKEN_TTL EMAIL_VERIFICATION_TTL \
+            PASSWORD_RESET_TTL REDIS_URL SMTP_URL MAIL_FROM APP_PUBLIC_URL THROTTLE_ENABLED \
+            ARGON2_MEMORY_COST ARGON2_TIME_COST ARGON2_PARALLELISM; do
+  railway variable set "$name=\${{jcool-ecommerce-backend.$name}}" --service user-service --skip-deploys
+done
+railway variable set 'CSRF_SECRET=${{jcool-ecommerce-backend.JWT_ACCESS_SECRET}}' --service user-service --skip-deploys
+```
+
+- `CSRF_SECRET` is the api's `JWT_ACCESS_SECRET`, so CSRF cookies the api issued stay valid after the cutover.
+- `IDENTITY_BUCKET_KEY` must be the api's: see [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key). Leave `IDENTITY_PIN_BOOTSTRAP` unset. A dark boot then compares the pin and never writes one, and the api's pin is copied over at the cutover.
+- `JWT_ISSUER` and `JWT_AUDIENCE`: the public URL and `jcool-api`. The api pins the same pair when it starts verifying ES256 tokens, so pick them once.
+
+Generate the new secrets locally, and paste them in the dashboard (user-service → Variables), never on a command line:
+
+```bash
+openssl rand -hex 32                                                   # INTERNAL_API_TOKEN
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out es256.pem
+awk '{printf "%s\\n", $0}' es256.pem                                   # the PEM on one line
+rm es256.pem
+```
+
+`JWT_ES256_PRIVATE_KEYS` is `<kid>:<pem>`, for example `2026-09:-----BEGIN PRIVATE KEY-----\n…`, and `JWT_ES256_ACTIVE_KID` is that kid.
+
+Then merge. CD deploys the user-service last. Check it from inside, since it has no domain:
+
+```bash
+railway ssh --service user-service
+node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"
+node -e "fetch('http://127.0.0.1:3000/.well-known/jwks.json').then(r => r.text()).then(console.log)"
+```
+
+`curl -s "$API/.well-known/jwks.json"` from outside must still answer 404 from the api: nothing public reaches the user-service yet.
+
+To take it down, remove the service's deployment in the dashboard. Nothing routes to it, so nothing else changes.
+
+### Rotate the ES256 signing key
+
+Verifiers fetch `/.well-known/jwks.json`, which is cached for 5 minutes, so a new key must be published before anything is signed with it:
+
+1. Append the new `kid:pem` to `JWT_ES256_PRIVATE_KEYS` (comma-separated) and deploy. Both keys are now published; tokens are still signed with the old one.
+2. Wait at least 10 minutes, then set `JWT_ES256_ACTIVE_KID` to the new kid and deploy.
+3. Once `JWT_ACCESS_TTL` has passed, remove the old entry and deploy.
+
+A key that leaked is the exception: drop it at once. Every token it signed is then refused, and clients log in again.
+
+### Rotate `INTERNAL_API_TOKEN`
+
+Move the current value to `INTERNAL_API_TOKEN_PREVIOUS`, set a new `INTERNAL_API_TOKEN`, and deploy. Both are accepted. Once every caller sends the new value, delete `INTERNAL_API_TOKEN_PREVIOUS` (see [Change Railway service config](#change-railway-service-config) for removing a variable).
 
 ---
 
@@ -360,4 +581,4 @@ Anything here that suppresses a gate must carry an expiry date and an owner. An 
 
 | Gate | Exception | Expires | Reason |
 | ---- | --------- | ------- | ------ |
-| — | none | — | `npm audit --omit=dev --audit-level=high` is clean as of 2026-09-07 |
+| — | none | — | `pnpm audit --prod --audit-level high` is clean as of 2026-09-18 |

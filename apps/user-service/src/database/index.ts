@@ -1,0 +1,8 @@
+import type { DrizzleDBOf, DrizzleTxOf } from '@jcool/platform/database';
+import type * as schema from './schema';
+
+export { DRIZZLE, PG_POOL } from '@jcool/platform/database';
+
+export type DrizzleDB = DrizzleDBOf<typeof schema>;
+
+export type DrizzleTx = DrizzleTxOf<typeof schema>;
