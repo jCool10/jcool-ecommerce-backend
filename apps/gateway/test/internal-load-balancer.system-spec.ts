@@ -1,18 +1,9 @@
-import { resolve } from 'node:path';
-import {
-  GenericContainer,
-  Network,
-  type StartedNetwork,
-  type StartedTestContainer,
-  Wait,
-} from 'testcontainers';
+import { Network, type StartedNetwork, type StartedTestContainer } from 'testcontainers';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { buildGatewayImage, fixtureUrl, hits, LB_PORT, startFixture, startGateway, urlOf } from './gateway-stack';
 
-const GATEWAY_IMAGE = 'jcool-gateway:system-test';
 const ID_SERVICE_ALIAS = 'id-service';
 const ID_SERVICE_PORT = 3000;
-const LB_PORT = 4000;
-const PUBLIC_PORT = 8080;
 const REQUESTS = 30;
 
 type Mode = 'ok' | '503' | 'hang';
@@ -31,39 +22,19 @@ describe('gateway: internal load balancer over id-service', () => {
   let replicas: StartedTestContainer[];
   let gateway: StartedTestContainer;
 
-  beforeAll(async () => {
-    await GenericContainer.fromDockerfile(resolve(__dirname, '..')).build(GATEWAY_IMAGE, { deleteOnExit: false });
-  });
+  beforeAll(buildGatewayImage);
 
   beforeEach(async () => {
     network = await new Network().start();
-    replicas = await Promise.all(
-      [1, 2, 3].map(() =>
-        new GenericContainer('node:24-alpine')
-          .withNetwork(network)
-          .withNetworkAliases(ID_SERVICE_ALIAS)
-          .withCopyFilesToContainer([
-            { source: resolve(__dirname, 'fixtures/fake-id-service.cjs'), target: '/fake-id-service.cjs' },
-          ])
-          .withCommand(['node', '/fake-id-service.cjs'])
-          .withExposedPorts(ID_SERVICE_PORT)
-          .withWaitStrategy(Wait.forListeningPorts())
-          .start(),
-      ),
-    );
-    gateway = await new GenericContainer(GATEWAY_IMAGE)
-      .withNetwork(network)
-      .withEnvironment({
-        PORT: String(PUBLIC_PORT),
-        ID_LB_PORT: String(LB_PORT),
-        ID_SERVICE_HOST: ID_SERVICE_ALIAS,
-        ID_SERVICE_PORT: String(ID_SERVICE_PORT),
-        // Outlasts every run of requests below, so a replica seen once was seen once because it sat out.
-        ID_LB_FAIL_DURATION: '30s',
-      })
-      .withExposedPorts(PUBLIC_PORT, LB_PORT)
-      .withWaitStrategy(Wait.forHttp('/health', PUBLIC_PORT))
-      .start();
+    replicas = await Promise.all([1, 2, 3].map(() => startFixture(network, 'fake-id-service.cjs', ID_SERVICE_ALIAS)));
+    gateway = await startGateway(network, {
+      // Never called here: the public site is covered by its own suite.
+      API_UPSTREAM: 'api:3000',
+      ID_SERVICE_HOST: ID_SERVICE_ALIAS,
+      ID_SERVICE_PORT: String(ID_SERVICE_PORT),
+      // Outlasts every run of requests below, so a replica seen once was seen once because it sat out.
+      ID_LB_FAIL_DURATION: '30s',
+    });
   });
 
   afterEach(async () => {
@@ -71,24 +42,16 @@ describe('gateway: internal load balancer over id-service', () => {
     await network?.stop();
   });
 
-  const url = (port: number, path: string) => `http://${gateway.getHost()}:${gateway.getMappedPort(port)}${path}`;
   const replicaName = (replica: StartedTestContainer) => replica.getId().slice(0, 12);
 
-  const control = (replica: StartedTestContainer, path: string) =>
-    `http://${replica.getHost()}:${replica.getMappedPort(ID_SERVICE_PORT)}${path}`;
-
   async function setMode(replica: StartedTestContainer, mode: Mode): Promise<void> {
-    const res = await fetch(control(replica, `/__mode/${mode}`), { method: 'POST' });
+    const res = await fetch(fixtureUrl(replica, `/__mode/${mode}`), { method: 'POST' });
     expect(res.status).toBe(200);
-  }
-
-  async function hits(replica: StartedTestContainer): Promise<number> {
-    return Number(await (await fetch(control(replica, '/__hits'))).text());
   }
 
   async function mint(): Promise<Answer> {
     const startedAt = Date.now();
-    const res = await fetch(url(LB_PORT, '/v1/ids'), {
+    const res = await fetch(urlOf(gateway, LB_PORT, '/v1/ids'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ bucket: 0 }),
@@ -146,13 +109,5 @@ describe('gateway: internal load balancer over id-service', () => {
     const answers = await mintMany();
 
     expect(failed(answers)).toEqual([]);
-  });
-
-  it('keeps the load balancer off the public listener', async () => {
-    const health = await fetch(url(PUBLIC_PORT, '/health'));
-    expect(health.status).toBe(200);
-
-    const mintViaPublic = await fetch(url(PUBLIC_PORT, '/v1/ids'), { method: 'POST', body: '{"bucket":0}' });
-    expect(mintViaPublic.status).toBe(404);
   });
 });

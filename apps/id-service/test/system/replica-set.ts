@@ -17,7 +17,7 @@ export async function buildImages(): Promise<void> {
     GenericContainer.fromDockerfile(REPO_ROOT, 'apps/id-service/Dockerfile').build(ID_SERVICE_IMAGE, {
       deleteOnExit: false,
     }),
-    GenericContainer.fromDockerfile(resolve(REPO_ROOT, 'apps/gateway')).build(GATEWAY_IMAGE, { deleteOnExit: false }),
+    GenericContainer.fromDockerfile(REPO_ROOT, 'apps/gateway/Dockerfile').build(GATEWAY_IMAGE, { deleteOnExit: false }),
   ]);
 }
 
@@ -57,9 +57,18 @@ export async function startStack(count = 3, { env = {}, freeNodes }: StackOption
   const replicas = await startReplicas(network, count, env);
   const gateway = await new GenericContainer(GATEWAY_IMAGE)
     .withNetwork(network)
-    .withEnvironment({ ID_LB_PORT: String(LB_PORT), ID_SERVICE_HOST: ID_SERVICE_ALIAS, ID_SERVICE_PORT: '3000' })
+    .withEnvironment({
+      ID_LB_PORT: String(LB_PORT),
+      ID_SERVICE_HOST: ID_SERVICE_ALIAS,
+      ID_SERVICE_PORT: '3000',
+      // Required by the public site, which these tests never call.
+      API_UPSTREAM: 'api:3000',
+      GATEWAY_SHUTDOWN_DELAY: '0s',
+      // Zero would be an endless grace period to Caddy.
+      GATEWAY_GRACE_PERIOD: '1ms',
+    })
     .withExposedPorts(8080, LB_PORT)
-    .withWaitStrategy(Wait.forHttp('/health', 8080))
+    .withWaitStrategy(Wait.forHttp('/health/live', 8080))
     .start();
   const lbUrl = `http://${gateway.getHost()}:${gateway.getMappedPort(LB_PORT)}`;
   return { network, postgres, gateway, replicas, lbUrl };

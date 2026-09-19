@@ -36,6 +36,22 @@ describe('env validation — IDENTITY_BUCKET_KEY', () => {
   });
 });
 
+describe('env validation — TRUST_PROXY', () => {
+  const PRODUCTION_ENV = { ...BASE_ENV, NODE_ENV: NodeEnv.Production };
+
+  it('refuses to boot in production when it is unset', () => {
+    expect(() => validate(PRODUCTION_ENV)).toThrow(/TRUST_PROXY/);
+  });
+
+  it.each(['fd12::/16', '1', 'false'])('boots in production with %s', (value) => {
+    expect(() => validate({ ...PRODUCTION_ENV, TRUST_PROXY: value })).not.toThrow();
+  });
+
+  it('leaves it optional outside production', () => {
+    expect(() => validate(BASE_ENV)).not.toThrow();
+  });
+});
+
 describe('env validation — retired inventory backoff key', () => {
   // validateSync runs without forbidNonWhitelisted, so an undeclared key is ignored while a
   // declared one can still fail a boot. Nothing reads this key any more, so it must stay undeclared

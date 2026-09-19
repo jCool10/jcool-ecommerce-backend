@@ -21,6 +21,7 @@ Conventions used below:
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
+- [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -368,16 +369,17 @@ pnpm db:migrate
 
 The compiled CLI fails loudly if its migrations directory resolves to a readable but wrong path: a directory with zero `.sql` files would otherwise make drizzle report "nothing pending" and exit 0 — a green deploy onto an empty schema. In the image `MIGRATIONS_DIR=/app/migrations`, absolute because the image ships no `src/` tree.
 
-**Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why there is a single deployable service.
+**Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why the api is a single Railway service.
 
 ---
 
 ## Change Railway service config
 
-`.railway/railway.ts` owns the service's build and deploy settings and the **names** of its variables; values stay in Railway (`preserve()`). CD runs `railway config apply --yes` before every deploy, so:
+`.railway/railway.ts` owns every service's build and deploy settings and the **names** of their variables. Values set by hand stay in Railway (`preserve()`); the rest are literals or references in the file. CD runs `railway config apply --yes` before every deploy, so:
 
 - **Settings** (healthcheck, pre-deploy command, overlap, replicas) change only in that file. A dashboard edit is reverted by the next deploy.
-- **New variable**: add its name to `API_VARIABLES` in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the apply into a delete, which CD refuses: the deploy stops at "Apply Railway config". This includes one set by hand during an incident.
+- **Deploys** go id-service → api → gateway, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`). id-service and gateway have no repo source, so only CD's `railway up` deploys them; a dashboard redeploy rebuilds their last upload.
+- **New variable**: add its name to the service's `env` (for the api, `API_VARIABLES`) in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the apply into a delete, which CD refuses: the deploy stops at "Apply Railway config". This includes one set by hand during an incident.
 - **Removing a variable** is the one destructive path. Drop the name and merge. CD then stops at the apply. From an up-to-date `main`, run:
 
 ```bash
@@ -389,6 +391,90 @@ railway config apply --confirm-destructive
 Then re-run the failed CD job.
 
 Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs.
+
+---
+
+## Put the gateway in front of the api
+
+The `gateway` service (Caddy, `apps/gateway`) hands every public route to the api unchanged, answers `/internal/*` with 404, and tells the api who the client is. CD creates and deploys it without a public domain. Moving `jcool-ecommerce.up.railway.app` onto it is this manual step. Do it off-peak, because between the two renames the name routes nowhere for a few seconds.
+
+**How the client address travels.** Railway's edge reaches the gateway from `100.64.0.0/10` and names the client in `X-Real-IP`. That is the only header Railway documents: its `X-Forwarded-For` arrives with two entries, and the last one is not the client. The gateway believes `X-Real-IP` only from `TRUSTED_PROXY_CIDRS`, and sends the api `X-Forwarded-For` with one entry, the client. It dials the api over IPv6 (`API_UPSTREAM=tcp6/…`): the private DNS also answers IPv4, and Go would dial that first. The api believes the header only from the private network's IPv6 range (`TRUST_PROXY=fd12::/16`), and the edge is not in it. So the same api value is right before the flip, after it, and after a rollback.
+
+### Before the gateway change reaches `main`
+
+Production refuses to boot without `TRUST_PROXY`:
+
+```bash
+railway variable set 'TRUST_PROXY=fd12::/16' --service jcool-ecommerce-backend --skip-deploys
+```
+
+Until the flip, nothing on the private network sends the api requests, so clients see no change.
+
+### Probe on a temporary domain
+
+```bash
+railway domain --service gateway --port 8080     # prints gateway-….up.railway.app
+GW=https://gateway-….up.railway.app
+API=https://jcool-ecommerce.up.railway.app
+```
+
+1. **Contract.**
+   - `curl -fsS "$GW/health/ready"` answers.
+   - `diff <(curl -fsS "$API/docs-json") <(curl -fsS "$GW/docs-json")` prints nothing.
+   - `curl -s -o /dev/null -w '%{http_code}\n' "$GW/internal/x"` prints `404`.
+2. **The edge's range.**
+   - Send `curl -fsS "$GW/health/live?probe=1"`, then find that request's access-log line in `railway logs --service gateway --lines 100`.
+   - With `TRUSTED_PROXY_CIDRS` unset, `remote_ip` and `client_ip` both hold the edge's address. Check that it falls inside `100.64.0.0/10`, then trust that range (a redeploy follows):
+
+   ```bash
+   railway variable set 'TRUSTED_PROXY_CIDRS=100.64.0.0/10' --service gateway
+   ```
+
+   Separate several ranges with spaces. Never use `0.0.0.0/0` or `private_ranges`: they would let any client pick its own throttle key.
+3. **Forged headers.**
+   - Send `curl -fsS -H 'X-Real-IP: 203.0.113.9' -H 'X-Forwarded-For: 203.0.113.9' "$GW/health/live?probe=2"`.
+   - The log line must show your own public IP (`curl -s https://api.ipify.org`) as `client_ip`, never `203.0.113.9`.
+   - If it shows the forged address, the edge passes `X-Real-IP` through unchecked. Delete `TRUSTED_PROXY_CIDRS` and do not flip.
+4. **Two clients stay two clients.**
+   - From two networks (a laptop and a phone hotspot), take turns running `curl -si "$GW/products" | grep -i x-ratelimit-remaining`.
+   - Each network must count down on its own.
+   - If they count down together, the api is not believing the gateway. Either `API_UPSTREAM` lost its `tcp6/` prefix, or the gateway's private address is outside `TRUST_PROXY`. Fix that before going on.
+
+### Flip
+
+```bash
+railway domain update jcool-ecommerce.up.railway.app --service jcool-ecommerce-backend --domain jcool-ecommerce-direct
+railway domain update "${GW#https://}" --service gateway --domain jcool-ecommerce
+```
+
+Then check the result:
+
+- `curl -fsS "$API/health/ready"` answers.
+- Step 4 passes against `$API`.
+- The 429 rate per route stays normal for the next hour.
+
+`APP_PUBLIC_URL` and the CD smoke test need no change, because the name stayed the same. Once the flip has held for a day, delete the direct domain, so the api can only be reached through the gateway:
+
+```bash
+railway domain delete jcool-ecommerce-direct.up.railway.app --service jcool-ecommerce-backend --yes
+```
+
+### Roll back
+
+Reverse the renames. `TRUST_PROXY` stays as it is.
+
+```bash
+railway domain update jcool-ecommerce.up.railway.app --service gateway --domain jcool-ecommerce-gateway
+railway domain update jcool-ecommerce-direct.up.railway.app --service jcool-ecommerce-backend --domain jcool-ecommerce
+```
+
+If the direct domain is already gone, create one with `railway domain --service jcool-ecommerce-backend --port 8080` and rename it the same way.
+
+### Route `/auth` to another service
+
+- Setting `AUTH_UPSTREAM` on the gateway sends `/auth`, `/auth/*` and `/.well-known/jwks.json` there. While it is unset, those routes go to the api. Give it as `tcp6/<private domain>:<port>`, for the same reason as `API_UPSTREAM`.
+- Once auth has left the api, also set `AUTH_UPSTREAM_REQUIRED=true`. The gateway then refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of serving auth from tables that nothing writes any more.
+- Both variables are set by hand and kept across every apply.
 
 ---
 

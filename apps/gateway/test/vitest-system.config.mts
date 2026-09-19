@@ -7,7 +7,9 @@ export default defineConfig({
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['test/**/*.system-spec.ts'],
     testTimeout: 60_000,
-    // The first run builds the Caddy image.
-    hookTimeout: 300_000,
+    // Builds the gateway and api images on a cold cache.
+    hookTimeout: 900_000,
+    // The load balancer suite asserts latency bounds that a second stack would eat into.
+    fileParallelism: false,
   },
 });

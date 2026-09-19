@@ -7,6 +7,7 @@ import {
   DatabaseEnv,
   EmptyEnv,
   MailEnv,
+  NodeEnv,
   ObservabilityEnv,
   RedisEnv,
   ResilienceEnv,
@@ -425,5 +426,13 @@ export class EnvironmentVariables extends PlatformEnv {
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {
-  return validateEnv(EnvironmentVariables, config);
+  const env = validateEnv(EnvironmentVariables, config);
+  // Unset behind the gateway, every IP-keyed throttle tier keys on the proxy's address instead of
+  // the client's. "false" stays a valid, deliberate answer for a deploy nothing proxies.
+  if (env.NODE_ENV === NodeEnv.Production && env.TRUST_PROXY === undefined) {
+    throw new Error(
+      'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
+    );
+  }
+  return env;
 }

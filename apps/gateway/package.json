@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Caddy in front of the services: for now only the private load balancer over the id-service replicas",
+  "description": "Caddy in front of the services: the public site before the api and the private load balancer over the id-service replicas",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:system": "vitest run --config ./test/vitest-system.config.mts"

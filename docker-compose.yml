@@ -135,8 +135,7 @@ services:
       dockerfile: Dockerfile
     container_name: jcool-app
     restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
+    # Unpublished, as on Railway: the gateway on 8080 is the way in.
     # .env carries the app's own secrets/config; the values below then override the host-oriented
     # ones it also holds (DATABASE_URL/REDIS_URL point at localhost there).
     env_file:
@@ -144,6 +143,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # The gateway, and only the gateway, names the client.
+      TRUST_PROXY: 1
+      # Mail links point at the published gateway; .env's value is for the app run on the host.
+      APP_PUBLIC_URL: http://localhost:${GATEWAY_HOST_PORT:-8080}
       # Inside the compose network the app reaches services by NAME, not the host-mapped ports.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       REDIS_URL: redis://redis:6379
@@ -249,19 +252,24 @@ services:
     networks:
       - jcool-net
 
-  # Only the health listener is published; the id-service load balancer (4000) stays on the network.
+  # The public site is published; the id-service load balancer (4000) stays on the network.
   gateway:
     build:
-      context: apps/gateway
+      context: .
+      dockerfile: apps/gateway/Dockerfile
     container_name: jcool-gateway
     restart: unless-stopped
     ports:
       - "${GATEWAY_HOST_PORT:-8080}:8080"
     environment:
       PORT: 8080
+      API_UPSTREAM: app:3000
       ID_LB_PORT: 4000
       ID_SERVICE_HOST: id-service
       ID_SERVICE_PORT: 3000
+      # Nothing sits in front of it here, so the socket address is the client.
+      TRUSTED_PROXY_CIDRS: ""
+    # Not on app: the id-service smoke brings up only this and id-service, and Caddy dials per request.
     depends_on:
       id-service:
         condition: service_started

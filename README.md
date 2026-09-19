@@ -111,6 +111,13 @@ flowchart TB
     classDef ext fill:#7c2d12,stroke:#9a3412,color:#ffedd5
 ```
 
+Deployed on Railway, once the public domain moves onto the gateway ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)):
+
+```
+client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ api            every route but /internal/*
+                              gateway :4000 ─▶ id-service ×3 ─▶ id-postgres   private network only
+```
+
 ### Bounded contexts
 
 | Context | Owns | Publishes to other contexts |
@@ -141,7 +148,7 @@ Two composition roots are exempt from the "shared may not import a context" rule
 
 ### Project layout
 
-pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id and is not called by anything yet; `apps/gateway` is the Caddy load balancer in front of it ([id-service README](./apps/id-service/README.md)). `packages/` holds the code the services share.
+pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id and is not called by anything yet ([id-service README](./apps/id-service/README.md)). `apps/gateway` is Caddy: the public entry that passes every route to the api, and the private load balancer in front of the id-service replicas. `packages/` holds the code the services share.
 
 ```
 apps/api/
@@ -164,7 +171,7 @@ apps/api/
 │   └── setup/               # global setup, app factory, fixtures, per-suite side containers
 └── scripts/                 # seeds, identity verification, DB metrics
 apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replicas; unit / e2e / system tests
-apps/gateway/                # Caddyfile: private LB over the id-service replicas; system tests against fake upstreams
+apps/gateway/                # Caddyfile: public site in front of the api, private LB over the id-service replicas
 packages/
 ├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
 ├── id-codec/                # @jcool/id-codec — UUIDv8 layout, HMAC email buckets
@@ -273,7 +280,7 @@ pnpm start:dev
 
 `minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Meilisearch is only needed with `SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
-Full stack in-network (app included): `docker compose up -d --build`. Tear down including volumes: `docker compose down -v`.
+Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose down -v`.
 
 ---
 
@@ -294,7 +301,7 @@ Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_
 
 `MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it because it ships `migrations/` without a `src/` tree.
 
-> **`TRUST_PROXY` is required behind a platform load balancer, including Railway.** It defaults to off — correct for a direct deploy, where trusting `X-Forwarded-For` would let any client spoof its own rate-limit key. Behind a proxy the same default inverts the problem: `req.ip` becomes the proxy's peer address, which changes per connection, so the IP-keyed throttle tiers count per-connection instead of per-client and stop binding. Set `TRUST_PROXY=1`. See [Known limits](#known-limits).
+> **`TRUST_PROXY` is required in production**, and the app refuses to boot without it. Off is correct for a direct deploy, where trusting `X-Forwarded-For` would let any client spoof its own rate-limit key. Behind a proxy, off inverts the problem: `req.ip` becomes the proxy's address and every IP-keyed throttle tier counts the proxy instead of the client. Prefer the proxy's subnet to a hop count, because then only a peer inside it is believed. On Railway the value is `fd12::/16`, the private network the gateway calls from. A hop count does not work directly behind Railway's edge, whose `X-Forwarded-For` does not end in the client. See [Known limits](#known-limits).
 
 ---
 
@@ -412,7 +419,7 @@ Details worth stealing: the e2e app factory quarantines the developer's `.env` s
 
 The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
 
-`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service` and `gateway`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced.
+`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service` and `gateway`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log.
 
 Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit `emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
 
@@ -489,7 +496,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 **CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first: `lint:check` → `typecheck` → `arch:check` → `pnpm audit --prod --audit-level high` → `build` → promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
 
-**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. It first applies `.railway/railway.ts` (service build and deploy settings; variables are listed by name with `preserve()`, so values stay in Railway, and a plan that would delete anything is refused), then re-plans and fails if anything is still pending. Railway then builds the image, applies migrations as a `preDeployCommand`, gates the traffic switch on `/health/ready` from inside the network, then smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
+**CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. It first applies `.railway/railway.ts` (every service's build and deploy settings; hand-set variables are listed by name with `preserve()`, so their values stay in Railway, and a plan that would delete anything is refused), then re-plans and fails if anything is still pending. It then deploys id-service, the api and the gateway in that order, each live before the next starts. For each, Railway builds the image, applies migrations as a `preDeployCommand`, and gates the traffic switch on `/health/ready` from inside the network. Last, CD smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
 
 **Shutdown** is staged: `SIGTERM` flips `/health/ready` to `503` and holds for `SHUTDOWN_GRACE_PERIOD_MS` so a load balancer drains this instance, the HTTP server closes, and only then do the pg pool and Redis client drain and the telemetry buffers flush. The flush runs the OTel and Sentry exports concurrently under a fixed ceiling, so a collector dying in the same rollout delays the exit by a bounded amount instead of the exporter's own timeout.
 
@@ -506,7 +513,7 @@ Stated plainly, because a reviewer will find them anyway.
 - **A money mismatch parks an order forever.** If the gateway reports a paid session whose charge does not match the recorded payment, reconcile refuses to settle it (guessing would move a buyer's money against the wrong order) and a `PAID` probe never ages into `EXPIRED`. The order stays `PENDING` with its stock still held, re-probed every tick, and logs `stuck: true` once past twice the TTL. Because the sweep reads oldest-first, enough of these would starve newer orders out of the batch. Resolving it properly needs a terminal `NEEDS_REVIEW` state that leaves the sweep's queue.
 - **A password change has a race the ordering cannot close.** Sessions are revoked before the new hash is written, so a crash between the two fails safe. But a login that verified the old password can insert its refresh-token family just after the revoke `UPDATE` has passed, and no later write to the user row reaches it. Closing it needs both writes in one transaction.
 - **No `CHECK` on the id layout.** Version and variant nibbles are validated in the codec on decode; a raw-SQL writer is not blocked at the database. The honest reason is that nothing writes those tables but this process.
-- **The IP-keyed throttle tiers are only as good as `req.ip`.** With `TRUST_PROXY` unset behind a platform load balancer, `req.ip` is the proxy's peer address rather than the client's, and that address changes per connection — so the `default` tier (100/60 s app-wide) and the IP half of the auth tiers count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./packages/platform/src/throttler) — and the knob is documented; the failure is that nothing at boot notices the combination of "production" and "untrusted proxy" and says so.
+- **The IP-keyed throttle tiers are only as good as `req.ip`, and until the public domain moves onto the gateway they count connections.** Directly behind Railway's edge, no `TRUST_PROXY` value names the client, so the api believes no forwarding header and `req.ip` is the edge's address, which changes per connection. The `default` tier (100/60 s app-wide) and the IP half of the auth tiers then count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./packages/platform/src/throttler). The fix is the gateway: it takes the client from the edge's `X-Real-IP` and hands the api a single entry, and the system tests prove the throttle then keys on the client ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)). Production now refuses to boot with `TRUST_PROXY` unset, so the setting can no longer be forgotten silently.
 - **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2` rather than reinterpret an existing path.
 - **The observability stack is local-only.** No collector is deployed — a hosted one is an operational commitment this project does not need to make its point.
 

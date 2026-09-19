@@ -2,15 +2,62 @@
 	admin off
 	# Railway's edge terminates TLS in front of us; certificates here would only fight it.
 	auto_https off
+	# Railway keeps sending traffic to an old deployment for a moment after SIGTERM: keep serving
+	# through the delay, then drain what is in flight. drainingSeconds must cover both.
+	shutdown_delay {$GATEWAY_SHUTDOWN_DELAY:5s}
+	grace_period {$GATEWAY_GRACE_PERIOD:10s}
+	servers :{$PORT:8080} {
+		# Only Railway's edge may name the client. From any other peer, the socket address is the client.
+		trusted_proxies static {$TRUSTED_PROXY_CIDRS}
+		client_ip_headers X-Real-IP
+	}
 }
 
-# The only port the platform exposes. Health only for now: no route here may reach the load balancer.
+(upstream) {
+	# Exactly one entry, the client: an app that trusts this gateway gets the client whatever the
+	# edge put in front of it.
+	header_up X-Forwarded-For {client_ip}
+	header_up X-Real-IP {client_ip}
+	transport http {
+		# Below Node's 5s keepAliveTimeout, so a connection is never reused just as the app closes it.
+		keepalive 4s
+	}
+}
+
+# Public: the only port the platform exposes.
 :{$PORT:8080} {
-	handle /health {
+	# Mail links carry their token in the query.
+	log {
+		output stdout
+		format filter {
+			request>uri query {
+				delete token
+			}
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+		}
+	}
+	# Responses leave as the app wrote them. reverse_proxy adds Via after header_down would run.
+	header -Via
+
+	handle /health/live {
 		respond "ok" 200
 	}
-	handle {
+	# Service-to-service routes. The matcher is case-insensitive and sees the decoded, cleaned path.
+	@internal path /internal /internal/*
+	handle @internal {
 		respond 404
+	}
+	@auth path /auth /auth/* /.well-known/jwks.json
+	handle @auth {
+		reverse_proxy {$AUTH_UPSTREAM} {
+			import upstream
+		}
+	}
+	handle {
+		reverse_proxy {$API_UPSTREAM} {
+			import upstream
+		}
 	}
 }
 
@@ -20,6 +67,8 @@
 		# Re-resolved on a timer, so replicas that come and go (every deploy) are picked up by IP.
 		dynamic a {$ID_SERVICE_HOST:id-service} {$ID_SERVICE_PORT:3000} {
 			refresh {$ID_LB_DNS_REFRESH:5s}
+			# A dual-stack name lists every replica once per family, and passive health tracks each apart.
+			versions {$ID_LB_IP_VERSIONS:ipv4 ipv6}
 		}
 		lb_policy round_robin
 		# A failed dial is always retried. A request that reached a replica is retried only if it
