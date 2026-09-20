@@ -1,16 +1,16 @@
 /**
- * Writes every user's session epoch into Redis before the api starts reading it there:
+ * Rebuilds every user's session epoch in Redis from the database:
  *
- *   USER_DATABASE_URL=… REDIS_URL=… tsx scripts/cutover/prewarm-epochs.ts
+ *   USER_DATABASE_URL=… REDIS_URL=… tsx scripts/prewarm-epochs.ts
  *
- * Read-through would fill the keys one login at a time, and until a key exists the api has to ask
- * the user-service for it — so the first minutes after the flip would put the whole logged-in
- * population through that path. Run it inside the write freeze, after the copy verifies.
+ * Run it after Redis loses the `auth:epoch:*` keyspace. Read-through refills one login at a time,
+ * and until a key exists the api has to ask this service for it — so the whole logged-in population
+ * would go through that path at once.
  */
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import { SESSION_EPOCH_KEY_PREFIX } from '@jcool/auth-verifier';
-import { RAISE_EPOCH } from '../../src/modules/user/infrastructure/redis-session-epoch.publisher';
+import { RAISE_EPOCH } from '../src/modules/user/infrastructure/redis-session-epoch.publisher';
 
 const BATCH = 5_000;
 const SCAN_START = '00000000-0000-0000-0000-000000000000';

@@ -4,11 +4,10 @@ import { workerCount } from './worker-count';
 /**
  * Per-worker isolation of the two resources every e2e spec shares.
  *
- * The e2e tier runs file-parallel. Three things break when 60 files share one Postgres database and
+ * The e2e tier runs file-parallel. Two things break when 60 files share one Postgres database and
  * one Redis logical db: `TRUNCATE`-all resets rip rows out from under a neighbour's transaction
- * (foreign-key violations and deadlocks), Redis-backed cache/idempotency/denylist/throttle keys
- * collide across files, and `identity_key_pin` — a single row one file deliberately corrupts —
- * refuses the next app's boot.
+ * (foreign-key violations and deadlocks), and Redis-backed cache/idempotency/denylist/throttle keys
+ * collide across files.
  *
  * Each worker therefore gets its own database, cloned from a migrated template
  * (`CREATE DATABASE ... TEMPLATE`, ~96ms, done once per worker in globalSetup) and its own Redis

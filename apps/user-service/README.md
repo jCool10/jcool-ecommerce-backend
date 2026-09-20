@@ -84,5 +84,4 @@ docker compose --profile user-service up -d --build user-service   # user-postgr
 curl -s http://127.0.0.1:3002/.well-known/jwks.json
 pnpm --filter @jcool/user-service test                        # unit
 pnpm --filter @jcool/user-service test:e2e                    # Postgres, Redis and Mailpit via Testcontainers
-pnpm --filter @jcool/user-service test:system                 # the data copy, against both migration sets
 ```

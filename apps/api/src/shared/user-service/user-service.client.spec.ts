@@ -50,6 +50,9 @@ class FakeUserService {
 
 const passThrough: OutboundCall = { run: (task) => task() };
 
+const inRequest = (id = 'req-uuid'): ClsService => ({ isActive: () => true, getId: () => id }) as unknown as ClsService;
+const outsideRequest = (): ClsService => ({ isActive: () => false }) as unknown as ClsService;
+
 function breakerFactory(): CircuitBreakerFactory {
   const config = fakeConfigService({
     'resilience.breaker.enabled': true,
@@ -66,8 +69,8 @@ function breakerFactory(): CircuitBreakerFactory {
 describe('UserServiceClient', () => {
   let userService: FakeUserService;
   let url: string;
-  const client = (timeoutMs = 1_000, breaker = passThrough) =>
-    new UserServiceClient({ url, token: TOKEN, timeoutMs }, breaker);
+  const client = (timeoutMs = 1_000, breaker = passThrough, cls = inRequest()) =>
+    new UserServiceClient({ url, token: TOKEN, timeoutMs }, breaker, cls);
 
   beforeEach(async () => {
     userService = new FakeUserService();
@@ -82,9 +85,19 @@ describe('UserServiceClient', () => {
       expect.objectContaining({
         method: 'GET',
         url: `/internal/v1/users/${USER_ID}/summary`,
-        headers: expect.objectContaining({ authorization: `Bearer ${TOKEN}` }) as IncomingHttpHeaders,
+        headers: expect.objectContaining({
+          authorization: `Bearer ${TOKEN}`,
+          // Carried across the hop, so the user-service logs the id the client was answered with.
+          'x-request-id': 'req-uuid',
+        }) as IncomingHttpHeaders,
       }),
     ]);
+  });
+
+  it('sends no request id from a queued job, leaving the user-service to generate one', async () => {
+    await client(1_000, passThrough, outsideRequest()).userSummary(USER_ID);
+
+    expect(userService.received[0].headers).not.toHaveProperty('x-request-id');
   });
 
   it("reads a user's session epoch", async () => {
@@ -177,7 +190,7 @@ describe('UserServiceClient', () => {
         'userService.timeoutMs': 500,
       });
 
-      expect(() => createUserServiceClient(config, breakerFactory())).toThrow();
+      expect(() => createUserServiceClient(config, breakerFactory(), inRequest())).toThrow();
     });
 
     it('guards every call with the user-service breaker at the configured timeout', async () => {
@@ -189,7 +202,9 @@ describe('UserServiceClient', () => {
       const breakers = breakerFactory();
       const create = vi.spyOn(breakers, 'create');
 
-      await expect(createUserServiceClient(config, breakers).userSummary(USER_ID)).resolves.toEqual(SUMMARY);
+      await expect(createUserServiceClient(config, breakers, inRequest()).userSummary(USER_ID)).resolves.toEqual(
+        SUMMARY,
+      );
       expect(create).toHaveBeenCalledWith(USER_SERVICE_BREAKER, {
         timeoutMs: 500,
         isDownstreamFault: isUserServiceFault,

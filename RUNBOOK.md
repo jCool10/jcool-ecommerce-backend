@@ -21,6 +21,7 @@ Conventions used below:
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
+- [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
@@ -403,6 +404,49 @@ Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, a
 
 ---
 
+## Deploy the monitoring stack
+
+`prometheus` and `grafana` are two ordinary Railway services declared in `.railway/railway.ts`, built
+from `infra/prometheus/Dockerfile` and `infra/grafana/Dockerfile`. Railway has no bind mounts, so
+each image **bakes** the config that compose mounts from the host; `.dockerignore` re-includes those
+files from the otherwise excluded `infra/` and keeps `infra/prometheus/secrets/` out.
+
+Neither is in `cd.yml`, and neither has a repo source: they are deployed by hand, which is right for
+config that changes a few times a year.
+
+First time, from an up-to-date `main`:
+
+```bash
+# A token shorter than 16 characters fails the api's env validation at boot.
+railway variable set "METRICS_TOKEN=$(openssl rand -hex 24)" --service jcool-ecommerce-backend
+railway variable set "GF_SECURITY_ADMIN_PASSWORD=$(openssl rand -hex 16)" --service grafana
+
+# GRAFANA_ADMIN_PASSWORD leaves the api in the same change, so this first apply is destructive.
+railway config plan                          # the only destroy must be that variable
+railway config apply --confirm-destructive
+
+railway up --ci --service prometheus
+railway up --ci --service grafana
+railway domain --service grafana --port 3000
+```
+
+Afterwards, a config change is `railway up --ci --service <prometheus|grafana>` on its own. The api
+needs a redeploy the first time `METRICS_TOKEN` is set: `MetricsTokenGuard` reads it at boot, and
+until then `/metrics` answers 404 and the target sits DOWN.
+
+Three constraints this stack depends on:
+
+- **One scrape job.** The recording rules in `infra/prometheus/rules/` aggregate globally, without
+  `by (job)`. Adding the user-service or id-service as a second job silently mixes two services into
+  one SLI; split the rules first.
+- **Prometheus binds `[::]`** (`infra/prometheus/railway-entrypoint.sh`). Railway's private network
+  is IPv6-only, and on the default `0.0.0.0` Grafana cannot reach it.
+- **Grafana is the only public surface**, and the only one with a login. Prometheus has no domain.
+  Grafana has no volume either: datasources and dashboards are provisioned from the image on every
+  start, so a redeploy loses only ad-hoc UI edits.
+
+---
+
 ## Put the gateway in front of the api
 
 The `gateway` service (Caddy, `apps/gateway`) hands every public route to the api unchanged, answers `/internal/*` with 404, and tells the api who the client is. CD creates and deploys it without a public domain. Moving `jcool-ecommerce.up.railway.app` onto it is this manual step. Do it off-peak, because between the two renames the name routes nowhere for a few seconds.
@@ -483,7 +527,8 @@ If the direct domain is already gone, create one with `railway domain --service 
 
 - `AUTH_UPSTREAM` on the gateway sends `/auth`, `/auth/*` and `/.well-known/jwks.json` there. Give it as `tcp6/<private domain>:<port>`, for the same reason as `API_UPSTREAM`.
 - `AUTH_UPSTREAM_REQUIRED=true` is on: the gateway refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of routing auth to an api that answers 404.
-- Both variables are set by hand and kept across every apply.
+- `AUTH_WRITE_FREEZE=true` answers every write under `/auth` with `503` and `Retry-After: 120`, reads untouched. Use it while a migration must not race a login or a password change, and unset it after. It is off unless set.
+- All three are set by hand and kept across every apply.
 
 ---
 
@@ -590,7 +635,9 @@ each as a reference so the two cannot drift.
 Session epochs come from the keys the user-service publishes to the shared Redis. A missing key
 costs a call to the user-service on the request path; if that call fails the request answers 503 —
 never an open door, never a logout. A sustained `session_epoch_lookups_total{result="miss"}` means
-Redis lost keys it should have kept.
+Redis lost keys it should have kept; refill them from the database rather than through the request
+path, with `USER_DATABASE_URL=… REDIS_URL=… pnpm --filter @jcool/user-service epochs:prewarm`. It
+writes each epoch as a max, so a login racing it is never lowered back.
 
 If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the
 endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that

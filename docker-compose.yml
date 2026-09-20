@@ -196,6 +196,9 @@ services:
     image: postgres:16-alpine
     container_name: jcool-id-postgres
     restart: unless-stopped
+    # Loopback only, as with the other databases: for running the id-service from the host.
+    ports:
+      - "127.0.0.1:${ID_POSTGRES_HOST_PORT:-5435}:5432"
     environment:
       POSTGRES_USER: ids
       POSTGRES_PASSWORD: ${ID_POSTGRES_PASSWORD:-ids}
@@ -298,7 +301,7 @@ services:
     networks:
       - jcool-net
 
-  # Dark: the gateway does not route /auth here yet. Loopback only, for direct checks.
+  # The gateway routes /auth here. Also published on loopback, for checks that bypass the edge.
   user-service:
     image: jcool-user-service:local
     pull_policy: never
@@ -350,19 +353,20 @@ services:
     restart: unless-stopped
     ports:
       - "${GATEWAY_HOST_PORT:-8080}:8080"
-      # Loopback only, as with the databases: the cutover precheck reads the id fleet from the host.
+      # Loopback only, as with the databases: it is for probing the id fleet from the host.
       - "127.0.0.1:${ID_LB_HOST_PORT:-4000}:4000"
     environment:
       PORT: 8080
-      API_UPSTREAM: app:3000
+      # Overridable so the edge can sit in front of services run on the host instead of containers:
+      # point them at host.docker.internal and bring this up with --no-deps.
+      API_UPSTREAM: ${API_UPSTREAM:-app:3000}
       ID_LB_PORT: 4000
-      ID_SERVICE_HOST: id-service
-      ID_SERVICE_PORT: 3000
+      ID_SERVICE_HOST: ${ID_SERVICE_HOST:-id-service}
+      ID_SERVICE_PORT: ${ID_SERVICE_PORT:-3000}
       # Nothing sits in front of it here, so the socket address is the client.
       TRUSTED_PROXY_CIDRS: ""
-      # The two switches of a cutover rehearsal. Empty means /auth still goes to the api; true makes
-      # every write under /auth answer 503 while the tables are copied. See RUNBOOK.md.
-      AUTH_UPSTREAM: ${AUTH_UPSTREAM:-}
+      AUTH_UPSTREAM: ${AUTH_UPSTREAM:-user-service:3000}
+      # Answers every write under /auth with 503, reads untouched. See RUNBOOK.md.
       AUTH_WRITE_FREEZE: ${AUTH_WRITE_FREEZE:-false}
     # Not on app: the id-service smoke brings up only this and id-service, and Caddy dials per request.
     depends_on:

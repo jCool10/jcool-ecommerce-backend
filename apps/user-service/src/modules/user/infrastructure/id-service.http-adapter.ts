@@ -1,5 +1,7 @@
 import { ServiceUnavailableException } from '@nestjs/common';
+import type { ClsService } from 'nestjs-cls';
 import { bucketOf } from '@jcool/id-codec';
+import { correlationHeaders } from '@jcool/platform/observability';
 import type { OutboundCall } from '@jcool/platform/resilience';
 import type { IdGeneratorPort } from '../application/ports';
 
@@ -51,6 +53,7 @@ export class IdServiceHttpAdapter implements IdGeneratorPort {
   constructor(
     private readonly options: IdServiceOptions,
     private readonly breaker: OutboundCall,
+    private readonly cls: ClsService,
   ) {}
 
   async mint(bucket: number, count = 1): Promise<string[]> {
@@ -65,7 +68,7 @@ export class IdServiceHttpAdapter implements IdGeneratorPort {
   private async request(bucket: number, count: number): Promise<string[]> {
     const response = await fetch(new URL('/v1/ids', this.options.url), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-caller': 'user-service' },
+      headers: { 'content-type': 'application/json', 'x-caller': 'user-service', ...correlationHeaders(this.cls) },
       body: JSON.stringify({ bucket, count }),
       // The breaker stops waiting at the same point; this also frees the socket.
       signal: AbortSignal.timeout(this.options.timeoutMs),

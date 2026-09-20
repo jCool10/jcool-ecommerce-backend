@@ -54,6 +54,9 @@ class FakeIdService {
 const leaseNotHeld: Reply = { status: 503, body: { statusCode: 503, code: 'LEASE_NOT_HELD' } };
 const passThrough: OutboundCall = { run: (task) => task() };
 
+const inRequest = (id = 'req-uuid'): ClsService => ({ isActive: () => true, getId: () => id }) as unknown as ClsService;
+const outsideRequest = (): ClsService => ({ isActive: () => false }) as unknown as ClsService;
+
 function breakerFactory(): CircuitBreakerFactory {
   const config = fakeConfigService({
     'resilience.breaker.enabled': true,
@@ -79,7 +82,7 @@ describe('IdServiceHttpAdapter', () => {
   afterEach(() => idService.stop());
 
   it('asks for ids in a bucket and names itself as the caller', async () => {
-    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, passThrough);
+    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, passThrough, inRequest());
 
     const ids = await adapter.mint(42, 2);
 
@@ -91,6 +94,8 @@ describe('IdServiceHttpAdapter', () => {
         headers: expect.objectContaining({
           'x-caller': 'user-service',
           'content-type': 'application/json',
+          // The id service logs the caller's id rather than minting one, so both hops read as one request.
+          'x-request-id': 'req-uuid',
         }) as IncomingHttpHeaders,
         body: { bucket: 42, count: 2 },
       }),
@@ -108,7 +113,7 @@ describe('IdServiceHttpAdapter', () => {
     ['ids from another bucket', { status: 200, body: { ids: [idIn(1), idIn(2)] } }],
   ])('answers 503 for %s, after exactly one request', async (_case, reply) => {
     idService.reply = () => reply;
-    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, passThrough);
+    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, passThrough, inRequest());
 
     await expect(adapter.mint(1, 2)).rejects.toBeInstanceOf(ServiceUnavailableException);
     // The gateway owns the only retry budget.
@@ -117,21 +122,29 @@ describe('IdServiceHttpAdapter', () => {
 
   it('answers 503 once the timeout runs out', async () => {
     idService.reply = () => 'hang';
-    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 100 }, passThrough);
+    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 100 }, passThrough, inRequest());
 
     await expect(adapter.mint(1)).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('answers 503 when nothing is listening', async () => {
-    const adapter = new IdServiceHttpAdapter({ url: 'http://127.0.0.1:1', timeoutMs: 1_000 }, passThrough);
+    const adapter = new IdServiceHttpAdapter({ url: 'http://127.0.0.1:1', timeoutMs: 1_000 }, passThrough, inRequest());
 
     await expect(adapter.mint(1)).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('sends no request id when it mints outside a request, leaving the id service to generate one', async () => {
+    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, passThrough, outsideRequest());
+
+    await adapter.mint(1);
+
+    expect(idService.received[0].headers).not.toHaveProperty('x-request-id');
   });
 
   describe('behind the breaker', () => {
     function adapterBehindBreaker(): IdServiceHttpAdapter {
       const breaker = breakerFactory().create(ID_SERVICE_BREAKER, { isDownstreamFault: isIdServiceFault });
-      return new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, breaker);
+      return new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, breaker, inRequest());
     }
 
     it('keeps the circuit closed through LEASE_NOT_HELD answers', async () => {

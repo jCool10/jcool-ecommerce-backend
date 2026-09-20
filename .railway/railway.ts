@@ -1,4 +1,4 @@
-import { database, defineRailway, github, preserve, project, service } from 'railway/iac';
+import { database, defineRailway, github, preserve, project, service, volume } from 'railway/iac';
 
 export const partial = 'api';
 
@@ -7,14 +7,17 @@ const API_PORT = '8080';
 const ID_SERVICE_PORT = '3000';
 const ID_LB_PORT = '4000';
 const USER_SERVICE_PORT = '3000';
+const PROMETHEUS_PORT = '9090';
+const GRAFANA_PORT = '3000';
 
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
   'DATABASE_URL',
-  'GRAFANA_ADMIN_PASSWORD',
   'LOG_LEVEL',
   'MAIL_FROM',
+  // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.
+  'METRICS_TOKEN',
   'NODE_ENV',
   'PAYMENT_WEBHOOK_SECRET',
   'POSTGRES_DB',
@@ -144,8 +147,9 @@ export default defineRailway(() => {
       ID_SERVICE_PORT,
       ID_LB_PORT,
       ID_LB_IP_VERSIONS: 'ipv6',
-      // Set by hand: the edge ranges come from a probe, the auth flip and the cutover freeze from
-      // their RUNBOOK steps. scripts/check-railway-flip-vars.mjs keeps them declared here.
+      // Set by hand: the edge ranges come from a probe, the auth upstream from its RUNBOOK step,
+      // and the write freeze only while auth writes have to stop. check-railway-flip-vars.mjs
+      // keeps them declared here.
       ...preserved(['TRUSTED_PROXY_CIDRS', 'AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED', 'AUTH_WRITE_FREEZE']),
     },
   });
@@ -179,7 +183,58 @@ export default defineRailway(() => {
     },
   });
 
+  // The tsdb outlives a deploy; the retention window is set in railway-entrypoint.sh.
+  const prometheusData = volume('prometheus-data', { sizeMB: 5_000 });
+
+  const prometheus = service('prometheus', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/prometheus/Dockerfile' },
+    deploy: {
+      numReplicas: 1,
+      healthcheckPath: '/-/healthy',
+      healthcheckTimeout: 60,
+      restartPolicyType: 'ON_FAILURE',
+      restartPolicyMaxRetries: 5,
+    },
+    volumeMounts: { [prometheusData.name]: { mountPath: '/prometheus' } },
+    env: {
+      PORT: PROMETHEUS_PORT,
+      // Referenced, not preserved: a scraper whose token drifts from the api's gets 404s that look
+      // like a missing endpoint.
+      METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
+      API_TARGET: `\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
+    },
+  });
+
+  // The only publicly reachable part of the stack, and the only one with a login.
+  const grafana = service('grafana', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/grafana/Dockerfile' },
+    deploy: {
+      numReplicas: 1,
+      healthcheckPath: '/api/health',
+      healthcheckTimeout: 60,
+      restartPolicyType: 'ON_FAILURE',
+      restartPolicyMaxRetries: 5,
+    },
+    env: {
+      ...preserved(['GF_SECURITY_ADMIN_PASSWORD']),
+      PORT: GRAFANA_PORT,
+      GF_SERVER_HTTP_PORT: GRAFANA_PORT,
+      GF_SERVER_ROOT_URL: 'https://${{RAILWAY_PUBLIC_DOMAIN}}',
+      GF_USERS_ALLOW_SIGN_UP: 'false',
+    },
+  });
+
   return project('jcool ecommerce backend', {
-    resources: [api, idPostgres, idService, gateway, userPostgres, userService],
+    resources: [
+      api,
+      idPostgres,
+      idService,
+      gateway,
+      userPostgres,
+      userService,
+      prometheusData,
+      prometheus,
+      grafana,
+    ],
   });
 });

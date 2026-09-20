@@ -1,0 +1,14 @@
+# Overrides the compose datasources (prometheus:9090, jaeger:16686) inside the Railway image.
+# Prometheus is reached over Railway's private network; no Jaeger runs there, and no provisioned
+# dashboard references it.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus.railway.internal:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s

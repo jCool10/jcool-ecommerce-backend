@@ -1,4 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
+import type { ClsService } from 'nestjs-cls';
+import { correlationHeaders } from '@jcool/platform/observability';
 import type { CircuitBreakerFactory, OutboundCall } from '@jcool/platform/resilience';
 
 export const USER_SERVICE_BREAKER = 'user-service';
@@ -46,6 +48,7 @@ export class UserServiceClient {
   constructor(
     private readonly options: UserServiceClientOptions,
     private readonly breaker: OutboundCall,
+    private readonly cls: ClsService,
   ) {}
 
   /** null when the user-service has no such user. */
@@ -62,7 +65,7 @@ export class UserServiceClient {
   private get<T>(path: string, isValid: Guard<T>): Promise<T | null> {
     return this.breaker.run(async () => {
       const response = await fetch(new URL(path, this.options.url), {
-        headers: { authorization: `Bearer ${this.options.token}` },
+        headers: { authorization: `Bearer ${this.options.token}`, ...correlationHeaders(this.cls) },
         signal: AbortSignal.timeout(this.options.timeoutMs),
       });
       if (!response.ok) {
@@ -80,7 +83,11 @@ export class UserServiceClient {
 }
 
 /** One breaker name for every caller, so they share what they learn about an outage. */
-export function createUserServiceClient(config: ConfigService, breakers: CircuitBreakerFactory): UserServiceClient {
+export function createUserServiceClient(
+  config: ConfigService,
+  breakers: CircuitBreakerFactory,
+  cls: ClsService,
+): UserServiceClient {
   const timeoutMs = config.getOrThrow<number>('userService.timeoutMs');
   return new UserServiceClient(
     {
@@ -89,5 +96,6 @@ export function createUserServiceClient(config: ConfigService, breakers: Circuit
       timeoutMs,
     },
     breakers.create(USER_SERVICE_BREAKER, { timeoutMs, isDownstreamFault: isUserServiceFault }),
+    cls,
   );
 }

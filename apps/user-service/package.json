@@ -17,17 +17,13 @@
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
     "test:e2e": "vitest run --config ./test/vitest-e2e.config.mts",
-    "test:system": "vitest run --config ./test/vitest-system.config.mts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env dist/database/migrate-cli.js",
     "db:seed:perf-user": "tsx --env-file-if-exists=.env scripts/seed-perf-user.ts",
     "seed:users:bulk": "tsx --env-file-if-exists=.env scripts/seed-users-bulk.ts",
     "db:metrics:users": "tsx --env-file-if-exists=.env scripts/capture-db-metrics.ts",
     "identity:verify": "tsx --env-file-if-exists=.env scripts/verify-identity-buckets.ts",
-    "cutover:precheck": "tsx scripts/cutover/precheck.ts",
-    "cutover:copy": "sh scripts/cutover/copy-user-tables.sh",
-    "cutover:verify": "tsx scripts/cutover/verify-copy.ts",
-    "cutover:prewarm-epochs": "tsx scripts/cutover/prewarm-epochs.ts"
+    "epochs:prewarm": "tsx scripts/prewarm-epochs.ts"
   },
   "dependencies": {
     "@jcool/auth-verifier": "workspace:*",

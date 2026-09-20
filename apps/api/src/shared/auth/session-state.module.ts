@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ClsService } from 'nestjs-cls';
 import { SESSION_EPOCH, TOKEN_DENYLIST } from '@jcool/auth-verifier';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { RedisService } from '@jcool/platform/redis';
@@ -13,9 +14,14 @@ import { RedisSessionEpochReader, RedisTokenDenylistReader } from './redis-sessi
   providers: [
     {
       provide: SESSION_EPOCH,
-      inject: [ConfigService, RedisService, CircuitBreakerFactory, METRICS],
-      useFactory: (config: ConfigService, redis: RedisService, breakers: CircuitBreakerFactory, metrics: MetricsPort) =>
-        new RedisSessionEpochReader(redis, createUserServiceClient(config, breakers), metrics),
+      inject: [ConfigService, RedisService, CircuitBreakerFactory, METRICS, ClsService],
+      useFactory: (
+        config: ConfigService,
+        redis: RedisService,
+        breakers: CircuitBreakerFactory,
+        metrics: MetricsPort,
+        cls: ClsService,
+      ) => new RedisSessionEpochReader(redis, createUserServiceClient(config, breakers, cls), metrics),
     },
     {
       provide: TOKEN_DENYLIST,

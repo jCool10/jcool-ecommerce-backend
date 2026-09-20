@@ -50,8 +50,8 @@
 	}
 	@auth path /auth /auth/* /.well-known/jwks.json
 	handle @auth {
-		# The cutover copies the user tables between two databases: nothing may write to the source
-		# while that runs. The expression is substituted at parse time, so the flag needs a redeploy.
+		# Stops auth writes while a migration must not race one, reads untouched. The expression is
+		# substituted at parse time, so the flag needs a redeploy.
 		@frozen {
 			method POST PUT PATCH DELETE
 			path /auth /auth/*

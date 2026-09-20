@@ -4,7 +4,7 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '
 import type { ClsService } from 'nestjs-cls';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withSpan } from '../tracing/tracer';
-import { getCorrelationId } from './cls.setup';
+import { correlationHeaders, getCorrelationId } from './cls.setup';
 
 function fakeCls(opts: { active: boolean; id?: string }): ClsService {
   return { isActive: () => opts.active, getId: () => opts.id } as unknown as ClsService;
@@ -46,5 +46,15 @@ describe('getCorrelationId', () => {
   it('returns undefined outside a request (CLS inactive)', () => {
     const cls = fakeCls({ active: false });
     expect(getCorrelationId(cls)).toBeUndefined();
+  });
+});
+
+describe('correlationHeaders', () => {
+  it('passes the request id down, so the next service logs the same one', () => {
+    expect(correlationHeaders(fakeCls({ active: true, id: 'req-uuid' }))).toEqual({ 'x-request-id': 'req-uuid' });
+  });
+
+  it('sends nothing outside a request, leaving the downstream to mint its own', () => {
+    expect(correlationHeaders(fakeCls({ active: false }))).toEqual({});
   });
 });

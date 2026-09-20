@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ClsService } from 'nestjs-cls';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
@@ -61,10 +62,10 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
     { provide: ORDER_PAYMENT_VIEW, useClass: OrderPaymentViewService },
     {
       provide: USER_CONTACT,
-      inject: [ConfigService, CircuitBreakerFactory],
-      useFactory: (config: ConfigService, breakers: CircuitBreakerFactory): UserContactPort =>
+      inject: [ConfigService, CircuitBreakerFactory, ClsService],
+      useFactory: (config: ConfigService, breakers: CircuitBreakerFactory, cls: ClsService): UserContactPort =>
         new RemoteUserContactAdapter(
-          createUserServiceClient(config, breakers),
+          createUserServiceClient(config, breakers, cls),
           durationToMs(config.getOrThrow<string>('userDirectory.notFoundGrace')),
         ),
     },

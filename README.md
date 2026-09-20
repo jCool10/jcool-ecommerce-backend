@@ -18,7 +18,7 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — seven
 
 | | |
 | --- | --- |
-| **Scale** | 7 bounded contexts · 566 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
+| **Scale** | 7 bounded contexts · 566 TypeScript files · 17 tables · 22 committed migrations · 53 HTTP routes |
 | **Tests** | 1,131 unit tests (160 files, hermetic) + 73 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers, run four workers wide |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
@@ -173,7 +173,7 @@ apps/api/
 │   └── setup/               # global setup, app factory, fixtures, per-suite side containers
 └── scripts/                 # seeds, DB metrics
 apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replicas; unit / e2e / system tests
-apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e / system tests
+apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e tests
 apps/gateway/                # Caddyfile: public site routing /auth to the user-service, private LB over the id-service replicas
 packages/
 ├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
@@ -409,7 +409,7 @@ Details worth stealing: the e2e app factory quarantines the developer's `.env` s
 
 The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
 
-`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service`, `gateway` and `user-service`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log. For the user-service, it checks the copy the cutover scripts make between the two databases, row for row.
+`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service` and `gateway`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log.
 
 Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit `emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
 

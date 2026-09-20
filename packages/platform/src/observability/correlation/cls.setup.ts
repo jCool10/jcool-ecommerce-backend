@@ -39,6 +39,15 @@ export function getCorrelationId(cls: ClsService): string | undefined {
   return cls.isActive() ? cls.getId() : undefined;
 }
 
+/**
+ * Carries this request's id to a downstream service, which {@link resolveRequestId} then adopts
+ * instead of minting its own. Empty outside a request or a job, so the downstream still gets one.
+ */
+export function correlationHeaders(cls: ClsService): Record<string, string> {
+  const id = getCorrelationId(cls);
+  return id === undefined ? {} : { [REQUEST_ID_HEADER]: id };
+}
+
 export function getRequestDurationMs(cls: ClsService): number | undefined {
   if (!cls.isActive()) return undefined;
   const start = cls.get<bigint>(REQUEST_START_KEY);
