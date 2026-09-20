@@ -109,6 +109,8 @@ describe('gateway: the api behind it', () => {
       new GenericContainer('redis:7-alpine')
         .withNetwork(network)
         .withNetworkAliases('redis')
+        // The api refuses to boot against a Redis that can lose session epochs or the denylist.
+        .withCommand(['redis-server', '--appendonly', 'yes'])
         .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
         .start(),
     ]);

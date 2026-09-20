@@ -47,6 +47,45 @@ async function reportKeyPin(pool: Pool, fingerprint: string): Promise<boolean> {
   return true;
 }
 
+/** The whole scan, printing as it goes: the pin check, then every row. False on any disagreement. */
+export async function verifyIdentityBuckets(pool: Pool, bucketKey: string): Promise<boolean> {
+  const keyMatches = await reportKeyPin(pool, identityKeyFingerprint(bucketKey));
+
+  let cursor = SCAN_START;
+  let scanned = 0;
+  let misrouted = 0;
+  // Counted, not collected: under an outright wrong key every row is an offender, and holding
+  // them all would exhaust the heap before printing.
+  const shown: string[] = [];
+
+  for (;;) {
+    // Keyset paging: OFFSET re-reads every earlier page, and this has to stay usable at the row
+    // counts that make the question worth asking.
+    const { rows } = await pool.query<UserRow>(`SELECT id, email FROM users WHERE id > $1 ORDER BY id LIMIT $2`, [
+      cursor,
+      BATCH,
+    ]);
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      if (carriedBucket(row.id) !== bucketForEmail(normalizeEmail(row.email), bucketKey)) {
+        misrouted++;
+        // Ids only: this output gets pasted into tickets.
+        if (shown.length < OFFENDERS_SHOWN) shown.push(row.id);
+      }
+    }
+    scanned += rows.length;
+    cursor = rows[rows.length - 1].id;
+    if (scanned % (BATCH * 10) === 0) console.log(`  ${scanned} rows scanned, ${misrouted} misrouted`);
+  }
+
+  console.log(`Scanned ${scanned} users: ${misrouted} misrouted.`);
+  for (const id of shown) console.log(`  ${id}`);
+  if (misrouted > shown.length) console.log(`  ... and ${misrouted - shown.length} more`);
+
+  return keyMatches && misrouted === 0;
+}
+
 async function main(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL is required to verify identity buckets');
@@ -55,47 +94,16 @@ async function main(): Promise<void> {
 
   const pool = new Pool({ connectionString, max: 2 });
   try {
-    const keyMatches = await reportKeyPin(pool, identityKeyFingerprint(bucketKey));
-
-    let cursor = SCAN_START;
-    let scanned = 0;
-    let misrouted = 0;
-    // Counted, not collected: under an outright wrong key every row is an offender, and holding
-    // them all would exhaust the heap before printing.
-    const shown: string[] = [];
-
-    for (;;) {
-      // Keyset paging: OFFSET re-reads every earlier page, and this has to stay usable at the row
-      // counts that make the question worth asking.
-      const { rows } = await pool.query<UserRow>(`SELECT id, email FROM users WHERE id > $1 ORDER BY id LIMIT $2`, [
-        cursor,
-        BATCH,
-      ]);
-      if (rows.length === 0) break;
-
-      for (const row of rows) {
-        if (carriedBucket(row.id) !== bucketForEmail(normalizeEmail(row.email), bucketKey)) {
-          misrouted++;
-          // Ids only: this output gets pasted into tickets.
-          if (shown.length < OFFENDERS_SHOWN) shown.push(row.id);
-        }
-      }
-      scanned += rows.length;
-      cursor = rows[rows.length - 1].id;
-      if (scanned % (BATCH * 10) === 0) console.log(`  ${scanned} rows scanned, ${misrouted} misrouted`);
-    }
-
-    console.log(`Scanned ${scanned} users: ${misrouted} misrouted.`);
-    for (const id of shown) console.log(`  ${id}`);
-    if (misrouted > shown.length) console.log(`  ... and ${misrouted - shown.length} more`);
-
-    if (misrouted > 0 || !keyMatches) process.exitCode = 1;
+    if (!(await verifyIdentityBuckets(pool, bucketKey))) process.exitCode = 1;
   } finally {
     await pool.end();
   }
 }
 
-void main().catch((error: unknown) => {
-  console.error('Identity bucket verification failed:', error);
-  process.exit(1);
-});
+// Imported by the cutover verifier, which brings its own pool and reports on both databases.
+if (process.argv[1]?.endsWith('verify-identity-buckets.ts')) {
+  void main().catch((error: unknown) => {
+    console.error('Identity bucket verification failed:', error);
+    process.exit(1);
+  });
+}

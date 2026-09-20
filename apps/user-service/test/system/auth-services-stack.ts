@@ -3,13 +3,23 @@ import { resolve } from 'node:path';
 import { GenericContainer, Network, type StartedNetwork, type StartedTestContainer, Wait } from 'testcontainers';
 
 const REPO_ROOT = resolve(__dirname, '../../../..');
-const API_IMAGE = 'jcool-api:system-test';
-const USER_SERVICE_IMAGE = 'jcool-user-service:system-test';
+export const API_IMAGE = 'jcool-api:system-test';
+export const USER_SERVICE_IMAGE = 'jcool-user-service:system-test';
 const ID_SERVICE_IMAGE = 'jcool-id-service:system-test';
 const GATEWAY_IMAGE = 'jcool-gateway:system-test';
-const APP_PORT = 3000;
+export const APP_PORT = 3000;
+export const GATEWAY_PORT = 8080;
+export const PG_PORT = 5432;
+export const REDIS_PORT = 6379;
 const LB_PORT = 4000;
 const STARTUP_TIMEOUT_MS = 120_000;
+
+/** testcontainers keeps its own name for this shape internal. */
+export interface FileToCopy {
+  source: string;
+  target: string;
+  mode?: number;
+}
 
 export const ALLOWED_ORIGIN = 'https://shop.system-test.invalid';
 export const IDENTITY_BUCKET_KEY = randomBytes(32).toString('hex');
@@ -33,7 +43,7 @@ const SHARED_ENV = {
   PORT: String(APP_PORT),
 };
 
-const API_ENV = {
+export const API_ENV = {
   ...SHARED_ENV,
   DATABASE_URL: 'postgres://api:api@api-postgres:5432/api',
   REDIS_URL: 'redis://redis:6379/0',
@@ -44,7 +54,7 @@ const API_ENV = {
   STORAGE_SECRET_ACCESS_KEY: randomBytes(16).toString('hex'),
 };
 
-const USER_SERVICE_ENV = {
+export const USER_SERVICE_ENV = {
   ...SHARED_ENV,
   DATABASE_URL: 'postgres://users:users@user-postgres:5432/users',
   REDIS_URL: 'redis://redis:6379/1',
@@ -87,10 +97,17 @@ export interface AuthServicesStack {
   api: StartedTestContainer;
   userService: StartedTestContainer;
   idService: StartedTestContainer;
+  gateway: StartedTestContainer;
+  apiPostgres: StartedTestContainer;
+  userPostgres: StartedTestContainer;
+  redis: StartedTestContainer;
 }
 
-/** The api and the user-service side by side, sharing one Redis, with the id-service behind the gateway. */
-export async function startStack(): Promise<AuthServicesStack> {
+/**
+ * The api and the user-service side by side, sharing one Redis, with the id-service behind the
+ * gateway. `files` land in the user-postgres container, which is where psql runs the cutover copy.
+ */
+export async function startStack(files: FileToCopy[] = []): Promise<AuthServicesStack> {
   const network = await new Network().start();
   const containers: StartedTestContainer[] = [];
   const track = async (pending: Promise<StartedTestContainer>) => {
@@ -100,15 +117,16 @@ export async function startStack(): Promise<AuthServicesStack> {
   };
 
   try {
-    await Promise.all([
+    const [apiPostgres, userPostgres, , redis] = await Promise.all([
       track(startPostgres(network, 'api-postgres', 'api')),
-      track(startPostgres(network, 'user-postgres', 'users')),
+      track(startPostgres(network, 'user-postgres', 'users', files)),
       track(startPostgres(network, 'id-postgres', 'ids')),
       track(
         new GenericContainer('redis:7-alpine')
           .withNetwork(network)
           .withNetworkAliases('redis')
           .withCommand(['redis-server', '--appendonly', 'yes'])
+          .withExposedPorts(REDIS_PORT)
           .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
           .start(),
       ),
@@ -120,28 +138,12 @@ export async function startStack(): Promise<AuthServicesStack> {
     ]);
 
     const idService = await track(startApp(network, ID_SERVICE_IMAGE, 'id-service', ID_SERVICE_ENV));
-    await track(
-      new GenericContainer(GATEWAY_IMAGE)
-        .withNetwork(network)
-        .withNetworkAliases('gateway')
-        .withEnvironment({
-          ID_LB_PORT: String(LB_PORT),
-          ID_SERVICE_HOST: 'id-service',
-          ID_SERVICE_PORT: String(APP_PORT),
-          API_UPSTREAM: `api:${APP_PORT}`,
-          GATEWAY_SHUTDOWN_DELAY: '0s',
-          // Zero would be an endless grace period to Caddy.
-          GATEWAY_GRACE_PERIOD: '1ms',
-        })
-        .withExposedPorts(8080)
-        .withWaitStrategy(Wait.forHttp('/health/live', 8080))
-        .start(),
-    );
+    const gateway = await track(startGateway(network, {}));
     const [api, userService] = await Promise.all([
       track(startApp(network, API_IMAGE, 'api', API_ENV)),
       track(startApp(network, USER_SERVICE_IMAGE, 'user-service', USER_SERVICE_ENV)),
     ]);
-    return { network, containers, api, userService, idService };
+    return { network, containers, api, userService, idService, gateway, apiPostgres, userPostgres, redis };
   } catch (error) {
     await Promise.allSettled(containers.map((container) => container.stop({ timeout: 0 })));
     await network.stop();
@@ -159,16 +161,59 @@ export function appUrl(container: StartedTestContainer, path = ''): string {
   return `http://${container.getHost()}:${container.getMappedPort(APP_PORT)}${path}`;
 }
 
-function startPostgres(network: StartedNetwork, alias: string, name: string): Promise<StartedTestContainer> {
+function startPostgres(
+  network: StartedNetwork,
+  alias: string,
+  name: string,
+  files: FileToCopy[] = [],
+): Promise<StartedTestContainer> {
   return (
     new GenericContainer('postgres:16-alpine')
       .withNetwork(network)
       .withNetworkAliases(alias)
       .withEnvironment({ POSTGRES_USER: name, POSTGRES_PASSWORD: name, POSTGRES_DB: name })
+      .withExposedPorts(PG_PORT)
+      .withCopyFilesToContainer(files)
       // The init server logs it once before restarting on TCP.
       .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
       .start()
   );
+}
+
+/** `env` overrides the defaults, which route everything to the api and put the id LB on the network. */
+export function startGateway(network: StartedNetwork, env: Record<string, string>): Promise<StartedTestContainer> {
+  return new GenericContainer(GATEWAY_IMAGE)
+    .withNetwork(network)
+    .withNetworkAliases('gateway')
+    .withEnvironment({
+      ID_LB_PORT: String(LB_PORT),
+      ID_SERVICE_HOST: 'id-service',
+      ID_SERVICE_PORT: String(APP_PORT),
+      API_UPSTREAM: `api:${APP_PORT}`,
+      GATEWAY_SHUTDOWN_DELAY: '0s',
+      // Zero would be an endless grace period to Caddy.
+      GATEWAY_GRACE_PERIOD: '1ms',
+      ...env,
+    })
+    .withExposedPorts(GATEWAY_PORT)
+    .withWaitStrategy(Wait.forHttp('/health/live', GATEWAY_PORT))
+    .start();
+}
+
+/**
+ * A deploy: the old container goes away and a new one takes its network alias. Railway overlaps the
+ * two for a while; the cutover's waits exist for exactly that, and are not what this reproduces.
+ */
+export async function replaceContainer(
+  stack: AuthServicesStack,
+  previous: StartedTestContainer,
+  start: () => Promise<StartedTestContainer>,
+): Promise<StartedTestContainer> {
+  await previous.stop({ timeout: 0 });
+  const replacement = await start();
+  const index = stack.containers.indexOf(previous);
+  if (index >= 0) stack.containers.splice(index, 1, replacement);
+  return replacement;
 }
 
 async function migrate(
@@ -188,7 +233,7 @@ async function migrate(
   await container.stop();
 }
 
-function startApp(
+export function startApp(
   network: StartedNetwork,
   image: string,
   alias: string,

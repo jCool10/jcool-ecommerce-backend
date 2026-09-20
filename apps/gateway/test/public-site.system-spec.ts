@@ -190,6 +190,38 @@ describe('gateway: public site', () => {
         await flipped.stop();
       }
     });
+
+    describe('frozen for the cutover', () => {
+      let frozen: StartedTestContainer;
+
+      beforeAll(async () => {
+        frozen = await startGateway(network, { ...baseEnv, AUTH_UPSTREAM: 'auth:3000', AUTH_WRITE_FREEZE: 'true' });
+      });
+
+      afterAll(async () => {
+        await frozen?.stop();
+      });
+
+      it.each(['POST', 'PUT', 'PATCH', 'DELETE'])('turns %s away with 503 and Retry-After', async (method) => {
+        const before = await hits(auth);
+
+        const res = await direct('/auth/login', { method }, frozen);
+
+        expect(res.status).toBe(503);
+        expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+        expect(await hits(auth)).toBe(before);
+      });
+
+      it('still serves reads and the key set', async () => {
+        for (const path of ['/auth/verify-email?token=x', '/.well-known/jwks.json']) {
+          expect((await echoOf(direct(path, undefined, frozen))).upstream, path).toBe('auth');
+        }
+      });
+
+      it('leaves writes outside /auth alone', async () => {
+        expect((await echoOf(direct('/orders', { method: 'POST' }, frozen))).upstream).toBe('api');
+      });
+    });
   });
 
   describe('startup', () => {

@@ -1,6 +1,8 @@
 import { Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, UseGuards } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { identityKeyFingerprint } from '@jcool/id-codec';
 import { Public } from '@jcool/platform/rbac';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@jcool/platform/throttler';
 import { USER_FACADE, type UserFacade, type UserSummary } from '../../application/public/user-facade.port';
@@ -21,6 +23,7 @@ export class InternalApiController {
   constructor(
     @Inject(USER_FACADE) private readonly users: UserFacade,
     private readonly fillSessionEpoch: FillSessionEpochUseCase,
+    private readonly config: ConfigService,
   ) {}
 
   @Get('users/:id/summary')
@@ -35,5 +38,25 @@ export class InternalApiController {
     const epoch = await this.fillSessionEpoch.execute(userId);
     if (epoch === null) throw new NotFoundException();
     return { epoch };
+  }
+
+  /**
+   * What this process actually loaded, as fingerprints. The cutover fails in ways no smoke test
+   * catches when a key here differs from the api's — ids route to the wrong bucket, CSRF cookies
+   * stop validating — so the precheck compares these against the api instead of trusting that the
+   * right values were pasted into two dashboards.
+   */
+  @Get('cutover/digest')
+  cutoverDigest(): Record<string, string | boolean> {
+    const fingerprint = (key: string) => identityKeyFingerprint(this.config.getOrThrow<string>(key));
+    return {
+      identityBucketKey: fingerprint('identity.bucketKey'),
+      jwtAccessSecret: fingerprint('auth.jwtAccessSecret'),
+      csrfSecret: fingerprint('auth.csrfSecret'),
+      accessTtl: this.config.getOrThrow<string>('auth.jwtAccessTtl'),
+      hs256Enabled: this.config.getOrThrow<boolean>('auth.hs256Enabled'),
+      issuer: this.config.getOrThrow<string>('auth.issuer'),
+      audience: this.config.getOrThrow<string>('auth.audience'),
+    };
   }
 }

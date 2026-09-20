@@ -50,8 +50,22 @@
 	}
 	@auth path /auth /auth/* /.well-known/jwks.json
 	handle @auth {
-		reverse_proxy {$AUTH_UPSTREAM} {
-			import upstream
+		# The cutover copies the user tables between two databases: nothing may write to the source
+		# while that runs. The expression is substituted at parse time, so the flag needs a redeploy.
+		@frozen {
+			method POST PUT PATCH DELETE
+			path /auth /auth/*
+			expression `"{$AUTH_WRITE_FREEZE:false}" == "true"`
+		}
+		handle @frozen {
+			# Long enough that a client retry lands after the freeze, short enough to stay a retry.
+			header Retry-After 120
+			respond "auth is read-only during a migration" 503
+		}
+		handle {
+			reverse_proxy {$AUTH_UPSTREAM} {
+				import upstream
+			}
 		}
 	}
 	handle {

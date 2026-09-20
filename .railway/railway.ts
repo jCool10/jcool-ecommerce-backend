@@ -162,8 +162,9 @@ export default defineRailway(() => {
       ID_SERVICE_PORT,
       ID_LB_PORT,
       ID_LB_IP_VERSIONS: 'ipv6',
-      // Set by hand: the edge ranges come from a probe, the auth flip from its RUNBOOK step.
-      ...preserved(['TRUSTED_PROXY_CIDRS', 'AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED']),
+      // Set by hand: the edge ranges come from a probe, the auth flip and the cutover freeze from
+      // their RUNBOOK steps. scripts/check-railway-flip-vars.mjs keeps them declared here.
+      ...preserved(['TRUSTED_PROXY_CIDRS', 'AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED', 'AUTH_WRITE_FREEZE']),
     },
   });
 

@@ -6,7 +6,7 @@ import type { SessionEpochPublisherPort } from '../application/ports';
 
 // SET-max in one round trip: a read-through fill racing a bump can land in either order and the key
 // still ends at the larger epoch.
-const RAISE_EPOCH = `
+export const RAISE_EPOCH = `
 local current = tonumber(redis.call('GET', KEYS[1]))
 local proposed = tonumber(ARGV[1])
 if current ~= nil and current >= proposed then

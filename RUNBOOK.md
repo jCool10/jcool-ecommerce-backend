@@ -24,6 +24,7 @@ Conventions used below:
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [Run the user-service dark](#run-the-user-service-dark)
 - [Prepare the api for the cutover](#prepare-the-api-for-the-cutover)
+- [Cut over the user data](#cut-over-the-user-data)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -635,6 +636,103 @@ A buyer the user-service does not know is retried until the event is `USER_DIREC
 Either way `DeadLetterQueued` pages. Once the user-service answers again, [replay the dead-letter queue](#replay-the-dead-letter-queue).
 
 The ladder is a custom backoff that only this release's worker knows. Do not roll the api back past it while `order.paid` jobs are waiting to retry: an older worker cannot schedule their next attempt, and the job stalls instead of retrying.
+
+---
+
+## Cut over the user data
+
+Moves the five user tables into `user-postgres` and `/auth` onto the user-service. The copy is a moment, not a stream, so `/auth` writes are frozen for its duration — a couple of minutes on a small database. Rehearse it on compose first (below).
+
+Up to step 4 the way back is to unfreeze and change nothing else. After it, the way back is to copy the tables the other way, for the next 72 hours.
+
+### What the scripts need
+
+All four live in `apps/user-service/scripts/cutover` and run **local**. `copy-user-tables.sh` needs `psql` 16 or newer and both databases reachable at once:
+
+```bash
+railway connect api-postgres --tunnel-only &     # each prints the local port it listens on
+railway connect user-postgres --tunnel-only &
+export API_DATABASE_URL=postgres://…@127.0.0.1:<port>/railway
+export USER_DATABASE_URL=postgres://…@127.0.0.1:<port>/railway
+```
+
+| Variable | Read by | Value |
+| -------- | ------- | ----- |
+| `API_DATABASE_URL`, `USER_DATABASE_URL` | all | the two databases, through the tunnels |
+| `REDIS_URL` | precheck, prewarm, verify | the shared instance |
+| `IDENTITY_BUCKET_KEY` | verify | the one both services use |
+| `API_URL`, `GATEWAY_URL`, `USER_SERVICE_URL`, `ID_SERVICE_URL` | precheck | public URL for the gateway, private for the rest |
+| `INTERNAL_API_TOKEN` | precheck | the user-service's |
+| `JWT_ACCESS_SECRET`, `JWT_ACCESS_TTL` | precheck | the **api's** — compared as fingerprints, never printed |
+
+Read the two secrets straight out of Railway rather than pasting them:
+
+```bash
+export JWT_ACCESS_SECRET=$(railway variables --service jcool-ecommerce-backend --json | jq -r .JWT_ACCESS_SECRET)
+```
+
+### Sequence
+
+1. **Back up both databases.** See [Backup and restore](#backup-and-restore). Delete the dumps once the rollback window closes: they hold password and token hashes.
+2. **`pnpm --filter @jcool/user-service cutover:precheck`.** It must be green, including the fingerprint checks — the user-service needs the api's `IDENTITY_BUCKET_KEY`, `JWT_ACCESS_SECRET` (also as `CSRF_SECRET`) and `JWT_ACCESS_TTL`, or tokens and CSRF cookies stop validating at the flip. It also prints what it cannot check itself.
+3. **Freeze the writes:** `AUTH_WRITE_FREEZE=true` on the gateway. Every `POST`, `PUT`, `PATCH` and `DELETE` under `/auth` answers 503 with `Retry-After`; reads and the key set carry on. If a retention sweep is due, set `RETENTION_AUTH_TOKENS_ENABLED=false` (api) and `RETENTION_ENABLED=false` (user-service) too — the freeze does not stop them writing.
+4. **Copy and verify.**
+
+   ```bash
+   pnpm --filter @jcool/user-service cutover:copy
+   pnpm --filter @jcool/user-service cutover:verify
+   ```
+
+   Anything but `Verification passed.` stops the cutover: unfreeze and investigate. The api is still the owner and nothing was lost.
+5. **Redeploy the user-service, then prewarm.** Its key pin is only checked against rows that exist, and until now there were none; a wrong key refuses the boot here, where the cost is a restart.
+
+   ```bash
+   pnpm --filter @jcool/user-service cutover:prewarm-epochs
+   pnpm --filter @jcool/user-service cutover:verify --epochs
+   ```
+
+6. **Flip, in this order**, one deploy each:
+   - api: `AUTH_EPOCH_SOURCE=redis`, `USER_DIRECTORY_SOURCE=remote`. First, or the gateway hands the old api a token it cannot verify and logs everyone out.
+   - gateway: `AUTH_UPSTREAM=tcp6/${{user-service.RAILWAY_PRIVATE_DOMAIN}}:3000`, `AUTH_UPSTREAM_REQUIRED=true`.
+   - api: `AUTH_ROUTES_ENABLED=false`. Its `/auth` routes answer 410 from here on.
+   - Delete `AUTH_WRITE_FREEZE`, and put the sweeps back if step 3 stopped them.
+7. **Smoke** through the public URL: log in (the access token is now ES256), refresh with a cookie issued *before* the cutover, call an api route with the new token, then `logout-all` and check that token is refused everywhere. The api's own `/auth/login` answers 410.
+
+Later, once no pre-cutover token can still be alive, set `AUTH_HS256_ENABLED=false` on the api first, then on the user-service.
+
+### Roll back after the flip
+
+Within 72 hours, and only then. Everything the user-service changed in place — rotations, revocations, spent reset links, accounts registered since — comes back with the tables, which is why this copies whole tables rather than recent rows.
+
+1. `AUTH_WRITE_FREEZE=true` on the gateway.
+2. `pnpm --filter @jcool/user-service cutover:copy --reverse`, then `cutover:verify --reverse`. The api's five tables are truncated and refilled; no other table is touched.
+3. api: `AUTH_ROUTES_ENABLED=true`, `AUTH_EPOCH_SOURCE=db`, `USER_DIRECTORY_SOURCE=local`, `AUTH_HS256_ENABLED=true`. Leave `AUTH_JWKS_URL` set — the api has to keep accepting the ES256 tokens already handed out.
+4. gateway: `AUTH_UPSTREAM_REQUIRED=false`, delete `AUTH_UPSTREAM`, delete `AUTH_WRITE_FREEZE`.
+
+Refresh cookies and CSRF cookies issued by either side stay valid throughout, so nobody is logged out by the rollback.
+
+### Rehearse on compose
+
+Both databases are published on `127.0.0.1:5433` (api) and `127.0.0.1:5434` (user-service), Redis on `6380`, so the scripts run from the host unchanged. The api's own switches are read from the shell at `up` time and are not remembered, so every `up -d app` has to repeat the ones already set.
+
+```bash
+docker compose --profile user-service up -d
+AUTH_WRITE_FREEZE=true docker compose up -d gateway
+pnpm --filter @jcool/user-service cutover:precheck     # API_DATABASE_URL=…:5433, USER_DATABASE_URL=…:5434
+pnpm --filter @jcool/user-service cutover:copy
+pnpm --filter @jcool/user-service cutover:verify
+docker compose up -d --force-recreate user-service
+pnpm --filter @jcool/user-service cutover:prewarm-epochs
+
+AUTH_EPOCH_SOURCE=redis USER_DIRECTORY_SOURCE=remote docker compose up -d app
+AUTH_UPSTREAM=user-service:3000 AUTH_UPSTREAM_REQUIRED=true AUTH_WRITE_FREEZE=true docker compose up -d gateway
+AUTH_EPOCH_SOURCE=redis USER_DIRECTORY_SOURCE=remote AUTH_ROUTES_ENABLED=false docker compose up -d app
+AUTH_UPSTREAM=user-service:3000 AUTH_UPSTREAM_REQUIRED=true docker compose up -d gateway
+```
+
+The precheck compares both schemas, so it catches the usual local surprise: an api database whose user tables were never migrated in.
+
+`pnpm --filter @jcool/user-service test:system` runs the same sequence unattended against built images, including the rollback and the freeze.
 
 ---
 

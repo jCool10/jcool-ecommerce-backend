@@ -2,8 +2,16 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { identityKeyFingerprint } from '@jcool/id-codec';
 import { authHeader } from '../setup/auth.helper';
-import { E2E_INTERNAL_API_TOKEN } from '../setup/e2e-env';
+import {
+  E2E_CSRF_SECRET,
+  E2E_IDENTITY_BUCKET_KEY,
+  E2E_INTERNAL_API_TOKEN,
+  E2E_JWT_ACCESS_SECRET,
+  E2E_JWT_AUDIENCE,
+  E2E_JWT_ISSUER,
+} from '../setup/e2e-env';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { createTestAppWithPool, redisOf, resetDatabaseBeforeEach } from '../setup/harness';
 import { publishedEpoch } from '../setup/session-epoch.helper';
@@ -45,6 +53,7 @@ describe('Internal service-to-service API (integration)', () => {
 
       await internal(`/users/${user.id}/summary`, null).expect(401);
       await internal(`/sessions/${user.id}/epoch`, null).expect(401);
+      await internal('/cutover/digest', null).expect(401);
     });
 
     it('refuses a wrong token (401)', async () => {
@@ -101,6 +110,30 @@ describe('Internal service-to-service API (integration)', () => {
       await internal(`/sessions/${userId}/epoch`).expect(404);
 
       expect(await publishedEpoch(app, userId)).toBeNull();
+    });
+  });
+
+  describe('GET /internal/v1/cutover/digest', () => {
+    it('fingerprints the keys this process loaded, for the cutover precheck to compare with the api', async () => {
+      const { body } = await internal('/cutover/digest').expect(200);
+
+      expect(body).toEqual({
+        identityBucketKey: identityKeyFingerprint(E2E_IDENTITY_BUCKET_KEY),
+        jwtAccessSecret: identityKeyFingerprint(E2E_JWT_ACCESS_SECRET),
+        csrfSecret: identityKeyFingerprint(E2E_CSRF_SECRET),
+        accessTtl: '5m',
+        hs256Enabled: true,
+        issuer: E2E_JWT_ISSUER,
+        audience: E2E_JWT_AUDIENCE,
+      });
+    });
+
+    it('never answers with a secret itself', async () => {
+      const { text } = await internal('/cutover/digest').expect(200);
+
+      for (const secret of [E2E_IDENTITY_BUCKET_KEY, E2E_JWT_ACCESS_SECRET, E2E_CSRF_SECRET]) {
+        expect(text).not.toContain(secret);
+      }
     });
   });
 

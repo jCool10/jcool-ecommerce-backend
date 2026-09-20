@@ -33,6 +33,7 @@ jobs:
       - run: pnpm turbo run lint:check # eslint, no --fix (CI must report, not mutate)
       - run: pnpm turbo run typecheck # tsc --noEmit (SWC build emits without checking types)
       - run: pnpm turbo run arch:check # dependency-cruiser: layer/context boundaries
+      - run: pnpm railway:check-flip-vars # the switches an operator flips by hand survive an IaC apply
       # Runtime dependencies only: a devDependency CVE cannot be reached by the deployed process,
       # and letting one turn the build red teaches everyone to ignore the gate. `high` rather than
       # `moderate` for the same reason — a floor that fires constantly is a floor nobody reads.
