@@ -7,7 +7,7 @@ import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructu
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import type { StartedObjectStorage } from './object-storage';
 import { resetDatabase } from './reset-database';
-import { createTestApp, type ProviderOverride } from './test-app.factory';
+import { createTestApp, type EnvOverrides, type ProviderOverride } from './test-app.factory';
 
 /**
  * Thin wrappers over `createTestApp`, which stays the single owner of the env hygiene every e2e app
@@ -23,7 +23,7 @@ export interface TestAppResources {
 }
 
 export async function createTestAppWithPool(
-  envOverrides: Record<string, string> = {},
+  envOverrides: EnvOverrides = {},
   providerOverrides: ProviderOverride[] = [],
 ): Promise<TestAppResources> {
   const app = await createTestApp(envOverrides, providerOverrides);
@@ -42,7 +42,7 @@ export interface TestAppWithGateway extends TestAppResources {
  */
 export async function createTestAppWithFakeGateway(
   webhookSecret: string,
-  envOverrides: Record<string, string> = {},
+  envOverrides: EnvOverrides = {},
   providerOverrides: ProviderOverride[] = [],
 ): Promise<TestAppWithGateway> {
   const gateway = new FakeSignerGatewayAdapter(webhookSecret);
@@ -62,7 +62,7 @@ export async function createTestAppWithFakeGateway(
  */
 export async function createTestAppWithObjectStorage(
   storage: StartedObjectStorage,
-  envOverrides: Record<string, string> = {},
+  envOverrides: EnvOverrides = {},
   providerOverrides: ProviderOverride[] = [],
 ): Promise<TestAppResources> {
   return createTestAppWithPool(

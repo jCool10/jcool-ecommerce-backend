@@ -38,6 +38,10 @@ export default () => ({
     // to ride out a restart or a provider outage, short enough that a poison message reaches the
     // dead-letter queue while the deploy that caused it is still the obvious suspect.
     consumerBackoffMs: parseIntOr(process.env.QUEUE_CONSUMER_BACKOFF_MS, 1000),
+    // order.paid starts on the same backoff, doubling up to this cap: at the defaults it rides out a
+    // user-service outage of 30 minutes before the dead-letter queue.
+    orderPaidAttempts: parseIntOr(process.env.ORDER_PAID_CONSUMER_ATTEMPTS, 15),
+    orderPaidBackoffCapMs: parseIntOr(process.env.ORDER_PAID_CONSUMER_BACKOFF_CAP_MS, 300_000),
   },
   outbox: {
     // Off leaves rows unpublished rather than losing them, which is what e2e suites want while they
@@ -58,6 +62,24 @@ export default () => ({
     passwordResetTtl: process.env.PASSWORD_RESET_TTL ?? '1h',
     // When true, an unverified account gets a 403 after correct credentials.
     requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
+    // 'redis' reads the epochs the user-service publishes; this database stops being their source.
+    epochSource: process.env.AUTH_EPOCH_SOURCE ?? 'db',
+    hs256Enabled: process.env.AUTH_HS256_ENABLED !== 'false',
+    // Off answers 410 on every /auth route once the gateway sends them to the user-service.
+    routesEnabled: process.env.AUTH_ROUTES_ENABLED !== 'false',
+    jwksUrl: process.env.AUTH_JWKS_URL,
+    issuer: process.env.JWT_ISSUER,
+    audience: process.env.JWT_AUDIENCE,
+  },
+  userService: {
+    internalUrl: process.env.USER_SERVICE_INTERNAL_URL,
+    internalApiToken: process.env.INTERNAL_API_TOKEN,
+    // Sits on the request path whenever an epoch misses Redis.
+    timeoutMs: parseIntOr(process.env.USER_SERVICE_TIMEOUT_MS, 500),
+  },
+  userDirectory: {
+    source: process.env.USER_DIRECTORY_SOURCE ?? 'local',
+    notFoundGrace: process.env.USER_DIRECTORY_NOT_FOUND_GRACE ?? '10m',
   },
   identity: {
     // No default, like jwtAccessSecret: the env schema requires it, so a boot reaching here has it.
@@ -110,6 +132,8 @@ export default () => ({
   },
   retention: {
     ...retentionConfig().retention,
+    // Off leaves the three auth-token tables alone while they are copied between databases.
+    authTokensEnabled: process.env.RETENTION_AUTH_TOKENS_ENABLED !== 'false',
     // Extra age past an idempotency key's own `expires_at`. Its TTL is already the retry window, so
     // this is only slack for clock skew between app and database.
     idempotencyGraceSec: parseIntOr(process.env.RETENTION_IDEMPOTENCY_GRACE_SEC, 3_600),

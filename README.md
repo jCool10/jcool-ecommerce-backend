@@ -19,7 +19,7 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — seven
 | | |
 | --- | --- |
 | **Scale** | 7 bounded contexts · 566 TypeScript files · 22 tables · 21 committed migrations · 53 HTTP routes |
-| **Tests** | 1,131 unit tests (160 files, hermetic) + 68 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers, run four workers wide |
+| **Tests** | 1,131 unit tests (160 files, hermetic) + 73 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers, run four workers wide |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
@@ -168,7 +168,7 @@ apps/api/
 │       ├── identity/        # IdentityService: mints user-context ids with the node's generator
 │       └── interface/       # debug controller
 ├── test/
-│   ├── integration/         # 68 e2e suites on real infrastructure (Testcontainers)
+│   ├── integration/         # 73 e2e suites on real infrastructure (Testcontainers)
 │   └── setup/               # global setup, app factory, fixtures, per-suite side containers
 └── scripts/                 # seeds, identity verification, DB metrics
 apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replicas; unit / e2e / system tests
@@ -211,9 +211,9 @@ The parts worth reading the code for. Each row names the file to open.
 | Problem | Approach | Where |
 | --- | --- | --- |
 | **The dual-write problem** | Events are rows written by the same transaction as the change they describe. A relay polls `published_at IS NULL` with `FOR UPDATE SKIP LOCKED`, publishes to BullMQ and marks the row published in one transaction — at-least-once, safe on every replica, no leader election | `shared/messaging/outbox/outbox-relay.ts` |
-| **At-least-once → exactly-once** | The consumer claims `message_id = outbox.id` in an `inbox` table (`UNIQUE (consumer, message_id)`) and runs the handler **in that same transaction**. A redelivery loses the claim and does nothing; a handler that throws takes its claim down with it, so the redelivery does the work | `shared/messaging/queue/domain-event.processor.ts` |
+| **At-least-once → exactly-once** | The consumer claims `message_id = outbox.id` in an `inbox` table (`UNIQUE (consumer, message_id)`) and applies the handler's effect **in that same transaction** (anything slow, such as a call to another service, is prepared before it opens). A redelivery loses the claim and does nothing; a handler that throws takes its claim down with it, so the redelivery does the work | `shared/messaging/queue/domain-event.processor.ts` |
 | **Sweeping the inbox safely** | Inbox claims are swept on a schedule (`RETENTION_INBOX_DAYS`, default 30d), and the app **refuses to boot** if that retention is shorter than the queue's failed-job horizon — deleting a claim while its message can still be redelivered would apply the effect twice | `shared/messaging/inbox/sweep-inbox.ts` |
-| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
+| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery; `order.paid`, which waits on the user-service, gets 15 with a capped backoff), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
 | **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts` |
 | **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `packages/platform/src/observability/tracing/propagation.ts` |
 
@@ -232,7 +232,7 @@ The parts worth reading the code for. Each row names the file to open.
 
 | Problem | Approach | Where |
 | --- | --- | --- |
-| **Immediate JWT revocation** | Stateless HS256 access tokens carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user `token_epoch` counter (every token issued before a logout-all or password change) | `modules/user/interface/strategies/jwt.strategy.ts` |
+| **Immediate JWT revocation** | Stateless access tokens (HS256 from the api, ES256 from the user-service, checked against its JWKS) carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user epoch (every token issued before a logout-all or password change), read from Postgres or, after the cutover, from Redis | `packages/auth-verifier/src/access-token.verifier.ts` |
 | **Token delivery and CSRF** | The access token goes in the JSON body (Bearer is CSRF-immune). The refresh token goes **only** in an `httpOnly; SameSite=Strict; Path=/auth` cookie (`Secure` in production, per `COOKIE_SECURE`), paired with a signed double-submit CSRF cookie enforced on the two routes that consume it | `modules/user/interface/security/csrf.guard.ts` |
 | **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `packages/platform/src/throttler/throttler.constants.ts` |
 | **User enumeration** | `forgot-password` and `resend-verification` always answer `202`. Login runs a real argon2 verify against a cached dummy hash on the unknown-email branch, so the timing of "no such user" matches "wrong password" | `modules/user/application/use-cases/login-user.use-case.ts` |
@@ -282,7 +282,7 @@ pnpm start:dev
 
 `minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Meilisearch is only needed with `SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
-Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose down -v`. The user-service is opt-in, since it needs `apps/user-service/.env`: `docker compose --profile user-service up -d --build user-service` serves it on <http://127.0.0.1:3002>, with its Postgres on 127.0.0.1:5434. Redis runs with AOF on, which the user-service requires.
+Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose down -v`. The user-service is opt-in, since it needs `apps/user-service/.env`: `docker compose --profile user-service up -d --build user-service` serves it on <http://127.0.0.1:3002>, with its Postgres on 127.0.0.1:5434. Redis runs with AOF on, which the api and the user-service both require.
 
 ---
 
@@ -299,7 +299,7 @@ Environment is validated **once at startup** and the process refuses to boot on 
 | `IDENTITY_BUCKET_KEY` | HMAC key for id routing buckets. **Permanent** — the DB pins its fingerprint on first boot and refuses a later boot under a different key. See [RUNBOOK.md](./RUNBOOK.md) |
 | `STRIPE_SUCCESS_URL` | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
 
-Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`.
+Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`. The user-service cutover switches (`AUTH_JWKS_URL`, `AUTH_EPOCH_SOURCE`, `USER_DIRECTORY_SOURCE`, `AUTH_HS256_ENABLED`, `AUTH_ROUTES_ENABLED`, `RETENTION_AUTH_TOKENS_ENABLED`) default to the api as it was; see [RUNBOOK.md](./RUNBOOK.md#prepare-the-api-for-the-cutover).
 
 `MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it because it ships `migrations/` without a `src/` tree.
 
@@ -409,7 +409,7 @@ Two tiers, kept separate on purpose.
 ```bash
 pnpm test           # 1,131 unit tests, 160 files — hermetic, no Docker
 pnpm test:cov       # same, with the coverage floor CI enforces
-pnpm test:e2e       # 68 integration suites, 522 tests — requires Docker
+pnpm test:e2e       # 73 integration suites — requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.

@@ -5,6 +5,8 @@ import {
   REFRESH_TOKEN_COOKIE,
 } from '../../src/modules/user/interface/security/auth-cookie.constants';
 
+export { authHeader } from './bearer.helper';
+
 export interface Credentials {
   email: string;
   password: string;
@@ -17,10 +19,6 @@ export interface Session {
   setCookies: string[];
   refreshToken: string;
   csrfToken: string;
-}
-
-export function authHeader(accessToken: string): Record<string, string> {
-  return { Authorization: `Bearer ${accessToken}` };
 }
 
 export function extractSetCookies(res: request.Response): string[] {

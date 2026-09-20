@@ -20,6 +20,16 @@ export default defineConfig({
       JWT_ACCESS_SECRET: '2b557f0c-ac0e-469d-bd24-9a380d07e3bc', // ≥32 chars for the schema
       // Deterministic so every app in a run buckets identically; mirrored in test-app.factory.ts.
       IDENTITY_BUCKET_KEY: 'e2e-identity-bucket-key-not-a-real-secret-000',
+      // Post-cutover by default: principals come from the user-service stub, not the user module.
+      // The auth suites switch back per app with LEGACY_AUTH_MODE. Both URLs are placeholders for
+      // import-time validation; createTestApp points them at the stub once its port is known.
+      AUTH_EPOCH_SOURCE: 'redis',
+      USER_DIRECTORY_SOURCE: 'remote',
+      AUTH_JWKS_URL: 'http://127.0.0.1:1/.well-known/jwks.json',
+      USER_SERVICE_INTERNAL_URL: 'http://127.0.0.1:1',
+      INTERNAL_API_TOKEN: 'e2e-internal-api-token-not-a-real-secret-0',
+      JWT_ISSUER: 'https://users.jcool.test',
+      JWT_AUDIENCE: 'jcool-api',
       // Left at the production default. No spec holds more than two apps open at once
       // (`queue-connection.e2e-spec.ts`), so the real peak is 2 × 10 × 4 workers = 80 plus a handful
       // of raw pools — comfortably inside the container's max_connections=300. Capping it lower

@@ -3,8 +3,8 @@ import { type JWTPayload, type JWTVerifyResult, decodeProtectedHeader, jwtVerify
 import { type AuthenticatedUser, ROLES, type Role } from '@jcool/platform/rbac';
 import type { AccessTokenClaims } from './access-token-claims';
 import { AUTH_VERIFIER_OPTIONS, type AuthVerifierOptions } from './auth-verifier.options';
-import { SESSION_EPOCH, type SessionEpochPort } from './session-epoch.port';
-import { TOKEN_DENYLIST, type TokenDenylistPort } from './token-denylist.port';
+import { SESSION_EPOCH, type SessionEpochReader } from './session-epoch.port';
+import { TOKEN_DENYLIST, type TokenDenylistReader } from './token-denylist.port';
 
 type VerifiedClaims = AccessTokenClaims & { exp: number };
 
@@ -18,12 +18,16 @@ export class AccessTokenVerifier {
 
   constructor(
     @Inject(AUTH_VERIFIER_OPTIONS) private readonly options: AuthVerifierOptions,
-    @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochPort,
-    @Inject(TOKEN_DENYLIST) private readonly denylist: TokenDenylistPort,
+    @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochReader,
+    @Inject(TOKEN_DENYLIST) private readonly denylist: TokenDenylistReader,
   ) {
     const { enabled, secret } = options.hs256;
     if (enabled && !secret) {
       throw new Error('HS256 verification is enabled without a secret');
+    }
+    // Would boot fine and then refuse every caller.
+    if (!enabled && !options.es256) {
+      throw new Error('HS256 verification is off and no ES256 key source is configured');
     }
     this.hs256Secret = enabled ? new TextEncoder().encode(secret) : undefined;
   }
@@ -58,7 +62,7 @@ export class AccessTokenVerifier {
     if (alg === 'HS256' && this.hs256Secret) {
       return jwtVerify(token, this.hs256Secret, { algorithms: ['HS256'] });
     }
-    if (alg === 'ES256') {
+    if (alg === 'ES256' && this.options.es256) {
       const { keys, issuer, audience } = this.options.es256;
       return jwtVerify(token, keys, { algorithms: ['ES256'], issuer, audience });
     }

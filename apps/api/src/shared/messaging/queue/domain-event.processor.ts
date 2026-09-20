@@ -41,6 +41,13 @@ export class DomainEventProcessor {
       assertEnvelope(job);
 
       result = await withConsumeSpan(job.eventType, job.traceparent, async (): Promise<ConsumeResult> => {
+        // Settled rather than awaited: a failure is only the delivery's once the claim says this is not
+        // a duplicate, or an already-applied message would ride the retry ladder into the DLQ.
+        const prepared = await this.dispatcher.prepare(job).then(
+          (step) => ({ step }),
+          (error: unknown) => ({ error }),
+        );
+
         let effect: PostCommitEffect | void = undefined;
         const outcome = await this.db.transaction(async (tx): Promise<ConsumeResult> => {
           const claimed = await this.inbox.claim(tx, {
@@ -49,8 +56,9 @@ export class DomainEventProcessor {
             eventType: job.eventType,
           });
           if (!claimed) return 'duplicate';
+          if ('error' in prepared) throw prepared.error;
 
-          effect = await this.dispatcher.dispatch(job, tx);
+          effect = await prepared.step(tx);
           return 'processed';
         });
 

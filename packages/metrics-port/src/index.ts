@@ -46,6 +46,9 @@ export type RefundOwedSource = 'expire_session' | 'webhook_direct' | 'settlement
 
 export type MailKind = 'email_verification' | 'password_reset' | 'order_paid';
 
+/** `miss` is a read-through to the user-service, paid for on the request path. */
+export type SessionEpochLookupResult = 'hit' | 'miss';
+
 /**
  * Every `string` parameter below is a Prometheus LABEL: callers pass only bounded values, never an
  * id/email/sku/concrete path (those belong on logs and spans).
@@ -86,4 +89,5 @@ export interface MetricsPort {
   /** Separate from the rows counter: reclaiming nothing and failing to run look alike there. */
   recordRetentionSweepFailure(sweep: string): void;
   recordMediaBytesReclaimed(bytes: number): void;
+  recordSessionEpochLookup(result: SessionEpochLookupResult): void;
 }

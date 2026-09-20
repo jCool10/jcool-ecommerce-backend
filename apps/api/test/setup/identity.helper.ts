@@ -1,9 +1,8 @@
 import { bucketForEmail } from '@jcool/id-codec';
 import { normalizeEmail } from '@jcool/kernel';
+import { E2E_IDENTITY_BUCKET_KEY } from './e2e-constants';
 
-// Duplicated as a literal in `vitest-e2e.config.mts`, which must satisfy env validation before any
-// module of this repo loads.
-export const E2E_IDENTITY_BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secret-000';
+export { E2E_IDENTITY_BUCKET_KEY };
 
 export const WRONG_IDENTITY_BUCKET_KEY = 'e2e-identity-bucket-key-a-different-one-001';
 

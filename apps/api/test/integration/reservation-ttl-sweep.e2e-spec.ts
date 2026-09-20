@@ -10,7 +10,7 @@ import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrast
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
-import { newUserToken } from '../setup/fixtures/user.fixture';
+import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import {
   addToCart,
   buyerWithCart,
@@ -194,7 +194,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
   // has to collapse to one entry — otherwise finalize is called once per line for the same order.
   it('expires a multi-line order once, from the several holds it left behind', async () => {
     const second = await seedSellableSku(app, { onHand: STOCK });
-    const accessToken = await newUserToken(app);
+    const accessToken = await newPrincipalToken(app);
     for (const variantId of [sku.variantId, second.variantId]) {
       await addToCart(app, accessToken, variantId, QUANTITY).expect(200);
     }

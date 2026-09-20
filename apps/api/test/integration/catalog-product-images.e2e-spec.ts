@@ -5,9 +5,9 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct, type TestProduct } from '../setup/fixtures/catalog.fixture';
-import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithObjectStorage } from '../setup/harness';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetCatalogCache } from '../setup/reset-cache';
@@ -46,7 +46,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     await resetDatabase(pool);
     await storage.clear();
     await resetCatalogCache(app);
-    adminToken = (await createTestAdmin(app)).accessToken;
+    adminToken = (await createTestAdminPrincipal(app)).accessToken;
     product = await createTestProduct(app);
   });
 
@@ -54,7 +54,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
 
   /** An asset in whatever state the test needs, with its object actually in the bucket. */
   async function seedAsset(status: 'PENDING' | 'READY' | 'ATTACHED' = 'READY'): Promise<string> {
-    const uploader = (await createTestAdmin(app)).user.id;
+    const uploader = (await createTestAdminPrincipal(app)).user.id;
     const [row] = await db
       .insert(schema.mediaAssets)
       .values({

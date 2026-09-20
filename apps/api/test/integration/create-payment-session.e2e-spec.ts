@@ -5,12 +5,12 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
-import { newUserToken } from '../setup/fixtures/user.fixture';
+import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 const ABSENT_ORDER_UUID = '00000000-0000-4000-8000-000000000000';
@@ -47,7 +47,7 @@ describe('Create payment session (integration, real Postgres)', () => {
   }
 
   it('opens a session for a PENDING order (201, one PENDING payment, amount snapshotted from order total)', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const { orderId, totalMinor } = await createPendingOrder(token, 199_000, 2);
 
     const res = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token));
@@ -70,7 +70,7 @@ describe('Create payment session (integration, real Postgres)', () => {
   });
 
   it('rejects an unauthenticated pay with 401 and persists nothing', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const { orderId } = await createPendingOrder(token);
 
     const res = await request(server()).post(`/orders/${orderId}/pay`);
@@ -80,8 +80,8 @@ describe('Create payment session (integration, real Postgres)', () => {
   });
 
   it("returns 404 when paying another user's order (never leaks the order id) and persists nothing", async () => {
-    const owner = await newUserToken(app);
-    const other = await newUserToken(app);
+    const owner = await newPrincipalToken(app);
+    const other = await newPrincipalToken(app);
     const { orderId } = await createPendingOrder(owner);
 
     const res = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(other));
@@ -91,13 +91,13 @@ describe('Create payment session (integration, real Postgres)', () => {
   });
 
   it('returns 404 for an unknown order id', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const res = await request(server()).post(`/orders/${ABSENT_ORDER_UUID}/pay`).set(authHeader(token));
     expect(res.status).toBe(404);
   });
 
   it('rejects a second session while one is active (409, still exactly one payment)', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const { orderId } = await createPendingOrder(token);
 
     await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token)).expect(201);
@@ -108,7 +108,7 @@ describe('Create payment session (integration, real Postgres)', () => {
   });
 
   it('rejects paying a non-PENDING order (409, no payment)', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const { orderId } = await createPendingOrder(token);
     // Moved out of PENDING by a direct write rather than through finalize; pay must still refuse.
     await db.update(schema.orders).set({ status: 'CANCELLED' }).where(eq(schema.orders.id, orderId));

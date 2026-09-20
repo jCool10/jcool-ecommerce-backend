@@ -5,6 +5,7 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { authHeader, loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 /**
@@ -19,7 +20,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
   const newPassword = 'NewPassword456!';
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool(LEGACY_AUTH_MODE));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);

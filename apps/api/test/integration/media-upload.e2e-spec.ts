@@ -5,8 +5,8 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
-import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { authHeader } from '../setup/bearer.helper';
+import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithObjectStorage } from '../setup/harness';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetDatabase } from '../setup/reset-database';
@@ -49,7 +49,7 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
   beforeEach(async () => {
     await resetDatabase(pool);
     await storage.clear();
-    adminToken = (await createTestAdmin(app)).accessToken;
+    adminToken = (await createTestAdminPrincipal(app)).accessToken;
   });
 
   const server = () => app.getHttpServer();
@@ -162,7 +162,7 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
   });
 
   it('is admin-only — anyone who can sign can write to the bucket', async () => {
-    const buyer = await createTestUser(app);
+    const buyer = await createTestPrincipal(app);
 
     await request(server())
       .post('/admin/media/uploads')

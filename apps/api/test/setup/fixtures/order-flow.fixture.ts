@@ -3,7 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import request from 'supertest';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../auth.helper';
+import { authHeader } from '../bearer.helper';
 import { idempotencyKeyHeader } from '../idempotency.helper';
 import {
   checkoutSessionCompleted,
@@ -14,7 +14,7 @@ import {
 } from '../sign-webhook.helper';
 import { createTestProduct } from './catalog.fixture';
 import { seedStock } from './inventory.fixture';
-import { createTestUser } from './user.fixture';
+import { newPrincipalToken } from './principal.fixture';
 
 export interface SellableSku {
   variantId: string;
@@ -53,7 +53,7 @@ export function addToCart(app: INestApplication, token: string, skuId: string, q
 
 /** Checkout isolates by user, so each buyer races alone. */
 export async function buyerWithCart(app: INestApplication, variantId: string, quantity = 1): Promise<string> {
-  const { accessToken } = await createTestUser(app);
+  const accessToken = await newPrincipalToken(app);
   await addToCart(app, accessToken, variantId, quantity);
   return accessToken;
 }

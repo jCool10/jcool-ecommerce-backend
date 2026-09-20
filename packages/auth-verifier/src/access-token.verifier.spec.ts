@@ -11,10 +11,11 @@ import {
   exportSPKI,
   generateKeyPair,
 } from 'jose';
+import type { Mock } from 'vitest';
 import { AccessTokenVerifier } from './access-token.verifier';
 import type { AuthVerifierOptions } from './auth-verifier.options';
-import type { SessionEpochPort } from './session-epoch.port';
-import type { TokenDenylistPort } from './token-denylist.port';
+import type { SessionEpochReader } from './session-epoch.port';
+import type { TokenDenylistReader } from './token-denylist.port';
 
 const ISSUER = 'https://users.test.invalid';
 const AUDIENCE = 'jcool-test';
@@ -58,16 +59,17 @@ function es256(
 describe('AccessTokenVerifier', () => {
   let current: SigningKey;
   let previous: SigningKey;
-  let epochs: { current: ReturnType<typeof vi.fn>; bump: ReturnType<typeof vi.fn> };
-  let denylist: { isDenylisted: ReturnType<typeof vi.fn>; denylist: ReturnType<typeof vi.fn> };
+  // Readers only: a verifier that could write revocation state would not compile against these.
+  let epochs: { current: Mock<SessionEpochReader['current']> };
+  let denylist: { isDenylisted: Mock<TokenDenylistReader['isDenylisted']> };
 
   beforeAll(async () => {
     [current, previous] = await Promise.all([signingKey('2026-09'), signingKey('2026-03')]);
   });
 
   beforeEach(() => {
-    epochs = { current: vi.fn().mockResolvedValue(2), bump: vi.fn() };
-    denylist = { isDenylisted: vi.fn().mockResolvedValue(false), denylist: vi.fn() };
+    epochs = { current: vi.fn<SessionEpochReader['current']>().mockResolvedValue(2) };
+    denylist = { isDenylisted: vi.fn<TokenDenylistReader['isDenylisted']>().mockResolvedValue(false) };
   });
 
   function verifier(hs256Enabled = true, overrides: Partial<AuthVerifierOptions> = {}): AccessTokenVerifier {
@@ -76,11 +78,7 @@ describe('AccessTokenVerifier', () => {
       es256: { keys: createLocalJWKSet({ keys: [current.jwk, previous.jwk] }), issuer: ISSUER, audience: AUDIENCE },
       ...overrides,
     };
-    return new AccessTokenVerifier(
-      options,
-      epochs as unknown as SessionEpochPort,
-      denylist as unknown as TokenDenylistPort,
-    );
+    return new AccessTokenVerifier(options, epochs, denylist);
   }
 
   async function expectRefused(token: Promise<string> | string | undefined, subject = verifier(), message?: string) {
@@ -103,6 +101,10 @@ describe('AccessTokenVerifier', () => {
     const user = await verifier(false).verify(await es256(current));
 
     expect(user.userId).toBe(USER_ID);
+  });
+
+  it('refuses every ES256 token while no key source is configured', async () => {
+    await expectRefused(es256(current), verifier(true, { es256: undefined }));
   });
 
   it('accepts an ES256 token signed by the previous key during a rotation', async () => {
@@ -195,5 +197,9 @@ describe('AccessTokenVerifier', () => {
 
   it('refuses to start with the legacy path on and no secret', () => {
     expect(() => verifier(true, { hs256: { enabled: true } })).toThrow(/HS256/);
+  });
+
+  it('refuses to start with no path a token could pass', () => {
+    expect(() => verifier(false, { es256: undefined })).toThrow(/no ES256 key source/);
   });
 });

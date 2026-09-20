@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // The verified-email login gate is off in the default harness, so this suite opts in explicitly
@@ -15,7 +16,7 @@ describe('Auth verified-email login gate (integration)', () => {
 
   beforeAll(async () => {
     process.env.AUTH_REQUIRE_VERIFIED_EMAIL = 'true';
-    ({ app, pool } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool(LEGACY_AUTH_MODE));
   });
 
   // Explicit rather than `closeAppAfterAll`: the flag has to be cleared as well, or it leaks into

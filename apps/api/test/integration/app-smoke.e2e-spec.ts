@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { RedisService } from '@jcool/platform/redis';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // Proves the harness boots against real Postgres + Redis (no mocks) and that
@@ -41,8 +41,8 @@ describe('App smoke (real Postgres + Redis)', () => {
     expect(await redis.ping()).toBe('PONG');
   });
 
-  it('fixtures seed a real user and a priced SKU', async () => {
-    const { user, accessToken } = await createTestUser(app);
+  it('fixtures mint a principal and seed a priced SKU', async () => {
+    const { user, accessToken } = await createTestPrincipal(app);
     const product = await createTestProduct(app, { priceMinor: 250_000 });
 
     expect(user.id).toBeTruthy();
@@ -51,19 +51,19 @@ describe('App smoke (real Postgres + Redis)', () => {
     expect(product.priceMinor).toBe(250_000);
   });
 
-  // Both tests insert the SAME email; without isolation the second would hit the
+  // Both tests insert the SAME sku; without isolation the second would hit the
   // unique index — proving resetDatabase works.
   describe('resetDatabase gives each test a clean slate', () => {
-    const email = 'isolation@test.local';
+    const sku = 'TEST-SKU-ISOLATION';
 
-    it('first test inserts the shared email', async () => {
-      const { user } = await createTestUser(app, { email });
-      expect(user.email).toBe(email);
+    it('first test inserts the shared sku', async () => {
+      const product = await createTestProduct(app, { sku });
+      expect(product.sku).toBe(sku);
     });
 
-    it('second test reuses the same email with no unique-violation', async () => {
-      const { user } = await createTestUser(app, { email });
-      expect(user.email).toBe(email);
+    it('second test reuses the same sku with no unique-violation', async () => {
+      const product = await createTestProduct(app, { sku });
+      expect(product.sku).toBe(sku);
     });
   });
 });

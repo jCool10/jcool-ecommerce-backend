@@ -27,6 +27,7 @@ function build() {
   const breakerTransitionInc = vi.fn();
   const breakerCallInc = vi.fn();
   const rateLimitInc = vi.fn();
+  const epochLookupInc = vi.fn();
   const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
   const logger = fakePinoLogger({ warn });
   const metrics = new BusinessMetrics(
@@ -53,6 +54,7 @@ function build() {
     { inc: breakerTransitionInc } as unknown as Counter<string>,
     { inc: breakerCallInc } as unknown as Counter<string>,
     { inc: rateLimitInc } as unknown as Counter<string>,
+    { inc: epochLookupInc } as unknown as Counter<string>,
     logger,
   );
   return {
@@ -80,6 +82,7 @@ function build() {
     breakerTransitionInc,
     breakerCallInc,
     rateLimitInc,
+    epochLookupInc,
     warn,
   };
 }
@@ -221,6 +224,12 @@ describe('BusinessMetrics', () => {
     const { metrics, rateLimitInc } = build();
     metrics.recordRateLimitRejection('account', '/auth/login');
     expect(rateLimitInc).toHaveBeenCalledWith({ tier: 'account', route: '/auth/login' });
+  });
+
+  it.each(['hit', 'miss'] as const)('counts a session-epoch lookup that was a %s', (result) => {
+    const { metrics, epochLookupInc } = build();
+    metrics.recordSessionEpochLookup(result);
+    expect(epochLookupInc).toHaveBeenCalledWith({ result });
   });
 
   it('swallows a metric error and logs it — telemetry never breaks the business flow', () => {

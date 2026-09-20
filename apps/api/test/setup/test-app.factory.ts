@@ -8,11 +8,16 @@ import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { expect } from 'vitest';
 import { AppModule } from '../../src/app.module';
-import { CSRF_HEADER } from '../../src/modules/user/interface/security/auth-cookie.constants';
 import { RedisService } from '@jcool/platform/redis';
-import { E2E_IDENTITY_BUCKET_KEY } from './identity.helper';
+import { E2E_IDENTITY_BUCKET_KEY } from './e2e-constants';
 import { waitForRedisReady } from './redis-ready';
+import { userServiceStub } from './user-service-stub';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
+
+// Mirrors the CORS allow-list in main.ts, which takes it from the user module's cookie constants.
+const CSRF_HEADER = 'x-csrf-token';
+
+export type EnvOverrides = Record<string, string | undefined>;
 
 export interface ProviderOverride {
   provide: unknown;
@@ -21,9 +26,9 @@ export interface ProviderOverride {
 
 // `envOverrides` set config-backing env vars for this app only: config reads process.env when the
 // module compiles, so they are applied before compile and restored after — one app's config never
-// leaks into the next (e2e files share this process and run sequentially).
+// leaks into the next (e2e files share this process and run sequentially). `undefined` unsets one.
 export async function createTestApp(
-  envOverrides: Record<string, string> = {},
+  envOverrides: EnvOverrides = {},
   providerOverrides: ProviderOverride[] = [],
 ): Promise<INestApplication> {
   // Set before AppModule loads: @nestjs/config's dotenv won't override these, so
@@ -56,6 +61,10 @@ export async function createTestApp(
   // every app in every file 8 seconds of doing nothing. Nothing here asserts on the window's length —
   // `health-shutdown.e2e-spec.ts` reads the readiness flag, which flips before the wait.
   process.env.SHUTDOWN_GRACE_PERIOD_MS = '0';
+  // The auth mode itself comes from vitest-e2e.config.mts; only the stub's port is known this late.
+  const userService = await userServiceStub();
+  process.env.AUTH_JWKS_URL = userService.jwksUrl;
+  process.env.USER_SERVICE_INTERNAL_URL = userService.url;
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
   // a file that leaves jobs waiting hands them to the next file that boots a worker — which then
   // applies events its own test never published. Same value for every app in a file, because a
@@ -85,7 +94,8 @@ export async function createTestApp(
   const savedEnv: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(envOverrides)) {
     savedEnv[key] = process.env[key];
-    process.env[key] = value;
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
   }
 
   try {

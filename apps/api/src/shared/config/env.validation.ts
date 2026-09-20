@@ -1,5 +1,18 @@
 import { Type } from 'class-transformer';
-import { IsBooleanString, IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import {
+  IsBooleanString,
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Max,
+  Min,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
 import { MIN_BUCKET_KEY_LENGTH } from '@jcool/id-codec';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
 import {
@@ -30,6 +43,14 @@ export enum PaymentProvider {
 const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
 );
+
+// configuration.ts compares against these literals, so '0' and '1' are refused rather than misread.
+const BOOLEAN_STRINGS = ['true', 'false'];
+
+const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
+
+const callsUserService = (env: EnvironmentVariables): boolean =>
+  env.AUTH_EPOCH_SOURCE === 'redis' || env.USER_DIRECTORY_SOURCE === 'remote';
 
 /** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS. */
@@ -423,6 +444,77 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsInt()
   @Min(1)
   ARGON2_PARALLELISM?: number;
+
+  @IsOptional()
+  @IsIn(['db', 'redis'])
+  AUTH_EPOCH_SOURCE?: string;
+
+  @IsOptional()
+  @IsIn(['local', 'remote'])
+  USER_DIRECTORY_SOURCE?: string;
+
+  @IsOptional()
+  @IsIn(BOOLEAN_STRINGS)
+  AUTH_HS256_ENABLED?: string;
+
+  @IsOptional()
+  @IsIn(BOOLEAN_STRINGS)
+  AUTH_ROUTES_ENABLED?: string;
+
+  @IsOptional()
+  @IsIn(BOOLEAN_STRINGS)
+  RETENTION_AUTH_TOKENS_ENABLED?: string;
+
+  // Unset refuses every ES256 token.
+  @IsOptional()
+  @IsUrl(HTTP_URL)
+  AUTH_JWKS_URL?: string;
+
+  @ValidateIf((env: EnvironmentVariables) => env.AUTH_JWKS_URL !== undefined)
+  @IsString()
+  @IsNotEmpty()
+  JWT_ISSUER?: string;
+
+  @ValidateIf((env: EnvironmentVariables) => env.AUTH_JWKS_URL !== undefined)
+  @IsString()
+  @IsNotEmpty()
+  JWT_AUDIENCE?: string;
+
+  @ValidateIf(callsUserService)
+  @IsUrl(HTTP_URL)
+  USER_SERVICE_INTERNAL_URL?: string;
+
+  @ValidateIf(callsUserService)
+  @IsString()
+  @MinLength(32)
+  INTERNAL_API_TOKEN?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  USER_SERVICE_TIMEOUT_MS?: number;
+
+  // Duration form. How long after an order is paid a user the directory does not know is still
+  // worth waiting for.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  USER_DIRECTORY_NOT_FOUND_GRACE?: string;
+
+  // order.paid waits on the user-service for the buyer's address, so it outlasts the shared ladder.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  ORDER_PAID_CONSUMER_ATTEMPTS?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  ORDER_PAID_CONSUMER_BACKOFF_CAP_MS?: number;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

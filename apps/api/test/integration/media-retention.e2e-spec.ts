@@ -11,7 +11,7 @@ import {
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
-import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithObjectStorage } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
@@ -66,7 +66,7 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
     await resetDatabase(pool);
     await storage.clear();
     // Assets carry the admin who uploaded them, and truncation takes the users with it.
-    uploaderId = (await createTestAdmin(app)).user.id;
+    uploaderId = (await createTestAdminPrincipal(app)).user.id;
   });
 
   async function seedAsset(overrides: {

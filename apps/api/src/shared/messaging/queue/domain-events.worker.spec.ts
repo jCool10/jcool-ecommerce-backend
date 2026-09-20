@@ -10,6 +10,8 @@ const CONFIG: Record<string, unknown> = {
   'queue.workerEnabled': false,
   'queue.workerConcurrency': 5,
   'queue.prefix': 'test',
+  'queue.consumerBackoffMs': 1_000,
+  'queue.orderPaidBackoffCapMs': 300_000,
   'redis.url': 'redis://127.0.0.1:6379',
 };
 
@@ -35,6 +37,7 @@ describe('DomainEventsWorker', () => {
     // Matches the key, not the fixture's phrasing: the claim is that the worker asked for
     // `queue.prefix` before doing any work, not how the double words its refusal.
     expect(() => build({ 'queue.prefix': undefined })).toThrow(/queue\.prefix/);
+    expect(() => build({ 'queue.orderPaidBackoffCapMs': undefined })).toThrow(/queue\.orderPaidBackoffCapMs/);
   });
 
   it('opens no connection while disabled', async () => {

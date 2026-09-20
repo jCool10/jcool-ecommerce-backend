@@ -1,9 +1,8 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Injectable } from '@nestjs/common';
+import { SESSION_EPOCH_KEY_PREFIX } from '@jcool/auth-verifier';
 import { RedisService } from '@jcool/platform/redis';
 import type { SessionEpochPublisherPort } from '../application/ports';
-
-export const SESSION_EPOCH_KEY_PREFIX = 'auth:epoch:';
 
 // SET-max in one round trip: a read-through fill racing a bump can land in either order and the key
 // still ends at the larger epoch.

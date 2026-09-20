@@ -1,4 +1,4 @@
-import type { DefaultJobOptions } from 'bullmq';
+import type { DefaultJobOptions, JobsOptions } from 'bullmq';
 
 /** One queue for every event type; splitting per type only pays off once one consumer starves another. */
 export const QUEUE_DOMAIN_EVENTS = 'domain-events';
@@ -44,4 +44,28 @@ export function buildJobOptions(attempts: number, backoffMs: number): DefaultJob
     // BullMQ raises no `failed` for a job killed by the stalled-job limit.
     removeOnFail: { age: REMOVE_ON_FAIL_AGE_SEC, count: 10_000 },
   };
+}
+
+/** A custom backoff type: the worker's strategy is the only thing that computes it. */
+export const ORDER_PAID_BACKOFF = 'order-paid';
+
+/**
+ * Overrides of the queue defaults, per event. order.paid alone waits on another service — the
+ * user-service, for the buyer's address — so it retries for as long as that service may be down.
+ * Every path that publishes to the main queue must apply these, or a replay runs the short ladder.
+ */
+export function jobOptionsFor(eventType: string, orderPaidAttempts: number): JobsOptions {
+  return eventType === 'order.paid' ? { attempts: orderPaidAttempts, backoff: { type: ORDER_PAID_BACKOFF } } : {};
+}
+
+/** Exponential with a ceiling: past a few minutes, doubling only thins the attempts out. */
+export function cappedBackoffMs(attemptsMade: number, baseMs: number, capMs: number): number {
+  return Math.min(capMs, baseMs * 2 ** (attemptsMade - 1));
+}
+
+/** The longest outage a ladder rides out: every wait before the last attempt. */
+export function retryHorizonMs(attempts: number, delayAfter: (attemptsMade: number) => number): number {
+  let total = 0;
+  for (let attemptsMade = 1; attemptsMade < attempts; attemptsMade++) total += delayAfter(attemptsMade);
+  return total;
 }

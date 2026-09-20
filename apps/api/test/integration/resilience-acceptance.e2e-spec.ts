@@ -7,7 +7,7 @@ import { PAYMENT_GATEWAY_BREAKER } from '../../src/modules/payment/infrastructur
 import { RedisService } from '@jcool/platform/redis';
 import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '@jcool/platform/throttler';
 import { CircuitBreakerFactory } from '@jcool/platform/resilience';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import {
   buyerWithCart,
@@ -16,7 +16,7 @@ import {
   readPayment,
   seedSellableSku,
 } from '../setup/fixtures/order-flow.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { createTestAppWithPool } from '../setup/harness';
@@ -181,7 +181,7 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     });
 
     for (let spent = 0; spent < IP_LIMIT;) {
-      const { accessToken } = await createTestUser(app);
+      const { accessToken } = await createTestPrincipal(app);
       for (let i = 0; i < Math.min(USER_LIMIT, IP_LIMIT - spent); i++, spent++) {
         // 400, not merely "not 429": a fresh buyer has an empty cart, and the guard increments the
         // address budget ahead of the handler — so a broken auth or route would spend the budget
@@ -190,7 +190,7 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
       }
     }
 
-    const newcomer = await createTestUser(app);
+    const newcomer = await createTestPrincipal(app);
     expect((await postOrder(newcomer.accessToken)).status).toBe(429);
     expect(sampleOf(await scrape(), 'rate_limit_rejections_total', { tier: DEFAULT_THROTTLER, route: '/orders' })).toBe(
       before + 1,

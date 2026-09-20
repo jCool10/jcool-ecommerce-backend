@@ -12,7 +12,7 @@ import {
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
 import { ReconcileStaleOrdersUseCase } from '../../src/modules/payment/application/use-cases';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
@@ -24,7 +24,7 @@ import {
   readReservation,
   readStock,
 } from '../setup/fixtures/order-flow.fixture';
-import { newUserToken } from '../setup/fixtures/user.fixture';
+import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
 
@@ -54,7 +54,7 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
 
   /** A real PENDING order (with a HELD reservation) plus an open payment session. */
   async function openPayment(): Promise<{ orderId: string; sessionId: string; variantId: string }> {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 150_000 });
     await seedStock(app, variantId, STOCK);
     await addToCart(app, token, variantId).expect(200);
@@ -69,7 +69,7 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
   }
 
   async function placeOrderOnly(): Promise<{ orderId: string; variantId: string }> {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 99_000 });
     await seedStock(app, variantId, STOCK);
     await addToCart(app, token, variantId).expect(200);

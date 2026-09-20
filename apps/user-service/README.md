@@ -34,7 +34,7 @@ Both keys live in the api's Redis and are read by every verifier. Their names an
 
 Nothing repairs `auth:denylist:*`. A failed write fails the logout with 5xx; a write Redis acknowledged and then lost (AOF `everysec` can drop the last second) leaves that one access token valid until it expires, at most `JWT_ACCESS_TTL`. The refresh token is revoked in Postgres, independently of that write.
 
-The service refuses to boot unless Redis reports `maxmemory_policy:noeviction` and `aof_enabled:1`: an evicted or unpersisted key is a revoked session that comes back. See [RUNBOOK.md, "Redis durability"](../../RUNBOOK.md#redis-durability).
+The service refuses to boot, and so does the api that reads these keys, unless Redis reports `maxmemory_policy:noeviction` and `aof_enabled:1`: an evicted or unpersisted key is a revoked session that comes back. See [RUNBOOK.md, "Redis durability"](../../RUNBOOK.md#redis-durability).
 
 ## Ids
 

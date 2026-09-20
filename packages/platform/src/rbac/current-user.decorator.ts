@@ -1,7 +1,7 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import type { Role } from './role.enum';
 
-// What JwtStrategy.validate attaches to request.user, with no DB round-trip: jti and exp are here
+// What the token guard attaches to request.user, with no DB round-trip: jti and exp are here
 // so logout can denylist exactly this token. A handler needing more has to load it.
 export interface AuthenticatedUser {
   userId: string;

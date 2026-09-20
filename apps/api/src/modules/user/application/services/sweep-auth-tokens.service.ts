@@ -20,6 +20,7 @@ const DAY_MS = 86_400_000;
  */
 @Injectable()
 export class SweepAuthTokensService implements OnModuleInit {
+  private readonly enabled: boolean;
   private readonly tokenGraceMs: number;
   private readonly refreshGraceMs: number;
 
@@ -33,11 +34,14 @@ export class SweepAuthTokensService implements OnModuleInit {
     config: ConfigService,
     private readonly registry: RetentionSweepRegistry,
   ) {
+    this.enabled = config.getOrThrow<boolean>('retention.authTokensEnabled');
     this.tokenGraceMs = config.getOrThrow<number>('retention.authTokenGraceDays') * DAY_MS;
     this.refreshGraceMs = config.getOrThrow<number>('retention.refreshTokenGraceDays') * DAY_MS;
   }
 
+  // Off only while these tables are copied to the user-service; outbox and inbox keep sweeping.
   onModuleInit(): void {
+    if (!this.enabled) return;
     for (const sweep of this.sweeps()) this.registry.register(sweep);
   }
 

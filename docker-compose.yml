@@ -34,7 +34,8 @@ services:
     image: redis:7-alpine
     container_name: jcool-redis
     restart: unless-stopped
-    # user-service refuses to boot without AOF: its session epochs and denylist must survive a restart.
+    # The api and the user-service refuse to boot without AOF: session epochs and the denylist must
+    # survive a restart.
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "${REDIS_HOST_PORT:-6380}:6379"

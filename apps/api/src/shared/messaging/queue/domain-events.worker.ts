@@ -11,7 +11,7 @@ import { DeadLetterRouter } from './dead-letter';
 import type { DomainEventJob } from './domain-event.job';
 import { DomainEventProcessor } from './domain-event.processor';
 import { createQueueConnection } from './queue-connection';
-import { QUEUE_DOMAIN_EVENTS } from './queue.constants';
+import { QUEUE_DOMAIN_EVENTS, cappedBackoffMs } from './queue.constants';
 
 const LOG_CONTEXT = 'DomainEventsWorker';
 // Long enough for a job that is merely slow, short enough that SIGTERM never waits on a dead Redis.
@@ -34,6 +34,8 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
   private readonly concurrency: number;
   private readonly prefix: string;
   private readonly redisUrl: string;
+  private readonly backoffMs: number;
+  private readonly orderPaidBackoffCapMs: number;
 
   constructor(
     private readonly processor: DomainEventProcessor,
@@ -46,6 +48,8 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     this.concurrency = config.getOrThrow<number>('queue.workerConcurrency');
     this.prefix = config.getOrThrow<string>('queue.prefix');
     this.redisUrl = config.getOrThrow<string>('redis.url');
+    this.backoffMs = config.getOrThrow<number>('queue.consumerBackoffMs');
+    this.orderPaidBackoffCapMs = config.getOrThrow<number>('queue.orderPaidBackoffCapMs');
     logger.setContext(LOG_CONTEXT);
   }
 
@@ -63,7 +67,16 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     this.worker = new Worker<DomainEventJob, ConsumeResult>(
       QUEUE_DOMAIN_EVENTS,
       (job) => runInJobContext(this.cls, `${QUEUE_DOMAIN_EVENTS}:${job.name}`, () => this.processor.process(job.data)),
-      { connection: this.connection, prefix: this.prefix, concurrency: this.concurrency },
+      {
+        connection: this.connection,
+        prefix: this.prefix,
+        concurrency: this.concurrency,
+        // BullMQ consults this only for a type it has no built-in for, which is order.paid's alone.
+        settings: {
+          backoffStrategy: (attemptsMade: number) =>
+            cappedBackoffMs(attemptsMade, this.backoffMs, this.orderPaidBackoffCapMs),
+        },
+      },
     );
 
     // An 'error' event with no listener is fatal to the process, and a dropped connection emits one.

@@ -52,15 +52,15 @@ describe('Correlation id (integration)', () => {
   });
 
   it('stamps the correlation id on a 4xx error envelope + header, keeping the legacy fields', async () => {
-    // Empty body fails the ValidationPipe (400) before any handler/DB — exercises the
-    // exception-filter enrichment path.
-    const res = await request(server).post('/auth/register').send({}).expect(400);
+    // An out-of-range page fails the ValidationPipe (400) on a public route before any handler/DB —
+    // exercises the exception-filter enrichment path.
+    const res = await request(server).get('/products?page=0').expect(400);
 
     const headerId = res.headers['x-request-id'];
     expect(typeof headerId).toBe('string');
     expect(res.body.requestId).toBe(headerId);
     // Backward-compat: the pre-existing envelope fields must still be present.
-    expect(res.body).toMatchObject({ statusCode: 400, path: '/auth/register' });
+    expect(res.body).toMatchObject({ statusCode: 400, path: '/products?page=0' });
     expect(typeof res.body.timestamp).toBe('string');
     expect(res.body.message).toBeDefined();
   });

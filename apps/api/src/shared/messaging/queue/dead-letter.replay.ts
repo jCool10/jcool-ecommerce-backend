@@ -1,4 +1,4 @@
-import type { Job, Queue } from 'bullmq';
+import type { Job, JobsOptions, Queue } from 'bullmq';
 import type { DeadLetterJob } from './dead-letter';
 import { envelopeFields, isWellFormedEnvelope, type DomainEventJob } from './domain-event.job';
 
@@ -29,6 +29,8 @@ export interface ReplayOptions {
   inboxRetentionMs: number;
   /** Overrides the age check ONLY. It can never override an existing claim. */
   force?: boolean;
+  /** The per-event options the relay publishes with, so a replay retries on the same ladder. */
+  jobOptionsFor: (eventType: string) => JobsOptions;
 }
 
 /**
@@ -53,7 +55,7 @@ export interface ReplayOptions {
 export async function replayDeadLetters(
   main: Queue,
   dlq: Queue,
-  { limit = 100, dryRun = true, inboxLookup, inboxRetentionMs, force = false }: ReplayOptions,
+  { limit = 100, dryRun = true, inboxLookup, inboxRetentionMs, force = false, jobOptionsFor }: ReplayOptions,
 ): Promise<ReplaySummary> {
   // Nothing consumes the DLQ, so every job it holds is waiting.
   const jobs = await dlq.getJobs(['waiting', 'prioritized'], 0, limit - 1, true);
@@ -62,7 +64,7 @@ export async function replayDeadLetters(
   for (const job of jobs as Job<DeadLetterJob>[]) {
     // Per job, never per batch: one unreadable entry must not cost the record of which others went back.
     try {
-      outcomes.push(await replayOne(main, dlq, job, { dryRun, inboxLookup, inboxRetentionMs, force }));
+      outcomes.push(await replayOne(main, dlq, job, { dryRun, inboxLookup, inboxRetentionMs, force, jobOptionsFor }));
     } catch (error) {
       outcomes.push({
         messageId: job.data?.outboxId ?? job.id ?? 'unknown',
@@ -84,7 +86,7 @@ async function replayOne(
   main: Queue,
   dlq: Queue,
   job: Job<DeadLetterJob>,
-  { dryRun, inboxLookup, inboxRetentionMs, force }: Required<Omit<ReplayOptions, 'limit'>>,
+  { dryRun, inboxLookup, inboxRetentionMs, force, jobOptionsFor }: Required<Omit<ReplayOptions, 'limit'>>,
 ): Promise<ReplayOutcome> {
   // The DLQ is where malformed envelopes are parked, so its contents must not be trusted to match
   // their type. Both fields below are used as keys further down.
@@ -144,7 +146,10 @@ async function replayOne(
   }
 
   const { failedReason: _reason, attemptsMade: _attempts, failedAt: _at, ...envelope } = job.data;
-  await main.add(envelope.eventType, envelope satisfies DomainEventJob, { jobId: messageId });
+  await main.add(envelope.eventType, envelope satisfies DomainEventJob, {
+    jobId: messageId,
+    ...jobOptionsFor(envelope.eventType),
+  });
 
   // Only after the re-publish landed — the reverse order would lose the message outright. Re-read
   // rather than reuse the handle: if it poisoned again meanwhile, the router has replaced this entry

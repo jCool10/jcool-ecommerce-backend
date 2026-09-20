@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
-import type { RedisService } from '@jcool/platform/redis';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { RedisDurabilityCheck } from './redis-durability.check';
+import type { RedisService } from './redis.service';
 
 class FakeRedisClient extends EventEmitter {
   status = 'ready';

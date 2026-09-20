@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { context } from '@opentelemetry/api';
 import type { Queue } from 'bullmq';
 import { asc, eq, isNull } from 'drizzle-orm';
@@ -10,7 +11,7 @@ import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { extractTraceContext, injectTraceContext, withSpan } from '@jcool/platform/observability';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import type { DomainEventJob } from '../queue/domain-event.job';
-import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../queue/queue.constants';
+import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION, jobOptionsFor } from '../queue/queue.constants';
 import { outbox } from './schema/outbox.schema';
 
 const LOG_CONTEXT = 'OutboxRelay';
@@ -30,6 +31,8 @@ export interface RelayTickSummary {
  */
 @Injectable()
 export class OutboxRelay {
+  private readonly orderPaidAttempts: number;
+
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     @Inject(DOMAIN_EVENTS_QUEUE) private readonly queue: Queue,
@@ -39,8 +42,10 @@ export class OutboxRelay {
     // the bounded set of names. The fold is also the signal: `event_type="unregistered"` climbing
     // here means events are heading straight for the DLQ, a full retry budget before it says so.
     private readonly dispatcher: DomainEventDispatcher,
+    config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
+    this.orderPaidAttempts = config.getOrThrow<number>('queue.orderPaidAttempts');
     logger.setContext(LOG_CONTEXT);
   }
 
@@ -134,7 +139,10 @@ export class OutboxRelay {
 
         // Republishing a row BullMQ still remembers is a no-op instead of a second job — best effort
         // only, since a completed job eventually ages out of retention and frees the id again.
-        await this.queue.add(row.eventType, job, { jobId: row.id });
+        await this.queue.add(row.eventType, job, {
+          jobId: row.id,
+          ...jobOptionsFor(row.eventType, this.orderPaidAttempts),
+        });
       }),
     );
   }

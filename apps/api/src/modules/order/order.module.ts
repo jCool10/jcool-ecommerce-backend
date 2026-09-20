@@ -1,9 +1,14 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { CartModule } from '@modules/cart/cart.module';
 import { CatalogModule } from '@modules/catalog/catalog.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
+import { USER_FACADE, type UserFacade } from '@modules/user/application/public/user-facade.port';
 import { UserModule } from '@modules/user/user.module';
+import { createUserServiceClient } from '@shared/user-service/user-service.client';
+import { durationToMs } from '@jcool/kernel';
 import { MailModule } from '@jcool/platform/mail';
+import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
 import {
   CancelOrderUseCase,
   CheckoutOrderUseCase,
@@ -19,7 +24,9 @@ import { CART_SNAPSHOT_READER } from './application/ports/cart-snapshot.port';
 import { CATALOG_QUERY } from './application/ports/catalog-query.port';
 import { INVENTORY_RESERVATION } from './application/ports/inventory-reservation.port';
 import { IDEMPOTENCY_STORE } from './application/ports/idempotency-store.port';
+import { USER_CONTACT, type UserContactPort } from './application/ports/user-contact.port';
 import { DrizzleOrderRepository } from './infrastructure/drizzle-order.repository';
+import { LocalUserContactAdapter, RemoteUserContactAdapter } from './infrastructure/user-contact.adapters';
 import { CartSnapshotAdapter } from './infrastructure/cart-snapshot.adapter';
 import { CatalogQueryAdapter } from './infrastructure/catalog-query.adapter';
 import { InventoryReservationAdapter } from './infrastructure/inventory-reservation.adapter';
@@ -38,7 +45,8 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
  * nothing in this module imports another context's domain or infrastructure.
  */
 @Module({
-  imports: [CartModule, CatalogModule, InventoryModule, UserModule, MailModule],
+  // UserModule only backs the `local` user directory.
+  imports: [CartModule, CatalogModule, InventoryModule, UserModule, MailModule, ResilienceModule],
   controllers: [OrderController, AdminOrderController],
   providers: [
     CheckoutOrderUseCase,
@@ -54,6 +62,17 @@ import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
     { provide: INVENTORY_RESERVATION, useClass: InventoryReservationAdapter },
     { provide: IDEMPOTENCY_STORE, useClass: DrizzleIdempotencyKeyRepository },
     { provide: ORDER_PAYMENT_VIEW, useClass: OrderPaymentViewService },
+    {
+      provide: USER_CONTACT,
+      inject: [ConfigService, USER_FACADE, CircuitBreakerFactory],
+      useFactory: (config: ConfigService, users: UserFacade, breakers: CircuitBreakerFactory): UserContactPort =>
+        config.getOrThrow<string>('userDirectory.source') === 'remote'
+          ? new RemoteUserContactAdapter(
+              createUserServiceClient(config, breakers),
+              durationToMs(config.getOrThrow<string>('userDirectory.notFoundGrace')),
+            )
+          : new LocalUserContactAdapter(users),
+    },
     RequireIdempotencyKeyGuard,
     IdempotencyInterceptor,
     PaymentEventsHandler,

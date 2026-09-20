@@ -5,12 +5,12 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { countHeldReservations, getStockView, seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
-import { newUserToken } from '../setup/fixtures/user.fixture';
+import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // N distinct buyers race POST /orders for the last unit(s), each on its own connection so the row
@@ -38,7 +38,7 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
   const server = () => app.getHttpServer();
 
   async function buyerFor(skuId: string, quantity: number): Promise<string> {
-    const accessToken = await newUserToken(app);
+    const accessToken = await newPrincipalToken(app);
     await addToCart(app, accessToken, skuId, quantity);
     return accessToken;
   }

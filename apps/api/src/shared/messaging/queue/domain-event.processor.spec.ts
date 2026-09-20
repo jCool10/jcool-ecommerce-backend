@@ -30,12 +30,17 @@ function build({
 }: { claimed?: boolean; known?: boolean; effect?: PostCommitEffect; trace?: string[] } = {}) {
   const tx = Symbol('tx');
   const transaction = vi.fn(async (run: (t: unknown) => unknown) => {
+    trace.push('begin');
     const value = await run(tx);
     trace.push('commit');
     return value;
   });
   const claim = vi.fn().mockResolvedValue(claimed);
   const dispatch = vi.fn().mockResolvedValue(effect);
+  const prepare = vi.fn(() => {
+    trace.push('prepare');
+    return Promise.resolve(dispatch);
+  });
   const label = vi.fn((eventType: string) => (known ? eventType : 'unregistered'));
   const recordEventConsumed = vi.fn();
   const error = vi.fn();
@@ -45,11 +50,11 @@ function build({
     { transaction } as unknown as DrizzleDB,
     { recordEventConsumed } as unknown as MetricsPort,
     { claim },
-    { dispatch, label } as unknown as DomainEventDispatcher,
+    { prepare, label } as unknown as DomainEventDispatcher,
     logger,
   );
 
-  return { processor, tx, claim, dispatch, recordEventConsumed, error };
+  return { processor, tx, claim, prepare, dispatch, recordEventConsumed, error };
 }
 
 describe('DomainEventProcessor', () => {
@@ -64,8 +69,38 @@ describe('DomainEventProcessor', () => {
       eventType: 'order.placed',
     });
     // The same handle for both, or the claim could commit while the effect rolls back.
-    expect(ctx.dispatch).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.placed' }), ctx.tx);
+    expect(ctx.prepare).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.placed' }));
+    expect(ctx.dispatch).toHaveBeenCalledWith(ctx.tx);
     expect(ctx.recordEventConsumed).toHaveBeenCalledWith('order.placed', 'processed');
+  });
+
+  it('prepares the handler before the transaction opens', async () => {
+    const trace: string[] = [];
+    const ctx = build({ trace });
+
+    await ctx.processor.process(job());
+
+    // A call to another service made in here would hold a pool connection for its whole round trip.
+    expect(trace).toEqual(['prepare', 'begin', 'commit']);
+  });
+
+  it('fails a delivery whose preparation failed, once it holds the claim', async () => {
+    const ctx = build();
+    ctx.prepare.mockRejectedValueOnce(new Error('user-service down'));
+
+    await expect(ctx.processor.process(job())).rejects.toThrow('user-service down');
+
+    expect(ctx.claim).toHaveBeenCalled();
+    expect(ctx.dispatch).not.toHaveBeenCalled();
+    expect(ctx.recordEventConsumed).toHaveBeenCalledWith('order.placed', 'failed');
+  });
+
+  it('still reads a duplicate as one when its preparation failed', async () => {
+    const ctx = build({ claimed: false });
+    ctx.prepare.mockRejectedValueOnce(new Error('user-service down'));
+
+    // Retrying would spend the whole ladder, then dead-letter a message that was already applied.
+    await expect(ctx.processor.process(job())).resolves.toBe('duplicate');
   });
 
   it('skips the effect when the claim was already taken', async () => {
@@ -91,7 +126,7 @@ describe('DomainEventProcessor', () => {
 
   it('folds an unregistered event type into one label', async () => {
     const ctx = build({ known: false });
-    ctx.dispatch.mockRejectedValueOnce(new Error('No handler registered'));
+    ctx.prepare.mockRejectedValueOnce(new Error('No handler registered'));
 
     await expect(ctx.processor.process(job({ eventType: 'order.whatever' }))).rejects.toThrow(/No handler/);
 
@@ -114,7 +149,7 @@ describe('DomainEventProcessor', () => {
       await expect(ctx.processor.process(job())).resolves.toBe('processed');
 
       // Reversed, the effect would reach a mail server for a message whose claim then rolled back.
-      expect(trace).toEqual(['commit', 'effect']);
+      expect(trace).toEqual(['prepare', 'begin', 'commit', 'effect']);
     });
 
     it('does not fail the consume when the effect throws', async () => {

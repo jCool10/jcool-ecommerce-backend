@@ -5,12 +5,12 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
-import { newUserToken } from '../setup/fixtures/user.fixture';
+import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // Single-thread proof that POST /orders holds stock in the SAME transaction as order creation, so a
@@ -51,7 +51,7 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   }
 
   it('checks out a two-line order when stock is sufficient (201 PENDING, reserved raised, HELD reservations)', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const a = await createTestProduct(app, { priceMinor: 100_000 });
     const b = await createTestProduct(app, { priceMinor: 50_000 });
     await seedStock(app, a.variantId, 5);
@@ -82,7 +82,7 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   });
 
   it('holds exactly the last available units (onHand == requested → available 0)', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const p = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, p.variantId, 3);
     await addToCart(app, token, p.variantId, 3);
@@ -96,7 +96,7 @@ describe('Checkout holds stock (integration, atomic order↔stock)', () => {
   });
 
   it('rolls the whole checkout back when one line is short (409, NO order persisted, no hold, no orphan reservation)', async () => {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const a = await createTestProduct(app, { priceMinor: 100_000 });
     const b = await createTestProduct(app, { priceMinor: 50_000 });
     await seedStock(app, a.variantId, 5);

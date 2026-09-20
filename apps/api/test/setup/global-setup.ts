@@ -54,7 +54,8 @@ export default async function setup({
     new PostgreSqlContainer(POSTGRES_IMAGE)
       .withCommand(['postgres', '-c', `max_connections=${MAX_CONNECTIONS}`])
       .start(),
-    new RedisContainer(REDIS_IMAGE).start(),
+    // The api refuses to boot on a Redis that could lose revocation state.
+    new RedisContainer(REDIS_IMAGE).withCommand(['redis-server', '--appendonly', 'yes']).start(),
   ]);
 
   if (pgResult.status === 'rejected' || redisResult.status === 'rejected') {

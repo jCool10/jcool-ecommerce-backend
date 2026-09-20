@@ -1,8 +1,6 @@
-import { Module } from '@nestjs/common';
+import { GoneException, type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
-import { PassportModule } from '@nestjs/passport';
 import { durationToMs } from './application';
 import {
   AUTH_AUDIT,
@@ -40,12 +38,9 @@ import {
   RedisTokenDenylist,
 } from './infrastructure';
 import { AuthController } from './interface/auth.controller';
-import { JwtAuthGuard } from './interface/guards/jwt-auth.guard';
 import { IdentityModule } from '@shared/identity/identity.module';
 import { MailModule } from '@jcool/platform/mail';
-import { RolesGuard } from '@jcool/platform/rbac';
 import { AuthCookieService, CsrfGuard, CsrfTokenService } from './interface/security';
-import { JwtStrategy } from './interface/strategies/jwt.strategy';
 import { UserModule } from './user.module';
 
 @Module({
@@ -55,7 +50,6 @@ import { UserModule } from './user.module';
     // and each mints its own row ids.
     IdentityModule,
     MailModule,
-    PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -82,7 +76,6 @@ import { UserModule } from './user.module';
     // three sweeps with the shared retention registry on init, one per table.
     SweepAuthTokensService,
     ChangePasswordUseCase,
-    JwtStrategy,
     AuthCookieService,
     CsrfTokenService,
     CsrfGuard,
@@ -90,12 +83,22 @@ import { UserModule } from './user.module';
     { provide: EMAIL_VERIFICATION_TOKEN_REPOSITORY, useClass: DrizzleEmailVerificationTokenRepository },
     { provide: PASSWORD_RESET_TOKEN_REPOSITORY, useClass: DrizzlePasswordResetTokenRepository },
     { provide: MAILER, useClass: MailerAdapter },
+    // Writable, for the flows that revoke. The token guard reads through SessionStateModule instead.
     { provide: TOKEN_DENYLIST, useClass: RedisTokenDenylist },
     { provide: SESSION_EPOCH, useClass: DrizzleSessionEpochRepository },
     { provide: AUTH_AUDIT, useClass: AuthAuditLogger },
-    // Order matters: authenticate (JwtAuthGuard) before authorize (RolesGuard).
-    { provide: APP_GUARD, useClass: JwtAuthGuard },
-    { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })
-export class AuthModule {}
+export class AuthModule implements NestModule {
+  constructor(private readonly config: ConfigService) {}
+
+  // Middleware, not a guard: it answers before the token guard, so a stale client gets 410 rather than 401.
+  configure(consumer: MiddlewareConsumer): void {
+    if (this.config.getOrThrow<boolean>('auth.routesEnabled')) return;
+    consumer
+      .apply(() => {
+        throw new GoneException('Authentication has moved to the user service');
+      })
+      .forRoutes(AuthController);
+  }
+}

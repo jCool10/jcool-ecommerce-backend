@@ -2,14 +2,14 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import {
   archiveTestCategory,
   createTestCategory,
   createTestProduct,
   seedProducts,
 } from '../setup/fixtures/catalog.fixture';
-import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
@@ -188,7 +188,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     }
 
     it('lets an admin create a category then a product (201)', async () => {
-      const { accessToken } = await createTestAdmin(app);
+      const { accessToken } = await createTestAdminPrincipal(app);
       const categoryId = await createCategoryAsAdmin(accessToken, 'admin-electronics');
 
       const res = await request(app.getHttpServer())
@@ -202,7 +202,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects product creation by a non-admin with 403', async () => {
-      const { accessToken } = await createTestUser(app); // CUSTOMER
+      const { accessToken } = await createTestPrincipal(app); // CUSTOMER
       const res = await request(app.getHttpServer())
         .post('/admin/products')
         .set(authHeader(accessToken))
@@ -212,7 +212,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects product creation with a missing name with 400', async () => {
-      const { accessToken } = await createTestAdmin(app);
+      const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
         .post('/admin/products')
         .set(authHeader(accessToken))
@@ -222,7 +222,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a malformed product id with 400, not a 500', async () => {
-      const { accessToken } = await createTestAdmin(app);
+      const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
         .patch('/admin/products/not-a-uuid')
         .set(authHeader(accessToken))
@@ -232,7 +232,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     });
 
     it('rejects a negative price with 400', async () => {
-      const { accessToken } = await createTestAdmin(app);
+      const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
         .put('/admin/skus/0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f/price')
         .set(authHeader(accessToken))
@@ -242,7 +242,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     });
 
     it('lets an admin update (200) then soft-delete a product (200, archived not hard-deleted)', async () => {
-      const { accessToken } = await createTestAdmin(app);
+      const { accessToken } = await createTestAdminPrincipal(app);
       const categoryId = await createCategoryAsAdmin(accessToken, 'admin-books');
 
       const created = await request(app.getHttpServer())

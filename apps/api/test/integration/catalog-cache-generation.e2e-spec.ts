@@ -8,9 +8,9 @@ import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructu
 import { CacheService } from '../../src/shared/cache';
 import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { RedisService } from '@jcool/platform/redis';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
@@ -100,7 +100,7 @@ describe('Catalog cache generation and lock budget (integration, real Postgres +
     const { productId, slug, name } = await createTestProduct(app);
     expect((await readProduct(slug)).body.name).toBe(name); // cached under generation 0
 
-    const { accessToken } = await createTestAdmin(app);
+    const { accessToken } = await createTestAdminPrincipal(app);
     await request(app.getHttpServer())
       .patch(`/admin/products/${productId}`)
       .set(authHeader(accessToken))

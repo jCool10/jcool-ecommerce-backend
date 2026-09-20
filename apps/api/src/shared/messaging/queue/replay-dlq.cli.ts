@@ -27,6 +27,7 @@ import { replayDeadLetters, type InboxClaimLookup } from './dead-letter.replay';
 import {
   buildJobOptions,
   DOMAIN_EVENTS_CONSUMER,
+  jobOptionsFor,
   QUEUE_DOMAIN_EVENTS,
   QUEUE_DOMAIN_EVENTS_DLQ,
 } from './queue.constants';
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
       inboxLookup,
       inboxRetentionMs: retention.inboxDays * DAY_MS,
       force,
+      jobOptionsFor: (eventType) => jobOptionsFor(eventType, queue.orderPaidAttempts),
     });
 
     // The window is printed because the guard is only as good as its match with the deployment whose

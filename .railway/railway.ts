@@ -15,6 +15,12 @@ const API_VARIABLES = [
   'ARGON2_MEMORY_COST',
   'ARGON2_PARALLELISM',
   'ARGON2_TIME_COST',
+  // AUTH_*, RETENTION_AUTH_TOKENS_ENABLED and USER_DIRECTORY_SOURCE switch the user-service cutover,
+  // each by hand at its RUNBOOK step.
+  'AUTH_EPOCH_SOURCE',
+  'AUTH_HS256_ENABLED',
+  'AUTH_JWKS_URL',
+  'AUTH_ROUTES_ENABLED',
   'DATABASE_URL',
   'EMAIL_VERIFICATION_TTL',
   'GRAFANA_ADMIN_PASSWORD',
@@ -33,6 +39,7 @@ const API_VARIABLES = [
   'REDIS_HOST_PORT',
   'REDIS_URL',
   'REFRESH_TOKEN_TTL',
+  'RETENTION_AUTH_TOKENS_ENABLED',
   'SEARCH_API_KEY',
   'SEARCH_ENABLED',
   'SEARCH_HOST_PORT',
@@ -46,6 +53,7 @@ const API_VARIABLES = [
   'THROTTLE_ENABLED',
   // Flipped by hand with the public domain (RUNBOOK), so an apply never reverts it.
   'TRUST_PROXY',
+  'USER_DIRECTORY_SOURCE',
 ];
 
 const USER_SERVICE_VARIABLES = [
@@ -92,8 +100,16 @@ export default defineRailway(() => {
       overlapSeconds: 20,
       drainingSeconds: 15,
     },
-    // Pinned rather than left to Railway's default: the gateway dials it.
-    env: { ...preserved(API_VARIABLES), PORT: API_PORT },
+    env: {
+      ...preserved(API_VARIABLES),
+      // Pinned rather than left to Railway's default: the gateway dials it.
+      PORT: API_PORT,
+      // Read only once a switch above turns on the path that needs them.
+      JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
+      JWT_AUDIENCE: '${{user-service.JWT_AUDIENCE}}',
+      INTERNAL_API_TOKEN: '${{user-service.INTERNAL_API_TOKEN}}',
+      USER_SERVICE_INTERNAL_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
+    },
   });
 
   // postgres() would pick 18; the tests and compose run 16.

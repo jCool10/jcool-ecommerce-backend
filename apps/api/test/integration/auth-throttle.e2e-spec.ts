@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // Rate limiting is off in the default harness (the shared loopback IP would make every suite
@@ -16,7 +17,7 @@ describe('Auth rate limiting (integration, real Redis)', () => {
 
   beforeAll(async () => {
     process.env.THROTTLE_ENABLED = 'true';
-    ({ app, pool } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool(LEGACY_AUTH_MODE));
   });
 
   // Explicit rather than `closeAppAfterAll`: the flag has to be cleared as well, or it leaks into

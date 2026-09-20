@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
-import { SESSION_EPOCH_KEY_PREFIX } from '../../src/modules/user/infrastructure/redis-session-epoch.publisher';
+import { SESSION_EPOCH_KEY_PREFIX } from '@jcool/auth-verifier';
 import { redisOf } from './harness';
 
 /** What other services read; null when never published. */

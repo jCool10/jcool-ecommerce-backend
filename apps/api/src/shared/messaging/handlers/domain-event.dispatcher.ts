@@ -15,11 +15,25 @@ import { OrderEventsHandler } from './order-events.handler';
  */
 export type DomainEventHandler = (job: DomainEventJob, tx: DrizzleTx) => Promise<PostCommitEffect | void>;
 
+/** A handler bound to its event, left with only the part that runs inside the transaction. */
+export type TransactionalStep = (tx: DrizzleTx) => Promise<PostCommitEffect | void>;
+
+/**
+ * Runs before the transaction opens, for work that must not hold a pool connection — a call to
+ * another service — and resolves into the step that runs inside it.
+ */
+type PreparedHandler = (job: DomainEventJob) => Promise<TransactionalStep>;
+
+const inTransaction =
+  (handle: DomainEventHandler): PreparedHandler =>
+  (job) =>
+    Promise.resolve((tx) => handle(job, tx));
+
 const UNREGISTERED_EVENT_LABEL = 'unregistered';
 
 @Injectable()
 export class DomainEventDispatcher {
-  private readonly handlers: ReadonlyMap<string, DomainEventHandler>;
+  private readonly handlers: ReadonlyMap<string, PreparedHandler>;
 
   constructor(
     orderEvents: OrderEventsHandler,
@@ -28,40 +42,43 @@ export class DomainEventDispatcher {
     orderCancelled: OrderCancelledHandler,
     orderPaidMail: OrderPaidMailHandler,
   ) {
-    this.handlers = new Map<string, DomainEventHandler>([
-      ['order.placed', (job) => orderEvents.record(job)],
+    this.handlers = new Map<string, PreparedHandler>([
+      ['order.placed', inTransaction((job) => orderEvents.record(job))],
       // No DB effect, for the same reason as order.placed: the finalizing transaction already
       // settled the stock, so re-applying anything here would double it. The buyer's confirmation
       // is still owed, which is why order.paid hands back an effect instead of sending inline.
       [
         'order.paid',
-        async (job, tx) => {
-          await orderEvents.record(job);
-          return orderPaidMail.prepare(job, tx);
+        async (job) => {
+          const confirmation = await orderPaidMail.prepare(job);
+          return async () => {
+            await orderEvents.record(job);
+            return confirmation;
+          };
         },
       ],
-      ['order.failed', (job) => orderEvents.record(job)],
+      ['order.failed', inTransaction((job) => orderEvents.record(job))],
       // The two exceptions: an order that dies unpaid settles its stock but cannot reach the gateway,
       // so the checkout session it leaves open is an effect still owed, and only Payment can apply it.
       // Two handlers because the logs tell the two deaths apart.
       [
         'order.expired',
-        async (job, tx) => {
+        inTransaction(async (job, tx) => {
           await orderEvents.record(job);
           await orderExpired.close(job, tx);
-        },
+        }),
       ],
       [
         'order.cancelled',
-        async (job, tx) => {
+        inTransaction(async (job, tx) => {
           await orderEvents.record(job);
           await orderCancelled.close(job, tx);
-        },
+        }),
       ],
       // Unlike the above, these carry an effect this consumer genuinely owns: the producing
       // transaction moved money and nothing else, leaving the order still to settle.
-      ['payment.succeeded', (job, tx) => paymentEvents.settle(job, tx)],
-      ['payment.failed', (job, tx) => paymentEvents.settle(job, tx)],
+      ['payment.succeeded', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
+      ['payment.failed', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
     ]);
   }
 
@@ -73,12 +90,12 @@ export class DomainEventDispatcher {
     return this.handlers.has(eventType) ? eventType : UNREGISTERED_EVENT_LABEL;
   }
 
-  async dispatch(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect | void> {
+  async prepare(job: DomainEventJob): Promise<TransactionalStep> {
     const handler = this.handlers.get(job.eventType);
     // Never ack an event we do not understand: failing keeps it in the queue's failure path, where
     // it stays visible and replayable, rather than dropping it with only a log line to show for it.
     if (!handler) throw new UnhandledEventError(job.eventType);
 
-    return handler(job, tx);
+    return handler(job);
   }
 }

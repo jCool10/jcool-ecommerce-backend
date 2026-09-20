@@ -12,7 +12,7 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import {
   buyerWithCart,
   checkout,
@@ -25,7 +25,7 @@ import {
   signOutcome,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 
@@ -142,7 +142,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
     it("hides someone else's order behind the same 404 as an id that does not exist", async () => {
       const token = await buyerWithCart(app, sku.variantId, QUANTITY);
       const orderId = (await checkout(app, token).expect(201)).body.id as string;
-      const { accessToken: stranger } = await createTestUser(app);
+      const { accessToken: stranger } = await createTestPrincipal(app);
 
       await cancel(stranger, orderId).expect(404);
       await cancel(stranger, ABSENT_UUID).expect(404);

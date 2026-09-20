@@ -3,9 +3,9 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, checkout, readOrder, readStock, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
-import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 
@@ -30,7 +30,7 @@ describe('Admin orders (integration, real Postgres)', () => {
 
   beforeEach(async () => {
     await resetDatabase(pool);
-    adminToken = (await createTestAdmin(app)).accessToken;
+    adminToken = (await createTestAdminPrincipal(app)).accessToken;
     variantId = (await seedSellableSku(app, { onHand: STOCK })).variantId;
   });
 
@@ -53,7 +53,7 @@ describe('Admin orders (integration, real Postgres)', () => {
 
     // 403, not 404: the caller is authenticated, so hiding the route buys nothing and costs clarity.
     it('rejects a signed-in non-admin with 403', async () => {
-      const { accessToken } = await createTestUser(app);
+      const { accessToken } = await createTestPrincipal(app);
       await request(server()).get('/admin/orders').set(authHeader(accessToken)).expect(403);
       await request(server()).post(`/admin/orders/${ABSENT_UUID}/cancel`).set(authHeader(accessToken)).expect(403);
     });

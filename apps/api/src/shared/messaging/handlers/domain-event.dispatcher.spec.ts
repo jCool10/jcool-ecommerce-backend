@@ -32,14 +32,17 @@ function build() {
   const sendMail = vi.fn().mockResolvedValue(undefined);
   const prepare = vi.fn().mockResolvedValue(sendMail);
   const handler = new OrderEventsHandler(fakePinoLogger({ info }));
+  const dispatcher = new DomainEventDispatcher(
+    handler,
+    { settle } as unknown as PaymentEventsHandler,
+    { close } as unknown as OrderExpiredHandler,
+    { close: closeCancelled } as unknown as OrderCancelledHandler,
+    { prepare } as unknown as OrderPaidMailHandler,
+  );
   return {
-    dispatcher: new DomainEventDispatcher(
-      handler,
-      { settle } as unknown as PaymentEventsHandler,
-      { close } as unknown as OrderExpiredHandler,
-      { close: closeCancelled } as unknown as OrderCancelledHandler,
-      { prepare } as unknown as OrderPaidMailHandler,
-    ),
+    dispatcher,
+    // Both halves, the way the processor runs them: prepare, then the step inside the transaction.
+    dispatch: async (event: DomainEventJob) => (await dispatcher.prepare(event))(tx),
     info,
     settle,
     close,
@@ -55,55 +58,69 @@ describe('DomainEventDispatcher', () => {
   it.each(['order.placed', 'order.paid', 'order.failed', 'order.expired', 'order.cancelled'])(
     'audits %s',
     async (eventType) => {
-      const { dispatcher, info } = build();
+      const { dispatch, info } = build();
 
-      await dispatcher.dispatch(job(eventType), tx);
+      await dispatch(job(eventType));
 
       expect(info).toHaveBeenCalledWith(expect.objectContaining({ eventType }), 'order event consumed');
     },
   );
 
   // The caller owns when it runs, and that is after the transaction this dispatch is inside commits.
-  // The address lookup itself is handed the consumer tx, so composing the mail joins the connection
-  // this job already holds rather than checking out a second one.
   it('returns the buyer confirmation from order.paid without sending it', async () => {
-    const { dispatcher, prepare, sendMail } = build();
+    const { dispatch, sendMail } = build();
 
-    const effect = await dispatcher.dispatch(job('order.paid'), tx);
+    const effect = await dispatch(job('order.paid'));
 
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.paid' }), tx);
     expect(sendMail).not.toHaveBeenCalled();
     expect(effect).toBe(sendMail);
+  });
+
+  // The address can come from another service, and that call must not hold the consumer's connection.
+  it('looks up the buyer for order.paid before the transaction, not inside it', async () => {
+    const { dispatcher, prepare, info } = build();
+
+    await dispatcher.prepare(job('order.paid'));
+
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.paid' }));
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it('fails order.paid before the transaction when the buyer cannot be looked up', async () => {
+    const { dispatcher, prepare } = build();
+    prepare.mockRejectedValue(new Error('user-service down'));
+
+    await expect(dispatcher.prepare(job('order.paid'))).rejects.toThrow('user-service down');
   });
 
   it.each(['order.placed', 'order.failed', 'order.cancelled', 'payment.succeeded'])(
     'returns nothing for %s, which owes no work outside the transaction',
     async (eventType) => {
-      const { dispatcher } = build();
-      await expect(dispatcher.dispatch(job(eventType), tx)).resolves.toBeUndefined();
+      const { dispatch } = build();
+      await expect(dispatch(job(eventType))).resolves.toBeUndefined();
     },
   );
 
   it('routes order.expired to the payment session close, on the consumer tx', async () => {
-    const { dispatcher, info, close } = build();
+    const { dispatch, info, close } = build();
 
-    await dispatcher.dispatch(job('order.expired'), tx);
+    await dispatch(job('order.expired'));
 
     expect(info).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.expired' }), 'order event consumed');
     expect(close).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'order.expired' }), tx);
   });
 
   it('fails the whole expiry when the session cannot be closed, so the redelivery retries it', async () => {
-    const { dispatcher, close } = build();
+    const { dispatch, close } = build();
     close.mockRejectedValue(new Error('gateway unreachable'));
 
-    await expect(dispatcher.dispatch(job('order.expired'), tx)).rejects.toThrow('gateway unreachable');
+    await expect(dispatch(job('order.expired'))).rejects.toThrow('gateway unreachable');
   });
 
   it('routes order.cancelled to its own payment session close, on the consumer tx', async () => {
-    const { dispatcher, info, close, closeCancelled } = build();
+    const { dispatch, info, close, closeCancelled } = build();
 
-    await dispatcher.dispatch(job('order.cancelled'), tx);
+    await dispatch(job('order.cancelled'));
 
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'order.cancelled' }),
@@ -114,18 +131,18 @@ describe('DomainEventDispatcher', () => {
   });
 
   it('fails the whole cancel when the session cannot be closed, so the redelivery retries it', async () => {
-    const { dispatcher, closeCancelled } = build();
+    const { dispatch, closeCancelled } = build();
     closeCancelled.mockRejectedValue(new Error('gateway unreachable'));
 
-    await expect(dispatcher.dispatch(job('order.cancelled'), tx)).rejects.toThrow('gateway unreachable');
+    await expect(dispatch(job('order.cancelled'))).rejects.toThrow('gateway unreachable');
   });
 
   it.each(['payment.succeeded', 'payment.failed'])(
     'routes %s to the order settlement, on the consumer tx',
     async (eventType) => {
-      const { dispatcher, settle } = build();
+      const { dispatch, settle } = build();
 
-      await dispatcher.dispatch(job(eventType), tx);
+      await dispatch(job(eventType));
 
       expect(settle).toHaveBeenCalledWith(expect.objectContaining({ eventType }), tx);
     },
@@ -134,7 +151,7 @@ describe('DomainEventDispatcher', () => {
   it('refuses an event it has no handler for rather than acknowledging it', async () => {
     const { dispatcher } = build();
 
-    await expect(dispatcher.dispatch(job('cart.abandoned'), tx)).rejects.toBeInstanceOf(UnhandledEventError);
+    await expect(dispatcher.prepare(job('cart.abandoned'))).rejects.toBeInstanceOf(UnhandledEventError);
   });
 
   it('folds an unregistered name into one label, so a bad producer cannot mint time series', () => {

@@ -16,6 +16,7 @@ import type {
   PublishResult,
   RefundOwedSource,
   SagaStep,
+  SessionEpochLookupResult,
 } from '@jcool/metrics-port';
 import {
   AUTH_EVENTS_TOTAL,
@@ -41,6 +42,7 @@ import {
   RETENTION_SWEEP_FAILURES_TOTAL,
   SAGA_COMPENSATION_TOTAL,
   SAGA_STEP_TOTAL,
+  SESSION_EPOCH_LOOKUPS_TOTAL,
 } from './metric-definitions';
 
 const LOG_CONTEXT = 'BusinessMetrics';
@@ -78,6 +80,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(CIRCUIT_BREAKER_TRANSITIONS_TOTAL) private readonly breakerTransitions: Counter<string>,
     @InjectMetric(CIRCUIT_BREAKER_CALLS_TOTAL) private readonly breakerCalls: Counter<string>,
     @InjectMetric(RATE_LIMIT_REJECTIONS_TOTAL) private readonly rateLimitRejections: Counter<string>,
+    @InjectMetric(SESSION_EPOCH_LOOKUPS_TOTAL) private readonly sessionEpochLookups: Counter<string>,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -176,6 +179,10 @@ export class BusinessMetrics implements MetricsPort {
 
   recordRateLimitRejection(tier: string, route: string): void {
     this.safely('rate_limit_rejection', () => this.rateLimitRejections.inc({ tier, route }));
+  }
+
+  recordSessionEpochLookup(result: SessionEpochLookupResult): void {
+    this.safely('session_epoch_lookup', () => this.sessionEpochLookups.inc({ result }));
   }
 
   // Swallow-and-log: a telemetry error is logged (so it's not invisible) but never rethrown.

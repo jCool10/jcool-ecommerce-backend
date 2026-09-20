@@ -7,7 +7,7 @@ import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import { GLOBAL_THROTTLERS } from './throttler.constants';
 
 // Counters live in shared Redis so limits hold across instances and restarts. Registered before
-// AuthModule so this global guard sheds floods ahead of the auth guards — which is also why the
+// AuthVerifierModule so this global guard sheds floods ahead of the auth guards — which is also why the
 // per-user tier can't be global; UserThrottlerGuard carries it per route, after authentication.
 @Module({
   imports: [

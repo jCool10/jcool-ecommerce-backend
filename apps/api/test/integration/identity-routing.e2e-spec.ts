@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { bucketOf } from '@jcool/id-codec';
 import { loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { bucketForTestEmail } from '../setup/identity.helper';
 
@@ -23,7 +24,7 @@ describe('Identity routing across the auth paths (integration)', () => {
   const versionNibble = (id: string) => id[14];
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool(LEGACY_AUTH_MODE));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);

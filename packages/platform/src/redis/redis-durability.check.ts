@@ -1,16 +1,15 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
-import { RedisService } from '@jcool/platform/redis';
+import { RedisService } from './redis.service';
 
 const READY_TIMEOUT_MS = 10_000;
 
 const LOG_CONTEXT = 'RedisDurabilityCheck';
 
 /**
- * `auth:epoch:*` is revocation state with no other copy outside Postgres: an evicted or un-persisted
- * key is a revoked session accepted elsewhere until the reconciler catches up. Read through INFO,
- * because managed Redis commonly disables CONFIG.
+ * `auth:denylist:*` and `auth:epoch:*` are revocation state: an evicted or un-persisted key is a
+ * revoked token accepted again. Read through INFO, because managed Redis commonly disables CONFIG.
  */
 @Injectable()
 export class RedisDurabilityCheck implements OnModuleInit {

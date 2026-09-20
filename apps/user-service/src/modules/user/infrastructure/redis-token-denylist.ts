@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import { TOKEN_DENYLIST_KEY_PREFIX as KEY_PREFIX } from '@jcool/auth-verifier';
 import { RedisService } from '@jcool/platform/redis';
 import type { TokenDenylistPort } from '../application/ports';
 
 // One key per denylisted jti, with a PX TTL equal to the token's remaining life, so the denylist
 // self-trims and never outgrows the live-token set.
-const KEY_PREFIX = 'auth:denylist:';
-
 @Injectable()
 export class RedisTokenDenylist implements TokenDenylistPort {
   constructor(private readonly redis: RedisService) {}

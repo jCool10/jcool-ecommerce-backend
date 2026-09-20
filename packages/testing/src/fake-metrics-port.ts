@@ -33,12 +33,13 @@ const METHODS = [
   'recordRetentionSweep',
   'recordRetentionSweepFailure',
   'recordSagaStep',
+  'recordSessionEpochLookup',
   'setBreakerState',
 ] as const satisfies readonly (keyof MetricsPort)[];
 
 /**
  * `satisfies readonly (keyof MetricsPort)[]` only checks that each entry IS a key — it does not
- * require covering the union, and the cast in `fakeMetricsPort` erases the gap. So a 24th method on
+ * require covering the union, and the cast in `fakeMetricsPort` erases the gap. So a new method on
  * the port would compile clean, be omitted from the fake, and produce exactly the "not a function"
  * the docblock above claims to have removed. This line is the missing half: it resolves to `never`
  * the moment a key is added to `MetricsPort` without being added to `METHODS`, and assigning `true`

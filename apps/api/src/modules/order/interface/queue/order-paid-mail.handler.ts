@@ -1,24 +1,24 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { USER_FACADE, type UserFacade } from '@modules/user/application/public/user-facade.port';
-import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@jcool/platform/mail';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob, PostCommitEffect } from '@shared/messaging/queue/domain-event.job';
 import { toError } from '@jcool/kernel';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
+import { USER_CONTACT, type UserContactPort } from '../../application/ports/user-contact.port';
 
 const LOG_CONTEXT = 'OrderPaidMailHandler';
 
 /**
- * Composed inside the consumer's transaction but sent after it commits: an SMTP call held inside
- * would keep a pool connection for its whole round-trip, and a breaker timeout cannot cancel a
- * message already on the wire — the redelivery would send it again while the first is still flying.
+ * Composed before the consumer's transaction and sent after it commits. The address can come from
+ * the user-service, and that call must not hold a pool connection; the SMTP call must not either,
+ * and a breaker timeout cannot cancel a message already on the wire — the redelivery would send it
+ * again while the first is still flying.
  */
 @Injectable()
 export class OrderPaidMailHandler {
   constructor(
-    @Inject(USER_FACADE) private readonly users: UserFacade,
+    @Inject(USER_CONTACT) private readonly contacts: UserContactPort,
     @Inject(MAIL_TRANSPORT) private readonly transport: MailTransportPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
@@ -26,7 +26,8 @@ export class OrderPaidMailHandler {
     logger.setContext(LOG_CONTEXT);
   }
 
-  async prepare(job: DomainEventJob, tx: DrizzleTx): Promise<PostCommitEffect> {
+  /** A directory that could not answer throws through, so the delivery goes back on its retry ladder. */
+  async prepare(job: DomainEventJob): Promise<PostCommitEffect> {
     const { orderId, userId } = job.payload;
     // Permanent: the payload is byte-identical on every redelivery, so retrying changes nothing.
     if (typeof orderId !== 'string' || typeof userId !== 'string') {
@@ -34,9 +35,8 @@ export class OrderPaidMailHandler {
     }
 
     // The event deliberately carries no email address: the outbox is jsonb in Postgres, and a
-    // deleted account must not leave its address behind in it. Read on the consumer's own
-    // transaction — a second pool connection here would compete with the one this job already holds.
-    const user = await this.users.getUserSummary(userId, tx);
+    // deleted account must not leave its address behind in it.
+    const user = await this.contacts.find(userId, new Date(job.occurredAt));
     if (!user) {
       throw new PermanentError(`order.paid for order ${orderId} names a user that no longer exists`);
     }

@@ -23,6 +23,7 @@ Conventions used below:
 - [Change Railway service config](#change-railway-service-config)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [Run the user-service dark](#run-the-user-service-dark)
+- [Prepare the api for the cutover](#prepare-the-api-for-the-cutover)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -197,7 +198,7 @@ A row here has **not** been dead-lettered — it was never delivered at all, so 
 
 ## Replay the dead-letter queue
 
-A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
+A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service). A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
 
 **Replay used to be unconditionally safe. It is not any more, and the tool now says so.** The old guarantee was that a message goes back under its outbox row id, the inbox dedups on that id, and a needless replay collapses into nothing. [Inbox retention](#retention-sweeps) ends it: once a claim has been swept, "no claim" no longer means "never applied", and replaying such a message applies its effect a second time.
 
@@ -485,7 +486,7 @@ If the direct domain is already gone, create one with `railway domain --service 
 
 ### Redis durability
 
-The user-service writes `auth:epoch:{userId}` and `auth:denylist:{jti}` to the api's Redis, and refuses to boot unless that Redis cannot silently lose them:
+The user-service writes `auth:epoch:{userId}` and `auth:denylist:{jti}` to the api's Redis, and the api reads them. Both refuse to boot unless that Redis cannot silently lose them. The api checks in every mode, so the instance has to pass before the api change reaches `main` as well:
 
 ```
 Redis cannot hold auth state: maxmemory-policy is allkeys-lru, not noeviction; appendonly is off. See RUNBOOK.md, "Redis durability".
@@ -561,7 +562,7 @@ To take it down, remove the service's deployment in the dashboard. Nothing route
 
 ### Rotate the ES256 signing key
 
-Verifiers fetch `/.well-known/jwks.json`, which is cached for 5 minutes, so a new key must be published before anything is signed with it:
+Verifiers fetch `/.well-known/jwks.json`: the api keeps it for up to 10 minutes and refetches for a kid it has not seen at most every 30 seconds. A new key must be published before anything is signed with it:
 
 1. Append the new `kid:pem` to `JWT_ES256_PRIVATE_KEYS` (comma-separated) and deploy. Both keys are now published; tokens are still signed with the old one.
 2. Wait at least 10 minutes, then set `JWT_ES256_ACTIVE_KID` to the new kid and deploy.
@@ -571,7 +572,69 @@ A key that leaked is the exception: drop it at once. Every token it signed is th
 
 ### Rotate `INTERNAL_API_TOKEN`
 
-Move the current value to `INTERNAL_API_TOKEN_PREVIOUS`, set a new `INTERNAL_API_TOKEN`, and deploy. Both are accepted. Once every caller sends the new value, delete `INTERNAL_API_TOKEN_PREVIOUS` (see [Change Railway service config](#change-railway-service-config) for removing a variable).
+Move the current value to `INTERNAL_API_TOKEN_PREVIOUS`, set a new `INTERNAL_API_TOKEN`, and deploy. Both are accepted. The api reads the token as a reference, so it sends the new value only once it is redeployed too. A token the user-service refuses shows up as 503s on epoch misses and `order.paid` retries, with the breaker still closed. Once every caller sends the new value, delete `INTERNAL_API_TOKEN_PREVIOUS` (see [Change Railway service config](#change-railway-service-config) for removing a variable).
+
+---
+
+## Prepare the api for the cutover
+
+The api runs on either side of the cutover. Every switch below defaults to the api as it was, is kept across every apply, and is flipped by hand at its own step, never ahead of it.
+
+| Variable | Default | Flipped to | Effect |
+| -------- | ------- | ---------- | ------ |
+| `AUTH_JWKS_URL` | unset | the user-service's JWKS | ES256 tokens are accepted as well as HS256 |
+| `AUTH_EPOCH_SOURCE` | `db` | `redis` | Session epochs come from the keys the user-service publishes; a missing key reads through to it |
+| `USER_DIRECTORY_SOURCE` | `local` | `remote` | `order.paid` reads the buyer's address from the user-service |
+| `AUTH_ROUTES_ENABLED` | `true` | `false` | Every `/auth` route on the api answers 410 |
+| `AUTH_HS256_ENABLED` | `true` | `false` | The api's own tokens are refused. Flip it one `JWT_ACCESS_TTL` plus a margin after the cutover |
+| `RETENTION_AUTH_TOKENS_ENABLED` | `true` | `false` while copying | The three auth-token sweeps pause; outbox, inbox and the rest keep sweeping |
+
+`JWT_ISSUER`, `JWT_AUDIENCE`, `INTERNAL_API_TOKEN` and `USER_SERVICE_INTERNAL_URL` are references to the user-service in `.railway/railway.ts`. Nothing reads them until a switch needs them.
+
+With `AUTH_EPOCH_SOURCE=redis` a missing epoch costs a call to the user-service on the request path. If that call fails, the request answers 503: never an open door, never a logout. A sustained `session_epoch_lookups_total{result="miss"}` means Redis lost keys it should have kept.
+
+`AUTH_EPOCH_SOURCE=redis` while `AUTH_ROUTES_ENABLED` is still `true` is only safe behind the gateway's write freeze. The api's own logout-all, password change and reset still bump the epoch in its database, which the verifier no longer reads, so they would answer 2xx and revoke nothing.
+
+If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that succeeds, not before.
+
+### Accept user-service tokens
+
+The api has to accept ES256 before anything issues it, so this switch ships well ahead of the cutover and soaks. It is the only one flipped at this step.
+
+1. The user-service runs dark with `JWT_ISSUER`, `JWT_AUDIENCE` and its signing keys set (see [Run the user-service dark](#run-the-user-service-dark)).
+2. On the api, set `AUTH_JWKS_URL` to `http://${{user-service.RAILWAY_PRIVATE_DOMAIN}}:3000/.well-known/jwks.json` and deploy.
+3. Check it with a token the user-service signs but nothing stores. Registering a real account would leave a row that the cutover's copy then fails to match.
+
+```bash
+railway ssh --service user-service
+API=http://<api private domain>:8080 node <<'EOF'
+const { randomUUID } = require('node:crypto');
+const { Es256SigningKeys } = require('./dist/modules/user/infrastructure/es256-signing-keys');
+const { Es256AccessTokenSigner } = require('./dist/modules/user/infrastructure/es256-access-token.signer');
+const env = process.env;
+const keys = Es256SigningKeys.parse(env.JWT_ES256_PRIVATE_KEYS, env.JWT_ES256_ACTIVE_KID);
+const signer = new Es256AccessTokenSigner(keys, { issuer: env.JWT_ISSUER, audience: env.JWT_AUDIENCE, expiresIn: 60 });
+signer
+  .sign({ sub: randomUUID(), role: 'CUSTOMER', jti: randomUUID(), epoch: 0 })
+  .then((token) => fetch(`${env.API}/cart`, { headers: { authorization: `Bearer ${token}` } }))
+  .then(async (res) => console.log(res.status, (await res.json()).message));
+EOF
+```
+
+- `401 Session has been revoked` is the pass. The signature, issuer and audience were accepted, and only the session lookup refused, because the api's database has no such user.
+- `401 Unauthorized` means the token itself was refused: the variable is missing, the JWKS is unreachable, or the issuer or audience differ.
+
+To back out, delete `AUTH_JWKS_URL`. ES256 is refused again and nothing else changes.
+
+### `order.paid` waits for the user-service
+
+With `USER_DIRECTORY_SOURCE=remote`, the order confirmation reads the buyer's address from the user-service before its transaction opens, with a 500 ms timeout (`USER_SERVICE_TIMEOUT_MS`) behind the `user-service` breaker. A failure goes back on a ladder of its own: `ORDER_PAID_CONSUMER_ATTEMPTS` (15) deliveries, doubling from `QUEUE_CONSUMER_BACKOFF_MS` up to `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` (5 minutes). That rides out about 33 minutes of outage.
+
+A buyer the user-service does not know is retried until the event is `USER_DIRECTORY_NOT_FOUND_GRACE` (10m) old, since a freshly copied directory can miss the newest accounts. After that it is parked as permanent.
+
+Either way `DeadLetterQueued` pages. Once the user-service answers again, [replay the dead-letter queue](#replay-the-dead-letter-queue).
+
+The ladder is a custom backoff that only this release's worker knows. Do not roll the api back past it while `order.paid` jobs are waiting to retry: an older worker cannot schedule their next attempt, and the job stalls instead of retrying.
 
 ---
 

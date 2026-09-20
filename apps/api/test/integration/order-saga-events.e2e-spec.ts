@@ -243,10 +243,13 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     const [settlement] = (await publishedJobs()).filter((job) => job.eventType === 'payment.succeeded');
 
     // Asserted because `strictBindCallApply` is off, so `bind` alone would hand back `any`.
-    const applyEffect = dispatcher.dispatch.bind(dispatcher) as DomainEventDispatcher['dispatch'];
-    const applyThenDie = vi.spyOn(dispatcher, 'dispatch').mockImplementation(async (job, tx) => {
-      await applyEffect(job, tx);
-      throw new Error('worker died after the effect');
+    const prepare = dispatcher.prepare.bind(dispatcher) as DomainEventDispatcher['prepare'];
+    const applyThenDie = vi.spyOn(dispatcher, 'prepare').mockImplementation(async (job) => {
+      const applyEffect = await prepare(job);
+      return async (tx) => {
+        await applyEffect(tx);
+        throw new Error('worker died after the effect');
+      };
     });
 
     await expect(processor.process(settlement)).rejects.toThrow('worker died after the effect');

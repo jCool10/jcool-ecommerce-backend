@@ -26,7 +26,7 @@ groups:
           severity: page
         annotations:
           summary: 'Circuit breaker {{ $labels.breaker }} has been refusing calls for a minute'
-          description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+          description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app. For user-service, a session epoch missing from Redis answers 503 and order confirmations wait on their retry ladder.'
       # A bad API key never opens the breaker: the provider answers 4xx, which is deliberately not
       # counted as its fault. A config fault therefore shows up as a checkout error rate with a
       # closed breaker, so do not read a quiet CircuitBreakerOpen as "payments are fine".

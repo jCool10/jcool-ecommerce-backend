@@ -1,12 +1,15 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SentryModule } from '@sentry/nestjs/setup';
 import { ClsModule } from 'nestjs-cls';
+import { AuthVerifierModule } from '@jcool/auth-verifier';
 import { ConfigModule } from '@shared/config';
+import { authVerifierOptions } from '@shared/auth/auth-verifier-options.factory';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import * as schema from '@shared/infrastructure/database/schema';
-import { RedisModule } from '@jcool/platform/redis';
+import { RedisDurabilityCheck, RedisModule } from '@jcool/platform/redis';
 import { MessagingModule } from '@shared/messaging';
 import { RetentionModule } from '@jcool/platform/retention';
 import { ThrottlerSecurityModule } from '@jcool/platform/throttler';
@@ -23,9 +26,10 @@ import { OrderModule } from '@modules/order/order.module';
 import { PaymentModule } from '@modules/payment/payment.module';
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/user/auth.module';
+import { SessionStateModule } from '@modules/user/session-state.module';
 
 // ClsModule precedes ObservabilityLoggerModule so its correlation middleware mounts before pino;
-// ThrottlerSecurityModule precedes AuthModule so its rate-limit guard runs before the auth guards.
+// ThrottlerSecurityModule precedes AuthVerifierModule: global guards run in module-scan order.
 // SentryModule only adds a route-name interceptor — Sentry itself is initialized in instrumentation.ts.
 @Module({
   imports: [
@@ -41,6 +45,11 @@ import { AuthModule } from '@modules/user/auth.module';
     RetentionModule,
     MessagingModule,
     ThrottlerSecurityModule,
+    AuthVerifierModule.forRootAsync({
+      imports: [SessionStateModule],
+      inject: [ConfigService],
+      useFactory: authVerifierOptions,
+    }),
     ScheduleModule.forRoot(),
     HealthModule,
     CatalogModule,
@@ -55,6 +64,7 @@ import { AuthModule } from '@modules/user/auth.module';
   ],
   controllers: [DebugController],
   providers: [
+    RedisDurabilityCheck,
     { provide: APP_INTERCEPTOR, useClass: CanonicalLogInterceptor },
     // Registered via DI, not useGlobalFilters, so the filter can inject CLS.
     { provide: APP_FILTER, useClass: HttpExceptionFilter },

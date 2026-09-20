@@ -7,12 +7,12 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { computeRequestHash } from '../../src/shared/idempotency';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { countHeldReservations, getStockView, seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // The count on the DB, not the HTTP status, is the verdict: a replay is also a 201, so status alone
@@ -39,7 +39,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
   const server = () => app.getHttpServer();
 
   async function newUser(): Promise<{ token: string; userId: string }> {
-    const { accessToken, user } = await createTestUser(app);
+    const { accessToken, user } = await createTestPrincipal(app);
     return { token: accessToken, userId: user.id };
   }
 

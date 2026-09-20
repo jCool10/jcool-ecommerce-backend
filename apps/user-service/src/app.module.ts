@@ -10,7 +10,7 @@ import { HealthModule } from '@jcool/platform/health';
 import { HttpExceptionFilter } from '@jcool/platform/interface';
 import { MetricsModule } from '@jcool/platform/metrics';
 import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } from '@jcool/platform/observability';
-import { RedisModule } from '@jcool/platform/redis';
+import { RedisDurabilityCheck, RedisModule } from '@jcool/platform/redis';
 import { RetentionModule } from '@jcool/platform/retention';
 import { ThrottlerSecurityModule } from '@jcool/platform/throttler';
 import configuration from './config/configuration';
@@ -21,7 +21,6 @@ import { AuthModule } from './modules/user/auth.module';
 import { Es256SigningKeys } from './modules/user/infrastructure/es256-signing-keys';
 import { SessionStateModule } from './modules/user/session-state.module';
 import { UserModule } from './modules/user/user.module';
-import { RedisDurabilityCheck } from './redis/redis-durability.check';
 
 // ClsModule precedes the logger so its correlation middleware mounts before pino's.
 // ThrottlerSecurityModule precedes AuthVerifierModule: global guards run in module-scan order.

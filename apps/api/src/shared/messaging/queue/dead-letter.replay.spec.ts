@@ -11,9 +11,10 @@ const RETENTION_MS = 30 * DAY_MS;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 // No inbox claim — the ordinary case, so every test below is about the branch it names.
-const guards: Pick<ReplayOptions, 'inboxLookup' | 'inboxRetentionMs'> = {
+const guards: Pick<ReplayOptions, 'inboxLookup' | 'inboxRetentionMs' | 'jobOptionsFor'> = {
   inboxLookup: () => Promise.resolve(null),
   inboxRetentionMs: RETENTION_MS,
+  jobOptionsFor: (eventType) => (eventType === 'order.paid' ? { attempts: 15 } : {}),
 };
 
 const dead = (overrides: Partial<DeadLetterJob> = {}): DeadLetterJob => ({
@@ -112,6 +113,14 @@ describe('replayDeadLetters', () => {
     );
     expect(dlqJob.remove).toHaveBeenCalled();
     expect(summary).toMatchObject({ replayed: 1, skipped: 0 });
+  });
+
+  it('re-publishes a message on the ladder its event type is published with', async () => {
+    const { main, dlq, add } = build({ entries: [entry(dead({ eventType: 'order.paid' }))] });
+
+    await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
+
+    expect(add).toHaveBeenCalledWith('order.paid', expect.anything(), { jobId: ID_A, attempts: 15 });
   });
 
   it('leaves a message alone while a worker is holding it', async () => {

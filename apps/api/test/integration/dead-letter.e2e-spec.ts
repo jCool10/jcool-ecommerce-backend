@@ -23,6 +23,7 @@ import {
   obliterateQueueBeforeEach,
   resetDatabaseBeforeEach,
 } from '../setup/harness';
+import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 
 const ATTEMPTS = 3;
@@ -73,7 +74,8 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     return row?.processedAt ?? null;
   };
 
-  const replayGuards = { inboxLookup, inboxRetentionMs: 30 * 86_400_000 };
+  // None of these events retries on a ladder of its own.
+  const replayGuards = { inboxLookup, inboxRetentionMs: 30 * 86_400_000, jobOptionsFor: () => ({}) };
 
   // The worker runs in this same app, so a spy on the dispatcher it resolved is the seam every
   // failure mode below is injected through.
@@ -112,7 +114,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('retries a transient failure to the end of the budget, then dead-letters it', async () => {
-    const effect = vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new Error('database unavailable'));
+    const effect = spyOnEffect(dispatcher).mockRejectedValue(new Error('database unavailable'));
 
     await publish(job());
 
@@ -127,11 +129,9 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('lets a healthy message through while a poisoned one is still being retried', async () => {
-    const effect = vi
-      .spyOn(dispatcher, 'dispatch')
-      .mockImplementation((delivered) =>
-        delivered.outboxId === messageId(1) ? Promise.reject(new Error('poison')) : Promise.resolve(),
-      );
+    const effect = spyOnEffect(dispatcher).mockImplementation((delivered) =>
+      delivered.outboxId === messageId(1) ? Promise.reject(new Error('poison')) : Promise.resolve(),
+    );
 
     await publish(job());
     await publish(job({ outboxId: messageId(2) }));
@@ -144,7 +144,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('stops retrying a failure no redelivery could fix and dead-letters it immediately', async () => {
-    const effect = vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new PermanentError('payload has no order id'));
+    const effect = spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('payload has no order id'));
 
     await publish(job());
 
@@ -163,7 +163,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('carries everything needed to reconcile the message by hand', async () => {
-    vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new PermanentError('nope'));
+    spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('nope'));
 
     const original = job();
     await publish(original);
@@ -185,7 +185,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('applies the message on replay once the handler is fixed, and clears the dead letter', async () => {
-    const effect = vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new PermanentError('bug in the handler'));
+    const effect = spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
     await waitForDeadLetter();
 
@@ -200,13 +200,13 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   it('refuses a message the inbox says was already applied, rather than reporting a no-op as a fix', async () => {
     // Reaches the dead-letter queue and the inbox, which is the state a crash between the effect's
     // commit and the ack leaves behind — the case that makes replay look dangerous.
-    vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new PermanentError('bug in the handler'));
+    spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
     await waitForDeadLetter();
     vi.restoreAllMocks();
     await expect(processor.process(job())).resolves.toBe('processed');
 
-    const effect = vi.spyOn(dispatcher, 'dispatch');
+    const effect = spyOnEffect(dispatcher);
     const summary = await replayDeadLetters(queue, dlq, { ...replayGuards, dryRun: false, force: true });
 
     // The inbox would have collapsed the duplicate anyway, so the effect was never at risk — what is
@@ -220,7 +220,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('refuses a replay older than the inbox horizon, where a missing claim proves nothing, until --force', async () => {
-    vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new PermanentError('bug in the handler'));
+    spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
     await waitForDeadLetter();
     vi.restoreAllMocks();
@@ -243,7 +243,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('changes nothing on a dry run, so an operator can look before replaying', async () => {
-    vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new PermanentError('nope'));
+    spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('nope'));
     await publish(job());
     await waitForDeadLetter();
 
@@ -254,8 +254,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('applies the effect once when a transient failure clears mid-budget', async () => {
-    const effect = vi
-      .spyOn(dispatcher, 'dispatch')
+    const effect = spyOnEffect(dispatcher)
       .mockRejectedValueOnce(new Error('connection reset'))
       .mockResolvedValue(undefined);
 
@@ -267,7 +266,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   });
 
   it('reports retries and dead letters on /metrics', async () => {
-    vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new Error('database unavailable'));
+    spyOnEffect(dispatcher).mockRejectedValue(new Error('database unavailable'));
 
     await publish(job());
     await waitForDeadLetter();

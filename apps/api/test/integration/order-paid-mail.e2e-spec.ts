@@ -6,6 +6,8 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
+import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
@@ -20,6 +22,8 @@ const ORDER_ID = '0198f0d8-5555-7000-8000-000000000001';
 // freshly started container can outlast it, and abandoning that send would fail the delivery this
 // suite is about.
 const MAIL_TIMEOUT_MS = '20000';
+// Past the directory's grace window, where an unknown user reads as gone rather than not yet copied.
+const LONG_AGO = new Date(Date.now() - 24 * 3_600_000).toISOString();
 
 const paidJob = (userId: string, overrides: Partial<DomainEventJob> = {}): DomainEventJob => ({
   outboxId: MESSAGE_ID,
@@ -70,7 +74,7 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   });
 
   it('confirms a paid order to the address the event only names by id', async () => {
-    const { user } = await createTestUser(app);
+    const { user } = await createTestPrincipal(app);
 
     await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
 
@@ -79,8 +83,22 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
     expect(await mail.body(delivered.ID)).toContain(ORDER_ID);
   });
 
+  it('confirms from the local user directory, as the api ships', async () => {
+    const local = await createTestApp({ ...LEGACY_AUTH_MODE, SMTP_URL: mail.smtpUrl, MAIL_FROM, MAIL_TIMEOUT_MS });
+    try {
+      const { user } = await createTestUser(local);
+
+      await expect(local.get(DomainEventProcessor).process(paidJob(user.id))).resolves.toBe('processed');
+
+      const [delivered] = await mail.waitForMail(user.email);
+      expect(delivered.Subject).toBe('Your order is confirmed');
+    } finally {
+      await local.close();
+    }
+  });
+
   it('sends nothing a second time when the message is redelivered', async () => {
-    const { user } = await createTestUser(app);
+    const { user } = await createTestPrincipal(app);
 
     await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
     await mail.waitForMail(user.email);
@@ -94,9 +112,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   });
 
   it('refuses permanently when the event names a user that no longer exists', async () => {
-    await expect(processor.process(paidJob('0198f0d8-6666-8000-8000-000000000001'))).rejects.toThrow(
-      /no longer exists/,
-    );
+    await expect(
+      processor.process(paidJob('0198f0d8-6666-8000-8000-000000000001', { occurredAt: LONG_AGO })),
+    ).rejects.toThrow(/no longer exists/);
 
     // The claim rolled back with the failed handler, so nothing is deduped away on a redelivery.
     expect(await inboxRows()).toHaveLength(0);
@@ -106,7 +124,7 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   // a metric rather than a retry — because the redelivery a retry would trigger can only find its
   // own claim and do nothing.
   it('keeps a message applied when the mail cannot be delivered, and does not retry it', async () => {
-    const { user } = await createTestUser(app);
+    const { user } = await createTestPrincipal(app);
     // A second boot, not a second test: `SMTP_URL` is read once when the module compiles, so "the
     // mail server is unreachable" is only expressible as an app that was built that way.
     const broken = await createTestApp({

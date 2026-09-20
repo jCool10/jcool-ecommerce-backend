@@ -2,10 +2,10 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { buyerWithCart, checkout, readStock, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
-import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 
@@ -28,7 +28,7 @@ describe('Admin inventory (integration, real Postgres)', () => {
 
   beforeEach(async () => {
     await resetDatabase(pool);
-    adminToken = (await createTestAdmin(app)).accessToken;
+    adminToken = (await createTestAdminPrincipal(app)).accessToken;
   });
 
   const server = () => app.getHttpServer();
@@ -56,7 +56,7 @@ describe('Admin inventory (integration, real Postgres)', () => {
     });
 
     it('rejects a signed-in non-admin with 403', async () => {
-      const { accessToken } = await createTestUser(app);
+      const { accessToken } = await createTestPrincipal(app);
       await request(server()).get(`/admin/inventory/${ABSENT_UUID}`).set(authHeader(accessToken)).expect(403);
       await request(server())
         .put(`/admin/inventory/${ABSENT_UUID}`)

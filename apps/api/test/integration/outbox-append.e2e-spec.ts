@@ -10,7 +10,7 @@ import {
   type OutboxRecord,
   type OutboxWriterPort,
 } from '../../src/shared/messaging/outbox/outbox-writer.port';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import {
   seedSellableSku,

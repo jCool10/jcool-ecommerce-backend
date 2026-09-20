@@ -4,9 +4,9 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../src/modules/catalog/application/ports';
 import { DrizzleProductRepository, reindexAll } from '../../src/modules/catalog/infrastructure';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { createTestCategory } from '../setup/fixtures/catalog.fixture';
-import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 import {
@@ -57,7 +57,7 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
   beforeEach(async () => {
     await resetDatabase(pool);
     await resetSearchIndex(app);
-    adminToken = (await createTestAdmin(app)).accessToken;
+    adminToken = (await createTestAdminPrincipal(app)).accessToken;
     categoryId = (await createTestCategory(app)).id;
   });
 

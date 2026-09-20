@@ -18,6 +18,7 @@ import {
 } from '../../src/modules/user/interface/security/auth-cookie.constants';
 import { authHeader, cookieValueOf, loginAs, sessionHeaders, setCookieEntry } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 describe('Auth (integration, real Postgres + Redis)', () => {
@@ -27,7 +28,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
   const password = 'Password123!';
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool(LEGACY_AUTH_MODE));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);

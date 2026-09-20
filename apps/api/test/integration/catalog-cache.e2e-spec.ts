@@ -5,9 +5,9 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { createTestAdmin } from '../setup/fixtures/user.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { withRedisDown } from '../setup/redis-outage';
@@ -126,7 +126,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
 
   describe('invalidation on admin write', () => {
     async function adminToken(): Promise<string> {
-      const { accessToken } = await createTestAdmin(app);
+      const { accessToken } = await createTestAdminPrincipal(app);
       return accessToken;
     }
 

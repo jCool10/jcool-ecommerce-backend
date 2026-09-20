@@ -5,12 +5,12 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart, postWebhook, readOrder, readReservation, readStock } from '../setup/fixtures/order-flow.fixture';
-import { newUserToken } from '../setup/fixtures/user.fixture';
+import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import {
   checkoutSessionCompleted,
@@ -46,7 +46,7 @@ describe('Payment webhook → order finalization (integration, real Postgres)', 
     variantId: string;
     charge: SessionCharge;
   }> {
-    const token = await newUserToken(app);
+    const token = await newPrincipalToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 150_000 });
     await seedStock(app, variantId, STOCK);
     await addToCart(app, token, variantId, 1);

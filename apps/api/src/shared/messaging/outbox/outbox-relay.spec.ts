@@ -7,8 +7,10 @@ import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@jcool/metrics-port';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
+import { ORDER_PAID_BACKOFF } from '../queue/queue.constants';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import type { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
@@ -90,6 +92,7 @@ function build(rows: OutboxRow[]) {
     connection as unknown as Redis,
     { recordEventPublished } as unknown as MetricsPort,
     dispatcher,
+    fakeConfigService({ 'queue.orderPaidAttempts': 15 }),
     fakePinoLogger(logger),
   );
 
@@ -157,6 +160,19 @@ describe('OutboxRelay', () => {
       await t.relay.runOnce(10);
 
       expect(t.add).toHaveBeenCalledWith(only.eventType, expect.anything(), { jobId: only.id });
+    });
+
+    it('publishes order.paid on the ladder that outlasts a user-service outage', async () => {
+      const paid = row({ eventType: 'order.paid' });
+      const t = build([paid]);
+
+      await t.relay.runOnce(10);
+
+      expect(t.add).toHaveBeenCalledWith('order.paid', expect.anything(), {
+        jobId: paid.id,
+        attempts: 15,
+        backoff: { type: ORDER_PAID_BACKOFF },
+      });
     });
   });
 

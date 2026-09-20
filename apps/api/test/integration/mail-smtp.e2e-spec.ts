@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -38,6 +39,7 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
   beforeAll(async () => {
     mail = await startMailServer();
     ({ app, pool } = await createTestAppWithPool({
+      ...LEGACY_AUTH_MODE,
       SMTP_URL: mail.smtpUrl,
       MAIL_FROM,
       APP_PUBLIC_URL: PUBLIC_URL,
@@ -111,6 +113,7 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
     // A second boot, not a second test: `SMTP_URL` is read once when the module compiles, so "the
     // mail server is unreachable" is only expressible as an app that was built that way.
     const broken = await createTestApp({
+      ...LEGACY_AUTH_MODE,
       SMTP_URL: UNREACHABLE_SMTP_URL,
       MAIL_FROM,
       APP_PUBLIC_URL: PUBLIC_URL,

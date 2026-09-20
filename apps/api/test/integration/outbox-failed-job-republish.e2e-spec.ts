@@ -14,6 +14,7 @@ import {
   DOMAIN_EVENTS_DLQ_QUEUE,
   DOMAIN_EVENTS_QUEUE,
 } from '../../src/shared/messaging/queue/queue.constants';
+import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
@@ -117,7 +118,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
   //   marked"); on the failed branch the identical line inverts its own meaning.
   // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — OBX-1.
   it('retires a row whose job is sitting in the failed set, so the event is never applied', async () => {
-    vi.spyOn(dispatcher, 'dispatch').mockRejectedValue(new Error('handler refused the event'));
+    spyOnEffect(dispatcher).mockRejectedValue(new Error('handler refused the event'));
     const [row] = await seed(1);
 
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
@@ -162,7 +163,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
   // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — OBX-2.
   it('retries a permanently refused row forever without ever escalating it', async () => {
     // Healthy siblings consume cleanly, so nothing but the poison row can reach the DLQ.
-    vi.spyOn(dispatcher, 'dispatch').mockResolvedValue(undefined);
+    spyOnEffect(dispatcher).mockResolvedValue(undefined);
     const [poison] = await seed(1);
     const add = queue.add.bind(queue);
     vi.spyOn(queue, 'add').mockImplementation((name: string, data: DomainEventJob, opts?: JobsOptions) =>

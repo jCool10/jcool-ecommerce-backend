@@ -4,8 +4,8 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
 import { ORDER_THROTTLE, USER_THROTTLER } from '@jcool/platform/throttler';
-import { authHeader } from '../setup/auth.helper';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { authHeader } from '../setup/bearer.helper';
+import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -55,8 +55,8 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
   }
 
   it('caps one account at the checkout endpoint without touching another account on the same IP', async () => {
-    const alice = await createTestUser(app);
-    const bob = await createTestUser(app);
+    const alice = await createTestPrincipal(app);
+    const bob = await createTestPrincipal(app);
     const rejectionsBefore = await readRejections('user', '/orders');
 
     for (let attempt = 0; attempt < USER_LIMIT; attempt++) {
@@ -78,7 +78,7 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
   // Every consumed cancellation ends in an outbound call to close the checkout session. The limiter
   // runs before the handler, so a non-existent id still costs a slot — hence no real orders here.
   it('caps one account at the cancel endpoint', async () => {
-    const dave = await createTestUser(app);
+    const dave = await createTestPrincipal(app);
     const cancel = (): request.Test =>
       request(app.getHttpServer()).post(`/orders/${ABSENT_ORDER_ID}/cancel`).set(authHeader(dave.accessToken)).send();
 
@@ -90,7 +90,7 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
   });
 
   it('enforces nothing while the kill-switch is off', async () => {
-    const carol = await createTestUser(app);
+    const carol = await createTestPrincipal(app);
     process.env.THROTTLE_ENABLED = 'false';
 
     try {

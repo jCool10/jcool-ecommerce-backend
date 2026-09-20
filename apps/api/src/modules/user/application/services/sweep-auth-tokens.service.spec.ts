@@ -13,6 +13,7 @@ const DAY_MS = 86_400_000;
 const NOW = new Date('2026-09-07T12:00:00.000Z');
 
 const CONFIG: Record<string, unknown> = {
+  'retention.authTokensEnabled': true,
   'retention.authTokenGraceDays': 7,
   'retention.refreshTokenGraceDays': 30,
 };
@@ -56,6 +57,15 @@ describe('SweepAuthTokensService', () => {
       'auth-tokens:password-reset',
       'auth-tokens:refresh',
     ]);
+  });
+
+  // Rows being copied to another database must not be collected out from under the copy.
+  it('registers nothing while switched off', () => {
+    const { make, registry } = build({ 'retention.authTokensEnabled': false });
+
+    make().onModuleInit();
+
+    expect(registry.names()).toEqual([]);
   });
 
   it('collects a single-use token only once it is a grace period past its expiry', async () => {

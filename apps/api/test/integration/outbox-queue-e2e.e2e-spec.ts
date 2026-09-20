@@ -16,7 +16,7 @@ import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-eve
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { withSpan } from '@jcool/platform/observability';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import {
   closeAppAfterAll,

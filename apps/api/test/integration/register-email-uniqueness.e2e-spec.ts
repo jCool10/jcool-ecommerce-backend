@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // The register write path is race-free because the unique email index — not a check-then-insert
@@ -19,7 +20,7 @@ describe('Register email uniqueness under concurrency (integration)', () => {
   }
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool(LEGACY_AUTH_MODE));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);

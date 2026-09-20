@@ -11,9 +11,10 @@ import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
+import { spyOnEffect } from '../setup/dispatcher-effect.helper';
+import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import {
   closeAppAfterAll,
   createTestAppWithPool,
@@ -70,7 +71,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('applies an event once and records the claim under its consumer group', async () => {
-    const effect = vi.spyOn(dispatcher, 'dispatch');
+    const effect = spyOnEffect(dispatcher);
 
     await expect(processor.process(job())).resolves.toBe('processed');
 
@@ -87,7 +88,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('collapses a redelivery of the same message into a single effect', async () => {
-    const effect = vi.spyOn(dispatcher, 'dispatch');
+    const effect = spyOnEffect(dispatcher);
 
     await expect(processor.process(job())).resolves.toBe('processed');
     await expect(processor.process(job())).resolves.toBe('duplicate');
@@ -97,7 +98,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('dedups on the outbox id, not on the delivery — a fresh job id changes nothing', async () => {
-    const effect = vi.spyOn(dispatcher, 'dispatch');
+    const effect = spyOnEffect(dispatcher);
 
     await processor.process(job());
     // What a BullMQ retry looks like from here: same message, republished after the original job id
@@ -110,7 +111,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('rolls the claim back when the effect fails, so the redelivery does the work', async () => {
-    const effect = vi.spyOn(dispatcher, 'dispatch').mockRejectedValueOnce(new Error('handler exploded'));
+    const effect = spyOnEffect(dispatcher).mockRejectedValueOnce(new Error('handler exploded'));
 
     await expect(processor.process(job())).rejects.toThrow('handler exploded');
 
@@ -126,7 +127,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('applies each of the order events the producers emit today', async () => {
     // Every finalized event carries `userId` (`order-outbox.mapper.ts`), and order.paid's handler
     // resolves the buyer's address from it — so the payload here has to be the one producers emit.
-    const { user } = await createTestUser(app);
+    const { user } = await createTestPrincipal(app);
     const payload = { orderId: ORDER_ID, userId: user.id, totalAmountMinor: 150_000 };
     for (const [index, eventType] of ['order.placed', 'order.paid', 'order.failed', 'order.expired'].entries()) {
       const outboxId = `0198f0d8-0000-7000-8000-00000000000${index + 1}`;

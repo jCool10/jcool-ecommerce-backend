@@ -11,7 +11,7 @@ import {
 import { CheckoutOrderUseCase } from '../../src/modules/order/application/use-cases/checkout-order.use-case';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/auth.helper';
+import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, seedSellableSku, type SellableSku } from '../setup/fixtures/order-flow.fixture';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetDatabase } from '../setup/reset-database';
