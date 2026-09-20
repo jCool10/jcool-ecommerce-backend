@@ -5,10 +5,11 @@ import { LEASED_NODE_MAX, UuidV8Generator } from '@jcool/id-generator';
 import { normalizeEmail } from '@jcool/kernel';
 import type { Role } from '@jcool/platform/rbac';
 import { RedisService } from '@jcool/platform/redis';
-import { E2E_IDENTITY_BUCKET_KEY } from '../e2e-constants';
 import { type StubUser, userServiceStub } from '../user-service-stub';
 
-// Stands in for the user-service's own generator, which mints on a leased node id.
+// Stands in for the user-service's own generator, which mints on a leased node id. The bucket key is
+// the user-service's now; this one only has to be stable so a user's id and its rows agree.
+const BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secret-000';
 const ids = UuidV8Generator.create({ nodeId: LEASED_NODE_MAX });
 let seq = 0;
 
@@ -33,7 +34,7 @@ export async function createTestPrincipal(
 ): Promise<TestPrincipal> {
   const email = normalizeEmail(options.email ?? `principal-${Date.now()}-${seq++}@test.local`);
   const user: StubUser = {
-    id: ids.generate(bucketForEmail(email, E2E_IDENTITY_BUCKET_KEY)),
+    id: ids.generate(bucketForEmail(email, BUCKET_KEY)),
     email,
     role: options.role ?? 'CUSTOMER',
   };

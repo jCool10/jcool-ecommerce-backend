@@ -53,20 +53,6 @@ export default () => ({
     batchSize: parseIntOr(process.env.OUTBOX_BATCH_SIZE, 100),
   },
   auth: {
-    jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
-    // Short by design: it caps exposure if the jti denylist is ever bypassed.
-    jwtAccessTtl: process.env.JWT_ACCESS_TTL ?? '5m',
-    refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '7d',
-    emailVerificationTtl: process.env.EMAIL_VERIFICATION_TTL ?? '24h',
-    // Short by design: a reset link is a high-value credential.
-    passwordResetTtl: process.env.PASSWORD_RESET_TTL ?? '1h',
-    // When true, an unverified account gets a 403 after correct credentials.
-    requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
-    // 'redis' reads the epochs the user-service publishes; this database stops being their source.
-    epochSource: process.env.AUTH_EPOCH_SOURCE ?? 'db',
-    hs256Enabled: process.env.AUTH_HS256_ENABLED !== 'false',
-    // Off answers 410 on every /auth route once the gateway sends them to the user-service.
-    routesEnabled: process.env.AUTH_ROUTES_ENABLED !== 'false',
     jwksUrl: process.env.AUTH_JWKS_URL,
     issuer: process.env.JWT_ISSUER,
     audience: process.env.JWT_AUDIENCE,
@@ -78,20 +64,9 @@ export default () => ({
     timeoutMs: parseIntOr(process.env.USER_SERVICE_TIMEOUT_MS, 500),
   },
   userDirectory: {
-    source: process.env.USER_DIRECTORY_SOURCE ?? 'local',
     notFoundGrace: process.env.USER_DIRECTORY_NOT_FOUND_GRACE ?? '10m',
   },
-  identity: {
-    // No default, like jwtAccessSecret: the env schema requires it, so a boot reaching here has it.
-    bucketKey: process.env.IDENTITY_BUCKET_KEY,
-  },
   ...mailConfig(),
-  argon2: {
-    // OWASP-minimum argon2id params (m=19 MiB, t=2, p=1).
-    memoryCost: parseInt(process.env.ARGON2_MEMORY_COST ?? '19456', 10),
-    timeCost: parseInt(process.env.ARGON2_TIME_COST ?? '2', 10),
-    parallelism: parseInt(process.env.ARGON2_PARALLELISM ?? '1', 10),
-  },
   ...throttleConfig(),
   payment: {
     // Declared but never dispatched on: payment.module.ts constructs Stripe unconditionally. This
@@ -132,18 +107,9 @@ export default () => ({
   },
   retention: {
     ...retentionConfig().retention,
-    // Off leaves the three auth-token tables alone while they are copied between databases.
-    authTokensEnabled: process.env.RETENTION_AUTH_TOKENS_ENABLED !== 'false',
     // Extra age past an idempotency key's own `expires_at`. Its TTL is already the retry window, so
     // this is only slack for clock skew between app and database.
     idempotencyGraceSec: parseIntOr(process.env.RETENTION_IDEMPOTENCY_GRACE_SEC, 3_600),
-    // Short: a spent single-use token has no use beyond answering a support question about a link
-    // clicked last week.
-    authTokenGraceDays: parseIntOr(process.env.RETENTION_AUTH_TOKEN_GRACE_DAYS, 7),
-    // Grace past REVOCATION for refresh tokens, deliberately much longer: a revoked token that
-    // comes back is the reuse signal, and that detection is a row lookup. Floored at 30 days in
-    // env.validation.
-    refreshTokenGraceDays: parseIntOr(process.env.RETENTION_REFRESH_TOKEN_GRACE_DAYS, 30),
     // How long a PUBLISHED outbox row is kept. Unpublished rows are never collected at any age.
     outboxDays: parseIntOr(process.env.RETENTION_OUTBOX_DAYS, 30),
     // How long an inbox claim is kept — the one retention number that is a correctness bound.

@@ -1,38 +1,14 @@
 import { useFakeClock } from '@jcool/testing/fake-clock';
-import type { UserFacade } from '@modules/user/application/public/user-facade.port';
 import { PermanentError } from '@shared/messaging/errors';
 import { DownstreamUnavailableError } from '@jcool/platform/resilience';
 import type { UserServiceClient, UserSummary } from '@shared/user-service/user-service.client';
-import type { UserContactPort } from '../application/ports/user-contact.port';
-import { LocalUserContactAdapter, RemoteUserContactAdapter, UserNotYetInDirectoryError } from './user-contact.adapters';
+import { RemoteUserContactAdapter, UserNotYetInDirectoryError } from './user-contact.adapters';
 
 const USER_ID = '0199a3b2-7c4d-8e5f-9a0b-1c2d3e4f5a6b';
 const SUMMARY: UserSummary = { id: USER_ID, email: 'buyer@example.com' };
 const NOW = new Date('2026-09-19T12:00:00.000Z');
 const GRACE_MS = 10 * 60_000;
 const minutesAgo = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
-
-describe('LocalUserContactAdapter', () => {
-  const build = (summary: UserSummary | null) => {
-    const getUserSummary = vi
-      .fn<UserFacade['getUserSummary']>()
-      .mockResolvedValue(summary && { ...summary, role: 'CUSTOMER' });
-    const adapter: UserContactPort = new LocalUserContactAdapter({ getUserSummary });
-    return { adapter, getUserSummary };
-  };
-
-  it("reads the user's address outside any transaction", async () => {
-    const { adapter, getUserSummary } = build(SUMMARY);
-
-    await expect(adapter.find(USER_ID, NOW)).resolves.toEqual({ email: SUMMARY.email });
-    expect(getUserSummary).toHaveBeenCalledWith(USER_ID);
-  });
-
-  // The local table is the source of truth, so a missing row is final however recent the event.
-  it('answers null for a user that does not exist', async () => {
-    await expect(build(null).adapter.find(USER_ID, NOW)).resolves.toBeNull();
-  });
-});
 
 describe('RemoteUserContactAdapter', () => {
   useFakeClock(NOW);

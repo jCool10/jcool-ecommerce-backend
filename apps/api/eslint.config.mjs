@@ -125,14 +125,6 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/modules/user/infrastructure/**/*.ts', 'src/shared/identity/identity.service.ts'],
-    ignores: ['**/*.spec.ts'],
-    rules: {
-      'no-restricted-imports': ['error', { paths: [nestLoggerBan], patterns: [uuidImportBan] }],
-      'no-restricted-syntax': ['error', ...logCallShape, ...randomUuidBan],
-    },
-  },
-  {
     files: ['scripts/**/*.ts'],
     ignores: ['**/*.spec.ts'],
     rules: {

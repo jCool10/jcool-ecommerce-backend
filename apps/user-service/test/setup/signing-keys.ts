@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomUUID, type KeyObject } from 'node:crypto';
 import { SignJWT } from 'jose';
 import type { Role } from '@jcool/platform/rbac';
-import { E2E_ES256_KID, E2E_JWT_ACCESS_SECRET, E2E_JWT_AUDIENCE, E2E_JWT_ISSUER } from './e2e-env';
+import { E2E_ES256_KID, E2E_JWT_AUDIENCE, E2E_JWT_ISSUER } from './e2e-env';
 
 function newP256Key(): KeyObject {
   return generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey;
@@ -38,7 +38,7 @@ export function signEs256WithForeignKey(claims: ForgedClaims, kid: string): Prom
     .sign(newP256Key());
 }
 
-/** The api's legacy token shape: HS256 on the shared secret, no issuer or audience. */
-export function signLegacyHs256(claims: ForgedClaims, secret = E2E_JWT_ACCESS_SECRET): Promise<string> {
+/** Forged: ES256 is the only verification path, so the secret cannot matter. */
+export function signHs256(claims: ForgedClaims, secret: string): Promise<string> {
   return withClaims(claims).setProtectedHeader({ alg: 'HS256', typ: 'JWT' }).sign(new TextEncoder().encode(secret));
 }

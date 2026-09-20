@@ -5,11 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
+import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { AppModule } from './app.module';
-import { CSRF_HEADER } from '@modules/user/interface/security';
 
 /**
  * Read off disk, not `import pkg from '../package.json'`: the SWC builder has `sourceRoot: "src"`,
@@ -43,20 +42,18 @@ async function bootstrap(): Promise<void> {
     app.set('trust proxy', trustProxy);
   }
 
-  // The default CSP blocks Swagger UI's inline assets, so it's disabled only when the docs are served.
+  // The default CSP blocks Swagger UI's inline bootstrap, so `script-src` is relaxed — and only that
+  // directive, and only when the docs are served.
   const swaggerEnabled = configService.get<boolean>('app.swaggerEnabled');
-  app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? false : undefined }));
+  app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? swaggerContentSecurityPolicy : undefined }));
 
-  // Credentials on so auth cookies can ride cross-origin XHR from a whitelisted origin.
+  // Every route here is Bearer-authenticated; cookies belong to the user-service's own origin rules.
   const corsOrigins = configService.get<string[]>('app.corsOrigins') ?? [];
   app.enableCors({
     origin: corsOrigins.length > 0 ? corsOrigins : false,
-    credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
-
-  app.use(cookieParser());
 
   // The global exception filter is wired via APP_FILTER (app.module) so it can inject CLS.
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
@@ -70,9 +67,8 @@ async function bootstrap(): Promise<void> {
       .setTitle('JCool E-commerce API')
       .setDescription(
         [
-          'Single-store e-commerce backend — six bounded contexts in one deployable process.',
+          'Single-store e-commerce backend — five bounded contexts in one deployable process.',
           '',
-          '- **User** — register/login, email verification, password reset, JWT + refresh rotation, sessions, RBAC.',
           '- **Catalog** — public product/SKU reads and search; admin CRUD behind `ADMIN`.',
           '- **Cart** — per-user cart lines, priced from the catalog at read time.',
           '- **Order** — checkout: the order, not the cart, is the source of truth for a transaction.',

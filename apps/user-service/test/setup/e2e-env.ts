@@ -4,7 +4,6 @@ export const E2E_IDENTITY_BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secre
 export const E2E_JWT_ISSUER = 'https://auth.jcool.test';
 export const E2E_JWT_AUDIENCE = 'jcool';
 export const E2E_ES256_KID = 'e2e-es256';
-export const E2E_JWT_ACCESS_SECRET = 'e2e-jwt-access-secret-not-a-real-secret-0000';
 export const E2E_CSRF_SECRET = 'e2e-csrf-secret-not-a-real-secret-000000000000';
 export const E2E_INTERNAL_API_TOKEN = 'e2e-internal-api-token-not-a-real-secret-000';
 // Nothing listens here, so an app that reaches the id service without being told to fails loudly.
@@ -15,7 +14,6 @@ export const E2E_BASE_ENV: Record<string, string> = {
   JWT_ES256_ACTIVE_KID: E2E_ES256_KID,
   JWT_ISSUER: E2E_JWT_ISSUER,
   JWT_AUDIENCE: E2E_JWT_AUDIENCE,
-  JWT_ACCESS_SECRET: E2E_JWT_ACCESS_SECRET,
   CSRF_SECRET: E2E_CSRF_SECRET,
   INTERNAL_API_TOKEN: E2E_INTERNAL_API_TOKEN,
   ID_SERVICE_URL: E2E_ID_SERVICE_URL,

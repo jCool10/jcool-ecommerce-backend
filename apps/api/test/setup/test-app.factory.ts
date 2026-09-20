@@ -3,19 +3,15 @@ import { ValidationPipe, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
-import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { expect } from 'vitest';
 import { AppModule } from '../../src/app.module';
+import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
-import { E2E_IDENTITY_BUCKET_KEY } from './e2e-constants';
 import { waitForRedisReady } from './redis-ready';
 import { userServiceStub } from './user-service-stub';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
-
-// Mirrors the CORS allow-list in main.ts, which takes it from the user module's cookie constants.
-const CSRF_HEADER = 'x-csrf-token';
 
 export type EnvOverrides = Record<string, string | undefined>;
 
@@ -38,7 +34,6 @@ export async function createTestApp(
   // logical db would let one file's TRUNCATE and cache keys reach into another's. See worker-resources.ts.
   process.env.DATABASE_URL = workerDatabaseUrl();
   process.env.REDIS_URL = workerRedisUrl();
-  process.env.JWT_ACCESS_SECRET ??= 'test-jwt-access-secret-not-a-real-secret-000'; // schema needs ≥32 chars
   // Payment defaults to the Stripe adapter, which refuses to construct without a webhook secret;
   // provide a dummy so AppModule boots. Signed-webhook e2e can override with its own known secret.
   process.env.PAYMENT_WEBHOOK_SECRET ??= 'whsec_test_not_a_real_secret_0000'; // schema needs ≥16 chars
@@ -48,9 +43,7 @@ export async function createTestApp(
   // Background drivers forced off so nothing runs behind a test's back — a tick firing mid-assertion
   // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Assigned
   // unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's .env into
-  // process.env, so from the second app onwards `??=` would inherit an untracked local file. The
-  // bucket key must also be identical across apps, or a user's id and its token ids split buckets.
-  process.env.IDENTITY_BUCKET_KEY = E2E_IDENTITY_BUCKET_KEY;
+  // process.env, so from the second app onwards `??=` would inherit an untracked local file.
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
@@ -61,7 +54,7 @@ export async function createTestApp(
   // every app in every file 8 seconds of doing nothing. Nothing here asserts on the window's length —
   // `health-shutdown.e2e-spec.ts` reads the readiness flag, which flips before the wait.
   process.env.SHUTDOWN_GRACE_PERIOD_MS = '0';
-  // The auth mode itself comes from vitest-e2e.config.mts; only the stub's port is known this late.
+  // Both URLs are placeholders in vitest-e2e.config.mts; only the stub's port is known this late.
   const userService = await userServiceStub();
   process.env.AUTH_JWKS_URL = userService.jwksUrl;
   process.env.USER_SERVICE_INTERNAL_URL = userService.url;
@@ -115,15 +108,13 @@ export async function createTestApp(
       app.set('trust proxy', trustProxy);
     }
     const swaggerEnabled = configService.get<boolean>('app.swaggerEnabled');
-    app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? false : undefined }));
+    app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? swaggerContentSecurityPolicy : undefined }));
     const corsOrigins = configService.get<string[]>('app.corsOrigins') ?? [];
     app.enableCors({
       origin: corsOrigins.length > 0 ? corsOrigins : false,
-      credentials: true,
       methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
+      allowedHeaders: ['Content-Type', 'Authorization'],
     });
-    app.use(cookieParser());
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     try {
       // HttpExceptionFilter is wired via APP_FILTER in AppModule (needs CLS injection).

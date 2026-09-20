@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "The one access-token check every service runs: HS256 or ES256 by header, then denylist and session epoch",
+  "description": "The one access-token check every service runs: ES256, then denylist and session epoch",
   "files": [
     "dist"
   ],

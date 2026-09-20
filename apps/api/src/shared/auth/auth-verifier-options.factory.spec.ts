@@ -53,8 +53,6 @@ class JwksServer {
 
 const config = (overrides: Record<string, unknown> = {}) =>
   fakeConfigService({
-    'auth.hs256Enabled': true,
-    'auth.jwtAccessSecret': 'legacy-secret',
     'auth.issuer': ISSUER,
     'auth.audience': AUDIENCE,
     'userService.timeoutMs': 200,
@@ -64,17 +62,6 @@ const config = (overrides: Record<string, unknown> = {}) =>
 const CACHE_MAX_AGE_MS = 600_000;
 
 describe('authVerifierOptions', () => {
-  it('takes the legacy path from config', () => {
-    expect(authVerifierOptions(config({ 'auth.hs256Enabled': false })).hs256).toEqual({
-      enabled: false,
-      secret: 'legacy-secret',
-    });
-  });
-
-  it('refuses ES256 until a JWKS URL is set', () => {
-    expect(authVerifierOptions(config()).es256).toBeUndefined();
-  });
-
   describe('with a JWKS URL', () => {
     let jwks: JwksServer;
     let url: string;
@@ -86,11 +73,7 @@ describe('authVerifierOptions', () => {
 
     afterEach(() => jwks.stop());
 
-    const es256 = () => {
-      const options = authVerifierOptions(config({ 'auth.jwksUrl': url })).es256;
-      if (!options) throw new Error('expected an ES256 path');
-      return options;
-    };
+    const es256 = () => authVerifierOptions(config({ 'auth.jwksUrl': url })).es256;
     const verify = (token: string, { keys, issuer, audience } = es256()) =>
       jwtVerify(token, keys, { algorithms: ['ES256'], issuer, audience });
 

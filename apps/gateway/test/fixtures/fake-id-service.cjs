@@ -13,6 +13,8 @@ http
     const control = /^\/__mode\/(ok|503|hang)$/.exec(req.url ?? '');
     if (control) {
       mode = control[1];
+      // Declared text/plain so the echo cannot be sniffed as markup.
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(mode);
       return;
     }

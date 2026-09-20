@@ -17,16 +17,11 @@ export default () => ({
   ...databaseConfig(),
   ...redisConfig(),
   auth: {
-    // Must equal the api's: both sides of a cutover hand out tokens that live this long.
     jwtAccessTtl: process.env.JWT_ACCESS_TTL ?? '5m',
     refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '7d',
     emailVerificationTtl: process.env.EMAIL_VERIFICATION_TTL ?? '24h',
     passwordResetTtl: process.env.PASSWORD_RESET_TTL ?? '1h',
     requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
-    // Accepts the api's legacy tokens until the cutover window closes.
-    hs256Enabled: process.env.AUTH_HS256_ENABLED !== 'false',
-    jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
-    // Set to the api's JWT_ACCESS_SECRET, so CSRF cookies already out there stay valid here.
     csrfSecret: process.env.CSRF_SECRET,
     es256PrivateKeys: process.env.JWT_ES256_PRIVATE_KEYS,
     es256ActiveKid: process.env.JWT_ES256_ACTIVE_KID,

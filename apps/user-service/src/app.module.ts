@@ -41,10 +41,6 @@ import { UserModule } from './modules/user/user.module';
       imports: [SessionStateModule, AccessTokenKeysModule],
       inject: [ConfigService, Es256SigningKeys],
       useFactory: (config: ConfigService, keys: Es256SigningKeys) => ({
-        hs256: {
-          enabled: config.getOrThrow<boolean>('auth.hs256Enabled'),
-          secret: config.get<string>('auth.jwtAccessSecret'),
-        },
         es256: {
           keys: createLocalJWKSet(keys.jwks),
           issuer: config.getOrThrow<string>('auth.issuer'),

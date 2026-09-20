@@ -41,20 +41,17 @@ export class InternalApiController {
   }
 
   /**
-   * What this process actually loaded, as fingerprints. The cutover fails in ways no smoke test
-   * catches when a key here differs from the api's — ids route to the wrong bucket, CSRF cookies
-   * stop validating — so the precheck compares these against the api instead of trusting that the
-   * right values were pasted into two dashboards.
+   * What this process actually loaded, as fingerprints. A wrong key fails in ways no smoke test
+   * catches — ids route to the wrong bucket, CSRF cookies stop validating — so the precheck reads
+   * them back instead of trusting that the right values were pasted into a dashboard.
    */
   @Get('cutover/digest')
-  cutoverDigest(): Record<string, string | boolean> {
+  cutoverDigest(): Record<string, string> {
     const fingerprint = (key: string) => identityKeyFingerprint(this.config.getOrThrow<string>(key));
     return {
       identityBucketKey: fingerprint('identity.bucketKey'),
-      jwtAccessSecret: fingerprint('auth.jwtAccessSecret'),
       csrfSecret: fingerprint('auth.csrfSecret'),
       accessTtl: this.config.getOrThrow<string>('auth.jwtAccessTtl'),
-      hs256Enabled: this.config.getOrThrow<boolean>('auth.hs256Enabled'),
       issuer: this.config.getOrThrow<string>('auth.issuer'),
       audience: this.config.getOrThrow<string>('auth.audience'),
     };

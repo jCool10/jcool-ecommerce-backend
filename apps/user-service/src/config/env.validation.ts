@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Min, MinLength, ValidateIf } from 'class-validator';
+import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Min, MinLength } from 'class-validator';
 import { MIN_BUCKET_KEY_LENGTH } from '@jcool/id-codec';
 import {
   AppEnv,
@@ -49,16 +49,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsString()
   @IsNotEmpty()
   JWT_AUDIENCE!: string;
-
-  @IsOptional()
-  @IsIn(BOOLEAN_STRINGS)
-  AUTH_HS256_ENABLED?: string;
-
-  // Needed only while the legacy path is on.
-  @ValidateIf((env: EnvironmentVariables) => env.AUTH_HS256_ENABLED !== 'false')
-  @IsString()
-  @MinLength(32)
-  JWT_ACCESS_SECRET?: string;
 
   @IsString()
   @MinLength(32)

@@ -148,8 +148,6 @@ services:
       PORT: 3000
       # The gateway, and only the gateway, names the client.
       TRUST_PROXY: 1
-      # Mail links point at the published gateway; .env's value is for the app run on the host.
-      APP_PUBLIC_URL: http://localhost:${GATEWAY_HOST_PORT:-8080}
       # Inside the compose network the app reaches services by NAME, not the host-mapped ports.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       REDIS_URL: redis://redis:6379
@@ -159,13 +157,7 @@ services:
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      # The cutover switches, defaulting to the api as it is today. Flip one per step:
-      #   AUTH_EPOCH_SOURCE=redis USER_DIRECTORY_SOURCE=remote docker compose up -d app
-      AUTH_EPOCH_SOURCE: ${AUTH_EPOCH_SOURCE:-db}
-      USER_DIRECTORY_SOURCE: ${USER_DIRECTORY_SOURCE:-local}
-      AUTH_ROUTES_ENABLED: ${AUTH_ROUTES_ENABLED:-true}
-      AUTH_HS256_ENABLED: ${AUTH_HS256_ENABLED:-true}
-      # Always set: it only adds a way in, and nothing issues ES256 until the user-service runs.
+      # The user-service signs every token this app accepts, so it must be up for auth to work.
       AUTH_JWKS_URL: http://user-service:3000/.well-known/jwks.json
       JWT_ISSUER: http://localhost:8080
       JWT_AUDIENCE: jcool-api

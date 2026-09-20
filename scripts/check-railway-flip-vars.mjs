@@ -10,17 +10,8 @@ const SOURCE_PATH = new URL('../.railway/railway.ts', import.meta.url);
 const source = readFileSync(SOURCE_PATH, 'utf8');
 
 const REQUIRED = {
-  'service(API_SERVICE': [
-    'AUTH_EPOCH_SOURCE',
-    'AUTH_HS256_ENABLED',
-    'AUTH_JWKS_URL',
-    'AUTH_ROUTES_ENABLED',
-    'RETENTION_AUTH_TOKENS_ENABLED',
-    'TRUST_PROXY',
-    'USER_DIRECTORY_SOURCE',
-  ],
+  'service(API_SERVICE': ['TRUST_PROXY'],
   "service('gateway'": ['AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED', 'AUTH_WRITE_FREEZE', 'TRUSTED_PROXY_CIDRS'],
-  "service('user-service'": ['AUTH_HS256_ENABLED'],
 };
 
 function blockAfter(marker) {

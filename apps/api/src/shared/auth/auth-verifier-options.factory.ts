@@ -5,24 +5,17 @@ import type { AuthVerifierOptions } from '@jcool/auth-verifier';
 // How long a failed fetch leaves the endpoint alone, so an outage costs one timeout, not one per request.
 const RETRY_AFTER_FAILURE_MS = 30_000;
 
-/**
- * No JWKS URL means no ES256 path at all. Setting one only adds a way in, so it can go live before
- * anything issues ES256 tokens.
- */
+/** The user-service's JWKS is the only key source; the env schema requires it. */
 export function authVerifierOptions(config: ConfigService): AuthVerifierOptions {
-  const jwksUrl = config.get<string>('auth.jwksUrl');
   return {
-    hs256: {
-      enabled: config.getOrThrow<boolean>('auth.hs256Enabled'),
-      secret: config.get<string>('auth.jwtAccessSecret'),
+    es256: {
+      keys: jwksServingStale(
+        new URL(config.getOrThrow<string>('auth.jwksUrl')),
+        config.getOrThrow<number>('userService.timeoutMs'),
+      ),
+      issuer: config.getOrThrow<string>('auth.issuer'),
+      audience: config.getOrThrow<string>('auth.audience'),
     },
-    ...(jwksUrl && {
-      es256: {
-        keys: jwksServingStale(new URL(jwksUrl), config.getOrThrow<number>('userService.timeoutMs')),
-        issuer: config.getOrThrow<string>('auth.issuer'),
-        audience: config.getOrThrow<string>('auth.audience'),
-      },
-    }),
   };
 }
 

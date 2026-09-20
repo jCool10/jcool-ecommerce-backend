@@ -19,8 +19,12 @@ const ALLOWED_ORIGIN = 'https://shop.system-test.invalid';
 const API_ENV = {
   DATABASE_URL: 'postgres://api:api@postgres:5432/api',
   REDIS_URL: 'redis://redis:6379',
-  JWT_ACCESS_SECRET: randomBytes(32).toString('hex'),
-  IDENTITY_BUCKET_KEY: randomBytes(32).toString('hex'),
+  // Nothing listens there: the api boots and refuses every token, which is all these cases need.
+  AUTH_JWKS_URL: 'http://user-service.invalid/.well-known/jwks.json',
+  JWT_ISSUER: 'https://auth.system-test.invalid',
+  JWT_AUDIENCE: 'jcool-system-test',
+  USER_SERVICE_INTERNAL_URL: 'http://user-service.invalid',
+  INTERNAL_API_TOKEN: randomBytes(32).toString('hex'),
   PAYMENT_WEBHOOK_SECRET: randomBytes(16).toString('hex'),
   SMTP_URL: 'smtp://smtp.invalid:587',
   MAIL_FROM: 'system-test@example.invalid',
@@ -43,12 +47,7 @@ const SAMPLES: { name: string; path: string; init?: RequestInit }[] = [
   { name: 'the public catalog', path: '/products' },
   { name: 'a product that does not exist', path: '/products/does-not-exist' },
   { name: 'an unknown route', path: '/nope' },
-  {
-    name: 'a failed login',
-    path: '/auth/login',
-    init: json({ email: 'nobody@system-test.invalid', password: 'wrong password' }),
-  },
-  { name: 'a session read without a token', path: '/auth/me' },
+  { name: 'a route auth has moved away from', path: '/auth/me' },
   { name: 'an admin route without a token', path: '/admin/orders' },
   {
     name: 'a webhook with a bad signature',
@@ -57,13 +56,13 @@ const SAMPLES: { name: string; path: string; init?: RequestInit }[] = [
   },
   {
     name: 'a CORS preflight from the allowed origin',
-    path: '/auth/login',
+    path: '/orders',
     init: {
       method: 'OPTIONS',
       headers: {
         origin: ALLOWED_ORIGIN,
         'access-control-request-method': 'POST',
-        'access-control-request-headers': 'content-type,authorization,x-csrf-token',
+        'access-control-request-headers': 'content-type,authorization',
       },
     },
   },
@@ -80,9 +79,6 @@ const contract = (res: Response) =>
       .filter(([name]) => !DROPPED.has(name))
       .map(([name, value]) => [name, VOLATILE.test(name) ? '*' : value]),
   );
-
-const cookieAttributes = (res: Response) =>
-  res.headers.getSetCookie().map((cookie) => cookie.replace(/=[^;]*/, '=*').replace(/Expires=[^;]+/i, 'Expires=*'));
 
 describe('gateway: the api behind it', () => {
   let network: StartedNetwork;
@@ -172,21 +168,6 @@ describe('gateway: the api behind it', () => {
 
     expect(through.status).toBe(straight.status);
     expect(contract(through)).toEqual(contract(straight));
-  });
-
-  it('keeps every attribute of the auth cookies', async () => {
-    const credentials = {
-      email: `cookies-${Date.now()}@system-test.invalid`,
-      password: 'correct horse battery staple',
-    };
-    expect((await direct('/auth/register', json(credentials))).status).toBe(201);
-
-    const straight = await direct('/auth/login', json(credentials));
-    const through = await proxied('/auth/login', json(credentials));
-
-    expect(through.status).toBe(200);
-    expect(cookieAttributes(through)).toEqual(cookieAttributes(straight));
-    expect(cookieAttributes(through).join('; ')).toMatch(/Path=\/auth.*HttpOnly.*Secure.*SameSite=Strict/);
   });
 
   it('keys the IP throttle on the address the edge saw, whatever the client claims', async () => {

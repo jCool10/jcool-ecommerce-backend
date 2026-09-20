@@ -10,7 +10,6 @@ const BASE = {
   JWT_ES256_ACTIVE_KID: 'k1',
   JWT_ISSUER: 'https://users.test.invalid',
   JWT_AUDIENCE: 'jcool',
-  JWT_ACCESS_SECRET: 's'.repeat(32),
   CSRF_SECRET: 'c'.repeat(32),
   ID_SERVICE_URL: 'http://gateway:4000',
   INTERNAL_API_TOKEN: 't'.repeat(32),
@@ -28,20 +27,13 @@ describe('validate', () => {
     },
   );
 
-  it('requires the HS256 secret only while the legacy path is on', () => {
-    expect(() => validate({ ...BASE, JWT_ACCESS_SECRET: undefined })).toThrow('JWT_ACCESS_SECRET');
-    expect(() => validate({ ...BASE, JWT_ACCESS_SECRET: undefined, AUTH_HS256_ENABLED: 'false' })).not.toThrow();
-  });
-
-  it.each([
-    'AUTH_HS256_ENABLED',
-    'AUTH_REQUIRE_VERIFIED_EMAIL',
-    'IDENTITY_PIN_BOOTSTRAP',
-    'SESSION_EPOCH_RECONCILE_ENABLED',
-  ])('accepts only true or false for %s', (name) => {
-    expect(() => validate({ ...BASE, [name]: '0' })).toThrow(name);
-    expect(() => validate({ ...BASE, [name]: 'false' })).not.toThrow();
-  });
+  it.each(['AUTH_REQUIRE_VERIFIED_EMAIL', 'IDENTITY_PIN_BOOTSTRAP', 'SESSION_EPOCH_RECONCILE_ENABLED'])(
+    'accepts only true or false for %s',
+    (name) => {
+      expect(() => validate({ ...BASE, [name]: '0' })).toThrow(name);
+      expect(() => validate({ ...BASE, [name]: 'false' })).not.toThrow();
+    },
+  );
 
   it.each(['gateway:4000', 'ftp://gateway:4000'])('rejects %s as ID_SERVICE_URL', (url) => {
     expect(() => validate({ ...BASE, ID_SERVICE_URL: url })).toThrow('ID_SERVICE_URL');

@@ -8,7 +8,6 @@ import {
   E2E_CSRF_SECRET,
   E2E_IDENTITY_BUCKET_KEY,
   E2E_INTERNAL_API_TOKEN,
-  E2E_JWT_ACCESS_SECRET,
   E2E_JWT_AUDIENCE,
   E2E_JWT_ISSUER,
 } from '../setup/e2e-env';
@@ -114,15 +113,13 @@ describe('Internal service-to-service API (integration)', () => {
   });
 
   describe('GET /internal/v1/cutover/digest', () => {
-    it('fingerprints the keys this process loaded, for the cutover precheck to compare with the api', async () => {
+    it('fingerprints the keys this process loaded', async () => {
       const { body } = await internal('/cutover/digest').expect(200);
 
       expect(body).toEqual({
         identityBucketKey: identityKeyFingerprint(E2E_IDENTITY_BUCKET_KEY),
-        jwtAccessSecret: identityKeyFingerprint(E2E_JWT_ACCESS_SECRET),
         csrfSecret: identityKeyFingerprint(E2E_CSRF_SECRET),
         accessTtl: '5m',
-        hs256Enabled: true,
         issuer: E2E_JWT_ISSUER,
         audience: E2E_JWT_AUDIENCE,
       });
@@ -131,7 +128,7 @@ describe('Internal service-to-service API (integration)', () => {
     it('never answers with a secret itself', async () => {
       const { text } = await internal('/cutover/digest').expect(200);
 
-      for (const secret of [E2E_IDENTITY_BUCKET_KEY, E2E_JWT_ACCESS_SECRET, E2E_CSRF_SECRET]) {
+      for (const secret of [E2E_IDENTITY_BUCKET_KEY, E2E_CSRF_SECRET]) {
         expect(text).not.toContain(secret);
       }
     });

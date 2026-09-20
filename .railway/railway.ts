@@ -11,26 +11,11 @@ const USER_SERVICE_PORT = '3000';
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
-  'APP_PUBLIC_URL',
-  'ARGON2_MEMORY_COST',
-  'ARGON2_PARALLELISM',
-  'ARGON2_TIME_COST',
-  // AUTH_*, RETENTION_AUTH_TOKENS_ENABLED and USER_DIRECTORY_SOURCE switch the user-service cutover,
-  // each by hand at its RUNBOOK step.
-  'AUTH_EPOCH_SOURCE',
-  'AUTH_HS256_ENABLED',
-  'AUTH_JWKS_URL',
-  'AUTH_ROUTES_ENABLED',
   'DATABASE_URL',
-  'EMAIL_VERIFICATION_TTL',
   'GRAFANA_ADMIN_PASSWORD',
-  'IDENTITY_BUCKET_KEY',
-  'JWT_ACCESS_SECRET',
-  'JWT_ACCESS_TTL',
   'LOG_LEVEL',
   'MAIL_FROM',
   'NODE_ENV',
-  'PASSWORD_RESET_TTL',
   'PAYMENT_WEBHOOK_SECRET',
   'POSTGRES_DB',
   'POSTGRES_HOST_PORT',
@@ -38,8 +23,6 @@ const API_VARIABLES = [
   'POSTGRES_USER',
   'REDIS_HOST_PORT',
   'REDIS_URL',
-  'REFRESH_TOKEN_TTL',
-  'RETENTION_AUTH_TOKENS_ENABLED',
   'SEARCH_API_KEY',
   'SEARCH_ENABLED',
   'SEARCH_HOST_PORT',
@@ -53,7 +36,6 @@ const API_VARIABLES = [
   'THROTTLE_ENABLED',
   // Flipped by hand with the public domain (RUNBOOK), so an apply never reverts it.
   'TRUST_PROXY',
-  'USER_DIRECTORY_SOURCE',
 ];
 
 const USER_SERVICE_VARIABLES = [
@@ -61,14 +43,12 @@ const USER_SERVICE_VARIABLES = [
   'ARGON2_MEMORY_COST',
   'ARGON2_PARALLELISM',
   'ARGON2_TIME_COST',
-  'AUTH_HS256_ENABLED',
   'CSRF_SECRET',
   'EMAIL_VERIFICATION_TTL',
   'IDENTITY_BUCKET_KEY',
   'IDENTITY_PIN_BOOTSTRAP',
   'INTERNAL_API_TOKEN',
   'INTERNAL_API_TOKEN_PREVIOUS',
-  'JWT_ACCESS_SECRET',
   'JWT_ACCESS_TTL',
   'JWT_AUDIENCE',
   'JWT_ES256_ACTIVE_KID',
@@ -104,11 +84,13 @@ export default defineRailway(() => {
       ...preserved(API_VARIABLES),
       // Pinned rather than left to Railway's default: the gateway dials it.
       PORT: API_PORT,
-      // Read only once a switch above turns on the path that needs them.
+      // Every request depends on these: the api verifies what the user-service signed, and reads
+      // an epoch or an address from it. Referenced, not preserved, so the two cannot drift.
       JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
       JWT_AUDIENCE: '${{user-service.JWT_AUDIENCE}}',
       INTERNAL_API_TOKEN: '${{user-service.INTERNAL_API_TOKEN}}',
       USER_SERVICE_INTERNAL_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
+      AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
     },
   });
 
@@ -173,7 +155,7 @@ export default defineRailway(() => {
     defaultMountPath: '/var/lib/postgresql/data',
   });
 
-  // Dark: no domain, and the gateway's AUTH_UPSTREAM still names the api.
+  // No domain of its own: the gateway's AUTH_UPSTREAM is the only way in.
   const userService = service('user-service', {
     build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/user-service/Dockerfile' },
     deploy: {

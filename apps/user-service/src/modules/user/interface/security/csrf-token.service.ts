@@ -5,8 +5,8 @@ import { ConfigService } from '@nestjs/config';
 /**
  * Signed double-submit tokens (`random.hmac(random)`): the same value sits in a readable cookie and
  * must be echoed in a header, and a valid signature is required as well — so an attacker who can set
- * a cookie still cannot forge one. The HMAC key is derived from CSRF_SECRET exactly as the api
- * derives it from JWT_ACCESS_SECRET, so with the two equal a cookie either one issued verifies here.
+ * a cookie still cannot forge one. The HMAC key is derived from CSRF_SECRET, so rotating that
+ * secret invalidates every cookie in circulation.
  */
 @Injectable()
 export class CsrfTokenService {

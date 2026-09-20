@@ -94,47 +94,14 @@ describe('configuration — Sentry', () => {
   });
 });
 
-describe('configuration — auth and user-directory modes', () => {
+describe('configuration — the user-service the api depends on', () => {
   isolateEnv([
-    'AUTH_EPOCH_SOURCE',
-    'USER_DIRECTORY_SOURCE',
-    'AUTH_HS256_ENABLED',
-    'AUTH_ROUTES_ENABLED',
-    'RETENTION_AUTH_TOKENS_ENABLED',
     'AUTH_JWKS_URL',
     'USER_SERVICE_TIMEOUT_MS',
     'USER_DIRECTORY_NOT_FOUND_GRACE',
     'ORDER_PAID_CONSUMER_ATTEMPTS',
     'ORDER_PAID_CONSUMER_BACKOFF_CAP_MS',
   ]);
-
-  it('keeps every flag on the behaviour that predates the user-service', () => {
-    const config = configuration();
-
-    expect(config.auth).toMatchObject({
-      epochSource: 'db',
-      hs256Enabled: true,
-      routesEnabled: true,
-      jwksUrl: undefined,
-    });
-    expect(config.userDirectory.source).toBe('local');
-    expect(config.retention.authTokensEnabled).toBe(true);
-  });
-
-  it('reads the post-cutover modes', () => {
-    Object.assign(process.env, {
-      AUTH_EPOCH_SOURCE: 'redis',
-      USER_DIRECTORY_SOURCE: 'remote',
-      AUTH_HS256_ENABLED: 'false',
-      AUTH_ROUTES_ENABLED: 'false',
-      RETENTION_AUTH_TOKENS_ENABLED: 'false',
-    });
-    const config = configuration();
-
-    expect(config.auth).toMatchObject({ epochSource: 'redis', hs256Enabled: false, routesEnabled: false });
-    expect(config.userDirectory.source).toBe('remote');
-    expect(config.retention.authTokensEnabled).toBe(false);
-  });
 
   it('defaults the user-service call and the order.paid ladder', () => {
     const config = configuration();

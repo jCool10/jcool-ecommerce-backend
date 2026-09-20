@@ -2,13 +2,12 @@
  * The gate in front of the cutover: everything that has to be true before writes are frozen.
  *
  *   API_DATABASE_URL=… USER_DATABASE_URL=… REDIS_URL=… API_URL=… GATEWAY_URL=… \
- *     USER_SERVICE_URL=… ID_SERVICE_URL=… INTERNAL_API_TOKEN=… \
- *     JWT_ACCESS_SECRET=… JWT_ACCESS_TTL=… tsx scripts/cutover/precheck.ts
+ *     USER_SERVICE_URL=… ID_SERVICE_URL=… INTERNAL_API_TOKEN=… CSRF_SECRET=… \
+ *     tsx scripts/cutover/precheck.ts
  *
- * JWT_ACCESS_SECRET and JWT_ACCESS_TTL are the api's, and only their fingerprints are compared: a
- * mismatch here means CSRF cookies stop validating, or tokens outlive what the other side expects.
- * Exits non-zero on the first thing that would make the copy unsafe, and prints the manual checks
- * it cannot make itself.
+ * Only fingerprints of the secrets are compared: a mismatch means ids route to the wrong bucket or
+ * CSRF cookies stop validating. Exits non-zero on the first thing that would make the copy unsafe,
+ * and prints the manual checks it cannot make itself.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -26,10 +25,7 @@ const MEMORY_HEADROOM = 0.8;
 
 interface Digest {
   identityBucketKey: string;
-  jwtAccessSecret: string;
   csrfSecret: string;
-  accessTtl: string;
-  hs256Enabled: boolean;
 }
 
 const failures: string[] = [];
@@ -148,14 +144,9 @@ async function checkDigest(api: Pool, userServiceUrl: string, token: string): Pr
     `pinned ${pinned ?? 'nothing'}, user-service has ${digest.identityBucketKey}`,
   );
 
-  const apiSecret = identityKeyFingerprint(required('JWT_ACCESS_SECRET'));
-  check(digest.jwtAccessSecret === apiSecret, "the user-service verifies the api's HS256 tokens");
-  check(digest.csrfSecret === apiSecret, 'CSRF cookies issued by the api stay valid');
-  check(digest.hs256Enabled, 'the user-service still accepts HS256, as tokens are in flight');
   check(
-    digest.accessTtl === required('JWT_ACCESS_TTL'),
-    'both sides mint access tokens with the same lifetime',
-    `api ${process.env.JWT_ACCESS_TTL}, user-service ${digest.accessTtl}`,
+    digest.csrfSecret === identityKeyFingerprint(required('CSRF_SECRET')),
+    'CSRF cookies already in circulation stay valid',
   );
 }
 
@@ -184,8 +175,7 @@ async function main(): Promise<void> {
   // Read before any check runs: a missing one is an operator mistake, not a red gate.
   const userServiceUrl = required('USER_SERVICE_URL');
   const internalToken = required('INTERNAL_API_TOKEN');
-  required('JWT_ACCESS_SECRET');
-  required('JWT_ACCESS_TTL');
+  required('CSRF_SECRET');
 
   const api = new Pool({ connectionString: required('API_DATABASE_URL'), max: 2 });
   const user = new Pool({ connectionString: required('USER_DATABASE_URL'), max: 2 });

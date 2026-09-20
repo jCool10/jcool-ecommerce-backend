@@ -4,6 +4,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { CSRF_HEADER } from './modules/user/interface/security';
 
 /** Served under `/auth` so the gateway's one auth route covers it. */
@@ -19,9 +20,9 @@ export function configureApp(app: NestExpressApplication): void {
     app.set('trust proxy', trustProxy);
   }
 
-  // The default CSP blocks Swagger UI's inline assets.
+  // The default CSP blocks Swagger UI's inline bootstrap, so `script-src` is relaxed for it alone.
   const swaggerEnabled = config.get<boolean>('app.swaggerEnabled') === true;
-  app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? false : undefined }));
+  app.use(helmet({ contentSecurityPolicy: swaggerEnabled ? swaggerContentSecurityPolicy : undefined }));
 
   const corsOrigins = config.get<string[]>('app.corsOrigins') ?? [];
   app.enableCors({

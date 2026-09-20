@@ -1,12 +1,12 @@
 # user-service
 
-Owns users, sessions and every `/auth` route. It serves the same contract as the api's user module, from its own Postgres, and signs ES256 access tokens that anything can verify from its JWKS. It is the only writer of the `auth:*` keys in Redis.
+Owns users, sessions and every `/auth` route, from its own Postgres, and signs the ES256 access tokens every other service verifies from its JWKS. It is the only writer of the `auth:*` keys in Redis.
 
-**Status: dark.** It is deployed on the private network with no domain, and the gateway still sends `/auth` to the api (`AUTH_UPSTREAM` unset). Production auth is served by the api until the cutover. See [RUNBOOK.md, "Run the user-service dark"](../../RUNBOOK.md#run-the-user-service-dark).
+The gateway sends `/auth` and `/.well-known/jwks.json` here; the api serves everything else and only verifies what this service signed.
 
 ## API
 
-`/auth/*` is the api's contract, request for request: same routes, DTOs, status codes, error envelope, cookies (`refresh_token`, `csrf_token` on `Path=/auth`) and throttles. `test/system` holds the proof, comparing the OpenAPI document and live answers against the api image. The document itself is at `/auth/docs` when `SWAGGER_ENABLED` is on.
+`/auth/*`: routes, DTOs, status codes, error envelope, cookies (`refresh_token`, `csrf_token` on `Path=/auth`) and throttles. The OpenAPI document is at `/auth/docs` when `SWAGGER_ENABLED` is on.
 
 | Route | Answer |
 | --- | --- |
@@ -19,7 +19,7 @@ Owns users, sessions and every `/auth` route. It serves the same contract as the
 
 ### Access tokens
 
-Header `{ alg: "ES256", kid, typ: "JWT" }`, claims `sub`, `role`, `epoch`, `jti`, `iss` (`JWT_ISSUER`), `aud` (`JWT_AUDIENCE`), `iat`, `exp`. `@jcool/auth-verifier` checks the signature, then the denylist, then the epoch. While `AUTH_HS256_ENABLED` is on, it also accepts the api's HS256 tokens.
+Header `{ alg: "ES256", kid, typ: "JWT" }`, claims `sub`, `role`, `epoch`, `jti`, `iss` (`JWT_ISSUER`), `aud` (`JWT_AUDIENCE`), `iat`, `exp`. `@jcool/auth-verifier` checks the signature, then the denylist, then the epoch. ES256 is its only verification path: any other `alg` is refused before its signature is looked at.
 
 ## Published Language: Redis keys
 
@@ -46,16 +46,14 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 
 | Variable | Default | |
 | --- | --- | --- |
-| `IDENTITY_BUCKET_KEY` | required | The api's key. Permanent. |
+| `IDENTITY_BUCKET_KEY` | required | The key every existing user id was minted under. Permanent. |
 | `IDENTITY_PIN_BOOTSTRAP` | `false` | `true` writes the key pin on an empty database. Off, the boot only compares. |
 | `JWT_ES256_PRIVATE_KEYS` | required | `kid:pem[,kid:pem]`, P-256 only; `\n` escapes are accepted in the PEM. |
 | `JWT_ES256_ACTIVE_KID` | required | The kid that signs. It must be in the list. |
 | `JWT_ISSUER`, `JWT_AUDIENCE` | required | Stamped on every token and pinned by verifiers. |
-| `JWT_ACCESS_TTL` | `5m` | Must equal the api's. |
-| `JWT_ACCESS_SECRET` | required while HS256 is on | The api's, to verify its HS256 tokens. |
-| `AUTH_HS256_ENABLED` | `true` | `false` refuses every HS256 token. |
-| `CSRF_SECRET` | required | The api's `JWT_ACCESS_SECRET`, so its CSRF cookies stay valid. |
-| `REFRESH_TOKEN_TTL`, `EMAIL_VERIFICATION_TTL`, `PASSWORD_RESET_TTL`, `AUTH_REQUIRE_VERIFIED_EMAIL`, `ARGON2_*` | as in the api | |
+| `JWT_ACCESS_TTL` | `5m` | How long a revoked-but-unexpired token stays usable. |
+| `CSRF_SECRET` | required | Rotating it invalidates every CSRF cookie in circulation. |
+| `REFRESH_TOKEN_TTL`, `EMAIL_VERIFICATION_TTL`, `PASSWORD_RESET_TTL`, `AUTH_REQUIRE_VERIFIED_EMAIL`, `ARGON2_*` | `7d`, `24h`, `1h`, `false`, argon2id defaults | |
 | `ID_SERVICE_URL` | required | The gateway's internal listener, never a replica. |
 | `ID_SERVICE_TIMEOUT_MS` | `2000` | Covers the gateway's retries, not one attempt. |
 | `INTERNAL_API_TOKEN` | required | At least 32 characters. |
@@ -86,5 +84,5 @@ docker compose --profile user-service up -d --build user-service   # user-postgr
 curl -s http://127.0.0.1:3002/.well-known/jwks.json
 pnpm --filter @jcool/user-service test                        # unit
 pnpm --filter @jcool/user-service test:e2e                    # Postgres, Redis and Mailpit via Testcontainers
-pnpm --filter @jcool/user-service test:system                 # built images: the api's /auth contract, minting through the gateway
+pnpm --filter @jcool/user-service test:system                 # the data copy, against both migration sets
 ```

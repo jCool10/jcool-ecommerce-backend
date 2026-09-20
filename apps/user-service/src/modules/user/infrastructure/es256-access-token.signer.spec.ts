@@ -87,7 +87,7 @@ describe('Es256AccessTokenSigner', () => {
       isDenylisted: () => Promise.resolve(false),
     };
     const verifier = new AccessTokenVerifier(
-      { hs256: { enabled: false }, es256: { keys: createLocalJWKSet(keys.jwks), issuer: ISSUER, audience: AUDIENCE } },
+      { es256: { keys: createLocalJWKSet(keys.jwks), issuer: ISSUER, audience: AUDIENCE } },
       epochs,
       denylist,
     );

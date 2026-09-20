@@ -57,7 +57,6 @@ Four invariants drive nearly every design decision in the repository:
 ```mermaid
 flowchart TB
     subgraph edge["interface — HTTP"]
-        AUTH["/auth"]:::ctx
         CAT["/products, /admin"]:::ctx
         CART["/cart"]:::ctx
         ORD["/orders, /admin/orders"]:::ctx
@@ -67,7 +66,7 @@ flowchart TB
     end
 
     subgraph core["bounded contexts — application + domain"]
-        U[User]:::box --- C[Catalog]:::box --- K[Cart]:::box
+        C[Catalog]:::box --- K[Cart]:::box
         O[Order]:::box --- P[Payment]:::box --- I[Inventory]:::box --- M[Media]:::box
     end
 
@@ -87,7 +86,6 @@ flowchart TB
         STRIPE([Stripe]):::ext
     end
 
-    AUTH --> U
     CAT --> C
     CART --> K
     ORD --> O
@@ -102,7 +100,6 @@ flowchart TB
     C --> RD
     C --> MS
     M --> S3
-    U --> SMTP
     W --> PG
 
     classDef ctx fill:#1f2937,stroke:#4b5563,color:#e5e7eb
@@ -114,16 +111,19 @@ flowchart TB
 Deployed on Railway, once the public domain moves onto the gateway ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)):
 
 ```
-client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ api            every route but /internal/*
+client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ user-service   /auth/*
+                              gateway :8080 ─▶ api            every other route but /internal/*
                               gateway :4000 ─▶ id-service ×3 ─▶ id-postgres   private network only
-                user-service ─▶ gateway :4000                 dark: no domain, nothing routes to it yet
+                user-service ─▶ gateway :4000
 ```
+
+The api verifies the user-service's ES256 tokens against its JWKS and reads session epochs from the
+shared Redis; it holds no user rows, no signing key and no `/auth` route.
 
 ### Bounded contexts
 
 | Context | Owns | Publishes to other contexts |
 | --- | --- | --- |
-| **User** | Accounts, credentials, sessions, RBAC, sharding-ready ids | `USER_FACADE` |
 | **Catalog** | Categories, products, SKUs, prices, product images, search index | `CATALOG_SKU_QUERY` (live price/name) |
 | **Cart** | Per-user cart lines — quantities only, no prices | `CART_SNAPSHOT` (`{skuId, quantity}`) |
 | **Inventory** | Stock levels and reservations | `STOCK_RESERVATION` (reserve / commit / release) |
@@ -149,31 +149,32 @@ Two composition roots are exempt from the "shared may not import a context" rule
 
 ### Project layout
 
-pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id ([id-service README](./apps/id-service/README.md)). `apps/user-service` serves the api's `/auth` contract from its own Postgres, mints its ids through the id-service and signs ES256 tokens; it runs dark until the cutover ([user-service README](./apps/user-service/README.md)). `apps/gateway` is Caddy: the public entry that passes every route to the api, and the private load balancer in front of the id-service replicas. `packages/` holds the code the services share.
+pnpm workspace, tasks run through Turborepo. The main app is `apps/api` (`@jcool/api`). `apps/id-service` mints UUIDv8 ids under a leased node id ([id-service README](./apps/id-service/README.md)). `apps/user-service` owns `/auth` and the user tables in its own Postgres, mints its ids through the id-service and signs ES256 tokens ([user-service README](./apps/user-service/README.md)). `apps/gateway` is Caddy: the public entry that routes `/auth` to the user-service and everything else to the api, and the private load balancer in front of the id-service replicas. `packages/` holds the code the services share.
 
 ```
 apps/api/
 ├── src/
-│   ├── main.ts              # bootstrap: helmet, CORS, cookies, ValidationPipe, Swagger, shutdown hooks
+│   ├── main.ts              # bootstrap: helmet, CORS, ValidationPipe, Swagger, shutdown hooks
 │   ├── instrumentation.ts   # OTel + Sentry, preloaded via `node --import` before Nest boots
 │   ├── app.module.ts
 │   ├── modules/             # bounded contexts — each: domain / application / infrastructure / interface
-│   │   ├── cart/  catalog/  inventory/  media/  order/  payment/  user/
+│   │   ├── cart/  catalog/  inventory/  media/  order/  payment/
 │   └── shared/
 │       ├── config/          # the api's env schema (platform fragments + its own keys) + config factory
+│       ├── auth/            # token verifier options (the user-service's JWKS) + Redis epoch/denylist readers
+│       ├── user-service/    # HTTP client for the user-service's internal routes
 │       ├── messaging/       # outbox, relay, BullMQ queue, inbox, DLQ + replay CLI
 │       ├── infrastructure/  # Drizzle schema + migrations, the api's DrizzleDB alias, object storage
 │       ├── cache/           # stale-while-revalidate cache + single-flight rebuild lock
 │       ├── idempotency/     # request fingerprint + CLS carrier
-│       ├── identity/        # IdentityService: mints user-context ids with the node's generator
 │       └── interface/       # debug controller
 ├── test/
-│   ├── integration/         # 73 e2e suites on real infrastructure (Testcontainers)
+│   ├── integration/         # e2e suites on real infrastructure (Testcontainers)
 │   └── setup/               # global setup, app factory, fixtures, per-suite side containers
-└── scripts/                 # seeds, identity verification, DB metrics
+└── scripts/                 # seeds, DB metrics
 apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replicas; unit / e2e / system tests
 apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e / system tests
-apps/gateway/                # Caddyfile: public site in front of the api, private LB over the id-service replicas
+apps/gateway/                # Caddyfile: public site routing /auth to the user-service, private LB over the id-service replicas
 packages/
 ├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
 ├── id-codec/                # @jcool/id-codec — UUIDv8 layout, HMAC email buckets
@@ -232,10 +233,10 @@ The parts worth reading the code for. Each row names the file to open.
 
 | Problem | Approach | Where |
 | --- | --- | --- |
-| **Immediate JWT revocation** | Stateless access tokens (HS256 from the api, ES256 from the user-service, checked against its JWKS) carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user epoch (every token issued before a logout-all or password change), read from Postgres or, after the cutover, from Redis | `packages/auth-verifier/src/access-token.verifier.ts` |
-| **Token delivery and CSRF** | The access token goes in the JSON body (Bearer is CSRF-immune). The refresh token goes **only** in an `httpOnly; SameSite=Strict; Path=/auth` cookie (`Secure` in production, per `COOKIE_SECURE`), paired with a signed double-submit CSRF cookie enforced on the two routes that consume it | `modules/user/interface/security/csrf.guard.ts` |
+| **Immediate JWT revocation** | Stateless ES256 access tokens, signed by the user-service and checked against its JWKS, carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user epoch (every token issued before a logout-all or password change). The user-service is the only writer of those keys; the api only reads them | `packages/auth-verifier/src/access-token.verifier.ts` |
+| **Token delivery and CSRF** | The access token goes in the JSON body (Bearer is CSRF-immune). The refresh token goes **only** in an `httpOnly; SameSite=Strict; Path=/auth` cookie, paired with a signed double-submit CSRF cookie enforced on the two routes that consume it. Both live in the user-service; the api takes Bearer only | `apps/user-service/src/modules/user/interface/security/csrf.guard.ts` |
 | **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `packages/platform/src/throttler/throttler.constants.ts` |
-| **User enumeration** | `forgot-password` and `resend-verification` always answer `202`. Login runs a real argon2 verify against a cached dummy hash on the unknown-email branch, so the timing of "no such user" matches "wrong password" | `modules/user/application/use-cases/login-user.use-case.ts` |
+| **User enumeration** | `forgot-password` and `resend-verification` always answer `202`. Login runs a real argon2 verify against a cached dummy hash on the unknown-email branch, so the timing of "no such user" matches "wrong password" | `apps/user-service/src/modules/user/application/use-cases/login-user.use-case.ts` |
 | **Webhook authenticity** | HMAC-SHA256 over the **raw request bytes** (`rawBody: true` — the JSON parser would re-serialize and break the signature), constant-time compare, plus a `±PAYMENT_WEBHOOK_TOLERANCE_SEC` replay window. Exempt from both throttle tiers so a burst of legitimate gateway retries is never rate-limited away | `modules/payment/infrastructure/gateway/hmac-signature.ts` |
 | **Metrics endpoint disclosure** | A wrong or missing `METRICS_TOKEN` returns a plain `404`, never `401` — a `401` confirms the endpoint exists to anyone probing. (With no token configured at all, `/metrics` is open in development and `404` in production.) | `packages/platform/src/observability/metrics/metrics.guard.ts` |
 
@@ -244,7 +245,7 @@ The parts worth reading the code for. Each row names the file to open.
 | Problem | Approach | Where |
 | --- | --- | --- |
 | **Sharding-ready user ids** | Every user-context id is a UUIDv8 (RFC 9562 §5.8) laid out `48 ts_ms │ 4 ver │ 12 bucket │ 2 var │ 10 node │ 12 seq │ 40 random`. The 12-bit routing bucket is `HMAC(IDENTITY_BUCKET_KEY, normalized_email) mod 4096` — derived from the same normalized email the `UNIQUE(email)` index sees, so a future shard split routes from the id alone, with no lookup table, and email uniqueness survives it | `packages/id-generator/src/uuid-v8.generator.ts` |
-| **Why HMAC, not a hash** | `users.id` is public. An unkeyed digest would turn every published id into an offline oracle for "does this address have an account here". The key is **permanent**: the database pins its fingerprint on first boot and refuses a later boot under a different key | `modules/user/infrastructure/identity-bucket-key.verifier.ts` |
+| **Why HMAC, not a hash** | `users.id` is public. An unkeyed digest would turn every published id into an offline oracle for "does this address have an account here". The key is **permanent**: the user-service's database pins its fingerprint on first boot and refuses a later boot under a different key | `apps/user-service/src/modules/user/infrastructure/identity-bucket-key.verifier.ts` |
 | **Money** | Integer minor units (VND đồng, USD cents) in a `Money` value object — never a float. Cross-currency operations throw rather than coerce. The order total is computed once from the lines and then persisted, never recomputed against a live price | `packages/kernel/src/money.vo.ts` |
 | **Media lifecycle as stock reservation** | An upload commits to something before knowing whether the caller will finish, so it is modelled like a stock hold: `PENDING → READY → ATTACHED → DETACHED`, plus `SWEEPING` as a terminal claim. `expires_at` is `NULL` in exactly one state (`ATTACHED`) — an asset no sweep can select is exactly what that state needs and exactly the leak every other state must not have | `modules/media/domain/asset-state-machine.ts` |
 | **Deleting bytes safely** | The sweep commits its `SWEEPING` claim **first**, then deletes the object, then the row. A crash mid-way leaves an orphan row whose object is gone — re-scannable, and deleting an absent object is a no-op. The other order leaves bytes nobody has a pointer to: unfindable and paid for indefinitely | `modules/media/application/use-cases/sweep-abandoned-assets.use-case.ts` |
@@ -295,11 +296,12 @@ Environment is validated **once at startup** and the process refuses to boot on 
 | `NODE_ENV` | `development` \| `test` \| `production` |
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Shared by cache, throttler, denylist and BullMQ |
-| `JWT_ACCESS_SECRET` | min 32 chars; production refuses to boot on a shorter one |
-| `IDENTITY_BUCKET_KEY` | HMAC key for id routing buckets. **Permanent** — the DB pins its fingerprint on first boot and refuses a later boot under a different key. See [RUNBOOK.md](./RUNBOOK.md) |
+| `AUTH_JWKS_URL` | The user-service's JWKS — the only key source, so without it every request is refused |
+| `JWT_ISSUER`, `JWT_AUDIENCE` | Must match what the user-service signs |
+| `USER_SERVICE_INTERNAL_URL`, `INTERNAL_API_TOKEN` | Its internal API: session epochs on a Redis miss, and the buyer's address for `order.paid`. Token min 32 chars |
 | `STRIPE_SUCCESS_URL` | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
 
-Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`. The user-service cutover switches (`AUTH_JWKS_URL`, `AUTH_EPOCH_SOURCE`, `USER_DIRECTORY_SOURCE`, `AUTH_HS256_ENABLED`, `AUTH_ROUTES_ENABLED`, `RETENTION_AUTH_TOKENS_ENABLED`) default to the api as it was; see [RUNBOOK.md](./RUNBOOK.md#prepare-the-api-for-the-cutover).
+Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`. The auth-side variables (`IDENTITY_BUCKET_KEY`, `CSRF_SECRET`, `JWT_ES256_*`, `ARGON2_*`, the token TTLs) belong to the user-service — see its [README](./apps/user-service/README.md).
 
 `MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it because it ships `migrations/` without a `src/` tree.
 
@@ -311,7 +313,7 @@ Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_
 
 No global prefix; routes are served at the root. The always-current contract is **`/docs`** (Swagger UI) when `SWAGGER_ENABLED` is on.
 
-**Applies to every route unless noted:** `401` without a valid access token, `403` on an `ADMIN` route without the role (and on a CSRF failure), `429` when throttled, `400` when a request body carries an unknown property — the global `ValidationPipe` runs with `whitelist` and `forbidNonWhitelisted` — and `422` when a value passes DTO validation but breaks a domain rule (`Email`, `Slug`, `Money`, the state machines). Every error answers with one envelope:
+**Applies to every route unless noted:** `401` without a valid access token, `403` on an `ADMIN` route without the role, `429` when throttled, `400` when a request body carries an unknown property — the global `ValidationPipe` runs with `whitelist` and `forbidNonWhitelisted` — and `422` when a value passes DTO validation but breaks a domain rule (`Email`, `Slug`, `Money`, the state machines). Every error answers with one envelope:
 
 ```json
 { "statusCode": 409, "path": "/orders", "timestamp": "…", "requestId": "…", "traceId": "…", "message": "…" }
@@ -321,23 +323,9 @@ No global prefix; routes are served at the root. The always-current contract is 
 
 ### Auth — `/auth`
 
-| Method | Path | Auth | Description |
-| --- | --- | --- | --- |
-| `POST` | `/auth/register` | Public | Create an unverified account and send a verification email (`409` if the email is taken) |
-| `POST` | `/auth/verify-email` | Public (token) | Redeem a single-use verification token (`204`) |
-| `POST` | `/auth/resend-verification` | Public | Re-issue a verification email (`202` always — enumeration-safe) |
-| `POST` | `/auth/forgot-password` | Public | Email a single-use reset token (`202` always) |
-| `POST` | `/auth/reset-password` | Public (token) | Set a new password and revoke every session (`204`) |
-| `POST` | `/auth/login` | Public | Access token in the body; refresh + CSRF set as cookies (`403` if `AUTH_REQUIRE_VERIFIED_EMAIL` blocks) |
-| `GET` | `/auth/me` | Bearer | Current profile |
-| `POST` | `/auth/change-password` | Bearer | Re-verify the current password, then revoke every session (`204`) |
-| `GET` | `/auth/sessions` | Bearer | Active sessions, the current one flagged |
-| `DELETE` | `/auth/sessions/:id` | Bearer | Revoke one session (`204`; `404` if not the caller's) |
-| `POST` | `/auth/logout-all` | Bearer | Revoke every session including this one (`204`) |
-| `POST` | `/auth/refresh` | Refresh cookie + CSRF | Rotate the token pair; reuse of a retired token revokes the family |
-| `POST` | `/auth/logout` | Bearer + CSRF | Denylist the access token, revoke the refresh token, clear cookies (`204`) |
-
-Only `/auth/refresh` is cookie-authenticated. `/auth/logout` is Bearer-authenticated and *also* CSRF-guarded because it consumes the refresh cookie when one is present. To call either, read the readable `csrf_token` cookie and echo it in the `x-csrf-token` header.
+Served by the **user-service**, behind the same public origin. Its routes and cookie rules are in the
+[user-service README](./apps/user-service/README.md); the api verifies the tokens it issues and serves
+none of those paths itself.
 
 ### Catalog — `/products`, `/admin`
 
@@ -421,7 +409,7 @@ Details worth stealing: the e2e app factory quarantines the developer's `.env` s
 
 The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
 
-`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service`, `gateway` and `user-service`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log. For the user-service, it runs the api image beside it and checks the same `/auth` OpenAPI operations, the same answers to a set of requests and to a whole session, and ids minted through the gateway.
+`pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service`, `gateway` and `user-service`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log. For the user-service, it checks the copy the cutover scripts make between the two databases, row for row.
 
 Vitest runs through **SWC**, not its default esbuild, because esbuild does not emit `emitDecoratorMetadata` — which NestJS DI needs, so `Test.createTestingModule()` would fail at the app layer. SWC is transpile-only, which is why `tsc --noEmit` is a separate gate.
 
@@ -492,7 +480,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 ## Operations
 
-[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: never rotating `IDENTITY_BUCKET_KEY`, backup/restore (including restoring a dump into a database pinned to a different key fingerprint), rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
+[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: never rotating the user-service's `IDENTITY_BUCKET_KEY`, backup/restore per database (including restoring a dump into one pinned to a different key fingerprint), rotating the JWKS and `INTERNAL_API_TOKEN`, rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
 
 **Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only: the builder runs `pnpm deploy --prod` for `@jcool/api`, and the runtime stage takes its `node_modules` plus the app's `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
 
@@ -508,7 +496,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 Stated plainly, because a reviewer will find them anyway.
 
-- **Run exactly one app instance.** The id generator holds a fixed node id for the whole fleet, so two replicas mint the same `(timestamp, node, sequence)` triples. Ids stay *unique* — 40 random bits see to that, and no insert fails — but the ordered per-writer sequence is lost on the four User-context tables. The real problem is that **nothing detects it**: no error, no metric, no failed insert. `.railway/railway.ts` sets `numReplicas: 1`, but its `overlapSeconds: 20` means every rollout runs two instances for ~20s by design. Lifting this properly needs a node-id lease.
+- **The api no longer mints bucketed ids.** The remaining contexts use `uuidv7`, which needs no node id, so the single-instance rule that used to apply here moved to the user-service — the only app that mints UUIDv8, and the one that takes a node id from the id-service's lease. Raising the api's replica count is a separate change: `.railway/railway.ts` still sets `numReplicas: 1`.
 - **Order confirmation mail is at-most-once.** Applied exactly once in the database, attempted at most once outside it, and on failure counted (`mail_send_failures_total`) rather than retried — because a retry would roll back the inbox claim and, under a breaker timeout that abandons the wait without cancelling the in-flight request, send up to eight confirmations for one order. A lost confirmation is worse than nothing and better than that. The fix, if the tolerance changes, is a separate `mail_outbox` table — not SMTP back inside the transaction.
 - **Auth mail is sent synchronously, outside the outbox**, because it carries a raw redeemable token and the token tables store only hashes. Putting the token in an outbox payload would write it to Postgres in plaintext.
 - **Context extraction is bounded work, not free.** One edge would have to change: Payment settles through Order's published `order-finalization.port` inside a shared transaction. The surface is already the only thing that crosses, so extraction is a transport change — across a process boundary that call becomes a saga step.
@@ -536,7 +524,7 @@ Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lin
 | `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | Drizzle migration workflow (`:prod` runs the compiled CLI — the image's release command) |
 | `search:reindex` | Rebuild the Meilisearch index from Postgres |
 | `queue:replay-dlq` | Inspect the dead-letter queue; `--apply` to replay (dry run is the default) |
-| `identity:verify` | Scan every user-service user row for an id that does not route to its email's bucket (`pnpm --filter @jcool/api identity:verify` scans the api's table until cutover) |
+| `identity:verify` | Scan every user-service user row for an id that does not route to its email's bucket |
 | `storage:verify` | Reconcile bucket against `media_assets` three ways: orphan objects, `ATTACHED` rows whose object is gone, and `product_images` rows whose asset row is gone |
 | `load:baseline` · `load:register:*` | k6 mixes |
 | `load:cache-stampede` · `load:breakpoint` · `load:sku-contention` | Performance-experiment mixes (`test/load/`): cache stampede arms, open-model breakpoint ramp, single-SKU reservation contention. Each exports `--summary-export` JSON; authoritative numbers come from Prometheus, not k6 timing |

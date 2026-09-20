@@ -1,16 +1,5 @@
-import type { UserFacade } from '@modules/user/application/public/user-facade.port';
 import type { UserServiceClient } from '@shared/user-service/user-service.client';
 import type { UserContact, UserContactPort } from '../application/ports/user-contact.port';
-
-/** Users still live in this database. */
-export class LocalUserContactAdapter implements UserContactPort {
-  constructor(private readonly users: Pick<UserFacade, 'getUserSummary'>) {}
-
-  async find(userId: string): Promise<UserContact | null> {
-    const summary = await this.users.getUserSummary(userId);
-    return summary && { email: summary.email };
-  }
-}
 
 /** Retryable on purpose: the user may still be on the way to the directory. */
 export class UserNotYetInDirectoryError extends Error {

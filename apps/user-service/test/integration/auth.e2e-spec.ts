@@ -22,7 +22,7 @@ import { E2E_ES256_KID } from '../setup/e2e-env';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { RbacProbeController } from '../setup/rbac-probe.controller';
-import { signLegacyHs256 } from '../setup/signing-keys';
+import { signHs256 } from '../setup/signing-keys';
 
 describe('Auth (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -436,20 +436,9 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(res.body).toMatchObject({ id: user.id, email: user.email, role: user.role });
     });
 
-    // The api's tokens stay valid here until the cutover window closes.
-    it('accepts a legacy HS256 token signed with the shared secret', async () => {
+    it('rejects an HS256 token (401)', async () => {
       const { user } = await createTestUser(app);
-      const legacy = await signLegacyHs256({ sub: user.id, role: user.role });
-
-      const res = await request(app.getHttpServer()).get('/auth/me').set(authHeader(legacy));
-
-      expect(res.status).toBe(200);
-      expect(res.body.id).toBe(user.id);
-    });
-
-    it('rejects an HS256 token signed with any other secret (401)', async () => {
-      const { user } = await createTestUser(app);
-      const forged = await signLegacyHs256({ sub: user.id }, 'not-the-shared-secret-but-just-as-long-0000');
+      const forged = await signHs256({ sub: user.id, role: user.role }, 'not-a-real-secret-but-just-as-long-000000');
 
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(forged)).expect(401);
     });

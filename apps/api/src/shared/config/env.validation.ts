@@ -2,7 +2,6 @@ import { Type } from 'class-transformer';
 import {
   IsBooleanString,
   IsEnum,
-  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -11,9 +10,7 @@ import {
   Max,
   Min,
   MinLength,
-  ValidateIf,
 } from 'class-validator';
-import { MIN_BUCKET_KEY_LENGTH } from '@jcool/id-codec';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
 import {
   AppEnv,
@@ -44,13 +41,7 @@ const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
 );
 
-// configuration.ts compares against these literals, so '0' and '1' are refused rather than misread.
-const BOOLEAN_STRINGS = ['true', 'false'];
-
 const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
-
-const callsUserService = (env: EnvironmentVariables): boolean =>
-  env.AUTH_EPOCH_SOURCE === 'redis' || env.USER_DIRECTORY_SOURCE === 'remote';
 
 /** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS. */
@@ -178,21 +169,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsInt()
   @Min(0)
   RETENTION_IDEMPOTENCY_GRACE_SEC?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  RETENTION_AUTH_TOKEN_GRACE_DAYS?: number;
-
-  // The 30-day floor is not a preference: a revoked token that reappears is the reuse signal. It is
-  // only real because the sweep's expiry arm excludes revoked rows — without that exclusion the much
-  // shorter RETENTION_AUTH_TOKEN_GRACE_DAYS would collect rotated tokens first.
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(30)
-  RETENTION_REFRESH_TOKEN_GRACE_DAYS?: number;
 
   @IsOptional()
   @Type(() => Number)
@@ -388,106 +364,24 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsString()
   STRIPE_CANCEL_URL?: string;
 
-  // MinLength(32) enforces a ~256-bit floor for HS256.
+  // The only way in: without it every token is refused, so it is required rather than optional.
+  @IsUrl(HTTP_URL)
+  AUTH_JWKS_URL!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  JWT_ISSUER!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  JWT_AUDIENCE!: string;
+
+  @IsUrl(HTTP_URL)
+  USER_SERVICE_INTERNAL_URL!: string;
+
   @IsString()
   @MinLength(32)
-  JWT_ACCESS_SECRET!: string;
-
-  // HMAC key behind the routing bucket in every user-context id. PERMANENT — rotating it routes
-  // every existing account to a shard that does not hold its rows, and old buckets are not
-  // recomputable, so back it up with the same rank as the database. MinLength gates length, not
-  // entropy: a passphrase is brute-forceable from a few self-registered (email, bucket) pairs, so
-  // generate it with `openssl rand -base64 48`.
-  @IsString()
-  @MinLength(MIN_BUCKET_KEY_LENGTH)
-  IDENTITY_BUCKET_KEY!: string;
-
-  // The four token TTLs below take duration form ("15m"/"7d").
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  JWT_ACCESS_TTL?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  REFRESH_TOKEN_TTL?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  EMAIL_VERIFICATION_TTL?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  PASSWORD_RESET_TTL?: string;
-
-  @IsOptional()
-  @IsBooleanString()
-  AUTH_REQUIRE_VERIFIED_EMAIL?: string;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  ARGON2_MEMORY_COST?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  ARGON2_TIME_COST?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  ARGON2_PARALLELISM?: number;
-
-  @IsOptional()
-  @IsIn(['db', 'redis'])
-  AUTH_EPOCH_SOURCE?: string;
-
-  @IsOptional()
-  @IsIn(['local', 'remote'])
-  USER_DIRECTORY_SOURCE?: string;
-
-  @IsOptional()
-  @IsIn(BOOLEAN_STRINGS)
-  AUTH_HS256_ENABLED?: string;
-
-  @IsOptional()
-  @IsIn(BOOLEAN_STRINGS)
-  AUTH_ROUTES_ENABLED?: string;
-
-  @IsOptional()
-  @IsIn(BOOLEAN_STRINGS)
-  RETENTION_AUTH_TOKENS_ENABLED?: string;
-
-  // Unset refuses every ES256 token.
-  @IsOptional()
-  @IsUrl(HTTP_URL)
-  AUTH_JWKS_URL?: string;
-
-  @ValidateIf((env: EnvironmentVariables) => env.AUTH_JWKS_URL !== undefined)
-  @IsString()
-  @IsNotEmpty()
-  JWT_ISSUER?: string;
-
-  @ValidateIf((env: EnvironmentVariables) => env.AUTH_JWKS_URL !== undefined)
-  @IsString()
-  @IsNotEmpty()
-  JWT_AUDIENCE?: string;
-
-  @ValidateIf(callsUserService)
-  @IsUrl(HTTP_URL)
-  USER_SERVICE_INTERNAL_URL?: string;
-
-  @ValidateIf(callsUserService)
-  @IsString()
-  @MinLength(32)
-  INTERNAL_API_TOKEN?: string;
+  INTERNAL_API_TOKEN!: string;
 
   @IsOptional()
   @Type(() => Number)

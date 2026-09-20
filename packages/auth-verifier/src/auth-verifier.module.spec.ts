@@ -1,15 +1,17 @@
-import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import { Controller, Get, type INestApplication, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { SignJWT, createLocalJWKSet } from 'jose';
+import { type CryptoKey, SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import request from 'supertest';
 import { type AuthenticatedUser, CurrentUser, Public, Roles } from '@jcool/platform/rbac';
 import { AuthVerifierModule } from './auth-verifier.module';
 import { SESSION_EPOCH } from './session-epoch.port';
 import { TOKEN_DENYLIST } from './token-denylist.port';
 
-const SECRET = randomBytes(32).toString('hex');
+const ISSUER = 'iss';
+const AUDIENCE = 'aud';
+const KID = 'test-key';
+let privateKey: CryptoKey;
 
 @Controller()
 class ProbeController {
@@ -42,9 +44,11 @@ class SessionStateModule {}
 
 function token(role: string): Promise<string> {
   return new SignJWT({ sub: 'u-1', role, jti: 'jti-1', epoch: 0 })
-    .setProtectedHeader({ alg: 'HS256' })
+    .setProtectedHeader({ alg: 'ES256', kid: KID })
+    .setIssuer(ISSUER)
+    .setAudience(AUDIENCE)
     .setExpirationTime('5m')
-    .sign(new TextEncoder().encode(SECRET));
+    .sign(privateKey);
 }
 
 describe('AuthVerifierModule', () => {
@@ -52,13 +56,16 @@ describe('AuthVerifierModule', () => {
   let server: Server;
 
   beforeAll(async () => {
+    const pair = await generateKeyPair('ES256', { extractable: true });
+    privateKey = pair.privateKey;
+    const jwk = { ...(await exportJWK(pair.publicKey)), kid: KID, alg: 'ES256' };
+
     const moduleRef = await Test.createTestingModule({
       imports: [
         AuthVerifierModule.forRootAsync({
           imports: [SessionStateModule],
           useFactory: () => ({
-            hs256: { enabled: true, secret: SECRET },
-            es256: { keys: createLocalJWKSet({ keys: [] }), issuer: 'iss', audience: 'aud' },
+            es256: { keys: createLocalJWKSet({ keys: [jwk] }), issuer: ISSUER, audience: AUDIENCE },
           }),
         }),
       ],

@@ -10,6 +10,18 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.spec.ts'],
+    // AppModule validates env when it is imported, and a spec that imports it must not depend on
+    // whatever a developer's .env happens to hold. Placeholders: nothing here opens a connection.
+    env: {
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://unit:unit@127.0.0.1:5432/unit',
+      REDIS_URL: 'redis://127.0.0.1:6379',
+      AUTH_JWKS_URL: 'http://127.0.0.1:1/.well-known/jwks.json',
+      JWT_ISSUER: 'https://users.jcool.test',
+      JWT_AUDIENCE: 'jcool-api',
+      USER_SERVICE_INTERNAL_URL: 'http://127.0.0.1:1',
+      INTERNAL_API_TOKEN: 'unit-internal-api-token-not-a-real-secret',
+    },
     // Workspace packages resolve outside node_modules, so Vitest would inline their dist and mint a
     // second copy of a token such as METRICS next to the one natively loaded packages hold.
     server: { deps: { external: [/\/packages\/[^/]+\/dist\//] } },
@@ -37,12 +49,13 @@ export default defineConfig({
       // Glob-scoped, not global: `test:cov` runs the unit tier only, and repositories, adapters and
       // controllers are covered by the e2e tier — a global floor would go red on code that is tested.
       // The numbers are measured-minus-two, not a round 80 that would sit far below or above reality.
+      // Re-measured after the user context moved out; the ratio barely moved.
       thresholds: {
         'src/**/{domain,application}/**': {
           statements: 84,
-          branches: 79,
-          functions: 85,
-          lines: 85,
+          branches: 80,
+          functions: 84,
+          lines: 84,
         },
       },
     },

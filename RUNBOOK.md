@@ -22,9 +22,8 @@ Conventions used below:
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
-- [Run the user-service dark](#run-the-user-service-dark)
-- [Prepare the api for the cutover](#prepare-the-api-for-the-cutover)
-- [Cut over the user data](#cut-over-the-user-data)
+- [The user-service](#the-user-service)
+- [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -35,7 +34,9 @@ Conventions used below:
 
 Every user-context id embeds a 12-bit routing bucket derived by HMAC from the account's normalized email, under this key. The bucket is what a future `users` shard split routes on. Rotating the key does not invalidate anything visibly — it mints *new* ids into buckets their emails no longer hash to, and nothing reads a bucket until the split. The damage would surface years after the key that caused it was lost.
 
-The application defends this on every boot, in two layers (`apps/api/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
+The key and the pin live in the **user-service** and its database; the api holds neither. The
+user-service defends this on every boot, in two layers
+(`apps/user-service/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use the same wrong key).
 2. **Key pin** — a fingerprint of the key stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. Runs *after* the canary on purpose: the pin **writes**, so pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
@@ -67,16 +68,20 @@ There is no third option. Do not delete the pin row to make the message go away:
 
 ## Backup and restore
 
-The `IDENTITY_BUCKET_KEY` and the database are **one artifact**. Back them up together; a dump without its key is a dump you cannot serve.
+Each service owns one database and is backed up on its own: the api's (catalog, cart, orders,
+payments, inventory, media, messaging), the user-service's (accounts, tokens, the key pin), and the
+id-service's (node leases). They share no foreign keys, so there is no cross-database consistency to
+preserve — but the **user-service's** dump and its `IDENTITY_BUCKET_KEY` are one artifact. Back them
+up together; that dump without its key is a dump you cannot serve.
 
 ### Back up
 
 ```bash
-# local — against whatever DATABASE_URL points at
+# local — against whatever DATABASE_URL points at, one service at a time
 pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" > backup-$(date +%Y%m%d-%H%M).dump
 ```
 
-Then record, alongside the dump:
+For the user-service's dump, record alongside it:
 
 - the `IDENTITY_BUCKET_KEY` fingerprint (`SELECT fingerprint FROM identity_key_pin WHERE id = 1;`),
 - which secret-manager entry holds the key itself.
@@ -89,11 +94,12 @@ createdb jcool_restore
 pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges backup-….dump
 ```
 
-Then boot the app against it **with the key that dump was taken under**.
+A user-service dump then needs the service booted against it **with the key that dump was taken
+under**; the api's and the id-service's carry no key.
 
 ### Restoring into an environment with a different key
 
-The dump carries the `identity_key_pin` row, so the restored database still remembers the original key's fingerprint. Booting the app against it under a different `IDENTITY_BUCKET_KEY` **refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not a restore problem.
+The user-service's dump carries the `identity_key_pin` row, so the restored database still remembers the original key's fingerprint. Booting the user-service against it under a different `IDENTITY_BUCKET_KEY` **refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not a restore problem.
 
 Consequences to plan for:
 
@@ -243,7 +249,7 @@ The CLI reads its Redis URL, queue prefix **and inbox window** through the app's
 
 ## Retention sweeps
 
-One timer (`RETENTION_INTERVAL_MS`, hourly by default) drives eight independent sweeps, each reclaiming one table. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
+Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — five sweeps in the api, the three `auth-tokens:*` ones in the user-service. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
 
 Every window is sized by **what still has to be able to retry against the row**, never by disk. Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say only during an incident.
 
@@ -253,9 +259,9 @@ Every window is sized by **what still has to be able to retry against the row**,
 | `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
 | `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
 | `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
-| `auth-tokens:email-verification` | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
-| `auth-tokens:password-reset` | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
-| `auth-tokens:refresh` | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
+| `auth-tokens:email-verification` *(user-service)* | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:password-reset` *(user-service)* | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:refresh` *(user-service)* | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
 | `media:assets` | `media_assets` **and the objects behind them** | `expires_at` past, or a `SWEEPING` claim older than `RETENTION_SWEEP_TIMEOUT_MS` | **Anything `ATTACHED`** — those rows have no `expires_at` at all, so no query the sweep can write will match them | `MEDIA_UPLOAD_TTL_SEC` (3600) / `MEDIA_READY_TTL_SEC` (86400) |
 
 `media:assets` is the only sweep that deletes something outside Postgres, and the only one whose work is not undoable by restoring a backup. It deletes **the object first, then the row**: a crash between the two leaves a row whose object is gone, which the next pass re-scans and finishes (deleting an absent object is a no-op). The reverse order would leave bytes nothing points at — unfindable and billed forever. If a pass dies mid-flight the claim is left at `SWEEPING`, and a claim older than the sweep's own timeout is assumed dead and picked up again.
@@ -475,25 +481,27 @@ If the direct domain is already gone, create one with `railway domain --service 
 
 ### Route `/auth` to another service
 
-- Setting `AUTH_UPSTREAM` on the gateway sends `/auth`, `/auth/*` and `/.well-known/jwks.json` there. While it is unset, those routes go to the api. Give it as `tcp6/<private domain>:<port>`, for the same reason as `API_UPSTREAM`.
-- Once auth has left the api, also set `AUTH_UPSTREAM_REQUIRED=true`. The gateway then refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of serving auth from tables that nothing writes any more.
+- `AUTH_UPSTREAM` on the gateway sends `/auth`, `/auth/*` and `/.well-known/jwks.json` there. Give it as `tcp6/<private domain>:<port>`, for the same reason as `API_UPSTREAM`.
+- `AUTH_UPSTREAM_REQUIRED=true` is on: the gateway refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of routing auth to an api that answers 404.
 - Both variables are set by hand and kept across every apply.
 
 ---
 
-## Run the user-service dark
+## The user-service
 
-`apps/user-service` serves the same `/auth` contract as the api from its own Postgres (`user-postgres`). It has no public domain, and the gateway does not route to it while `AUTH_UPSTREAM` is unset, so production auth stays on the api. It is deployed last by CD, after the smoke test of the public URL.
+`apps/user-service` owns `/auth`, the user tables and the ES256 signing keys, on its own Postgres
+(`user-postgres`). The gateway routes `/auth`, `/auth/*` and `/.well-known/jwks.json` to it; it has
+no public domain of its own. It is deployed last by CD, after the smoke test of the public URL.
 
 ### Redis durability
 
-The user-service writes `auth:epoch:{userId}` and `auth:denylist:{jti}` to the api's Redis, and the api reads them. Both refuse to boot unless that Redis cannot silently lose them. The api checks in every mode, so the instance has to pass before the api change reaches `main` as well:
+The user-service writes `auth:epoch:{userId}` and `auth:denylist:{jti}` to the shared Redis, and the api reads them. Both refuse to boot unless that Redis cannot silently lose them:
 
 ```
 Redis cannot hold auth state: maxmemory-policy is allkeys-lru, not noeviction; appendonly is off. See RUNBOOK.md, "Redis durability".
 ```
 
-An evicted denylist entry revives a logged-out token, and an evicted epoch lets a revoked session back in. The boot reads both settings from `INFO`, since managed Redis often disables `CONFIG`. Check the instance the same way before the user-service change reaches `main`:
+An evicted denylist entry revives a logged-out token, and an evicted epoch lets a revoked session back in. The boot reads both settings from `INFO`, since managed Redis often disables `CONFIG`. Check the instance the same way after any Redis plan or provider change:
 
 ```bash
 railway connect <redis service>             # opens redis-cli on the production instance
@@ -513,30 +521,18 @@ Doing it in this order matters: a Redis that restarts with AOF newly enabled and
 
 Locally, `docker-compose.yml` starts Redis with `--appendonly yes`. If the `redisdata` volume holds something you want to keep, run `docker exec jcool-redis redis-cli CONFIG SET appendonly yes` before recreating the container.
 
-### Before the user-service change reaches `main`
+### Rebuilding the service from scratch
 
-CD's apply creates `user-postgres` and `user-service`, but the service will not boot until its variables have values. Create them first from the branch, then fill them in:
+`railway config plan && railway config apply --yes` creates `user-postgres` and `user-service`, but
+the service will not boot until its variables have values. Two of them are one-way doors:
 
-```bash
-# local, on the branch, after `railway link` to production
-railway config plan                         # creates user-postgres and user-service; adds ID_LB_PORT to the gateway
-railway config apply --yes
-```
+- `IDENTITY_BUCKET_KEY` — the key the existing ids were minted under, never a fresh one. See
+  [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key). Leave
+  `IDENTITY_PIN_BOOTSTRAP` unset against a database that already holds the pin.
+- `CSRF_SECRET` — changing it invalidates every CSRF cookie in circulation.
 
-The values that must equal the api's are references, so no secret passes through a shell. First drop from the list every name the api's Variables tab does not show: a reference to a missing variable can reach the user-service as an empty value, which its env validation refuses, where leaving it unset gives the default the api also uses.
-
-```bash
-for name in IDENTITY_BUCKET_KEY JWT_ACCESS_SECRET JWT_ACCESS_TTL REFRESH_TOKEN_TTL EMAIL_VERIFICATION_TTL \
-            PASSWORD_RESET_TTL REDIS_URL SMTP_URL MAIL_FROM APP_PUBLIC_URL THROTTLE_ENABLED \
-            ARGON2_MEMORY_COST ARGON2_TIME_COST ARGON2_PARALLELISM; do
-  railway variable set "$name=\${{jcool-ecommerce-backend.$name}}" --service user-service --skip-deploys
-done
-railway variable set 'CSRF_SECRET=${{jcool-ecommerce-backend.JWT_ACCESS_SECRET}}' --service user-service --skip-deploys
-```
-
-- `CSRF_SECRET` is the api's `JWT_ACCESS_SECRET`, so CSRF cookies the api issued stay valid after the cutover.
-- `IDENTITY_BUCKET_KEY` must be the api's: see [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key). Leave `IDENTITY_PIN_BOOTSTRAP` unset. A dark boot then compares the pin and never writes one, and the api's pin is copied over at the cutover.
-- `JWT_ISSUER` and `JWT_AUDIENCE`: the public URL and `jcool-api`. The api pins the same pair when it starts verifying ES256 tokens, so pick them once.
+`REDIS_URL` is a reference to the api's instance (`auth:*` lives there). `JWT_ISSUER` is the public
+URL and `JWT_AUDIENCE` is `jcool-api`; the api references both, so pick them once.
 
 Generate the new secrets locally, and paste them in the dashboard (user-service → Variables), never on a command line:
 
@@ -549,7 +545,9 @@ rm es256.pem
 
 `JWT_ES256_PRIVATE_KEYS` is `<kid>:<pem>`, for example `2026-09:-----BEGIN PRIVATE KEY-----\n…`, and `JWT_ES256_ACTIVE_KID` is that kid.
 
-Then merge. CD deploys the user-service last. Check it from inside, since it has no domain:
+Then set the gateway's `AUTH_UPSTREAM` to `tcp6/${{user-service.RAILWAY_PRIVATE_DOMAIN}}:3000` and
+`AUTH_UPSTREAM_REQUIRED=true`, and redeploy it. Check the service from inside first, since it has no
+domain of its own:
 
 ```bash
 railway ssh --service user-service
@@ -557,9 +555,9 @@ node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(co
 node -e "fetch('http://127.0.0.1:3000/.well-known/jwks.json').then(r => r.text()).then(console.log)"
 ```
 
-`curl -s "$API/.well-known/jwks.json"` from outside must still answer 404 from the api: nothing public reaches the user-service yet.
-
-To take it down, remove the service's deployment in the dashboard. Nothing routes to it, so nothing else changes.
+Then from outside: `curl -s "$PUBLIC_URL/.well-known/jwks.json"` must answer the same key set, and a
+login must succeed. The api refuses every token until it can read that document — it is down for
+everyone if the user-service is down.
 
 ### Rotate the ES256 signing key
 
@@ -577,162 +575,41 @@ Move the current value to `INTERNAL_API_TOKEN_PREVIOUS`, set a new `INTERNAL_API
 
 ---
 
-## Prepare the api for the cutover
+## The api depends on the user-service
 
-The api runs on either side of the cutover. Every switch below defaults to the api as it was, is kept across every apply, and is flipped by hand at its own step, never ahead of it.
+The api holds no user rows, no signing key and no `/auth` route. Four variables wire it to the
+user-service, all required — the api refuses to boot without them, and `.railway/railway.ts` sets
+each as a reference so the two cannot drift.
 
-| Variable | Default | Flipped to | Effect |
-| -------- | ------- | ---------- | ------ |
-| `AUTH_JWKS_URL` | unset | the user-service's JWKS | ES256 tokens are accepted as well as HS256 |
-| `AUTH_EPOCH_SOURCE` | `db` | `redis` | Session epochs come from the keys the user-service publishes; a missing key reads through to it |
-| `USER_DIRECTORY_SOURCE` | `local` | `remote` | `order.paid` reads the buyer's address from the user-service |
-| `AUTH_ROUTES_ENABLED` | `true` | `false` | Every `/auth` route on the api answers 410 |
-| `AUTH_HS256_ENABLED` | `true` | `false` | The api's own tokens are refused. Flip it one `JWT_ACCESS_TTL` plus a margin after the cutover |
-| `RETENTION_AUTH_TOKENS_ENABLED` | `true` | `false` while copying | The three auth-token sweeps pause; outbox, inbox and the rest keep sweeping |
+| Variable | Value |
+| -------- | ----- |
+| `AUTH_JWKS_URL` | the user-service's JWKS. The only key source: without it every request is refused |
+| `JWT_ISSUER`, `JWT_AUDIENCE` | what the user-service signs |
+| `USER_SERVICE_INTERNAL_URL`, `INTERNAL_API_TOKEN` | its internal API: session epochs on a Redis miss, the buyer's address for `order.paid` |
 
-`JWT_ISSUER`, `JWT_AUDIENCE`, `INTERNAL_API_TOKEN` and `USER_SERVICE_INTERNAL_URL` are references to the user-service in `.railway/railway.ts`. Nothing reads them until a switch needs them.
+Session epochs come from the keys the user-service publishes to the shared Redis. A missing key
+costs a call to the user-service on the request path; if that call fails the request answers 503 —
+never an open door, never a logout. A sustained `session_epoch_lookups_total{result="miss"}` means
+Redis lost keys it should have kept.
 
-With `AUTH_EPOCH_SOURCE=redis` a missing epoch costs a call to the user-service on the request path. If that call fails, the request answers 503: never an open door, never a logout. A sustained `session_epoch_lookups_total{result="miss"}` means Redis lost keys it should have kept.
-
-`AUTH_EPOCH_SOURCE=redis` while `AUTH_ROUTES_ENABLED` is still `true` is only safe behind the gateway's write freeze. The api's own logout-all, password change and reset still bump the epoch in its database, which the verifier no longer reads, so they would answer 2xx and revoke nothing.
-
-If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that succeeds, not before.
-
-### Accept user-service tokens
-
-The api has to accept ES256 before anything issues it, so this switch ships well ahead of the cutover and soaks. It is the only one flipped at this step.
-
-1. The user-service runs dark with `JWT_ISSUER`, `JWT_AUDIENCE` and its signing keys set (see [Run the user-service dark](#run-the-user-service-dark)).
-2. On the api, set `AUTH_JWKS_URL` to `http://${{user-service.RAILWAY_PRIVATE_DOMAIN}}:3000/.well-known/jwks.json` and deploy.
-3. Check it with a token the user-service signs but nothing stores. Registering a real account would leave a row that the cutover's copy then fails to match.
-
-```bash
-railway ssh --service user-service
-API=http://<api private domain>:8080 node <<'EOF'
-const { randomUUID } = require('node:crypto');
-const { Es256SigningKeys } = require('./dist/modules/user/infrastructure/es256-signing-keys');
-const { Es256AccessTokenSigner } = require('./dist/modules/user/infrastructure/es256-access-token.signer');
-const env = process.env;
-const keys = Es256SigningKeys.parse(env.JWT_ES256_PRIVATE_KEYS, env.JWT_ES256_ACTIVE_KID);
-const signer = new Es256AccessTokenSigner(keys, { issuer: env.JWT_ISSUER, audience: env.JWT_AUDIENCE, expiresIn: 60 });
-signer
-  .sign({ sub: randomUUID(), role: 'CUSTOMER', jti: randomUUID(), epoch: 0 })
-  .then((token) => fetch(`${env.API}/cart`, { headers: { authorization: `Bearer ${token}` } }))
-  .then(async (res) => console.log(res.status, (await res.json()).message));
-EOF
-```
-
-- `401 Session has been revoked` is the pass. The signature, issuer and audience were accepted, and only the session lookup refused, because the api's database has no such user.
-- `401 Unauthorized` means the token itself was refused: the variable is missing, the JWKS is unreachable, or the issuer or audience differ.
-
-To back out, delete `AUTH_JWKS_URL`. ES256 is refused again and nothing else changes.
+If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the
+endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that
+succeeds, not before.
 
 ### `order.paid` waits for the user-service
 
-With `USER_DIRECTORY_SOURCE=remote`, the order confirmation reads the buyer's address from the user-service before its transaction opens, with a 500 ms timeout (`USER_SERVICE_TIMEOUT_MS`) behind the `user-service` breaker. A failure goes back on a ladder of its own: `ORDER_PAID_CONSUMER_ATTEMPTS` (15) deliveries, doubling from `QUEUE_CONSUMER_BACKOFF_MS` up to `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` (5 minutes). That rides out about 33 minutes of outage.
+The order confirmation reads the buyer's address from the user-service before its transaction opens,
+with a 500 ms timeout (`USER_SERVICE_TIMEOUT_MS`) behind the `user-service` breaker. A failure goes
+back on a ladder of its own: `ORDER_PAID_CONSUMER_ATTEMPTS` (15) deliveries, doubling from
+`QUEUE_CONSUMER_BACKOFF_MS` up to `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` (5 minutes). That rides out
+about 33 minutes of outage.
 
-A buyer the user-service does not know is retried until the event is `USER_DIRECTORY_NOT_FOUND_GRACE` (10m) old, since a freshly copied directory can miss the newest accounts. After that it is parked as permanent.
+A buyer the user-service does not know is retried until the event is `USER_DIRECTORY_NOT_FOUND_GRACE`
+(10m) old, since a freshly restored directory can miss the newest accounts. After that it is parked
+as permanent.
 
-Either way `DeadLetterQueued` pages. Once the user-service answers again, [replay the dead-letter queue](#replay-the-dead-letter-queue).
-
-The ladder is a custom backoff that only this release's worker knows. Do not roll the api back past it while `order.paid` jobs are waiting to retry: an older worker cannot schedule their next attempt, and the job stalls instead of retrying.
-
----
-
-## Cut over the user data
-
-Moves the five user tables into `user-postgres` and `/auth` onto the user-service. The copy is a moment, not a stream, so `/auth` writes are frozen for its duration — a couple of minutes on a small database. Rehearse it on compose first (below).
-
-Up to step 4 the way back is to unfreeze and change nothing else. After it, the way back is to copy the tables the other way, for the next 72 hours.
-
-### What the scripts need
-
-All four live in `apps/user-service/scripts/cutover` and run **local**. `copy-user-tables.sh` needs `psql` 16 or newer and both databases reachable at once:
-
-```bash
-railway connect api-postgres --tunnel-only &     # each prints the local port it listens on
-railway connect user-postgres --tunnel-only &
-export API_DATABASE_URL=postgres://…@127.0.0.1:<port>/railway
-export USER_DATABASE_URL=postgres://…@127.0.0.1:<port>/railway
-```
-
-| Variable | Read by | Value |
-| -------- | ------- | ----- |
-| `API_DATABASE_URL`, `USER_DATABASE_URL` | all | the two databases, through the tunnels |
-| `REDIS_URL` | precheck, prewarm, verify | the shared instance |
-| `IDENTITY_BUCKET_KEY` | verify | the one both services use |
-| `API_URL`, `GATEWAY_URL`, `USER_SERVICE_URL`, `ID_SERVICE_URL` | precheck | public URL for the gateway, private for the rest |
-| `INTERNAL_API_TOKEN` | precheck | the user-service's |
-| `JWT_ACCESS_SECRET`, `JWT_ACCESS_TTL` | precheck | the **api's** — compared as fingerprints, never printed |
-
-Read the two secrets straight out of Railway rather than pasting them:
-
-```bash
-export JWT_ACCESS_SECRET=$(railway variables --service jcool-ecommerce-backend --json | jq -r .JWT_ACCESS_SECRET)
-```
-
-### Sequence
-
-1. **Back up both databases.** See [Backup and restore](#backup-and-restore). Delete the dumps once the rollback window closes: they hold password and token hashes.
-2. **`pnpm --filter @jcool/user-service cutover:precheck`.** It must be green, including the fingerprint checks — the user-service needs the api's `IDENTITY_BUCKET_KEY`, `JWT_ACCESS_SECRET` (also as `CSRF_SECRET`) and `JWT_ACCESS_TTL`, or tokens and CSRF cookies stop validating at the flip. It also prints what it cannot check itself.
-3. **Freeze the writes:** `AUTH_WRITE_FREEZE=true` on the gateway. Every `POST`, `PUT`, `PATCH` and `DELETE` under `/auth` answers 503 with `Retry-After`; reads and the key set carry on. If a retention sweep is due, set `RETENTION_AUTH_TOKENS_ENABLED=false` (api) and `RETENTION_ENABLED=false` (user-service) too — the freeze does not stop them writing.
-4. **Copy and verify.**
-
-   ```bash
-   pnpm --filter @jcool/user-service cutover:copy
-   pnpm --filter @jcool/user-service cutover:verify
-   ```
-
-   Anything but `Verification passed.` stops the cutover: unfreeze and investigate. The api is still the owner and nothing was lost.
-5. **Redeploy the user-service, then prewarm.** Its key pin is only checked against rows that exist, and until now there were none; a wrong key refuses the boot here, where the cost is a restart.
-
-   ```bash
-   pnpm --filter @jcool/user-service cutover:prewarm-epochs
-   pnpm --filter @jcool/user-service cutover:verify --epochs
-   ```
-
-6. **Flip, in this order**, one deploy each:
-   - api: `AUTH_EPOCH_SOURCE=redis`, `USER_DIRECTORY_SOURCE=remote`. First, or the gateway hands the old api a token it cannot verify and logs everyone out.
-   - gateway: `AUTH_UPSTREAM=tcp6/${{user-service.RAILWAY_PRIVATE_DOMAIN}}:3000`, `AUTH_UPSTREAM_REQUIRED=true`.
-   - api: `AUTH_ROUTES_ENABLED=false`. Its `/auth` routes answer 410 from here on.
-   - Delete `AUTH_WRITE_FREEZE`, and put the sweeps back if step 3 stopped them.
-7. **Smoke** through the public URL: log in (the access token is now ES256), refresh with a cookie issued *before* the cutover, call an api route with the new token, then `logout-all` and check that token is refused everywhere. The api's own `/auth/login` answers 410.
-
-Later, once no pre-cutover token can still be alive, set `AUTH_HS256_ENABLED=false` on the api first, then on the user-service.
-
-### Roll back after the flip
-
-Within 72 hours, and only then. Everything the user-service changed in place — rotations, revocations, spent reset links, accounts registered since — comes back with the tables, which is why this copies whole tables rather than recent rows.
-
-1. `AUTH_WRITE_FREEZE=true` on the gateway.
-2. `pnpm --filter @jcool/user-service cutover:copy --reverse`, then `cutover:verify --reverse`. The api's five tables are truncated and refilled; no other table is touched.
-3. api: `AUTH_ROUTES_ENABLED=true`, `AUTH_EPOCH_SOURCE=db`, `USER_DIRECTORY_SOURCE=local`, `AUTH_HS256_ENABLED=true`. Leave `AUTH_JWKS_URL` set — the api has to keep accepting the ES256 tokens already handed out.
-4. gateway: `AUTH_UPSTREAM_REQUIRED=false`, delete `AUTH_UPSTREAM`, delete `AUTH_WRITE_FREEZE`.
-
-Refresh cookies and CSRF cookies issued by either side stay valid throughout, so nobody is logged out by the rollback.
-
-### Rehearse on compose
-
-Both databases are published on `127.0.0.1:5433` (api) and `127.0.0.1:5434` (user-service), Redis on `6380`, so the scripts run from the host unchanged. The api's own switches are read from the shell at `up` time and are not remembered, so every `up -d app` has to repeat the ones already set.
-
-```bash
-docker compose --profile user-service up -d
-AUTH_WRITE_FREEZE=true docker compose up -d gateway
-pnpm --filter @jcool/user-service cutover:precheck     # API_DATABASE_URL=…:5433, USER_DATABASE_URL=…:5434
-pnpm --filter @jcool/user-service cutover:copy
-pnpm --filter @jcool/user-service cutover:verify
-docker compose up -d --force-recreate user-service
-pnpm --filter @jcool/user-service cutover:prewarm-epochs
-
-AUTH_EPOCH_SOURCE=redis USER_DIRECTORY_SOURCE=remote docker compose up -d app
-AUTH_UPSTREAM=user-service:3000 AUTH_UPSTREAM_REQUIRED=true AUTH_WRITE_FREEZE=true docker compose up -d gateway
-AUTH_EPOCH_SOURCE=redis USER_DIRECTORY_SOURCE=remote AUTH_ROUTES_ENABLED=false docker compose up -d app
-AUTH_UPSTREAM=user-service:3000 AUTH_UPSTREAM_REQUIRED=true docker compose up -d gateway
-```
-
-The precheck compares both schemas, so it catches the usual local surprise: an api database whose user tables were never migrated in.
-
-`pnpm --filter @jcool/user-service test:system` runs the same sequence unattended against built images, including the rollback and the freeze.
+Either way `DeadLetterQueued` pages. Once the user-service answers again,
+[replay the dead-letter queue](#replay-the-dead-letter-queue).
 
 ---
 

@@ -19,7 +19,6 @@ import type { TokenDenylistReader } from './token-denylist.port';
 
 const ISSUER = 'https://users.test.invalid';
 const AUDIENCE = 'jcool-test';
-const SECRET = randomBytes(32).toString('hex');
 const USER_ID = '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f';
 const CLAIMS = { sub: USER_ID, role: 'CUSTOMER', jti: 'jti-1', epoch: 2 };
 
@@ -35,24 +34,30 @@ async function signingKey(kid: string, alg = 'ES256'): Promise<SigningKey> {
   return { kid, privateKey, publicKey, jwk: { ...(await exportJWK(publicKey)), kid, alg } };
 }
 
-function hs256(secret: string, claims: JWTPayload = CLAIMS, expiresIn: string | number = '5m'): Promise<string> {
+function hs256(secret: string, claims: JWTPayload = CLAIMS): Promise<string> {
   return new SignJWT(claims)
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
     .setIssuedAt()
-    .setExpirationTime(expiresIn)
+    .setExpirationTime('5m')
     .sign(new TextEncoder().encode(secret));
 }
 
-function es256(
-  key: SigningKey,
-  { issuer = ISSUER, audience = AUDIENCE, alg = 'ES256' }: { issuer?: string; audience?: string; alg?: string } = {},
-): Promise<string> {
-  return new SignJWT(CLAIMS)
+interface Es256Options {
+  claims?: JWTPayload;
+  issuer?: string;
+  audience?: string;
+  alg?: string;
+  expiresIn?: string | number;
+}
+
+function es256(key: SigningKey, options: Es256Options = {}): Promise<string> {
+  const { claims = CLAIMS, issuer = ISSUER, audience = AUDIENCE, alg = 'ES256', expiresIn = '5m' } = options;
+  return new SignJWT(claims)
     .setProtectedHeader({ alg, kid: key.kid, typ: 'JWT' })
     .setIssuer(issuer)
     .setAudience(audience)
     .setIssuedAt()
-    .setExpirationTime('5m')
+    .setExpirationTime(expiresIn)
     .sign(key.privateKey);
 }
 
@@ -72,11 +77,9 @@ describe('AccessTokenVerifier', () => {
     denylist = { isDenylisted: vi.fn<TokenDenylistReader['isDenylisted']>().mockResolvedValue(false) };
   });
 
-  function verifier(hs256Enabled = true, overrides: Partial<AuthVerifierOptions> = {}): AccessTokenVerifier {
+  function verifier(): AccessTokenVerifier {
     const options: AuthVerifierOptions = {
-      hs256: { enabled: hs256Enabled, secret: SECRET },
       es256: { keys: createLocalJWKSet({ keys: [current.jwk, previous.jwk] }), issuer: ISSUER, audience: AUDIENCE },
-      ...overrides,
     };
     return new AccessTokenVerifier(options, epochs, denylist);
   }
@@ -87,28 +90,23 @@ describe('AccessTokenVerifier', () => {
     await expect(outcome).rejects.toThrow(message ?? 'Unauthorized');
   }
 
-  it('accepts an HS256 token while the legacy path is on', async () => {
-    const user = await verifier().verify(await hs256(SECRET));
+  it('accepts an ES256 token signed by the current key', async () => {
+    const user = await verifier().verify(await es256(current));
 
     expect(user).toEqual({ userId: USER_ID, role: 'CUSTOMER', jti: 'jti-1', exp: expect.any(Number) as number });
   });
 
-  it('refuses an HS256 token once the legacy path is off', async () => {
-    await expectRefused(hs256(SECRET), verifier(false));
-  });
-
-  it('accepts an ES256 token signed by the current key', async () => {
-    const user = await verifier(false).verify(await es256(current));
-
-    expect(user.userId).toBe(USER_ID);
-  });
-
-  it('refuses every ES256 token while no key source is configured', async () => {
-    await expectRefused(es256(current), verifier(true, { es256: undefined }));
-  });
-
   it('accepts an ES256 token signed by the previous key during a rotation', async () => {
-    await expect(verifier(false).verify(await es256(previous))).resolves.toMatchObject({ userId: USER_ID });
+    await expect(verifier().verify(await es256(previous))).resolves.toMatchObject({ userId: USER_ID });
+  });
+
+  it('refuses an HS256 token under any secret', async () => {
+    await expectRefused(hs256(randomBytes(32).toString('hex')));
+  });
+
+  it('refuses an HS256 token keyed with the public key', async () => {
+    await expectRefused(hs256(await exportSPKI(current.publicKey)));
+    await expectRefused(hs256(JSON.stringify(current.jwk)));
   });
 
   it('refuses a key id that is not published', async () => {
@@ -125,15 +123,6 @@ describe('AccessTokenVerifier', () => {
     await expectRefused(new UnsecuredJWT(CLAIMS).setIssuedAt().setExpirationTime('5m').encode());
   });
 
-  it('refuses an HS256 token keyed with the public key', async () => {
-    await expectRefused(hs256(await exportSPKI(current.publicKey)));
-    await expectRefused(hs256(JSON.stringify(current.jwk)));
-  });
-
-  it('refuses an HS256 token under another secret', async () => {
-    await expectRefused(hs256(randomBytes(32).toString('hex')));
-  });
-
   it('refuses an algorithm it has no path for', async () => {
     await expectRefused(es256(await signingKey(current.kid, 'ES384'), { alg: 'ES384' }));
   });
@@ -146,7 +135,7 @@ describe('AccessTokenVerifier', () => {
   });
 
   it('refuses an expired token', async () => {
-    await expectRefused(hs256(SECRET, CLAIMS, Math.floor(Date.now() / 1000) - 1));
+    await expectRefused(es256(current, { expiresIn: Math.floor(Date.now() / 1000) - 1 }));
   });
 
   it.each([
@@ -154,7 +143,7 @@ describe('AccessTokenVerifier', () => {
     ['an unknown role', { ...CLAIMS, role: 'ROOT' }],
     ['no jti', { sub: USER_ID, role: 'CUSTOMER', epoch: 2 }],
   ])('refuses a token with %s', async (_case, claims) => {
-    await expectRefused(hs256(SECRET, claims));
+    await expectRefused(es256(current, { claims }));
   });
 
   it.each([undefined, '', 'not-a-jwt'])('refuses %j as a token', async (token) => {
@@ -178,28 +167,20 @@ describe('AccessTokenVerifier', () => {
   it('refuses a token whose user is gone', async () => {
     epochs.current.mockResolvedValue(null);
 
-    await expectRefused(hs256(SECRET), verifier(), 'Session has been revoked');
+    await expectRefused(es256(current), verifier(), 'Session has been revoked');
   });
 
   it('reads a token without an epoch claim as epoch 0', async () => {
     const { epoch: _epoch, ...claims } = CLAIMS;
     epochs.current.mockResolvedValue(0);
 
-    await expect(verifier().verify(await hs256(SECRET, claims))).resolves.toMatchObject({ userId: USER_ID });
+    await expect(verifier().verify(await es256(current, { claims }))).resolves.toMatchObject({ userId: USER_ID });
   });
 
   it('checks no revocation state for a token it refused on signature', async () => {
-    await expectRefused(hs256(randomBytes(32).toString('hex')));
+    await expectRefused(es256(await signingKey(current.kid)));
 
     expect(denylist.isDenylisted).not.toHaveBeenCalled();
     expect(epochs.current).not.toHaveBeenCalled();
-  });
-
-  it('refuses to start with the legacy path on and no secret', () => {
-    expect(() => verifier(true, { hs256: { enabled: true } })).toThrow(/HS256/);
-  });
-
-  it('refuses to start with no path a token could pass', () => {
-    expect(() => verifier(false, { es256: undefined })).toThrow(/no ES256 key source/);
   });
 });

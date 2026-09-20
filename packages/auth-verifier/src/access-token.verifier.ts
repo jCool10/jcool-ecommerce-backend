@@ -9,28 +9,16 @@ import { TOKEN_DENYLIST, type TokenDenylistReader } from './token-denylist.port'
 type VerifiedClaims = AccessTokenClaims & { exp: number };
 
 /**
- * The header picks one path and each path takes one algorithm, so a token never chooses the kind of
- * key it is checked against: HS256 keyed with a public key lands on the secret and fails there.
+ * ES256 is the only path, so the algorithm in the header can never pick the kind of key a token is
+ * checked against — anything else is refused before its signature is looked at.
  */
 @Injectable()
 export class AccessTokenVerifier {
-  private readonly hs256Secret: Uint8Array | undefined;
-
   constructor(
     @Inject(AUTH_VERIFIER_OPTIONS) private readonly options: AuthVerifierOptions,
     @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochReader,
     @Inject(TOKEN_DENYLIST) private readonly denylist: TokenDenylistReader,
-  ) {
-    const { enabled, secret } = options.hs256;
-    if (enabled && !secret) {
-      throw new Error('HS256 verification is enabled without a secret');
-    }
-    // Would boot fine and then refuse every caller.
-    if (!enabled && !options.es256) {
-      throw new Error('HS256 verification is off and no ES256 key source is configured');
-    }
-    this.hs256Secret = enabled ? new TextEncoder().encode(secret) : undefined;
-  }
+  ) {}
 
   async verify(token: string | undefined): Promise<AuthenticatedUser> {
     const claims = token ? await this.verifiedClaims(token) : null;
@@ -59,14 +47,11 @@ export class AccessTokenVerifier {
 
   private verifySignature(token: string): Promise<JWTVerifyResult> {
     const { alg } = decodeProtectedHeader(token);
-    if (alg === 'HS256' && this.hs256Secret) {
-      return jwtVerify(token, this.hs256Secret, { algorithms: ['HS256'] });
+    if (alg !== 'ES256') {
+      return Promise.reject(new Error(`no verification path for alg ${String(alg)}`));
     }
-    if (alg === 'ES256' && this.options.es256) {
-      const { keys, issuer, audience } = this.options.es256;
-      return jwtVerify(token, keys, { algorithms: ['ES256'], issuer, audience });
-    }
-    return Promise.reject(new Error(`no verification path for alg ${String(alg)}`));
+    const { keys, issuer, audience } = this.options.es256;
+    return jwtVerify(token, keys, { algorithms: ['ES256'], issuer, audience });
   }
 }
 

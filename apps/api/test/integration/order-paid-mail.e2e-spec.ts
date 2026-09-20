@@ -6,9 +6,7 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { LEGACY_AUTH_MODE } from '../setup/e2e-constants';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { createTestUser } from '../setup/fixtures/user.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -81,20 +79,6 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
     const [delivered] = await mail.waitForMail(user.email);
     expect(delivered.Subject).toBe('Your order is confirmed');
     expect(await mail.body(delivered.ID)).toContain(ORDER_ID);
-  });
-
-  it('confirms from the local user directory, as the api ships', async () => {
-    const local = await createTestApp({ ...LEGACY_AUTH_MODE, SMTP_URL: mail.smtpUrl, MAIL_FROM, MAIL_TIMEOUT_MS });
-    try {
-      const { user } = await createTestUser(local);
-
-      await expect(local.get(DomainEventProcessor).process(paidJob(user.id))).resolves.toBe('processed');
-
-      const [delivered] = await mail.waitForMail(user.email);
-      expect(delivered.Subject).toBe('Your order is confirmed');
-    } finally {
-      await local.close();
-    }
   });
 
   it('sends nothing a second time when the message is redelivered', async () => {

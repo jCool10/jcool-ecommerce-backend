@@ -7,6 +7,7 @@ import { ClsModule } from 'nestjs-cls';
 import { AuthVerifierModule } from '@jcool/auth-verifier';
 import { ConfigModule } from '@shared/config';
 import { authVerifierOptions } from '@shared/auth/auth-verifier-options.factory';
+import { SessionStateModule } from '@shared/auth/session-state.module';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import * as schema from '@shared/infrastructure/database/schema';
 import { RedisDurabilityCheck, RedisModule } from '@jcool/platform/redis';
@@ -24,9 +25,6 @@ import { InventoryModule } from '@modules/inventory/inventory.module';
 import { MediaModule } from '@modules/media/media.module';
 import { OrderModule } from '@modules/order/order.module';
 import { PaymentModule } from '@modules/payment/payment.module';
-import { UserModule } from '@modules/user/user.module';
-import { AuthModule } from '@modules/user/auth.module';
-import { SessionStateModule } from '@modules/user/session-state.module';
 
 // ClsModule precedes ObservabilityLoggerModule so its correlation middleware mounts before pino;
 // ThrottlerSecurityModule precedes AuthVerifierModule: global guards run in module-scan order.
@@ -59,8 +57,6 @@ import { SessionStateModule } from '@modules/user/session-state.module';
     MediaModule,
     OrderModule,
     PaymentModule,
-    UserModule,
-    AuthModule,
   ],
   controllers: [DebugController],
   providers: [
