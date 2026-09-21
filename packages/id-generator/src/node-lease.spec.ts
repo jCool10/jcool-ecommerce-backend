@@ -2,9 +2,10 @@ import { decode } from '@jcool/id-codec';
 import { LeaseNotHeldError } from './identity.errors';
 import type { LeaseGrant, LeaseStore } from './lease-store.port';
 import { NodeLease, type NodeLeaseOptions } from './node-lease';
-import type { IdentityClock } from './uuid-v8.generator';
+import type { IdentityClock } from './snowflake.generator';
 
-const START_MS = 1_756_000_000_000;
+// After EPOCH_MS (2026-01-01), the earliest instant the layout can stamp.
+const START_MS = 1_800_000_000_000;
 const TTL_MS = 300_000;
 const FENCE_MARGIN_MS = 15_000;
 const QUARANTINE_MS = 10_000;

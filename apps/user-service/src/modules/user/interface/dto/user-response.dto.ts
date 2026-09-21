@@ -5,8 +5,9 @@ import { ROLES } from '@jcool/platform/rbac';
 /** Always build through `fromEntity`: naming the safe fields is what keeps `passwordHash` from leaking. */
 export class UserResponseDto {
   @ApiProperty({
-    example: '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f',
-    description: 'User id (UUID v8 — carries the routing bucket).',
+    example: '137465797020397179',
+    description:
+      'User id — a 63-bit integer carrying the routing bucket, sent as a decimal string because it exceeds what a JSON number holds exactly.',
   })
   id!: string;
 

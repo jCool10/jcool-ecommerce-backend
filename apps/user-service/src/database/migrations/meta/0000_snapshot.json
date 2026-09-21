@@ -1,5 +1,5 @@
 {
-  "id": "9bb1ae81-1844-4301-b6c7-f763f0bb84a6",
+  "id": "b5e398eb-b771-4043-aa5b-0ee1f90ac97a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -10,13 +10,13 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": true,
           "notNull": true
         },
         "user_id": {
           "name": "user_id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -139,6 +139,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "layout_version": {
+          "name": "layout_version",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "pinned_at": {
           "name": "pinned_at",
           "type": "timestamp with time zone",
@@ -166,13 +173,13 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": true,
           "notNull": true
         },
         "user_id": {
           "name": "user_id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -285,13 +292,13 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": true,
           "notNull": true
         },
         "user_id": {
           "name": "user_id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -309,7 +316,7 @@
         },
         "replaced_by_token_id": {
           "name": "replaced_by_token_id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
@@ -439,7 +446,7 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "bigint",
           "primaryKey": true,
           "notNull": true
         },

@@ -2,7 +2,7 @@ import { Inject, Injectable, type OnApplicationBootstrap } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config';
 import { desc, eq } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
-import { bucketForEmail, bucketOf, identityKeyFingerprint } from '@jcool/id-codec';
+import { LAYOUT_VERSION, bucketForEmail, bucketOf, identityKeyFingerprint } from '@jcool/id-codec';
 import { normalizeEmail, toError } from '@jcool/kernel';
 import { DRIZZLE, type DrizzleDB } from '../../../database';
 import { identityKeyPin, users } from './schema/user.schema';
@@ -63,7 +63,7 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
   private async verifyKeyPin(key: string): Promise<void> {
     const fingerprint = identityKeyFingerprint(key);
     const bootstrap = this.config.get<boolean>('identity.pinBootstrap') === true;
-    let pinned: string | undefined;
+    let pinned: { fingerprint: string; layoutVersion: number } | undefined;
 
     try {
       // Concurrent first boots race here rather than in a read-then-write gap; the loser falls
@@ -72,23 +72,26 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
         ? await this.withinTimeout(
             this.db
               .insert(identityKeyPin)
-              .values({ id: PIN_ROW_ID, fingerprint })
+              .values({ id: PIN_ROW_ID, fingerprint, layoutVersion: LAYOUT_VERSION })
               .onConflictDoNothing()
               .returning({ fingerprint: identityKeyPin.fingerprint }),
           )
         : [];
       if (persisted) {
-        this.logger.info({ fingerprint }, 'identity bucket key pinned — no key was pinned here before');
+        this.logger.info(
+          { fingerprint, layoutVersion: LAYOUT_VERSION },
+          'identity bucket key pinned — no key was pinned here before',
+        );
         return;
       }
 
       const [row] = await this.withinTimeout(
         this.db
-          .select({ fingerprint: identityKeyPin.fingerprint })
+          .select({ fingerprint: identityKeyPin.fingerprint, layoutVersion: identityKeyPin.layoutVersion })
           .from(identityKeyPin)
           .where(eq(identityKeyPin.id, PIN_ROW_ID)),
       );
-      pinned = row?.fingerprint;
+      pinned = row;
     } catch (error) {
       this.logger.warn({ err: toError(error) }, 'identity bucket key pin not verified');
       return;
@@ -102,12 +105,21 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
       );
       return;
     }
-    if (pinned !== fingerprint) {
+    if (pinned.fingerprint !== fingerprint) {
       throw new Error(
         `IDENTITY_BUCKET_KEY does not match the key this database was built with ` +
-          `(pinned ${pinned}, current ${fingerprint}). The key is permanent: booting under a ` +
-          `different one routes every new id to a shard that will not hold its rows. Restore the ` +
-          `original key, or reset the database if it holds nothing worth keeping.`,
+          `(pinned ${pinned.fingerprint}, current ${fingerprint}). The key is permanent: booting ` +
+          `under a different one routes every new id to a shard that will not hold its rows. ` +
+          `Restore the original key, or reset the database if it holds nothing worth keeping.`,
+      );
+    }
+    if (pinned.layoutVersion !== LAYOUT_VERSION) {
+      throw new Error(
+        `The id layout does not match the one this database was built with (pinned ` +
+          `${pinned.layoutVersion}, current ${LAYOUT_VERSION}). The epoch and the field widths are ` +
+          `permanent: every stored id decodes to a different timestamp and a different bucket under ` +
+          `another layout. Restore the original build, or reset the database if it holds nothing ` +
+          `worth keeping.`,
       );
     }
   }
@@ -117,8 +129,8 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
 
     try {
       // Newest row: an old one only proves the key was right at some point. Ordered by id, not
-      // `createdAt` — the id leads with a big-endian ms timestamp and Postgres compares uuids
-      // bytewise, so this walks the primary key instead of sorting the table.
+      // `createdAt` — the id carries its millisecond in the high bits of a bigint, so numeric order
+      // is time order and this walks the primary key instead of sorting the table.
       [sample] = await this.withinTimeout(
         this.db.select({ id: users.id, email: users.email }).from(users).orderBy(desc(users.id)).limit(1),
       );
@@ -136,8 +148,8 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
     try {
       actual = bucketOf(sample.id);
     } catch {
-      // A non-v8 id carries no bucket. Reported below as a mismatch, because the codec's parse error
-      // reads like a bug in the codec when the fault is the row.
+      // An id from outside this layout carries no bucket we can read. Reported below as a mismatch,
+      // because the codec's parse error reads like a bug in the codec when the fault is the row.
     }
 
     if (actual !== expected) {

@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsSnowflakeId } from '@jcool/platform/interface';
 import { ORDER_STATUSES, OrderStatus } from '../../domain/order-status';
 
 export class ListOrdersQueryDto {
@@ -27,8 +28,8 @@ export class ListAdminOrdersQueryDto extends ListOrdersQueryDto {
   @IsIn(ORDER_STATUSES)
   status?: OrderStatus;
 
-  @ApiPropertyOptional({ format: 'uuid', description: 'Only orders placed by this user' })
+  @ApiPropertyOptional({ example: '137465797020397179', description: 'Only orders placed by this user' })
   @IsOptional()
-  @IsUUID()
+  @IsSnowflakeId()
   userId?: string;
 }

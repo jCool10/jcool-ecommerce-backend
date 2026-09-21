@@ -5,7 +5,7 @@ import { decode } from '@jcool/id-codec';
 import { freshDatabase, holdAllNodesExcept, type LeaseDatabase, openLeaseDatabase } from '../setup/databases';
 import { createTestApp } from '../setup/test-app';
 
-const NODE = 42;
+const NODE = 21;
 const QUARANTINE_MS = 10_000;
 const CLAIM = { holder: 'claimant', ttlMs: 60_000, quarantineMs: QUARANTINE_MS };
 

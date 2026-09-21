@@ -1,12 +1,16 @@
 # id-service
 
-Mints UUIDv8 ids (layout in [`@jcool/id-codec`](../../packages/id-codec)) under a 10-bit node id leased from the service's own Postgres. It runs as three or more stateless replicas behind the private load balancer in [`apps/gateway`](../gateway). No id is stamped past its holder's lease end, and the next holder of a node starts above that end, so no id and no `(ts, node, seq)` triple is ever issued twice, whatever the replicas' clocks say.
+Mints 63-bit integer ids (layout in [`@jcool/id-codec`](../../packages/id-codec): `41 ts_ms │ 12 bucket │ 5 node │ 5 seq`) under a 5-bit node id leased from the service's own Postgres. It runs as three or more stateless replicas behind the private load balancer in [`apps/gateway`](../gateway). No id is stamped past its holder's lease end, and the next holder of a node starts above that end, so no id and no `(ts, node, seq)` triple is ever issued twice, whatever the replicas' clocks say.
+
+The layout carries no random bits, so that lease is the *whole* of the uniqueness argument: a node belongs to one holder at a time, and a new holder is floored past the previous holder's entire lease window rather than past what it last reported minting.
+
+An id is returned as a **decimal string**, not a JSON number. 63 bits outruns the 53 a JSON number holds exactly, about 25 days past the 2026-01-01 epoch, so a client that parses one as a number silently loses its last digits.
 
 ## API
 
 | Route | Answer |
 | --- | --- |
-| `POST /v1/ids` `{ "bucket": 0..4095, "count"?: 1..1000 }` | `200 { "ids": [...] }`, where every id carries the bucket that was sent. `400` for anything outside those ranges or any extra field. `503 { "code": "LEASE_NOT_HELD" }` when this replica holds no usable lease; the gateway retries the request on another replica. |
+| `POST /v1/ids` `{ "bucket": 0..4095, "count"?: 1..32 }` | `200 { "ids": [...] }`, decimal strings, each carrying the bucket that was sent. The cap is one node-millisecond: the sequence holds 32 ids per millisecond, and a larger batch would busy-wait into the next one with the event loop blocked. `400` for anything outside those ranges or any extra field. `503 { "code": "LEASE_NOT_HELD" }` when this replica holds no usable lease; the gateway retries the request on another replica. |
 | `GET /health/live` | `200` while the process runs. |
 | `GET /health/ready` | `200` while the replica holds an unfenced lease, including while it drains. `503` with the lease state otherwise. |
 | `GET /metrics` | Prometheus, guarded by `METRICS_TOKEN` as in the api. |
@@ -19,7 +23,7 @@ The service never receives an email and never logs the ids it mints.
 
 ## The node lease
 
-`node_leases` has one row per node id from 1 to 1022; 0 and 1023 stay reserved for the api and scripts. The table is seeded by migration. Every operation is a single SQL statement, and every time comparison uses the database clock.
+`node_leases` has one row per node id from 1 to 30; 0 and 31 stay reserved for the api and scripts. The table is seeded by migration. Every operation is a single SQL statement, and every time comparison uses the database clock.
 
 - **Acquire** claims the node that expired longest ago, and only after the quarantine has passed. It uses `FOR UPDATE SKIP LOCKED` and bumps `generation`. A holder is identified by its generation, never by its name.
 - **Renew** runs every `ID_LEASE_RENEW_EVERY_MS` and records the last timestamp minted in `max_ts_ms`. If the lease has already expired, renew returns *lost*: minting stops immediately and the replica claims another node.

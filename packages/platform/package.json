@@ -71,6 +71,7 @@
     "test:cov": "vitest run --coverage"
   },
   "dependencies": {
+    "@jcool/id-codec": "workspace:*",
     "@jcool/id-generator": "workspace:*",
     "@jcool/kernel": "workspace:*",
     "@jcool/metrics-port": "workspace:*",

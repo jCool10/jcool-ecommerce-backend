@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { normalizeEmail } from '@jcool/kernel';
 import { bucketForEmail, identityKeyFingerprint } from './email-bucket';
-import { BUCKET_COUNT, bucketOf, encode } from './uuid-v8.codec';
+import { BUCKET_COUNT, SEQUENCE_COUNT, bucketOf, encode } from './snowflake.codec';
 
 const KEY = 'test-identity-bucket-key-not-a-real-secret-000';
 const OTHER_KEY = 'test-identity-bucket-key-not-a-real-secret-001';
@@ -89,7 +89,7 @@ describe('email bucket', () => {
     for (let i = 0; i < ROUND_TRIP_SAMPLES; i++) {
       const email = normalizeEmail(`Round.Trip+${i}@Example.com`);
       const bucket = bucketForEmail(email, KEY);
-      const id = encode({ tsMs: 1_756_000_000_000 + i, bucket, nodeId: 0, sequence: i % 4096, random: i });
+      const id = encode({ tsMs: 1_800_000_000_000 + i, bucket, nodeId: 0, sequence: i % SEQUENCE_COUNT });
       expect(bucketOf(id)).toBe(bucket);
     }
   }, 60_000);
@@ -187,11 +187,10 @@ describe('bucket layout changes', () => {
     })();
 
     const minted = encode({
-      tsMs: 1_756_000_000_000,
+      tsMs: 1_800_000_000_000,
       bucket: bucketForEmail(moved, KEY),
       nodeId: 0,
       sequence: 1,
-      random: 1,
     });
 
     // Preconditions, restated so the assertion below is readable: the id keeps the bucket it was

@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import type { NormalizedEmail } from '@jcool/kernel';
-import { BUCKET_COUNT } from './uuid-v8.codec';
+import { BUCKET_COUNT } from './snowflake.codec';
 
 // Fixed public input, so the fingerprint depends on the key alone and needs no rows to exist.
 const KEY_FINGERPRINT_SENTINEL = 'identity-key-fingerprint-v1';

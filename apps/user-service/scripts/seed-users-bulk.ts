@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { normalizeEmail, type NormalizedEmail } from '@jcool/kernel';
 import type { IdentityService } from '../src/modules/user/application/services/identity.service';
 import { scriptsIdentity } from './scripts-identity';
+import { withScriptsMintLock } from './scripts-mint-lock';
 
 // Grows `users` and its unique-email index to a target row count WITHOUT going through the API, so
 // the benchmark can read index size / cache residency / autovacuum behavior at scale. Every row
@@ -66,25 +67,27 @@ async function main(): Promise<void> {
     const count = intArg('count', 200_000);
     const batch = Math.max(1, Math.min(intArg('batch', 2_000), 20_000)); // ×3 params stays under pg's 65535 cap
     const hash = await argon2.hash(SEED_PASSWORD);
-    const ids = scriptsIdentity();
 
-    const startedAt = Date.now();
-    let inserted = 0;
-    for (let start = 0; start < count; start += batch) {
-      const size = Math.min(batch, count - start);
-      await insertBatch(pool, ids, hash, start, size);
-      inserted += size;
-      if (inserted % (batch * 20) === 0 || inserted === count) {
-        const secs = (Date.now() - startedAt) / 1000;
-        console.log(`  ${inserted}/${count} rows (${Math.round(inserted / Math.max(secs, 0.001))} rows/s)`);
+    await withScriptsMintLock(pool, async () => {
+      const ids = scriptsIdentity();
+      const startedAt = Date.now();
+      let inserted = 0;
+      for (let start = 0; start < count; start += batch) {
+        const size = Math.min(batch, count - start);
+        await insertBatch(pool, ids, hash, start, size);
+        inserted += size;
+        if (inserted % (batch * 20) === 0 || inserted === count) {
+          const secs = (Date.now() - startedAt) / 1000;
+          console.log(`  ${inserted}/${count} rows (${Math.round(inserted / Math.max(secs, 0.001))} rows/s)`);
+        }
       }
-    }
-    const secs = (Date.now() - startedAt) / 1000;
-    console.log(
-      `Bulk seed complete: ${inserted} synthetic users in ${secs.toFixed(1)}s ` +
-        `(${Math.round(inserted / Math.max(secs, 0.001))} rows/s). Prefix '${EMAIL_PREFIX}', domain '${EMAIL_DOMAIN}'.`,
-    );
-    console.log(`Clean up later with: pnpm seed:users:bulk --clean`);
+      const secs = (Date.now() - startedAt) / 1000;
+      console.log(
+        `Bulk seed complete: ${inserted} synthetic users in ${secs.toFixed(1)}s ` +
+          `(${Math.round(inserted / Math.max(secs, 0.001))} rows/s). Prefix '${EMAIL_PREFIX}', domain '${EMAIL_DOMAIN}'.`,
+      );
+      console.log(`Clean up later with: pnpm seed:users:bulk --clean`);
+    });
   } finally {
     await pool.end();
   }

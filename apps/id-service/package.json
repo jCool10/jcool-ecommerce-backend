@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Mints UUIDv8 ids under a node id leased from its own Postgres; runs as N replicas behind the gateway",
+  "description": "Mints 63-bit integer ids under a node id leased from its own Postgres; runs as N replicas behind the gateway",
   "engines": {
     "node": ">=22.9"
   },

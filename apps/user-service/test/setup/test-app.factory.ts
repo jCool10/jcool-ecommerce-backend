@@ -2,7 +2,7 @@ import type { INestApplication, Type } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { Logger } from 'nestjs-pino';
-import { SCRIPTS_NODE_ID, UuidV8Generator } from '@jcool/id-generator';
+import { SCRIPTS_NODE_ID, SnowflakeGenerator } from '@jcool/id-generator';
 import { RedisService } from '@jcool/platform/redis';
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/app.setup';
@@ -25,7 +25,7 @@ export interface TestAppOptions {
 
 // Shared by every app in this worker: a second generator on the same node id replays the sequence,
 // and some suites hold two apps open against one database.
-const generator = UuidV8Generator.create({ nodeId: SCRIPTS_NODE_ID });
+const generator = SnowflakeGenerator.create({ nodeId: SCRIPTS_NODE_ID });
 
 export const inProcessIdGenerator: IdGeneratorPort = {
   mint: (bucket, count = 1) => Promise.resolve(Array.from({ length: count }, () => generator.generate(bucket))),

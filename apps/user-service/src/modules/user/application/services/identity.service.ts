@@ -22,7 +22,7 @@ export class IdentityService {
     return this.mintOne(bucketForEmail(email, this.bucketKey));
   }
 
-  /** Rejects a non-v8 `userId`: it predates routing and has no bucket to colocate with. */
+  /** Rejects a `userId` from outside this layout: it carries no bucket to colocate with. */
   async mintOwnedBy(userId: string): Promise<string> {
     return this.mintOne(bucketOf(userId));
   }

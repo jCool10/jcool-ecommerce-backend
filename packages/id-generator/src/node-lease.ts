@@ -1,7 +1,7 @@
 import { type IdentityClock, systemClock } from './identity-clock';
 import { LeaseNotHeldError } from './identity.errors';
 import type { LeaseStore } from './lease-store.port';
-import { UuidV8Generator } from './uuid-v8.generator';
+import { SnowflakeGenerator } from './snowflake.generator';
 
 export const LEASE_STATES = [
   'idle',
@@ -43,7 +43,7 @@ interface ClockReading {
 interface Held {
   nodeId: number;
   generation: number;
-  generator: UuidV8Generator;
+  generator: SnowflakeGenerator;
   /** Taken before the store call that granted or extended the lease, so the deadline errs early. */
   anchor: ClockReading;
   /** On the store's clock. No id is stamped past it, which is what the next holder's floor relies on. */
@@ -106,7 +106,7 @@ export class NodeLease {
     return this.held?.nodeId;
   }
 
-  get generator(): UuidV8Generator | null {
+  get generator(): SnowflakeGenerator | null {
     return this.held?.generator ?? null;
   }
 
@@ -140,7 +140,7 @@ export class NodeLease {
         return { kind: 'floor_rejected', nodeId, aheadMs: floorMs - dbNowMs };
       }
 
-      const generator = UuidV8Generator.createWithClock({
+      const generator = SnowflakeGenerator.createWithClock({
         nodeId,
         clock: this.clock,
         // `prevUntilMs` covers what the previous holder minted after its last report, whatever its clock said.

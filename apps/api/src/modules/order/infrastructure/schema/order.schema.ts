@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
+import { snowflakeId } from '@jcool/platform/database';
 
 export const orderStatus = pgEnum('order_status', ['DRAFT', 'PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED']);
 
@@ -21,8 +22,9 @@ export const orders = pgTable(
   'orders',
   {
     id: id(),
-    // No FK — cross-context boundary kept at the application layer.
-    userId: uuid('user_id').notNull(),
+    // No FK — cross-context boundary kept at the application layer. Minted by the id service, so
+    // this column holds its layout, not the uuids the rows around it use.
+    userId: snowflakeId('user_id').notNull(),
     status: orderStatus('status').notNull().default('DRAFT'),
     currency: text('currency').notNull(),
     // Snapshot total in smallest units; never a float. bigint (not int4) because the

@@ -40,14 +40,14 @@ user-service defends this on every boot, in two layers
 (`apps/user-service/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use the same wrong key).
-2. **Key pin** — a fingerprint of the key stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. Runs *after* the canary on purpose: the pin **writes**, so pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
+2. **Key pin** — a fingerprint of the key, and the id layout version, stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. Runs *after* the canary on purpose: the pin **writes**, so pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
 
 Both **fail open** if the database is unreachable (no id is minted while it is down) and **fail closed** only on a disagreement actually read back.
 
 The first boot against an empty database logs the line that matters:
 
 ```
-Pinned identity bucket key <fingerprint> — no key was pinned here before
+identity bucket key pinned — no key was pinned here before   (fields: fingerprint, layoutVersion)
 ```
 
 **Record that fingerprint with the key.** It prints only on the boot that *writes* the pin; a boot against an already-pinned database is silent.
@@ -64,6 +64,16 @@ There are exactly two correct responses:
 - **Reset the database**, if and only if it holds nothing worth keeping.
 
 There is no third option. Do not delete the pin row to make the message go away: that removes the only evidence of which key the existing ids were minted under, and the canary alone cannot rebuild it.
+
+### The id layout is the same kind of one-way door
+
+```
+The id layout does not match the one this database was built with (pinned X, current Y)
+```
+
+An id is a 63-bit integer laid out `41 ts_ms │ 12 bucket │ 5 node │ 5 seq` over an epoch of `2026-01-01T00:00:00Z` (`packages/id-codec/src/snowflake.codec.ts`). The epoch and the field widths are **permanent in the same way the key is**: move either and every id already stored decodes to a different timestamp and a different bucket, silently. `identity_key_pin.layout_version` is what makes that loud — a build carrying a different `LAYOUT_VERSION` refuses to boot against this database.
+
+The two correct responses are the same two: restore the original build, or reset the database if it holds nothing worth keeping. Changing the layout deliberately is a data migration that rewrites every id, not a version bump.
 
 ---
 
@@ -380,6 +390,28 @@ pnpm db:migrate
 The compiled CLI fails loudly if its migrations directory resolves to a readable but wrong path: a directory with zero `.sql` files would otherwise make drizzle report "nothing pending" and exit 0 — a green deploy onto an empty schema. In the image `MIGRATIONS_DIR=/app/migrations`, absolute because the image ships no `src/` tree.
 
 **Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why the api is a single Railway service.
+
+### The id-type migrations only apply to empty tables
+
+Three migrations moved user ids from `uuid` to `bigint`, and they are written to fail rather than guess:
+
+| Service | Migration | What it does |
+| --- | --- | --- |
+| api | `0022_round_green_goblin.sql` | drops and re-adds `carts.user_id`, `orders.user_id`, `media_assets.uploaded_by` as `bigint NOT NULL`, then rebuilds the indexes over them |
+| user-service | `0000_users_baseline.sql` | the baseline itself was regenerated; there is no in-place step from the old one |
+| id-service | `0002_bright_dreadnoughts.sql` | deletes `node_leases` rows above 30 and narrows the range constraint to 1..30 |
+
+Postgres has no cast from `uuid` to `bigint`, so an `ALTER COLUMN … SET DATA TYPE` would be refused outright. `ADD COLUMN … NOT NULL` with no default succeeds on an empty table — every new environment and every CI run — and fails on a populated one. That failure is the correct outcome, not an obstacle: those rows point at user ids that no longer exist anywhere, and there is no mapping back.
+
+So on a development or staging database that still holds rows, recreate it rather than migrating it:
+
+```bash
+docker compose down -v                 # drops every volume, including all three Postgres
+docker compose up -d postgres redis meilisearch mailpit minio minio-init
+pnpm db:migrate && pnpm db:seed
+```
+
+The user-service and id-service databases come back the same way — their containers run their own migrate step (`--profile user-service`, and the one-shot in front of the id-service replicas). Back up first if anything in there is worth keeping; see [Backup and restore](#backup-and-restore).
 
 ---
 

@@ -1,7 +1,7 @@
 import { RedisContainer } from '@testcontainers/redis';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { UuidV8Generator } from '@jcool/id-generator';
+import { SnowflakeGenerator } from '@jcool/id-generator';
 import { ID_GENERATOR } from '../../src/modules/user/application/ports/id-generator.port';
 import { IdServiceHttpAdapter } from '../../src/modules/user/infrastructure/id-service.http-adapter';
 import { REDIS_IMAGE } from '../setup/global-setup';
@@ -30,7 +30,7 @@ describe('Boot checks (integration)', () => {
   it('builds no in-process id generator: every id comes from the id service', async () => {
     const app = await createTestApp({}, [], { realIdService: true });
     try {
-      expect(() => app.get(UuidV8Generator)).toThrow();
+      expect(() => app.get(SnowflakeGenerator)).toThrow();
       expect(app.get(ID_GENERATOR)).toBeInstanceOf(IdServiceHttpAdapter);
     } finally {
       await app.close();

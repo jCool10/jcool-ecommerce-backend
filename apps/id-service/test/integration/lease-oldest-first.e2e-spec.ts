@@ -14,16 +14,16 @@ describe('lease acquire order', () => {
 
   // The longest-idle node is the one whose previous holder is least likely to still be minting.
   it('claims the node that expired longest ago, the lowest id on a tie', async () => {
-    await holdAllNodesExcept(leases.pool, 500, 700, 900);
+    await holdAllNodesExcept(leases.pool, 5, 7, 9);
     await leases.pool.query(`
       UPDATE node_leases
-      SET lease_until = CASE node_id WHEN 900 THEN now() - interval '1 minute' ELSE timestamptz '2020-01-01' END
-      WHERE node_id IN (500, 700, 900)
+      SET lease_until = CASE node_id WHEN 9 THEN now() - interval '1 minute' ELSE timestamptz '2020-01-01' END
+      WHERE node_id IN (5, 7, 9)
     `);
 
     const order = [];
     for (let i = 0; i < 4; i += 1) order.push((await leases.store.acquire(CLAIM))?.nodeId ?? null);
 
-    expect(order).toEqual([500, 700, 900, null]);
+    expect(order).toEqual([5, 7, 9, null]);
   });
 });

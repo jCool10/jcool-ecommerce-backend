@@ -18,8 +18,7 @@ interface Received {
 
 type Reply = { status: number; body: unknown } | 'hang';
 
-const idIn = (bucket: number, sequence = 0): string =>
-  encode({ tsMs: Date.now(), bucket, nodeId: 1, sequence, random: 0 });
+const idIn = (bucket: number, sequence = 0): string => encode({ tsMs: Date.now(), bucket, nodeId: 1, sequence });
 
 class FakeIdService {
   readonly received: Received[] = [];
@@ -109,7 +108,7 @@ describe('IdServiceHttpAdapter', () => {
     ['a body without ids', { status: 200, body: {} }],
     ['fewer ids than asked for', { status: 200, body: { ids: [idIn(1)] } }],
     ['ids that are not strings', { status: 200, body: { ids: [1, 2] } }],
-    ['ids that are not UUIDv8', { status: 200, body: { ids: [crypto.randomUUID(), crypto.randomUUID()] } }],
+    ['ids that are not routable', { status: 200, body: { ids: [crypto.randomUUID(), crypto.randomUUID()] } }],
     ['ids from another bucket', { status: 200, body: { ids: [idIn(1), idIn(2)] } }],
   ])('answers 503 for %s, after exactly one request', async (_case, reply) => {
     idService.reply = () => reply;

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { bigint, index, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
+import { snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure, never imported by domain. No FK to products: the reference points the other way,
 // and cross-context FKs are not used here.
@@ -32,7 +33,7 @@ export const mediaAssets = pgTable(
     // the value comes from the bucket rather than from us.
     sizeBytes: bigint('size_bytes', { mode: 'number' }),
     status: mediaAssetStatus('status').notNull().default('PENDING'),
-    uploadedBy: uuid('uploaded_by').notNull(),
+    uploadedBy: snowflakeId('uploaded_by').notNull(),
     // Null only for ATTACHED. Every other state must stay selectable by the sweep's predicate.
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     ...stamps,

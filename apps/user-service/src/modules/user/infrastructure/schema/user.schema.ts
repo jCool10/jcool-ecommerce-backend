@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure only: nothing in the domain layer may import this file.
 
@@ -8,7 +9,7 @@ export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 
 // No default: every id here carries a routing bucket only the writer can compute, so a fallback
 // would mint unroutable rows. Without one, each insert site supplies an id or fails to compile.
-const id = () => uuid('id').primaryKey();
+const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -39,7 +40,7 @@ export const emailVerificationTokens = pgTable(
   'email_verification_tokens',
   {
     id: id(),
-    userId: uuid('user_id')
+    userId: snowflakeId('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull().unique(),
@@ -64,7 +65,7 @@ export const passwordResetTokens = pgTable(
   'password_reset_tokens',
   {
     id: id(),
-    userId: uuid('user_id')
+    userId: snowflakeId('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull().unique(),
@@ -87,12 +88,14 @@ export const refreshTokens = pgTable(
   'refresh_tokens',
   {
     id: id(),
-    userId: uuid('user_id')
+    userId: snowflakeId('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull().unique(),
+    // Not minted by the id service: a family groups one login session and is only ever read
+    // alongside its owner's id, so it needs no routing bucket and no round trip to mint.
     familyId: uuid('family_id').notNull(),
-    replacedByTokenId: uuid('replaced_by_token_id').unique(),
+    replacedByTokenId: snowflakeId('replaced_by_token_id').unique(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -118,15 +121,19 @@ export const refreshTokens = pgTable(
 );
 
 /**
- * Fingerprint of the HMAC key the ids above were minted under — written on the first boot against a
- * database, compared on every boot after. Stored here rather than in the environment so it travels
- * with a backup: a restore into an environment holding a different key refuses to boot.
+ * Fingerprint of the HMAC key the ids above were minted under, and the id layout they were minted
+ * under — written on the first boot against a database, compared on every boot after. Stored here
+ * rather than in the environment so it travels with a backup: a restore into an environment holding
+ * a different key, or running a different layout, refuses to boot.
  */
 export const identityKeyPin = pgTable(
   'identity_key_pin',
   {
     id: smallint('id').primaryKey(),
     fingerprint: text('fingerprint').notNull(),
+    // Literal, not the codec constant: a migration is a snapshot of what the column held on the day
+    // it ran, and reading the constant would silently rewrite history on the next bump.
+    layoutVersion: smallint('layout_version').notNull().default(1),
     pinnedAt: timestamp('pinned_at', { withTimezone: true }).notNull().defaultNow(),
   },
   // One database was built under one key; a second row would mean two answers to which one.

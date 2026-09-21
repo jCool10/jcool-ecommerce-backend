@@ -1,4 +1,4 @@
-import { bucketForEmail, encode } from '@jcool/id-codec';
+import { EPOCH_MS, bucketForEmail, encode } from '@jcool/id-codec';
 import { normalizeEmail } from '@jcool/kernel';
 import type { IdGeneratorPort } from '../ports';
 import { IdentityService } from './identity.service';
@@ -31,7 +31,7 @@ describe('IdentityService', () => {
 
   it("mints an owned row's id in its owner's bucket", async () => {
     const ids = recordingGenerator();
-    const owner = encode({ tsMs: 1, bucket: 77, nodeId: 1, sequence: 0, random: 0 });
+    const owner = encode({ tsMs: EPOCH_MS + 1, bucket: 77, nodeId: 1, sequence: 0 });
 
     await expect(new IdentityService(ids, KEY).mintOwnedBy(owner)).resolves.toBe('id-77-0');
   });

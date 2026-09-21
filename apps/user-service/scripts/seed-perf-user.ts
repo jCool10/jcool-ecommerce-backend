@@ -9,6 +9,7 @@ import { Pool } from 'pg';
 import { normalizeEmail } from '@jcool/kernel';
 import { users } from '../src/modules/user/infrastructure/schema/user.schema';
 import { scriptsIdentity } from './scripts-identity';
+import { withScriptsMintLock } from './scripts-mint-lock';
 
 const PERF_USER_EMAIL = normalizeEmail('perf@loadtest.jcool.local');
 
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
     const [created] = await db
       .insert(users)
       .values({
-        id: await scriptsIdentity().mintUserId(PERF_USER_EMAIL),
+        id: await withScriptsMintLock(pool, () => scriptsIdentity().mintUserId(PERF_USER_EMAIL)),
         email: PERF_USER_EMAIL,
         passwordHash,
         emailVerifiedAt: new Date(),

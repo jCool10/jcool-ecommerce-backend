@@ -38,7 +38,11 @@ The service refuses to boot, and so does the api that reads these keys, unless R
 
 ## Ids
 
-Every id is a UUIDv8 minted by the id-service through the gateway's internal load balancer (`ID_SERVICE_URL`), with a `x-caller: user-service` header. There is no local generator in `src/`, and dependency-cruiser keeps it that way. The call has one overall timeout and a circuit breaker, and is not retried here: the gateway already retries across replicas. When no id can be minted, the request answers `503` and writes nothing. A refresh mints its successor id only after the presented token proved rotatable, so an expired, revoked or replayed token is refused without calling the id-service.
+Every id is a 63-bit integer minted by the id-service through the gateway's internal load balancer (`ID_SERVICE_URL`), with a `x-caller: user-service` header. There is no local generator in `src/`, and dependency-cruiser keeps it that way. The call has one overall timeout and a circuit breaker, and is not retried here: the gateway already retries across replicas. When no id can be minted, the request answers `503` and writes nothing. A refresh mints its successor id only after the presented token proved rotatable, so an expired, revoked or replayed token is refused without calling the id-service.
+
+The columns are `bigint` and the JSON is a decimal string: 63 bits is more than a JSON number carries exactly, so `"id": "137465797020397179"` is a string on purpose and a client must not parse it as a number. `family_id` is the one id here the id-service does not mint — it groups a login session, is only ever read alongside its owner's id, so it needs no routing bucket and stays a locally generated `uuidv7`.
+
+Two things travel with the database rather than the environment, both pinned in `identity_key_pin` on first boot and compared on every boot after: the `IDENTITY_BUCKET_KEY` fingerprint, and the id layout version. A restore into an environment holding a different key, or a build running a different bit layout, refuses to boot instead of quietly minting ids the existing rows disagree with.
 
 ## Configuration
 
@@ -47,7 +51,7 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | Variable | Default | |
 | --- | --- | --- |
 | `IDENTITY_BUCKET_KEY` | required | The key every existing user id was minted under. Permanent. |
-| `IDENTITY_PIN_BOOTSTRAP` | `false` | `true` writes the key pin on an empty database. Off, the boot only compares. |
+| `IDENTITY_PIN_BOOTSTRAP` | `false` | `true` writes the key and layout pin on an empty database. Off, the boot only compares. |
 | `JWT_ES256_PRIVATE_KEYS` | required | `kid:pem[,kid:pem]`, P-256 only; `\n` escapes are accepted in the PEM. |
 | `JWT_ES256_ACTIVE_KID` | required | The kid that signs. It must be in the list. |
 | `JWT_ISSUER`, `JWT_AUDIENCE` | required | Stamped on every token and pinned by verifiers. |
@@ -67,7 +71,7 @@ Key and token rotation: [RUNBOOK.md](../../RUNBOOK.md#rotate-the-es256-signing-k
 
 ## Scripts
 
-Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`. They mint ids in-process on the scripts' node id, not through the id-service.
+Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`. The seeding ones mint ids in-process on the scripts' node id, not through the id-service. That node id is shared and not leased, so they take a Postgres advisory lock first and a second concurrent run fails loudly rather than minting beside the first.
 
 | Script | |
 | --- | --- |

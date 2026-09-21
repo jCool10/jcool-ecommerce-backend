@@ -13,7 +13,8 @@ import { SESSION_EPOCH_KEY_PREFIX } from '@jcool/auth-verifier';
 import { RAISE_EPOCH } from '../src/modules/user/infrastructure/redis-session-epoch.publisher';
 
 const BATCH = 5_000;
-const SCAN_START = '00000000-0000-0000-0000-000000000000';
+// Sorts before every real id; the column compares it as a bigint, not as text.
+const SCAN_START = '0';
 
 async function main(): Promise<void> {
   const connectionString = process.env.USER_DATABASE_URL;

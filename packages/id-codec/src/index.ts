@@ -1,2 +1,2 @@
-export * from './uuid-v8.codec';
+export * from './snowflake.codec';
 export * from './email-bucket';

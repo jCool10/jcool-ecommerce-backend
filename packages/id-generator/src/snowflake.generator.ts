@@ -1,11 +1,9 @@
-import { EntropyPool } from './entropy-pool';
 import { type IdentityClock, systemClock } from './identity-clock';
 import { type ClockStallReason, ClockStalledError } from './identity.errors';
-import { MAX_TIMESTAMP_MS, NODE_COUNT, RANDOM_BITS, SEQUENCE_COUNT, encode } from '@jcool/id-codec';
+import { MAX_TIMESTAMP_MS, NODE_COUNT, SEQUENCE_COUNT, encode } from '@jcool/id-codec';
 
 export type { IdentityClock } from './identity-clock';
 
-const RANDOM_BYTES = RANDOM_BITS / 8;
 const NS_PER_MS = 1_000_000n;
 
 // Both bounds only matter once the clock has stopped. `systemClock` serves `monotonicMs` and
@@ -21,11 +19,12 @@ const NO_STALL = -1;
  * Synchronous by design and lint-enforced to stay that way — an await between reading the clock and
  * stamping the sequence lets two callers emit the same `(timestamp, node, sequence)` triple.
  *
- * Uniqueness rests on distinct node ids across writers, and on the sequence never being replayed
- * within one. A restart inside the millisecond of the last mint does replay it (sequence and clock
- * base both start fresh); the 40 random bits keep those ids distinct but not ordered.
+ * This layout carries no random bits, so uniqueness rests entirely on the lease: a node id belongs
+ * to one holder at a time, and `NodeLease` floors each new holder past the previous holder's whole
+ * lease window, not merely past what it last reported minting. A generator built outside that
+ * discipline — the two reserved node ids — must never run twice at once.
  */
-export class UuidV8Generator {
+export class SnowflakeGenerator {
   private nodeIdValue: number;
   private lastMs = 0;
   private sequence = 0;
@@ -40,14 +39,13 @@ export class UuidV8Generator {
   private constructor(
     nodeId: number,
     private readonly clock: IdentityClock,
-    private readonly entropy: EntropyPool,
     floorMs: number | undefined,
   ) {
     if (!Number.isInteger(nodeId) || nodeId < 0 || nodeId >= NODE_COUNT) {
-      throw new RangeError(`UUIDv8 nodeId must be an integer in [0, ${NODE_COUNT - 1}]`);
+      throw new RangeError(`Snowflake nodeId must be an integer in [0, ${NODE_COUNT - 1}]`);
     }
     if (floorMs !== undefined && (!Number.isInteger(floorMs) || floorMs < 0 || floorMs >= MAX_TIMESTAMP_MS)) {
-      throw new RangeError(`UUIDv8 floorMs must be an integer in [0, ${MAX_TIMESTAMP_MS - 1}]`);
+      throw new RangeError(`Snowflake floorMs must be an integer in [0, ${MAX_TIMESTAMP_MS - 1}]`);
     }
     this.nodeIdValue = nodeId;
     this.originWallMs = clock.wallMs();
@@ -56,13 +54,13 @@ export class UuidV8Generator {
   }
 
   /** `floorMs`: the last timestamp a previous holder of this node id may have minted at. */
-  static create(options: { nodeId: number; floorMs?: number }): UuidV8Generator {
-    return new UuidV8Generator(options.nodeId, systemClock, new EntropyPool(), options.floorMs);
+  static create(options: { nodeId: number; floorMs?: number }): SnowflakeGenerator {
+    return new SnowflakeGenerator(options.nodeId, systemClock, options.floorMs);
   }
 
   /** @internal The only path that accepts a clock, so the seam is closed by type rather than by convention. */
-  static createWithClock(options: { nodeId: number; clock: IdentityClock; floorMs?: number }): UuidV8Generator {
-    return new UuidV8Generator(options.nodeId, options.clock, new EntropyPool(), options.floorMs);
+  static createWithClock(options: { nodeId: number; clock: IdentityClock; floorMs?: number }): SnowflakeGenerator {
+    return new SnowflakeGenerator(options.nodeId, options.clock, options.floorMs);
   }
 
   get nodeId(): number {
@@ -101,13 +99,7 @@ export class UuidV8Generator {
     }
     this.lastMs = tsMs;
 
-    return encode({
-      tsMs,
-      bucket,
-      nodeId: this.nodeIdValue,
-      sequence: this.sequence,
-      random: this.entropy.take(RANDOM_BYTES),
-    });
+    return encode({ tsMs, bucket, nodeId: this.nodeIdValue, sequence: this.sequence });
   }
 
   // Monotonic base plus an offset that only grows, so the result cannot go backwards. The obvious

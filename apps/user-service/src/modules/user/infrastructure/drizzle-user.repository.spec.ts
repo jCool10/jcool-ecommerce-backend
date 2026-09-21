@@ -5,6 +5,9 @@ import type { DrizzleDB, DrizzleTx } from '../../../database';
 import type { IdentityService } from '../application/services/identity.service';
 import { DrizzleUserRepository } from './drizzle-user.repository';
 
+// A real id: the column type refuses anything that would not survive a `bigint` round trip.
+const USER_ID = '137465797020397179';
+
 // Repositories are otherwise an e2e concern, but the idempotence of markEmailVerified lives entirely
 // in the WHERE clause, which is cheaper and more precise to assert on the compiled predicate.
 function fakeDb() {
@@ -38,7 +41,7 @@ describe('DrizzleUserRepository', () => {
       const tx = fakeReader();
 
       await new DrizzleUserRepository(pool as unknown as DrizzleDB, {} as IdentityService).findById(
-        'u1',
+        USER_ID,
         tx as unknown as DrizzleTx,
       );
 
@@ -49,7 +52,7 @@ describe('DrizzleUserRepository', () => {
     it('falls back to the pool when there is no transaction to join', async () => {
       const pool = fakeReader();
 
-      await new DrizzleUserRepository(pool as unknown as DrizzleDB, {} as IdentityService).findById('u1');
+      await new DrizzleUserRepository(pool as unknown as DrizzleDB, {} as IdentityService).findById(USER_ID);
 
       expect(pool.select).toHaveBeenCalled();
     });
@@ -59,7 +62,7 @@ describe('DrizzleUserRepository', () => {
     it('only stamps a row that is not verified yet, so a repeat call keeps the original date', async () => {
       const { db, set, predicateSql } = fakeDb();
 
-      await new DrizzleUserRepository(db, {} as IdentityService).markEmailVerified('u1');
+      await new DrizzleUserRepository(db, {} as IdentityService).markEmailVerified(USER_ID);
 
       expect(set.mock.calls[0][0].emailVerifiedAt).toBeInstanceOf(Date);
       expect(predicateSql()).toContain('"email_verified_at" is null');

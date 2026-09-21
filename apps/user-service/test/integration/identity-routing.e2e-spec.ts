@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { bucketOf } from '@jcool/id-codec';
+import { bucketOf, isRoutableId } from '@jcool/id-codec';
 import { loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
@@ -15,9 +15,6 @@ describe('Identity routing across the auth paths (integration)', () => {
   let pool: Pool;
 
   const password = 'Password123!';
-
-  // `bucketOf` checks the variant bits; this is the version nibble the DB constraint reads.
-  const versionNibble = (id: string) => id[14];
 
   beforeAll(async () => {
     ({ app, pool } = await createTestAppWithPool());
@@ -46,7 +43,7 @@ describe('Identity routing across the auth paths (integration)', () => {
     const res = await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
 
     const id = res.body.id as string;
-    expect(versionNibble(id)).toBe('8');
+    expect(isRoutableId(id)).toBe(true);
     expect(bucketOf(id)).toBe(bucketForTestEmail(email));
 
     const { rows } = await pool.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [email]);
@@ -61,7 +58,7 @@ describe('Identity routing across the auth paths (integration)', () => {
 
     const [tokenId, ...extra] = await ownedIds('refresh_tokens', user.id);
     expect(extra).toHaveLength(0);
-    expect(versionNibble(tokenId)).toBe('8');
+    expect(isRoutableId(tokenId)).toBe(true);
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 
@@ -82,7 +79,7 @@ describe('Identity routing across the auth paths (integration)', () => {
     if (!successorId) throw new Error('rotation left no token pointing at a successor');
     expect(rows.map((row) => row.id)).toContain(successorId);
 
-    expect(versionNibble(successorId)).toBe('8');
+    expect(isRoutableId(successorId)).toBe(true);
     expect(bucketOf(successorId)).toBe(bucketOf(user.id));
   });
 
@@ -93,7 +90,7 @@ describe('Identity routing across the auth paths (integration)', () => {
 
     const [tokenId, ...extra] = await issuedIds('email_verification_tokens', user.id);
     expect(extra).toHaveLength(0);
-    expect(versionNibble(tokenId)).toBe('8');
+    expect(isRoutableId(tokenId)).toBe(true);
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 
@@ -104,7 +101,7 @@ describe('Identity routing across the auth paths (integration)', () => {
 
     const [tokenId, ...extra] = await issuedIds('password_reset_tokens', user.id);
     expect(extra).toHaveLength(0);
-    expect(versionNibble(tokenId)).toBe('8');
+    expect(isRoutableId(tokenId)).toBe(true);
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 });

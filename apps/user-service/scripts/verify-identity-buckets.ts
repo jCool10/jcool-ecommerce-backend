@@ -13,15 +13,16 @@ import { normalizeEmail } from '@jcool/kernel';
 
 const BATCH = 10_000;
 const OFFENDERS_SHOWN = 20;
-// Sorts before every real id, so the first page starts at the beginning.
-const SCAN_START = '00000000-0000-0000-0000-000000000000';
+// Sorts before every real id — the layout's smallest encodable value is well above zero — so the
+// first page starts at the beginning. Compared as a bigint by the column, not as text.
+const SCAN_START = '0';
 
 interface UserRow {
   id: string;
   email: string;
 }
 
-// null means the id is not v8 at all — bucketOf throws on those.
+// null means the value is not a routable id at all — bucketOf throws on those.
 function carriedBucket(id: string): number | null {
   try {
     return bucketOf(id);

@@ -12,7 +12,8 @@ import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from
 
 // A syntactically-valid UUID no seed creates — probes the not_found path without a text→uuid 500.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
-const USER_ID = '00000000-0000-4000-8000-0000000000aa';
+// An owner these orders only need to agree on; the user lives in another service and another database.
+const USER_ID = '137465797020397179';
 
 // The state machine + idempotency guard that turn an at-least-once webhook into an exactly-once
 // effect. Drives FinalizeOrderUseCase directly against seeded orders; stock resolution is covered in

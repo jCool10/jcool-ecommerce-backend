@@ -7,7 +7,7 @@ import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { archiveProduct, createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
-import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
+import { createTestPrincipal, newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // A syntactically-valid UUID that no fixture creates — probes 404 paths (unknown
@@ -66,6 +66,30 @@ describe('Order (integration, real Postgres + Redis)', () => {
         unitPriceMinor: 199_000,
         lineTotalMinor: 398_000,
       });
+    });
+
+    // The owner comes from the token as a decimal string past 2^53, so a `Number()` anywhere on the
+    // way into Postgres would drop its last digits silently. Compared as text, never as a number.
+    it("keeps every digit of the caller's id on the cart and the order it becomes", async () => {
+      const { user, accessToken } = await createTestPrincipal(app);
+      const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+      await seedStock(app, variantId, 5);
+      await addToCart(app, accessToken, variantId, 1);
+
+      const res = await request(server()).post('/orders').set(authHeader(accessToken)).set(idempotencyKeyHeader());
+      expect(res.status).toBe(201);
+
+      expect(BigInt(user.id)).toBeGreaterThan(BigInt(Number.MAX_SAFE_INTEGER));
+      const owners = await pool.query<{ owned: string; user_id: string; type: string }>(
+        `SELECT 'carts' AS owned, user_id::text, pg_typeof(user_id)::text AS type FROM carts
+         UNION ALL
+         SELECT 'orders', user_id::text, pg_typeof(user_id)::text FROM orders
+         ORDER BY 1`,
+      );
+      expect(owners.rows).toEqual([
+        { owned: 'carts', user_id: user.id, type: 'bigint' },
+        { owned: 'orders', user_id: user.id, type: 'bigint' },
+      ]);
     });
 
     it('rejects checkout from an empty cart with 400', async () => {

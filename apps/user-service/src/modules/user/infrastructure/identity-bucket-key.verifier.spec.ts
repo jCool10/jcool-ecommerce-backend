@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { bucketForEmail, encode, identityKeyFingerprint } from '@jcool/id-codec';
+import { EPOCH_MS, LAYOUT_VERSION, bucketForEmail, encode, identityKeyFingerprint } from '@jcool/id-codec';
 import type { DrizzleDB } from '../../../database';
 import { normalizeEmail } from '@jcool/kernel';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
@@ -11,14 +11,19 @@ const KEY = 'verifier-spec-identity-bucket-key-not-a-real-secret';
 const OTHER_KEY = 'a-different-identity-bucket-key-not-a-real-secret';
 const EMAIL = normalizeEmail('canary@test.local');
 
-const idInBucket = (bucket: number): string => encode({ tsMs: 1, bucket, nodeId: 0, sequence: 0, random: 0 });
+const idInBucket = (bucket: number): string => encode({ tsMs: EPOCH_MS + 1, bucket, nodeId: 0, sequence: 0 });
+
+const pinnedUnder =
+  (key: string, layoutVersion = LAYOUT_VERSION) =>
+  () =>
+    Promise.resolve([{ fingerprint: identityKeyFingerprint(key), layoutVersion }]);
 
 const unreachable = (): Promise<never> => Promise.reject(new Error('connection terminated'));
 
 interface FakeDbOptions {
   /** Rows returned by the pin's insert — non-empty means this boot won the first-boot race. */
   pinInsert?: () => Promise<{ fingerprint: string }[]>;
-  pinRow?: () => Promise<{ fingerprint: string }[]>;
+  pinRow?: () => Promise<{ fingerprint: string; layoutVersion: number }[]>;
   userRow?: () => Promise<{ id: string; email: string }[]>;
 }
 
@@ -65,19 +70,27 @@ describe('IdentityBucketKeyVerifier', () => {
       // pin is written under is not.
       await verifier(db).onApplicationBootstrap();
 
-      expect(values).toHaveBeenCalledWith({ id: 1, fingerprint });
+      expect(values).toHaveBeenCalledWith({ id: 1, fingerprint, layoutVersion: LAYOUT_VERSION });
     });
 
     it('proceeds when the pinned fingerprint is the running key', async () => {
-      const { db } = fakeDb({ pinRow: () => Promise.resolve([{ fingerprint: identityKeyFingerprint(KEY) }]) });
+      const { db } = fakeDb({ pinRow: pinnedUnder(KEY) });
 
       await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
     });
 
     it('refuses to boot when the pinned fingerprint is a different key', async () => {
-      const { db } = fakeDb({ pinRow: () => Promise.resolve([{ fingerprint: identityKeyFingerprint(OTHER_KEY) }]) });
+      const { db } = fakeDb({ pinRow: pinnedUnder(OTHER_KEY) });
 
       await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not match the key/);
+    });
+
+    // The key can be right while the layout is not: same secret, different epoch or field widths,
+    // and every stored id then decodes to a different bucket.
+    it('refuses to boot when the pinned layout is not the running one', async () => {
+      const { db } = fakeDb({ pinRow: pinnedUnder(KEY, LAYOUT_VERSION + 1) });
+
+      await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/id layout does not match/);
     });
 
     // Fail open: no id is minted while the database is down, so refusing to start only extends the outage.
@@ -98,14 +111,14 @@ describe('IdentityBucketKeyVerifier', () => {
     });
 
     it('proceeds when the pinned fingerprint is the running key', async () => {
-      const { db, values } = fakeDb({ pinRow: () => Promise.resolve([{ fingerprint: identityKeyFingerprint(KEY) }]) });
+      const { db, values } = fakeDb({ pinRow: pinnedUnder(KEY) });
 
       await expect(verifier(db, KEY, false).onApplicationBootstrap()).resolves.toBeUndefined();
       expect(values).not.toHaveBeenCalled();
     });
 
     it('still refuses to boot when the pinned fingerprint is a different key', async () => {
-      const { db } = fakeDb({ pinRow: () => Promise.resolve([{ fingerprint: identityKeyFingerprint(OTHER_KEY) }]) });
+      const { db } = fakeDb({ pinRow: pinnedUnder(OTHER_KEY) });
 
       await expect(verifier(db, KEY, false).onApplicationBootstrap()).rejects.toThrow(/does not match the key/);
     });
@@ -132,7 +145,7 @@ describe('IdentityBucketKeyVerifier', () => {
       await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not route to the bucket/);
     });
 
-    it('refuses to boot on a user id that is not a UUIDv8', async () => {
+    it('refuses to boot on a user id that carries no routing bucket', async () => {
       const { db } = fakeDb({
         userRow: () => Promise.resolve([{ id: '01920000-0000-7000-8000-000000000001', email: EMAIL }]),
       });

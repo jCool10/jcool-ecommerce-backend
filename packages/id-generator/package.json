@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Synchronous UUIDv8 minting for one node id",
+  "description": "Synchronous 63-bit id minting for one node id",
   "files": [
     "dist"
   ],

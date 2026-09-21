@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type { Job, Queue } from 'bullmq';
 import type { Pool } from 'pg';
@@ -14,7 +13,7 @@ import {
   cappedBackoffMs,
   retryHorizonMs,
 } from '../../src/shared/messaging/queue/queue.constants';
-import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, type StartedMailServer } from '../setup/mail-server';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -148,7 +147,8 @@ describe('Order confirmation mail against the user directory (integration, real 
   });
 
   it('retries a buyer the directory has not copied yet, then confirms', async () => {
-    const user = { id: randomUUID(), email: `late-${Date.now()}@test.local`, role: 'CUSTOMER' as const };
+    const email = `late-${Date.now()}@test.local`;
+    const user = { id: mintTestUserId(email), email, role: 'CUSTOMER' as const };
 
     const jobId = await publishPaid(user.id);
     await waitForFailedAttempts(jobId, 2);

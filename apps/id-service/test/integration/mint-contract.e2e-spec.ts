@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { decode } from '@jcool/id-codec';
+import { MAX_IDS_PER_REQUEST } from '../../src/mint/mint.request';
 import { freshDatabase, type LeaseDatabase, openLeaseDatabase } from '../setup/databases';
 import { sleep } from '../setup/eventually';
 import { createTestApp } from '../setup/test-app';
@@ -39,7 +40,7 @@ describe('POST /v1/ids', () => {
     ['a fractional bucket', { bucket: 1.5 }],
     ['a bucket sent as a string', { bucket: '1' }],
     ['a count of 0', { bucket: 1, count: 0 }],
-    ['a count past 1000', { bucket: 1, count: 1001 }],
+    ['a count past the per-request cap', { bucket: 1, count: MAX_IDS_PER_REQUEST + 1 }],
     ['an unknown field', { bucket: 1, email: 'someone@example.com' }],
   ])('rejects %s with 400', async (_, body) => {
     await mint(body).expect(400);
@@ -51,10 +52,10 @@ describe('POST /v1/ids', () => {
   });
 
   it('mints the requested count, each under the held node and the requested bucket', async () => {
-    const res = await mint({ bucket: 4095, count: 1000 }, 'api').expect(200);
+    const res = await mint({ bucket: 4095, count: MAX_IDS_PER_REQUEST }, 'api').expect(200);
     const ids = res.body.ids as string[];
 
-    expect(new Set(ids).size).toBe(1000);
+    expect(new Set(ids).size).toBe(MAX_IDS_PER_REQUEST);
     for (const id of ids) expect(decode(id)).toMatchObject({ nodeId, bucket: 4095 });
   });
 

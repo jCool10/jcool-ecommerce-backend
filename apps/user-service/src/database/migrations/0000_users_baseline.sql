@@ -1,7 +1,7 @@
 CREATE TYPE "public"."role" AS ENUM('ADMIN', 'CUSTOMER');--> statement-breakpoint
 CREATE TABLE "email_verification_tokens" (
-	"id" uuid PRIMARY KEY NOT NULL,
-	"user_id" uuid NOT NULL,
+	"id" bigint PRIMARY KEY NOT NULL,
+	"user_id" bigint NOT NULL,
 	"token_hash" text NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
 	"consumed_at" timestamp with time zone,
@@ -12,13 +12,14 @@ CREATE TABLE "email_verification_tokens" (
 CREATE TABLE "identity_key_pin" (
 	"id" smallint PRIMARY KEY NOT NULL,
 	"fingerprint" text NOT NULL,
+	"layout_version" smallint DEFAULT 1 NOT NULL,
 	"pinned_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "ck_identity_key_pin_singleton" CHECK ("identity_key_pin"."id" = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "password_reset_tokens" (
-	"id" uuid PRIMARY KEY NOT NULL,
-	"user_id" uuid NOT NULL,
+	"id" bigint PRIMARY KEY NOT NULL,
+	"user_id" bigint NOT NULL,
 	"token_hash" text NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
 	"consumed_at" timestamp with time zone,
@@ -27,11 +28,11 @@ CREATE TABLE "password_reset_tokens" (
 );
 --> statement-breakpoint
 CREATE TABLE "refresh_tokens" (
-	"id" uuid PRIMARY KEY NOT NULL,
-	"user_id" uuid NOT NULL,
+	"id" bigint PRIMARY KEY NOT NULL,
+	"user_id" bigint NOT NULL,
 	"token_hash" text NOT NULL,
 	"family_id" uuid NOT NULL,
-	"replaced_by_token_id" uuid,
+	"replaced_by_token_id" bigint,
 	"expires_at" timestamp with time zone NOT NULL,
 	"revoked_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -40,7 +41,7 @@ CREATE TABLE "refresh_tokens" (
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" bigint PRIMARY KEY NOT NULL,
 	"email" text NOT NULL,
 	"password_hash" text NOT NULL,
 	"role" "role" DEFAULT 'CUSTOMER' NOT NULL,

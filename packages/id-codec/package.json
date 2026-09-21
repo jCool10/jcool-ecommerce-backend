@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "UUIDv8 layout and the email routing bucket: pure functions every service must agree on",
+  "description": "The 63-bit id layout and the email routing bucket: pure functions every service must agree on",
   "files": [
     "dist"
   ],

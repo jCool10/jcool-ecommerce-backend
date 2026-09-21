@@ -1,8 +1,9 @@
-import { Controller, Get, Inject, NotFoundException, Param, ParseUUIDPipe, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, NotFoundException, Param, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { identityKeyFingerprint } from '@jcool/id-codec';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { Public } from '@jcool/platform/rbac';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@jcool/platform/throttler';
 import { USER_FACADE, type UserFacade, type UserSummary } from '../../application/public/user-facade.port';
@@ -27,14 +28,14 @@ export class InternalApiController {
   ) {}
 
   @Get('users/:id/summary')
-  async userSummary(@Param('id', ParseUUIDPipe) id: string): Promise<UserSummary> {
+  async userSummary(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<UserSummary> {
     const summary = await this.users.getUserSummary(id);
     if (!summary) throw new NotFoundException();
     return summary;
   }
 
   @Get('sessions/:userId/epoch')
-  async sessionEpoch(@Param('userId', ParseUUIDPipe) userId: string): Promise<{ epoch: number }> {
+  async sessionEpoch(@Param('userId', ParseSnowflakeIdPipe) userId: string): Promise<{ epoch: number }> {
     const epoch = await this.fillSessionEpoch.execute(userId);
     if (epoch === null) throw new NotFoundException();
     return { epoch };

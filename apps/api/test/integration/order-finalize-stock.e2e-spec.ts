@@ -12,7 +12,8 @@ import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { readOrder, readReservation, readStock } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
-const USER_ID = '00000000-0000-4000-8000-0000000000aa';
+// An owner these orders only need to agree on; the user lives in another service and another database.
+const USER_ID = '137465797020397179';
 const SKU = '11111111-1111-4111-8111-111111111111';
 const SKU_B = '22222222-2222-4222-8222-222222222222';
 

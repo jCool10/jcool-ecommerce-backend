@@ -1,7 +1,7 @@
 import type { Provider } from '@nestjs/common';
 import { makeCounterProvider, makeGaugeProvider } from '@willsoto/nestjs-prometheus';
 import type { Counter, Gauge } from 'prom-client';
-import type { UuidV8Generator } from '@jcool/id-generator';
+import type { SnowflakeGenerator } from '@jcool/id-generator';
 
 // The two ways the host clock spoils ids, neither of which surfaces as an application error: drift
 // (ids carry a jumped timestamp) and stalls (mints refused outright).
@@ -11,11 +11,11 @@ export const ID_CLOCK_STALL_TOTAL = 'id_clock_stall_total';
 // Module-level rather than captured in the collect closures: the registry get-or-creates a metric by
 // name, so a closure over an injected generator would pin the FIRST app built in the process and
 // report one nothing mints through (the api's outbox backlog collector has the same hazard).
-let bound: UuidV8Generator | null = null;
+let bound: SnowflakeGenerator | null = null;
 // Stalls counted by generators no longer bound, so a swap never drops the total back to zero.
 let retiredStalls = 0;
 
-export function bindIdentityClockMetrics(generator: UuidV8Generator): void {
+export function bindIdentityClockMetrics(generator: SnowflakeGenerator): void {
   if (bound !== null && bound !== generator) retiredStalls += bound.stallCount;
   bound = generator;
 }
@@ -24,7 +24,7 @@ export function bindIdentityClockMetrics(generator: UuidV8Generator): void {
  * Guarded on identity: where a process builds a second app before closing the first, the older
  * app's shutdown must not tear down the newer app's binding.
  */
-export function unbindIdentityClockMetrics(generator: UuidV8Generator): void {
+export function unbindIdentityClockMetrics(generator: SnowflakeGenerator): void {
   if (bound !== generator) return;
   retiredStalls += generator.stallCount;
   bound = null;

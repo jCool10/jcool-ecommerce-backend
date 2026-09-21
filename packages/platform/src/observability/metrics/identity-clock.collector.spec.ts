@@ -2,7 +2,7 @@ import type { FactoryProvider } from '@nestjs/common';
 import { register } from 'prom-client';
 import { describe, expect, it } from 'vitest';
 import { SEQUENCE_COUNT } from '@jcool/id-codec';
-import { ClockStalledError, UuidV8Generator, type IdentityClock } from '@jcool/id-generator';
+import { ClockStalledError, SnowflakeGenerator, type IdentityClock } from '@jcool/id-generator';
 import {
   ID_CLOCK_DRIFT_MS,
   ID_CLOCK_STALL_TOTAL,
@@ -11,7 +11,8 @@ import {
   unbindIdentityClockMetrics,
 } from './identity-clock.collector';
 
-const START_MS = 1_700_000_000_000;
+// After EPOCH_MS (2026-01-01), the earliest instant the layout can stamp.
+const START_MS = 1_800_000_000_000;
 
 // Stepping the wall clock forward is what the generator absorbs as drift; leaving it frozen is
 // what makes it refuse to mint.
@@ -36,7 +37,7 @@ async function scrape(name: string): Promise<number | undefined> {
   return line === undefined ? undefined : Number(line.slice(name.length + 1));
 }
 
-function stall(generator: UuidV8Generator): void {
+function stall(generator: SnowflakeGenerator): void {
   // One mint per sequence value at a frozen millisecond; the next one has nowhere left to go.
   for (let i = 0; i < SEQUENCE_COUNT; i++) generator.generate(0);
   expect(() => generator.generate(0)).toThrow(ClockStalledError);
@@ -49,7 +50,7 @@ describe('identity clock collector', () => {
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBeUndefined();
 
     const fake = fakeClock();
-    const generator = UuidV8Generator.createWithClock({ nodeId: 0, clock: fake.clock });
+    const generator = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: fake.clock });
     bindIdentityClockMetrics(generator);
 
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBe(0);
@@ -61,7 +62,7 @@ describe('identity clock collector', () => {
   });
 
   it('counts the refusals the generator has answered 503 with', async () => {
-    const generator = UuidV8Generator.createWithClock({ nodeId: 0, clock: fakeClock().clock });
+    const generator = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: fakeClock().clock });
     bindIdentityClockMetrics(generator);
 
     await expect(scrape(ID_CLOCK_STALL_TOTAL)).resolves.toBe(0);
@@ -75,10 +76,10 @@ describe('identity clock collector', () => {
   // the first app built in the process and report a flat 0 as proof the clock is fine.
   it('follows the most recently built generator', async () => {
     const first = fakeClock();
-    bindIdentityClockMetrics(UuidV8Generator.createWithClock({ nodeId: 0, clock: first.clock }));
+    bindIdentityClockMetrics(SnowflakeGenerator.createWithClock({ nodeId: 0, clock: first.clock }));
 
     const second = fakeClock();
-    const later = UuidV8Generator.createWithClock({ nodeId: 0, clock: second.clock });
+    const later = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: second.clock });
     bindIdentityClockMetrics(later);
 
     second.stepWall(1_500);
@@ -91,11 +92,11 @@ describe('identity clock collector', () => {
   // zero would read as a counter reset to `increase()`, hiding exactly the stalls around the swap.
   it('carries the stall count across a rebind and an unbind', async () => {
     const baseline = (await scrape(ID_CLOCK_STALL_TOTAL)) ?? 0;
-    const first = UuidV8Generator.createWithClock({ nodeId: 1, clock: fakeClock().clock });
+    const first = SnowflakeGenerator.createWithClock({ nodeId: 1, clock: fakeClock().clock });
     bindIdentityClockMetrics(first);
     stall(first);
 
-    const second = UuidV8Generator.createWithClock({ nodeId: 2, clock: fakeClock().clock });
+    const second = SnowflakeGenerator.createWithClock({ nodeId: 2, clock: fakeClock().clock });
     bindIdentityClockMetrics(second);
     stall(second);
     await expect(scrape(ID_CLOCK_STALL_TOTAL)).resolves.toBe(baseline + 2);
@@ -107,11 +108,11 @@ describe('identity clock collector', () => {
   // Apps do not close in build order, so an unguarded release lets a shutting-down app blind the
   // metrics for the one still serving.
   it('releases only the generator that is actually bound', async () => {
-    const superseded = UuidV8Generator.createWithClock({ nodeId: 0, clock: fakeClock().clock });
+    const superseded = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: fakeClock().clock });
     bindIdentityClockMetrics(superseded);
 
     const current = fakeClock();
-    const live = UuidV8Generator.createWithClock({ nodeId: 0, clock: current.clock });
+    const live = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: current.clock });
     bindIdentityClockMetrics(live);
     current.stepWall(700);
     live.generate(0);

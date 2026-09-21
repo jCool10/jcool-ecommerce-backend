@@ -3,6 +3,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { Client } from 'pg';
 import { GenericContainer, Network, type StartedNetwork, type StartedTestContainer, Wait } from 'testcontainers';
 import { decode } from '@jcool/id-codec';
+import { MAX_IDS_PER_REQUEST } from '../../src/mint/mint.request';
 
 const REPO_ROOT = resolve(__dirname, '../../../..');
 const ID_SERVICE_IMAGE = 'jcool-id-service:system-test';
@@ -130,8 +131,13 @@ export interface MintRun {
   maxLatencyMs: number;
 }
 
-/** `workers` callers minting batches through the load balancer until `until` resolves. */
-export async function mintUntil(lbUrl: string, until: Promise<unknown>, workers = 8, count = 100): Promise<MintRun> {
+/** `workers` callers minting full batches through the load balancer until `until` resolves. */
+export async function mintUntil(
+  lbUrl: string,
+  until: Promise<unknown>,
+  workers = 8,
+  count = MAX_IDS_PER_REQUEST,
+): Promise<MintRun> {
   const run: MintRun = { ids: [], failures: [], maxLatencyMs: 0 };
   let done = false;
   const stop = () => {
