@@ -41,8 +41,8 @@ describe('id-service replicas behind the gateway', () => {
 
     expect(run.failures).toEqual([]);
     expect(run.ids).toHaveLength(TOTAL_IDS);
-    const { duplicateIds, duplicateTriples, nodes } = collisions(run.ids);
-    expect({ duplicateIds, duplicateTriples }).toEqual({ duplicateIds: 0, duplicateTriples: 0 });
+    const { duplicates, nodes } = collisions(run.ids);
+    expect(duplicates).toBe(0);
     expect(nodes.size).toBe(3);
   });
 
@@ -58,7 +58,7 @@ describe('id-service replicas behind the gateway', () => {
     );
 
     expect(run.failures).toEqual([]);
-    expect(collisions(run.ids).duplicateTriples).toBe(0);
+    expect(collisions(run.ids).duplicates).toBe(0);
   });
 
   it('routes around a frozen replica within the try deadline', async () => {
@@ -96,8 +96,8 @@ describe('id-service replicas behind the gateway', () => {
     );
 
     expect(run.failures).toEqual([]);
-    const { duplicateIds, duplicateTriples, nodes } = collisions(run.ids);
-    expect({ duplicateIds, duplicateTriples }).toEqual({ duplicateIds: 0, duplicateTriples: 0 });
+    const { duplicates, nodes } = collisions(run.ids);
+    expect(duplicates).toBe(0);
     expect(nodes.size).toBe(6);
   });
 });
@@ -156,7 +156,6 @@ describe('a node changing hands under load', () => {
     expect(minted.length).toBeGreaterThan(0);
     expect(handedOn.length).toBeGreaterThan(0);
     expect(handedOn.reduce((a, b) => Math.min(a, b))).toBeGreaterThan(minted.reduce((a, b) => Math.max(a, b)));
-    const { duplicateIds, duplicateTriples } = collisions([...before.ids, ...after.ids]);
-    expect({ duplicateIds, duplicateTriples }).toEqual({ duplicateIds: 0, duplicateTriples: 0 });
+    expect(collisions([...before.ids, ...after.ids]).duplicates).toBe(0);
   });
 });

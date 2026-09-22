@@ -11,7 +11,7 @@ import {
   unbindIdentityClockMetrics,
 } from './identity-clock.collector';
 
-// After EPOCH_MS (2026-01-01), the earliest instant the layout can stamp.
+// Well after EPOCH_MS (2026-01-01): the earliest instant the layout can stamp is EPOCH_MS + 1.
 const START_MS = 1_800_000_000_000;
 
 // Stepping the wall clock forward is what the generator absorbs as drift; leaving it frozen is

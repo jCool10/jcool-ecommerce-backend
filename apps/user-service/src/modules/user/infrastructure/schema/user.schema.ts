@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { snowflakeId } from '@jcool/platform/database';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure only: nothing in the domain layer may import this file.
 
@@ -33,7 +33,7 @@ export const users = pgTable(
     ...stamps,
   },
   // The epoch reconciler reads the users changed in the last few seconds, every few seconds.
-  (t) => [index('idx_users_updated_at').on(t.updatedAt)],
+  (t) => [index('idx_users_updated_at').on(t.updatedAt), routableIdCheck('ck_users_id_routable', t.id)],
 );
 
 export const emailVerificationTokens = pgTable(
@@ -58,6 +58,8 @@ export const emailVerificationTokens = pgTable(
     index('idx_email_verification_tokens_consumed')
       .on(t.consumedAt)
       .where(sql`${t.consumedAt} is not null`),
+    routableIdCheck('ck_email_verification_tokens_id_routable', t.id),
+    routableIdCheck('ck_email_verification_tokens_user_id_routable', t.userId),
   ],
 );
 
@@ -80,6 +82,8 @@ export const passwordResetTokens = pgTable(
     index('idx_password_reset_tokens_consumed')
       .on(t.consumedAt)
       .where(sql`${t.consumedAt} is not null`),
+    routableIdCheck('ck_password_reset_tokens_id_routable', t.id),
+    routableIdCheck('ck_password_reset_tokens_user_id_routable', t.userId),
   ],
 );
 
@@ -117,6 +121,9 @@ export const refreshTokens = pgTable(
     index('idx_refresh_tokens_revoked')
       .on(t.revokedAt)
       .where(sql`${t.revokedAt} is not null`),
+    routableIdCheck('ck_refresh_tokens_id_routable', t.id),
+    routableIdCheck('ck_refresh_tokens_user_id_routable', t.userId),
+    routableIdCheck('ck_refresh_tokens_replaced_by_token_id_routable', t.replacedByTokenId),
   ],
 );
 

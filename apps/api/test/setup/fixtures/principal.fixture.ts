@@ -40,7 +40,7 @@ export async function createTestPrincipal(
 ): Promise<TestPrincipal> {
   const email = normalizeEmail(options.email ?? `principal-${Date.now()}-${seq++}@test.local`);
   const user: StubUser = {
-    id: ids.generate(bucketForEmail(email, BUCKET_KEY)),
+    id: mintTestUserId(email),
     email,
     role: options.role ?? 'CUSTOMER',
   };

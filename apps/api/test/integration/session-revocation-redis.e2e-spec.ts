@@ -6,11 +6,13 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { SESSION_EPOCH_KEY_PREFIX, TOKEN_DENYLIST_KEY_PREFIX } from '@jcool/auth-verifier';
 import { RedisService } from '@jcool/platform/redis';
 import { authHeader } from '../setup/bearer.helper';
-import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
 import { type UserServiceStub, userServiceStub } from '../setup/user-service-stub';
+
+const PRE_SNOWFLAKE_USER_ID = '0198f0d8-9999-8000-8000-000000000001';
 
 /**
  * The user-service revokes by writing Redis; the api only reads it. So "logged out everywhere" is
@@ -75,9 +77,23 @@ describe('Session revocation read from Redis (integration, real Redis)', () => {
   });
 
   it('refuses a user the user-service no longer has', async () => {
-    const gone = { id: '0198f0d8-9999-8000-8000-000000000001', email: 'gone@test.local', role: 'CUSTOMER' as const };
+    const email = 'gone@test.local';
+    const gone = { id: mintTestUserId(email), email, role: 'CUSTOMER' as const };
 
     expect((await cart(await stub.sign(gone))).status).toBe(401);
     expect(stub.calls('epoch')).toBe(1);
+  });
+
+  // A token minted before user ids became snowflakes: no id column here or there accepts its subject.
+  it.each([
+    ['no epoch', false],
+    ['a leftover epoch', true],
+  ])('refuses a token whose subject is a UUID, with %s in Redis', async (_case, leftover) => {
+    const legacy = { id: PRE_SNOWFLAKE_USER_ID, email: 'legacy@test.local', role: 'CUSTOMER' as const };
+    if (leftover) await redis.set(epochKey(legacy.id), '0');
+    else await redis.del(epochKey(legacy.id));
+
+    expect((await cart(await stub.sign(legacy))).status).toBe(401);
+    expect(stub.calls('epoch')).toBe(0);
   });
 });

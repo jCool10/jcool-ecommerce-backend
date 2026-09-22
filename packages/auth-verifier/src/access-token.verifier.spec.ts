@@ -19,7 +19,7 @@ import type { TokenDenylistReader } from './token-denylist.port';
 
 const ISSUER = 'https://users.test.invalid';
 const AUDIENCE = 'jcool-test';
-const USER_ID = '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f';
+const USER_ID = '137465797020397179';
 const CLAIMS = { sub: USER_ID, role: 'CUSTOMER', jti: 'jti-1', epoch: 2 };
 
 interface SigningKey {
@@ -144,6 +144,15 @@ describe('AccessTokenVerifier', () => {
     ['no jti', { sub: USER_ID, role: 'CUSTOMER', epoch: 2 }],
   ])('refuses a token with %s', async (_case, claims) => {
     await expectRefused(es256(current, { claims }));
+  });
+
+  it.each([
+    ['a UUID', '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f'],
+    ['an integer below the routable range', '42'],
+  ])('refuses a correctly signed, unexpired token whose subject is %s', async (_case, sub) => {
+    await expectRefused(es256(current, { claims: { ...CLAIMS, sub } }));
+
+    expect(epochs.current).not.toHaveBeenCalled();
   });
 
   it.each([undefined, '', 'not-a-jwt'])('refuses %j as a token', async (token) => {

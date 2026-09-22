@@ -10,7 +10,7 @@
 export const EPOCH_MS = Date.UTC(2026, 0, 1);
 
 /**
- * Bumped by any change to the epoch or the field widths below. Pinned in the database next to the
+ * Bumped by any change to the epoch, the field widths below or their order. Pinned in the database next to the
  * bucket key, for the same reason: both decide where a row belongs, and a disagreement is silent
  * until a shard split years later.
  */
@@ -27,7 +27,7 @@ export const SEQUENCE_COUNT = 2 ** SEQUENCE_BITS;
 
 /** Latest wall clock an id can carry: 2095-09-07T15:47:35.551Z. */
 export const MAX_TIMESTAMP_MS = EPOCH_MS + 2 ** TIMESTAMP_BITS - 1;
-/** The epoch millisecond itself is not encodable — see `MIN_VALUE`. */
+/** The epoch millisecond itself is not encodable — see `MIN_ROUTABLE_ID`. */
 export const MIN_TIMESTAMP_MS = EPOCH_MS + 1;
 
 export interface SnowflakeFields {
@@ -51,12 +51,18 @@ const SEQUENCE_MASK = BigInt(SEQUENCE_COUNT - 1);
 const CANONICAL_DECIMAL = /^[1-9][0-9]{0,18}$/;
 
 /**
- * Standing in for the version nibble the UUID layout used to carry. Nothing below one encodable
- * millisecond can be an id, so a row id, a count, an array index and an epoch-seconds stamp are all
- * rejected rather than silently decoded into bucket 0.
+ * Every value below 2^22 has an all-zero timestamp field, so small integers (row ids, counts, array
+ * indexes) are refused. It is not a type check: an epoch-seconds or epoch-ms stamp is large enough
+ * to pass and decodes into some real-looking bucket.
  */
-const MIN_VALUE = 1n << TIMESTAMP_SHIFT;
+export const MIN_ROUTABLE_ID = 1n << TIMESTAMP_SHIFT;
 const MAX_VALUE = (1n << 63n) - 1n;
+
+function toRoutable(value: unknown): bigint | null {
+  if (typeof value !== 'string' || !CANONICAL_DECIMAL.test(value)) return null;
+  const parsed = BigInt(value);
+  return parsed >= MIN_ROUTABLE_ID && parsed <= MAX_VALUE ? parsed : null;
+}
 
 function assertField(name: string, value: number, min: number, max: number): void {
   if (!Number.isInteger(value) || value < min || value > max) {
@@ -82,13 +88,9 @@ export function encode(fields: SnowflakeFields): string {
 
 // Strict on purpose: a lenient parse yields NaN fields, and a NaN bucket is a silent misroute.
 export function decode(id: string): SnowflakeFields {
-  if (typeof id !== 'string' || !CANONICAL_DECIMAL.test(id)) {
-    throw new TypeError('Not a routable id: expected a canonical decimal integer');
-  }
-
-  const value = BigInt(id);
-  if (value < MIN_VALUE || value > MAX_VALUE) {
-    throw new TypeError(`Not a routable id: ${id} is outside the encodable range`);
+  const value = toRoutable(id);
+  if (value === null) {
+    throw new TypeError('Not a routable id: expected a canonical decimal integer in [2^22, 2^63)');
   }
 
   return {
@@ -107,7 +109,5 @@ export function bucketOf(id: string): number {
 
 /** Predicate form for validators, which run per request and must not raise to decide. */
 export function isRoutableId(value: unknown): value is string {
-  if (typeof value !== 'string' || !CANONICAL_DECIMAL.test(value)) return false;
-  const parsed = BigInt(value);
-  return parsed >= MIN_VALUE && parsed <= MAX_VALUE;
+  return toRoutable(value) !== null;
 }

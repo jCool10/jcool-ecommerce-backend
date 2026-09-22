@@ -1,6 +1,6 @@
 import { integer, pgTable, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
-import { snowflakeId } from '@jcool/platform/database';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // By design there is NO cross-context FK (userId → users, skuId → product_variants): the boundary
 // is kept at the application layer (reads go through Catalog's published port), so the DB does not
@@ -19,11 +19,15 @@ const stamps = {
     .$onUpdate(() => new Date()),
 };
 
-export const carts = pgTable('carts', {
-  id: id(),
-  userId: snowflakeId('user_id').notNull().unique(),
-  ...stamps,
-});
+export const carts = pgTable(
+  'carts',
+  {
+    id: id(),
+    userId: snowflakeId('user_id').notNull().unique(),
+    ...stamps,
+  },
+  (t) => [routableIdCheck('ck_carts_user_id_routable', t.userId)],
+);
 
 export const cartItems = pgTable(
   'cart_items',

@@ -40,7 +40,7 @@ user-service defends this on every boot, in two layers
 (`apps/user-service/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use the same wrong key).
-2. **Key pin** — a fingerprint of the key, and the id layout version, stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. Runs *after* the canary on purpose: the pin **writes**, so pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
+2. **Key pin** — a fingerprint of the key, and the id layout version, stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. It is read and compared *before* the canary, so a changed layout is reported as one instead of being misread as a key fault, but **written** only after the canary passes: pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
 
 Both **fail open** if the database is unreachable (no id is minted while it is down) and **fail closed** only on a disagreement actually read back.
 
@@ -71,9 +71,9 @@ There is no third option. Do not delete the pin row to make the message go away:
 The id layout does not match the one this database was built with (pinned X, current Y)
 ```
 
-An id is a 63-bit integer laid out `41 ts_ms │ 12 bucket │ 5 node │ 5 seq` over an epoch of `2026-01-01T00:00:00Z` (`packages/id-codec/src/snowflake.codec.ts`). The epoch and the field widths are **permanent in the same way the key is**: move either and every id already stored decodes to a different timestamp and a different bucket, silently. `identity_key_pin.layout_version` is what makes that loud — a build carrying a different `LAYOUT_VERSION` refuses to boot against this database.
+An id is a 63-bit integer laid out `41 ts_ms │ 12 bucket │ 5 node │ 5 seq` over an epoch of `2026-01-01T00:00:00Z` (`packages/id-codec/src/snowflake.codec.ts`). The epoch and the field widths are **permanent in the same way the key is**, and moving either is silent: a new epoch makes every stored id decode to a different timestamp, and a new width makes it decode into different fields, the bucket among them once the change reaches past `node │ seq`. `identity_key_pin.layout_version` is what makes that loud — a build carrying a different `LAYOUT_VERSION` refuses to boot against this database.
 
-The two correct responses are the same two: restore the original build, or reset the database if it holds nothing worth keeping. Changing the layout deliberately is a data migration that rewrites every id, not a version bump.
+The two correct responses are the same two: restore the original build, or reset the database if it holds nothing worth keeping. Changing the layout deliberately is a data migration that rewrites every id and the pinned version, shipped with a `LAYOUT_VERSION` bump. The bump alone only makes every existing database refuse to boot.
 
 ---
 
@@ -403,10 +403,12 @@ Three migrations moved user ids from `uuid` to `bigint`, and they are written to
 
 Postgres has no cast from `uuid` to `bigint`, so an `ALTER COLUMN … SET DATA TYPE` would be refused outright. `ADD COLUMN … NOT NULL` with no default succeeds on an empty table — every new environment and every CI run — and fails on a populated one. That failure is the correct outcome, not an obstacle: those rows point at user ids that no longer exist anywhere, and there is no mapping back.
 
+Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, add a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`). They validate the rows already there, so either one fails on a database holding an id below 2^22. No app writer produces such an id; a row like that was written by hand.
+
 So on a development or staging database that still holds rows, recreate it rather than migrating it:
 
 ```bash
-docker compose down -v                 # drops every volume, including all three Postgres
+docker compose --profile '*' down -v   # every profile, so all three Postgres volumes go
 docker compose up -d postgres redis meilisearch mailpit minio minio-init
 pnpm db:migrate && pnpm db:seed
 ```

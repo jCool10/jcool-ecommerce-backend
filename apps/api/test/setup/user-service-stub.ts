@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
+import { isRoutableId } from '@jcool/id-codec';
 import type { Role } from '@jcool/platform/rbac';
 
 export interface StubUser {
@@ -107,6 +108,14 @@ export class UserServiceStub {
 
     if (route.name === 'jwks') return void reply(res, 200, { keys: [this.jwk] });
     if (req.headers.authorization !== `Bearer ${requiredEnv('INTERNAL_API_TOKEN')}`) return void reply(res, 401, {});
+    // The real routes parse the id with ParseSnowflakeIdPipe, after the token guard.
+    if (!isRoutableId(route.userId)) {
+      return void reply(res, 400, {
+        statusCode: 400,
+        message: 'Validation failed (routable id is expected)',
+        error: 'Bad Request',
+      });
+    }
 
     const user = this.users.get(route.userId);
     if (!user) return void reply(res, 404, { statusCode: 404, message: 'Not Found' });

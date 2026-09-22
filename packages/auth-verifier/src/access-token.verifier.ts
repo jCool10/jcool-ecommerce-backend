@@ -1,5 +1,6 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { type JWTPayload, type JWTVerifyResult, decodeProtectedHeader, jwtVerify } from 'jose';
+import { isRoutableId } from '@jcool/id-codec';
 import { type AuthenticatedUser, ROLES, type Role } from '@jcool/platform/rbac';
 import type { AccessTokenClaims } from './access-token-claims';
 import { AUTH_VERIFIER_OPTIONS, type AuthVerifierOptions } from './auth-verifier.options';
@@ -59,10 +60,11 @@ function isRole(value: unknown): value is Role {
   return (ROLES as readonly unknown[]).includes(value);
 }
 
-// A token minted before epochs existed carries none; it reads as 0.
+// A token minted before epochs existed carries none; it reads as 0. A subject that is not a routable
+// id, such as a pre-snowflake UUID, is refused here: every id column downstream throws on it as a 5xx.
 function toClaims(payload: JWTPayload): VerifiedClaims | null {
   const { sub, jti, exp, role, epoch = 0 } = payload;
-  if (typeof sub !== 'string' || typeof jti !== 'string' || typeof exp !== 'number') return null;
+  if (!isRoutableId(sub) || typeof jti !== 'string' || typeof exp !== 'number') return null;
   if (!isRole(role) || typeof epoch !== 'number') return null;
   return { sub, role, jti, epoch, exp };
 }

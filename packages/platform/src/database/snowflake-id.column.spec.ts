@@ -1,5 +1,5 @@
-import { pgTable } from 'drizzle-orm/pg-core';
-import { snowflakeId } from './snowflake-id.column';
+import { PgDialect, getTableConfig, pgTable } from 'drizzle-orm/pg-core';
+import { routableIdCheck, snowflakeId } from './snowflake-id.column';
 
 const ID = '137465797020397179';
 const MAX_ID = '9223372036854775807';
@@ -26,12 +26,28 @@ describe('snowflakeId column', () => {
     expect(column().mapToDriverValue(MAX_ID)).toBe(MAX_ID);
   });
 
-  // A uuid, a row counter or a rounded number reaching a bigint column is a bug that would otherwise
-  // only surface as a foreign key violation much later, or not at all.
-  it('refuses a value that is not a routable id, in either direction', () => {
-    for (const bad of ['0198d9c1-9800-8aab-9fff-ff0000000001', '0', '', '1.5', '-1', 137465797020397180]) {
+  it('refuses to write a value that is not a routable id', () => {
+    for (const bad of ['0198d9c1-9800-8aab-9fff-ff0000000001', '0', '4194303', '', '1.5', '-1', 137465797020397180]) {
       expect(() => column().mapToDriverValue(bad as never)).toThrow(TypeError);
-      expect(() => column().mapFromDriverValue(bad as never)).toThrow(TypeError);
     }
+  });
+
+  // The database CHECK keeps a bad value out, so a read never has a reason to throw.
+  it('reads whatever the driver returns without validating it', () => {
+    expect(column().mapFromDriverValue('4194303')).toBe('4194303');
+  });
+});
+
+describe('routableIdCheck', () => {
+  it('holds the column to the smallest routable id', () => {
+    const table = pgTable('checked', { userId: snowflakeId('user_id') }, (t) => [
+      routableIdCheck('ck_checked_user_id_routable', t.userId),
+    ]);
+    const [constraint] = getTableConfig(table).checks;
+    const rendered = new PgDialect().sqlToQuery(constraint.value);
+
+    expect(constraint.name).toBe('ck_checked_user_id_routable');
+    expect(rendered.sql).toBe('"checked"."user_id" >= 4194304');
+    expect(rendered.params).toEqual([]);
   });
 });

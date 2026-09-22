@@ -61,7 +61,7 @@ export class DrizzleSessionEpochRepository implements SessionEpochPort, SessionE
         after
           ? and(
               gte(users.updatedAt, sql`${after.updatedAt}::timestamptz`),
-              sql`(${users.updatedAt}, ${users.id}) > (${after.updatedAt}::timestamptz, ${after.userId}::uuid)`,
+              sql`(${users.updatedAt}, ${users.id}) > (${after.updatedAt}::timestamptz, ${after.userId}::bigint)`,
             )
           : gte(users.updatedAt, since),
       )

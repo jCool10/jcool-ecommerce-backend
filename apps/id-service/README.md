@@ -10,7 +10,7 @@ An id is returned as a **decimal string**, not a JSON number. 63 bits outruns th
 
 | Route | Answer |
 | --- | --- |
-| `POST /v1/ids` `{ "bucket": 0..4095, "count"?: 1..32 }` | `200 { "ids": [...] }`, decimal strings, each carrying the bucket that was sent. The cap is one node-millisecond: the sequence holds 32 ids per millisecond, and a larger batch would busy-wait into the next one with the event loop blocked. `400` for anything outside those ranges or any extra field. `503 { "code": "LEASE_NOT_HELD" }` when this replica holds no usable lease; the gateway retries the request on another replica. |
+| `POST /v1/ids` `{ "bucket": 0..4095, "count"?: 1..32 }` | `200 { "ids": [...] }`, decimal strings, each carrying the bucket that was sent. The cap is one node-millisecond: the sequence holds 32 ids per millisecond, so a request busy-waits into the next one at most once, for up to about 1 ms with the event loop blocked. A larger batch would block for a millisecond per 32 ids. `400` for anything outside those ranges or any extra field. `503 { "code": "LEASE_NOT_HELD" }` when this replica holds no usable lease; the gateway retries the request on another replica. |
 | `GET /health/live` | `200` while the process runs. |
 | `GET /health/ready` | `200` while the replica holds an unfenced lease, including while it drains. `503` with the lease state otherwise. |
 | `GET /metrics` | Prometheus, guarded by `METRICS_TOKEN` as in the api. |
@@ -49,7 +49,7 @@ On a rolling deploy, keep `SHUTDOWN_GRACE_PERIOD_MS` < the platform's draining w
 ## Operations
 
 - **Migrate** before starting replicas: `node dist/database/migrate-cli.js` (`MIGRATIONS_DIR=/app/migrations` in the image). It exits non-zero if it finds no migrations at all.
-- **Pool exhausted**: readiness returns `503 {state: "exhausted"}`, the keeper logs one error, and it retries every second. The usual cause is crashed replicas whose leases have not expired yet; they free up after `TTL + quarantine`.
+- **Pool exhausted**: readiness returns `503 {state: "exhausted"}`, the keeper logs one error, and it retries every second. The usual cause is crashed replicas whose leases have not expired yet; they free up after `TTL + quarantine`. A replica that exits without releasing (a crash, an OOM kill, `SIGKILL`) keeps its node for up to that, about 310 s by default, so with 3 replicas holding nodes about 27 such exits inside that window exhaust the 30-node pool. Railway restarts a crashing replica at most 5 times, so one bad deploy locks at most 18.
 - **Database down**: replicas keep minting until the fence, then answer `LEASE_NOT_HELD`. Once the database is back, they either renew or claim a new node.
 - **Database restored or recreated**: its rows can sit behind ids already minted. Follow the [runbook](../../RUNBOOK.md#restoring-or-recreating-the-id-service-database) before any replica starts.
 

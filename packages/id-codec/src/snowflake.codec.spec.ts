@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import {
+  BUCKET_BITS,
   BUCKET_COUNT,
   EPOCH_MS,
+  LAYOUT_VERSION,
   MAX_TIMESTAMP_MS,
+  MIN_ROUTABLE_ID,
   MIN_TIMESTAMP_MS,
+  NODE_BITS,
   NODE_COUNT,
+  SEQUENCE_BITS,
   SEQUENCE_COUNT,
   type SnowflakeFields,
   TIMESTAMP_BITS,
@@ -117,6 +122,23 @@ describe('snowflake codec', () => {
     expect(Number(value & 0x1fn)).toBe(27);
   });
 
+  it('pins LAYOUT_VERSION to the epoch and to every field width and position', () => {
+    const lowBit = (fields: Partial<SnowflakeFields>) =>
+      (BigInt(encode({ ...MIN, ...fields })) - BigInt(encode(MIN))).toString(2).length - 1;
+    const layout = [
+      new Date(EPOCH_MS).toISOString(),
+      `ts ${TIMESTAMP_BITS}@${lowBit({ tsMs: MIN_TIMESTAMP_MS + 1 })}`,
+      `bucket ${BUCKET_BITS}@${lowBit({ bucket: 1 })}`,
+      `node ${NODE_BITS}@${lowBit({ nodeId: 1 })}`,
+      `seq ${SEQUENCE_BITS}@${lowBit({ sequence: 1 })}`,
+    ].join(' | ');
+
+    expect(
+      { layout, version: LAYOUT_VERSION },
+      'A layout change is a data migration that rewrites every id, plus a LAYOUT_VERSION bump',
+    ).toEqual({ layout: '2026-01-01T00:00:00.000Z | ts 41@22 | bucket 12@10 | node 5@5 | seq 5@0', version: 1 });
+  });
+
   it('orders by time: a later millisecond always encodes larger', () => {
     const early = BigInt(encode({ tsMs: 1_800_000_000_000, bucket: 4095, nodeId: 31, sequence: 31 }));
     const late = BigInt(encode({ tsMs: 1_800_000_000_001, bucket: 0, nodeId: 0, sequence: 0 }));
@@ -139,8 +161,8 @@ describe('snowflake codec', () => {
     expect(() => encode({ ...MIN, bucket: NaN })).toThrow(RangeError);
   });
 
-  // The epoch millisecond itself encodes to a value below MIN_VALUE, which is exactly what makes a
-  // small integer impossible to mistake for an id. Refusing it at encode keeps the two ends honest.
+  // The epoch millisecond itself encodes to a value below MIN_ROUTABLE_ID, which is exactly what makes
+  // a small integer impossible to mistake for an id. Refusing it at encode keeps the two ends honest.
   it('refuses a timestamp at or before the epoch', () => {
     expect(() => encode({ ...MIN, tsMs: EPOCH_MS })).toThrow(RangeError);
     expect(() => encode({ ...MIN, tsMs: EPOCH_MS - 1 })).toThrow(RangeError);
@@ -189,7 +211,23 @@ describe('snowflake codec', () => {
     }
   });
 
+  it('does not echo the rejected input in its error', () => {
+    for (const id of ['4194303', '9999999999999999999', '0198d9c1-9800-8aab-9fff-ff0000000001']) {
+      let message = '';
+      try {
+        decode(id);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+
+      expect(message).toMatch(/^Not a routable id/);
+      expect(message).not.toContain(id);
+    }
+  });
+
   it('accepts the smallest and largest encodable ids', () => {
+    expect(MIN_ROUTABLE_ID).toBe(4_194_304n);
+    expect(encode(MIN)).toBe(MIN_ROUTABLE_ID.toString());
     expect(isRoutableId('4194304')).toBe(true);
     expect(isRoutableId(((1n << 63n) - 1n).toString())).toBe(true);
   });

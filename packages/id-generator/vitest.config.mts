@@ -12,8 +12,8 @@ export default defineConfig({
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.spec.ts'],
-      // Measured minus two.
-      thresholds: { statements: 93, branches: 95, functions: 95, lines: 93 },
+      // Measured minus two, and never lowered.
+      thresholds: { statements: 94, branches: 98, functions: 95, lines: 94 },
     },
   },
 });

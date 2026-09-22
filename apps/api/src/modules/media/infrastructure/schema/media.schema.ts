@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { bigint, index, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
-import { snowflakeId } from '@jcool/platform/database';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure, never imported by domain. No FK to products: the reference points the other way,
 // and cross-context FKs are not used here.
@@ -39,6 +39,7 @@ export const mediaAssets = pgTable(
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_media_assets_uploaded_by_routable', t.uploadedBy),
     // Serves the expiry branch of the sweep's claim — keep this status set identical to
     // `RECLAIMABLE_STATUSES`, whose literals here are invisible to a grep for that constant. Partial,
     // so it stays proportional to what is reclaimable rather than to every asset uploaded.

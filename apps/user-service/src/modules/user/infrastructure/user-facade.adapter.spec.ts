@@ -13,7 +13,7 @@ function build(user: User | null) {
 const tx = Symbol('tx') as unknown as DrizzleTx;
 
 const USER = User.create({
-  id: '0198f0d8-1111-8000-8000-000000000001',
+  id: '137465797020397179',
   email: 'buyer@test.local',
   passwordHash: '$argon2id$not-a-real-hash',
   role: Role.Customer,

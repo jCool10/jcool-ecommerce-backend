@@ -13,7 +13,7 @@ const clockMetrics = vi.hoisted(() => ({
 }));
 vi.mock('@jcool/platform/metrics', () => clockMetrics);
 
-// After EPOCH_MS (2026-01-01), the earliest instant the layout can stamp.
+// Well after EPOCH_MS (2026-01-01): the earliest instant the layout can stamp is EPOCH_MS + 1.
 const START_MS = 1_800_000_000_000;
 const HOLDER = LEASE.holder;
 const GRACE_MS = 8_000;

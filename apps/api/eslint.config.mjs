@@ -40,7 +40,8 @@ const logCallShape = [
 
 // An id from a general-purpose generator carries no routing bucket, and nothing notices until a
 // shard split. Not a global ban: `jti`/`familyId` have no bucket and stay on uuidv7, and specs must
-// be able to mint a non-v8 id to prove it is rejected. `scripts/` is in because it inserts over raw SQL.
+// be able to mint a non-snowflake (e.g. uuid) id to prove it is rejected. `scripts/` is in because
+// it inserts over raw SQL.
 const bucketedIdMessage =
   'User-context ids must be minted through IdentityService so they carry a routing bucket.';
 const uuidImportBan = { group: ['uuid', 'uuid/*'], message: bucketedIdMessage };

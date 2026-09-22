@@ -11,6 +11,7 @@ import { TOKEN_DENYLIST } from './token-denylist.port';
 const ISSUER = 'iss';
 const AUDIENCE = 'aud';
 const KID = 'test-key';
+const USER_ID = '137465797020397179';
 let privateKey: CryptoKey;
 
 @Controller()
@@ -43,7 +44,7 @@ class ProbeController {
 class SessionStateModule {}
 
 function token(role: string): Promise<string> {
-  return new SignJWT({ sub: 'u-1', role, jti: 'jti-1', epoch: 0 })
+  return new SignJWT({ sub: USER_ID, role, jti: 'jti-1', epoch: 0 })
     .setProtectedHeader({ alg: 'ES256', kid: KID })
     .setIssuer(ISSUER)
     .setAudience(AUDIENCE)
@@ -92,7 +93,7 @@ describe('AuthVerifierModule', () => {
       .set('Authorization', `bearer ${await token('CUSTOMER')}`)
       .expect(200);
 
-    expect(res.body).toMatchObject({ userId: 'u-1', role: 'CUSTOMER', jti: 'jti-1' });
+    expect(res.body).toMatchObject({ userId: USER_ID, role: 'CUSTOMER', jti: 'jti-1' });
   });
 
   it('authenticates before it authorizes', async () => {

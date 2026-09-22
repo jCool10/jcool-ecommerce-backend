@@ -2,9 +2,10 @@ import { Inject, Injectable, type OnApplicationBootstrap } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config';
 import { desc, eq } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
-import { LAYOUT_VERSION, bucketForEmail, bucketOf, identityKeyFingerprint } from '@jcool/id-codec';
+import { bucketForEmail, bucketOf } from '@jcool/id-codec';
 import { normalizeEmail, toError } from '@jcool/kernel';
 import { DRIZZLE, type DrizzleDB } from '../../../database';
+import { type IdentityPin, identityPinMismatch, runningIdentityPin } from './identity-key-pin-comparison';
 import { identityKeyPin, users } from './schema/user.schema';
 
 const PIN_ROW_ID = 1;
@@ -15,14 +16,19 @@ const DB_CHECK_TIMEOUT_MS = 5_000;
 
 const LOG_CONTEXT = 'IdentityBucketKeyVerifier';
 
+const PIN_NOT_VERIFIED = 'identity bucket key pin not verified';
+
+type PinRead = IdentityPin | 'absent' | 'unreadable';
+
 /**
  * Refuses to boot when the running `IDENTITY_BUCKET_KEY` is not the one this database was built
  * with: a wrong key mints ids into buckets their emails do not hash to, and nothing reads a bucket
- * until a shard split, so the damage surfaces years later. The canary runs before the pin even
- * though the pin is stronger, because the pin *writes* — pinning first on a database that already
- * holds rows would record a wrong key as the reference every later boot is held to. The canary is
- * blind to a key wrong from row 1 — both sides then hash under it and agree — which is what the pin
- * catches. Both fail open on an unreachable database, closed only on a disagreement read back.
+ * until a shard split, so the damage surfaces years later. The pin is read and compared before the
+ * row canary, because under a changed layout the canary misreads the newest row as a key fault. It
+ * is only *written* after the canary passes: pinning on a database that already holds rows would
+ * record a wrong key as the reference every later boot is held to. The canary is blind to a key
+ * wrong from row 1 — both sides then hash under it and agree — which is what the pin catches. Both
+ * fail open on an unreachable database, closed only on a disagreement read back.
  *
  * With `identity.pinBootstrap` off the pin is only compared: this database is filled by copying
  * another one, pin included, and a pin written before that copy would be the empty database's.
@@ -39,8 +45,16 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
 
   async onApplicationBootstrap(): Promise<void> {
     const key = this.config.getOrThrow<string>('identity.bucketKey');
-    await this.verifyNewestUserRow(key);
-    await this.verifyKeyPin(key);
+    const running = runningIdentityPin(key);
+
+    const pinned = await this.readPin();
+    if (typeof pinned === 'object') assertPinMatches(pinned, running);
+
+    const canaryRan = await this.verifyNewestUserRow(key);
+    if (pinned !== 'absent') return;
+
+    if (canaryRan) await this.bootstrapPin(running);
+    else this.logger.warn('identity bucket key pin not written — the row canary could not run; the next boot retries');
   }
 
   private async withinTimeout<T>(query: Promise<T>): Promise<T> {
@@ -60,71 +74,54 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
     }
   }
 
-  private async verifyKeyPin(key: string): Promise<void> {
-    const fingerprint = identityKeyFingerprint(key);
-    const bootstrap = this.config.get<boolean>('identity.pinBootstrap') === true;
-    let pinned: { fingerprint: string; layoutVersion: number } | undefined;
-
+  private async readPin(): Promise<PinRead> {
     try {
-      // Concurrent first boots race here rather than in a read-then-write gap; the loser falls
-      // through to the comparison below.
-      const [persisted] = bootstrap
-        ? await this.withinTimeout(
-            this.db
-              .insert(identityKeyPin)
-              .values({ id: PIN_ROW_ID, fingerprint, layoutVersion: LAYOUT_VERSION })
-              .onConflictDoNothing()
-              .returning({ fingerprint: identityKeyPin.fingerprint }),
-          )
-        : [];
-      if (persisted) {
-        this.logger.info(
-          { fingerprint, layoutVersion: LAYOUT_VERSION },
-          'identity bucket key pinned — no key was pinned here before',
-        );
-        return;
-      }
-
       const [row] = await this.withinTimeout(
         this.db
           .select({ fingerprint: identityKeyPin.fingerprint, layoutVersion: identityKeyPin.layoutVersion })
           .from(identityKeyPin)
           .where(eq(identityKeyPin.id, PIN_ROW_ID)),
       );
-      pinned = row;
+      return row ?? 'absent';
     } catch (error) {
-      this.logger.warn({ err: toError(error) }, 'identity bucket key pin not verified');
-      return;
-    }
-
-    if (pinned === undefined) {
-      this.logger.warn(
-        bootstrap
-          ? 'identity bucket key pin disappeared while being read — not verified'
-          : 'no identity bucket key pin here and IDENTITY_PIN_BOOTSTRAP is off — not verified',
-      );
-      return;
-    }
-    if (pinned.fingerprint !== fingerprint) {
-      throw new Error(
-        `IDENTITY_BUCKET_KEY does not match the key this database was built with ` +
-          `(pinned ${pinned.fingerprint}, current ${fingerprint}). The key is permanent: booting ` +
-          `under a different one routes every new id to a shard that will not hold its rows. ` +
-          `Restore the original key, or reset the database if it holds nothing worth keeping.`,
-      );
-    }
-    if (pinned.layoutVersion !== LAYOUT_VERSION) {
-      throw new Error(
-        `The id layout does not match the one this database was built with (pinned ` +
-          `${pinned.layoutVersion}, current ${LAYOUT_VERSION}). The epoch and the field widths are ` +
-          `permanent: every stored id decodes to a different timestamp and a different bucket under ` +
-          `another layout. Restore the original build, or reset the database if it holds nothing ` +
-          `worth keeping.`,
-      );
+      this.logger.warn({ err: toError(error) }, PIN_NOT_VERIFIED);
+      return 'unreadable';
     }
   }
 
-  private async verifyNewestUserRow(key: string): Promise<void> {
+  private async bootstrapPin(running: IdentityPin): Promise<void> {
+    if (this.config.get<boolean>('identity.pinBootstrap') !== true) {
+      this.logger.warn('no identity bucket key pin here and IDENTITY_PIN_BOOTSTRAP is off — not verified');
+      return;
+    }
+
+    let persisted: { fingerprint: string } | undefined;
+    try {
+      // Concurrent first boots race here rather than in a read-then-write gap; the loser re-reads
+      // the winner's pin below.
+      [persisted] = await this.withinTimeout(
+        this.db
+          .insert(identityKeyPin)
+          .values({ id: PIN_ROW_ID, ...running })
+          .onConflictDoNothing()
+          .returning({ fingerprint: identityKeyPin.fingerprint }),
+      );
+    } catch (error) {
+      this.logger.warn({ err: toError(error) }, PIN_NOT_VERIFIED);
+      return;
+    }
+    if (persisted) {
+      this.logger.info({ ...running }, 'identity bucket key pinned — no key was pinned here before');
+      return;
+    }
+
+    const pinned = await this.readPin();
+    if (pinned === 'absent') this.logger.warn('identity bucket key pin disappeared while being read — not verified');
+    if (typeof pinned === 'object') assertPinMatches(pinned, running);
+  }
+
+  /** Resolves `false` when the users table could not be read, so nothing was checked. */
+  private async verifyNewestUserRow(key: string): Promise<boolean> {
     let sample: { id: string; email: string } | undefined;
 
     try {
@@ -136,10 +133,10 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
       );
     } catch (error) {
       this.logger.warn({ err: toError(error) }, 'identity routing canary not checked');
-      return;
+      return false;
     }
 
-    if (!sample) return;
+    if (!sample) return true;
 
     // Outside the catch above: from here on every failure is a disagreement read back from a
     // reachable database, and must refuse the boot rather than be logged and stepped over.
@@ -160,5 +157,11 @@ export class IdentityBucketKeyVerifier implements OnApplicationBootstrap {
           `Run \`pnpm identity:verify\` to size the damage before restarting.`,
       );
     }
+    return true;
   }
+}
+
+function assertPinMatches(pinned: IdentityPin, running: IdentityPin): void {
+  const mismatch = identityPinMismatch(pinned, running);
+  if (mismatch !== null) throw new Error(mismatch);
 }

@@ -8,14 +8,16 @@
  * non-zero on disagreement so it can gate a deploy.
  */
 import { Pool } from 'pg';
-import { bucketForEmail, bucketOf, identityKeyFingerprint } from '@jcool/id-codec';
+import { bucketForEmail, bucketOf } from '@jcool/id-codec';
 import { normalizeEmail } from '@jcool/kernel';
+import {
+  type IdentityPin,
+  identityPinMismatch,
+  runningIdentityPin,
+} from '../src/modules/user/infrastructure/identity-key-pin-comparison';
 
 const BATCH = 10_000;
 const OFFENDERS_SHOWN = 20;
-// Sorts before every real id — the layout's smallest encodable value is well above zero — so the
-// first page starts at the beginning. Compared as a bigint by the column, not as text.
-const SCAN_START = '0';
 
 interface UserRow {
   id: string;
@@ -31,28 +33,41 @@ function carriedBucket(id: string): number | null {
   }
 }
 
-async function reportKeyPin(pool: Pool, fingerprint: string): Promise<boolean> {
-  const { rows } = await pool.query<{ fingerprint: string }>(`SELECT fingerprint FROM identity_key_pin WHERE id = 1`);
-  const pinned = rows[0]?.fingerprint;
+async function reportKeyPin(pool: Pool, running: IdentityPin): Promise<boolean> {
+  const { rows } = await pool.query<IdentityPin>(
+    `SELECT fingerprint, layout_version AS "layoutVersion" FROM identity_key_pin WHERE id = 1`,
+  );
+  const pinned = rows[0];
   if (pinned === undefined) {
     console.log(
-      `Key fingerprint ${fingerprint} (nothing pinned yet — a boot pins it only with IDENTITY_PIN_BOOTSTRAP=true)`,
+      `Key fingerprint ${running.fingerprint}, id layout ${running.layoutVersion} (nothing pinned yet — a boot ` +
+        `pins it only with IDENTITY_PIN_BOOTSTRAP=true)`,
     );
     return true;
   }
-  if (pinned !== fingerprint) {
-    console.error(`Key fingerprint ${fingerprint} does NOT match the pinned ${pinned} — this is the wrong key.`);
+  const mismatch = identityPinMismatch(pinned, running);
+  if (mismatch !== null) {
+    console.error(mismatch);
     return false;
   }
-  console.log(`Key fingerprint ${fingerprint} matches the one pinned in this database.`);
+  console.log(
+    `Key fingerprint ${running.fingerprint} matches the one pinned in this database (id layout ${running.layoutVersion}).`,
+  );
   return true;
+}
+
+// No lower bound on the first page: a zero or negative id is still read, and counted as misrouted.
+function readPage(pool: Pool, after: string | null): Promise<{ rows: UserRow[] }> {
+  return after === null
+    ? pool.query<UserRow>(`SELECT id, email FROM users ORDER BY id LIMIT $1`, [BATCH])
+    : pool.query<UserRow>(`SELECT id, email FROM users WHERE id > $1 ORDER BY id LIMIT $2`, [after, BATCH]);
 }
 
 /** The whole scan, printing as it goes: the pin check, then every row. False on any disagreement. */
 export async function verifyIdentityBuckets(pool: Pool, bucketKey: string): Promise<boolean> {
-  const keyMatches = await reportKeyPin(pool, identityKeyFingerprint(bucketKey));
+  const pinMatches = await reportKeyPin(pool, runningIdentityPin(bucketKey));
 
-  let cursor = SCAN_START;
+  let cursor: string | null = null;
   let scanned = 0;
   let misrouted = 0;
   // Counted, not collected: under an outright wrong key every row is an offender, and holding
@@ -62,10 +77,7 @@ export async function verifyIdentityBuckets(pool: Pool, bucketKey: string): Prom
   for (;;) {
     // Keyset paging: OFFSET re-reads every earlier page, and this has to stay usable at the row
     // counts that make the question worth asking.
-    const { rows } = await pool.query<UserRow>(`SELECT id, email FROM users WHERE id > $1 ORDER BY id LIMIT $2`, [
-      cursor,
-      BATCH,
-    ]);
+    const { rows } = await readPage(pool, cursor);
     if (rows.length === 0) break;
 
     for (const row of rows) {
@@ -84,7 +96,7 @@ export async function verifyIdentityBuckets(pool: Pool, bucketKey: string): Prom
   for (const id of shown) console.log(`  ${id}`);
   if (misrouted > shown.length) console.log(`  ... and ${misrouted - shown.length} more`);
 
-  return keyMatches && misrouted === 0;
+  return pinMatches && misrouted === 0;
 }
 
 async function main(): Promise<void> {
@@ -101,7 +113,6 @@ async function main(): Promise<void> {
   }
 }
 
-// Imported by the cutover verifier, which brings its own pool and reports on both databases.
 if (process.argv[1]?.endsWith('verify-identity-buckets.ts')) {
   void main().catch((error: unknown) => {
     console.error('Identity bucket verification failed:', error);

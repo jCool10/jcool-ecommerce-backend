@@ -71,11 +71,11 @@ Key and token rotation: [RUNBOOK.md](../../RUNBOOK.md#rotate-the-es256-signing-k
 
 ## Scripts
 
-Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`. The seeding ones mint ids in-process on the scripts' node id, not through the id-service. That node id is shared and not leased, so they take a Postgres advisory lock first and a second concurrent run fails loudly rather than minting beside the first.
+Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`. The seeding ones mint ids in-process on the scripts' node id, not through the id-service. That node id is shared and not leased, so they take a Postgres advisory lock first and a second concurrent run fails loudly rather than minting beside the first. Under that lock each run also starts above the newest id already on that node in `users`, so a later run on a host whose clock is behind cannot replay an earlier run's ids.
 
 | Script | |
 | --- | --- |
-| `identity:verify` | Scan every user row for an id that does not route to its email's bucket. Exits non-zero on a finding. |
+| `identity:verify` | Check the key and id layout pinned in the database, then scan every user row for an id that does not route to its email's bucket. Exits non-zero on a finding. |
 | `db:seed:perf-user` | The verified load-test account; `--clean` removes it. Run before the api's `db:seed:perf`. |
 | `seed:users:bulk` | Synthetic users for the register-uniqueness benchmark; `--clean` removes them. |
 | `db:metrics:users` | Size, cache-hit and vacuum readings for `users`. |

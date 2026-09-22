@@ -10,7 +10,7 @@ function pem(namedCurve = 'P-256'): string {
 
 const ISSUER = 'https://auth.jcool.test';
 const AUDIENCE = 'jcool';
-const CLAIMS = { sub: 'u1', role: 'CUSTOMER', jti: 'jti-1', epoch: 2 } as const;
+const CLAIMS = { sub: '137465797020397179', role: 'CUSTOMER', jti: 'jti-1', epoch: 2 } as const;
 
 describe('Es256SigningKeys', () => {
   it('publishes every key, public half only, and signs with the active one', () => {
@@ -93,7 +93,7 @@ describe('Es256AccessTokenSigner', () => {
     );
 
     await expect(verifier.verify(await signer.sign(CLAIMS))).resolves.toMatchObject({
-      userId: 'u1',
+      userId: CLAIMS.sub,
       role: 'CUSTOMER',
       jti: 'jti-1',
     });

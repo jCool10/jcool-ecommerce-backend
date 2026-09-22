@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import type { INestApplication } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -46,6 +47,8 @@ describe('Identity colocation at scale (integration)', () => {
     app = await createTestApp({ IDENTITY_PIN_BOOTSTRAP: 'true' });
 
     const identity = app.get(IdentityService);
+    // Each batch is minted while the previous one's INSERT runs; minting is clock-bound at 32 ids/ms.
+    let inFlight: Promise<unknown> = Promise.resolve();
     for (let from = 0; from < USERS; from += INSERT_BATCH) {
       const size = Math.min(INSERT_BATCH, USERS - from);
       const values: string[] = [];
@@ -55,8 +58,14 @@ describe('Identity colocation at scale (integration)', () => {
         values.push(`($${i * 2 + 1}, $${i * 2 + 2}, 'not-a-real-hash')`);
         params.push(await identity.mintUserId(email), email);
       }
-      await pool.query(`INSERT INTO users (id, email, password_hash) VALUES ${values.join(',')}`, params);
+      await inFlight;
+      inFlight = pool.query(`INSERT INTO users (id, email, password_hash) VALUES ${values.join(',')}`, params);
+      // Surfaced by the next await; this only stops a rejection during the next mint counting as unhandled.
+      inFlight.catch(() => undefined);
+      // pg-pool dispatches on process.nextTick, which the all-microtask mint loop starves until it ends.
+      await yieldToEventLoop();
     }
+    await inFlight;
 
     rows = (await pool.query<{ id: string; email: string }>(`SELECT id, email FROM users`)).rows;
   });

@@ -25,7 +25,7 @@ const NO_STALL = -1;
  * discipline — the two reserved node ids — must never run twice at once.
  */
 export class SnowflakeGenerator {
-  private nodeIdValue: number;
+  readonly nodeId: number;
   private lastMs = 0;
   private sequence = 0;
   private offsetMs = 0;
@@ -47,7 +47,7 @@ export class SnowflakeGenerator {
     if (floorMs !== undefined && (!Number.isInteger(floorMs) || floorMs < 0 || floorMs >= MAX_TIMESTAMP_MS)) {
       throw new RangeError(`Snowflake floorMs must be an integer in [0, ${MAX_TIMESTAMP_MS - 1}]`);
     }
-    this.nodeIdValue = nodeId;
+    this.nodeId = nodeId;
     this.originWallMs = clock.wallMs();
     this.originMonotonicMs = clock.monotonicMs();
     this.liftMs = floorMs === undefined ? 0 : Math.max(0, floorMs + 1 - this.originWallMs);
@@ -61,10 +61,6 @@ export class SnowflakeGenerator {
   /** @internal The only path that accepts a clock, so the seam is closed by type rather than by convention. */
   static createWithClock(options: { nodeId: number; clock: IdentityClock; floorMs?: number }): SnowflakeGenerator {
     return new SnowflakeGenerator(options.nodeId, options.clock, options.floorMs);
-  }
-
-  get nodeId(): number {
-    return this.nodeIdValue;
   }
 
   /** Milliseconds of one-way catch-up applied since construction. A suspended host resumes with the whole gap here. */
@@ -99,7 +95,7 @@ export class SnowflakeGenerator {
     }
     this.lastMs = tsMs;
 
-    return encode({ tsMs, bucket, nodeId: this.nodeIdValue, sequence: this.sequence });
+    return encode({ tsMs, bucket, nodeId: this.nodeId, sequence: this.sequence });
   }
 
   // Monotonic base plus an offset that only grows, so the result cannot go backwards. The obvious

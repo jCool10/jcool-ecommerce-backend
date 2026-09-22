@@ -4,7 +4,7 @@ import type { LeaseGrant, LeaseStore } from './lease-store.port';
 import { NodeLease, type NodeLeaseOptions } from './node-lease';
 import type { IdentityClock } from './snowflake.generator';
 
-// After EPOCH_MS (2026-01-01), the earliest instant the layout can stamp.
+// Well after EPOCH_MS (2026-01-01): the earliest instant the layout can stamp is EPOCH_MS + 1.
 const START_MS = 1_800_000_000_000;
 const TTL_MS = 300_000;
 const FENCE_MARGIN_MS = 15_000;

@@ -775,6 +775,9 @@ importers:
 
   packages/auth-verifier:
     dependencies:
+      '@jcool/id-codec':
+        specifier: workspace:*
+        version: link:../id-codec
       '@jcool/platform':
         specifier: workspace:*
         version: link:../platform

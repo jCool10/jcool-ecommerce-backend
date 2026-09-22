@@ -6,7 +6,7 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -97,7 +97,7 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
 
   it('refuses permanently when the event names a user that no longer exists', async () => {
     await expect(
-      processor.process(paidJob('0198f0d8-6666-8000-8000-000000000001', { occurredAt: LONG_AGO })),
+      processor.process(paidJob(mintTestUserId('gone@test.local'), { occurredAt: LONG_AGO })),
     ).rejects.toThrow(/no longer exists/);
 
     // The claim rolled back with the failed handler, so nothing is deduped away on a redelivery.

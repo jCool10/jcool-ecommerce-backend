@@ -1,9 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
+import { decodeJwt } from 'jose';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { bucketOf, isRoutableId } from '@jcool/id-codec';
-import { loginAs, sessionHeaders } from '../setup/auth.helper';
+import { bucketOf } from '@jcool/id-codec';
+import { authHeader, loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { bucketForTestEmail } from '../setup/identity.helper';
@@ -43,12 +44,33 @@ describe('Identity routing across the auth paths (integration)', () => {
     const res = await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
 
     const id = res.body.id as string;
-    expect(isRoutableId(id)).toBe(true);
     expect(bucketOf(id)).toBe(bucketForTestEmail(email));
 
     const { rows } = await pool.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [email]);
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(id);
+  });
+
+  // Past 2^53, so a JSON number, parseInt or Number() anywhere on the path drops digits silently.
+  it('stores a register id as a bigint and hands every digit of it back', async () => {
+    const email = 'routing-roundtrip@test.local';
+
+    const registered = await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
+    const id = registered.body.id as string;
+    expect(BigInt(id)).toBeGreaterThan(BigInt(Number.MAX_SAFE_INTEGER));
+
+    const { rows } = await pool.query<{ id: string; type: string }>(
+      `SELECT u.id::text AS id, pg_typeof(u.id)::text AS type FROM users u WHERE u.email = $1`,
+      [email],
+    );
+    expect(rows[0]).toEqual({ id, type: 'bigint' });
+
+    const session = await loginAs(app, { email, password });
+    expect(decodeJwt(session.accessToken).sub).toBe(id);
+
+    const me = await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(200);
+    expect(me.body.id).toBe(id);
+    expect(me.text).toContain(`"id":"${id}"`);
   });
 
   it("puts the refresh token a login issues in its owner's bucket", async () => {
@@ -58,7 +80,6 @@ describe('Identity routing across the auth paths (integration)', () => {
 
     const [tokenId, ...extra] = await ownedIds('refresh_tokens', user.id);
     expect(extra).toHaveLength(0);
-    expect(isRoutableId(tokenId)).toBe(true);
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 
@@ -79,7 +100,6 @@ describe('Identity routing across the auth paths (integration)', () => {
     if (!successorId) throw new Error('rotation left no token pointing at a successor');
     expect(rows.map((row) => row.id)).toContain(successorId);
 
-    expect(isRoutableId(successorId)).toBe(true);
     expect(bucketOf(successorId)).toBe(bucketOf(user.id));
   });
 
@@ -90,7 +110,6 @@ describe('Identity routing across the auth paths (integration)', () => {
 
     const [tokenId, ...extra] = await issuedIds('email_verification_tokens', user.id);
     expect(extra).toHaveLength(0);
-    expect(isRoutableId(tokenId)).toBe(true);
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 
@@ -101,7 +120,6 @@ describe('Identity routing across the auth paths (integration)', () => {
 
     const [tokenId, ...extra] = await issuedIds('password_reset_tokens', user.id);
     expect(extra).toHaveLength(0);
-    expect(isRoutableId(tokenId)).toBe(true);
     expect(bucketOf(tokenId)).toBe(bucketOf(user.id));
   });
 });

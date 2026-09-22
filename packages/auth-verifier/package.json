@@ -23,6 +23,7 @@
     "test:cov": "vitest run --coverage"
   },
   "dependencies": {
+    "@jcool/id-codec": "workspace:*",
     "@jcool/platform": "workspace:*",
     "jose": "^6.2.12"
   },

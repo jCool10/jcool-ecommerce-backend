@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
-import { snowflakeId } from '@jcool/platform/database';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const orderStatus = pgEnum('order_status', ['DRAFT', 'PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED']);
 
@@ -48,6 +48,7 @@ export const orders = pgTable(
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_orders_user_id_routable', t.userId),
     index('idx_orders_user').on(t.userId),
     // Per-user idempotency, matching the store's (scope, key) scope: at most one order per
     // (user, key). NULL keys don't collide (Postgres treats them as distinct), so pre-idempotency

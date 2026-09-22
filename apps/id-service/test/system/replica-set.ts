@@ -178,17 +178,18 @@ async function mintInto(run: MintRun, lbUrl: string, count: number): Promise<voi
   run.ids.push(...((await res.json()) as { ids: string[] }).ids);
 }
 
-/** Ids and (timestamp, node, sequence) triples seen more than once, and the nodes that minted. */
-export function collisions(ids: string[]): { duplicateIds: number; duplicateTriples: number; nodes: Set<number> } {
+/** Repeated (timestamp, node, sequence) triples, and the nodes that minted. A repeated id repeats its
+ * triple, and the triple still catches a repeat across buckets, since the sequence runs per node. */
+export function collisions(ids: string[]): { duplicates: number; nodes: Set<number> } {
   const triples = new Set<string>();
   const nodes = new Set<number>();
-  let duplicateTriples = 0;
+  let duplicates = 0;
   for (const id of ids) {
     const { tsMs, nodeId, sequence } = decode(id);
     nodes.add(nodeId);
     const triple = `${tsMs}:${nodeId}:${sequence}`;
-    if (triples.has(triple)) duplicateTriples += 1;
+    if (triples.has(triple)) duplicates += 1;
     triples.add(triple);
   }
-  return { duplicateIds: ids.length - new Set(ids).size, duplicateTriples, nodes };
+  return { duplicates, nodes };
 }

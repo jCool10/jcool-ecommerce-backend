@@ -8,12 +8,12 @@ import { OrderPaidEvent } from '../../src/modules/order/domain/events/order-paid
 import { OrderExpiredEvent } from '../../src/modules/order/domain/events/order-expired.event';
 import { OrderCancelledEvent } from '../../src/modules/order/domain/events/order-cancelled.event';
 import { readOrder } from '../setup/fixtures/order-flow.fixture';
+import { mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 // A syntactically-valid UUID no seed creates — probes the not_found path without a text→uuid 500.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
-// An owner these orders only need to agree on; the user lives in another service and another database.
-const USER_ID = '137465797020397179';
+const USER_ID = mintTestUserId('owner@test.local');
 
 // The state machine + idempotency guard that turn an at-least-once webhook into an exactly-once
 // effect. Drives FinalizeOrderUseCase directly against seeded orders; stock resolution is covered in

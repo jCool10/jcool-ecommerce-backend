@@ -8,7 +8,6 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { normalizeEmail } from '@jcool/kernel';
 import { users } from '../src/modules/user/infrastructure/schema/user.schema';
-import { scriptsIdentity } from './scripts-identity';
 import { withScriptsMintLock } from './scripts-mint-lock';
 
 const PERF_USER_EMAIL = normalizeEmail('perf@loadtest.jcool.local');
@@ -25,7 +24,8 @@ async function main(): Promise<void> {
     throw new Error('seed-perf-user refuses to run with NODE_ENV=production (throwaway data only)');
   }
 
-  const pool = new Pool({ connectionString, max: 1 });
+  // Two: the mint lock holds one connection while the insert runs on the other.
+  const pool = new Pool({ connectionString, max: 2 });
   const db = drizzle(pool);
   try {
     if (process.argv.includes('--clean')) {
@@ -42,17 +42,24 @@ async function main(): Promise<void> {
 
     // argon2id is deliberately slow, so the hash is only paid for when the row is actually created.
     const passwordHash = await argon2.hash(perfUserPassword(), { type: argon2.argon2id });
-    const [created] = await db
-      .insert(users)
-      .values({
-        id: await withScriptsMintLock(pool, () => scriptsIdentity().mintUserId(PERF_USER_EMAIL)),
-        email: PERF_USER_EMAIL,
-        passwordHash,
-        emailVerifiedAt: new Date(),
-      })
-      .onConflictDoNothing()
-      .returning({ id: users.id });
-    console.log(`Perf user ${PERF_USER_EMAIL} ${created ? `created (user ${created.id})` : 'created concurrently'}.`);
+    const [created] = await withScriptsMintLock(pool, async (identity) =>
+      db
+        .insert(users)
+        .values({
+          id: await identity.mintUserId(PERF_USER_EMAIL),
+          email: PERF_USER_EMAIL,
+          passwordHash,
+          emailVerifiedAt: new Date(),
+        })
+        // Email only: without a target a primary-key clash is skipped too, and no perf user exists.
+        .onConflictDoNothing({ target: users.email })
+        .returning({ id: users.id }),
+    );
+    console.log(
+      created
+        ? `Perf user ${PERF_USER_EMAIL} created (user ${created.id}).`
+        : `Perf user ${PERF_USER_EMAIL} already present (created concurrently).`,
+    );
   } finally {
     await pool.end();
   }
