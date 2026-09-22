@@ -87,7 +87,9 @@
 		lb_policy round_robin
 		# A failed dial is always retried. A request that reached a replica is retried only if it
 		# matches below: minting is safe to repeat, since an unanswered batch is never handed out.
-		lb_retries {$ID_LB_RETRIES:1}
+		# 0 is no count, only the try deadline: a deploy drops every old replica at once, and they
+		# come back into rotation together each time fail_duration lapses while DNS still lists them.
+		lb_retries {$ID_LB_RETRIES:0}
 		lb_try_duration {$ID_LB_TRY_DURATION:1s}
 		lb_try_interval {$ID_LB_TRY_INTERVAL:50ms}
 		lb_retry_match {
