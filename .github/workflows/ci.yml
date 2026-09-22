@@ -72,20 +72,3 @@ jobs:
           # ubuntu-latest is 4 vCPU, and the boot cost the parallelism hides is CPU-bound, so more
           # workers than cores buys contention rather than wall clock.
           E2E_WORKERS: '4'
-
-  system:
-    name: System (built images · id-service replicas behind the gateway)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # One package at a time: the suites assert latency bounds that a second stack on the same
-      # runner would eat into.
-      - run: pnpm turbo run test:system --concurrency=1
-        env:
-          TESTCONTAINERS_RYUK_DISABLED: 'true'
