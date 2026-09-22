@@ -26,7 +26,7 @@
     "@jcool/id-generator": "workspace:*",
     "@jcool/kernel": "workspace:*",
     "@jcool/platform": "workspace:*",
-    "@nestjs/common": "^11.0.1",
+    "@nestjs/common": "^12.0.3",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
