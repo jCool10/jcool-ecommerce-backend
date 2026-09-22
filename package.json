@@ -52,6 +52,6 @@
   },
   "devDependencies": {
     "railway": "^3.11.0",
-    "turbo": "^2.10.13"
+    "turbo": "^2.11.2"
   }
 }
