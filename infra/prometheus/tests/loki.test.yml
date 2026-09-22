@@ -1,0 +1,111 @@
+# Rule unit tests for loki.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+rule_files:
+  - ../rules/loki.yml
+
+evaluation_interval: 15s
+
+tests:
+  # Down long enough to page, then back: the alert must fire and then clear on its own.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="loki", instance="loki:3100"}'
+        values: '0x40 1x40'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LokiDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: LokiDown
+        exp_alerts:
+          - exp_labels:
+              job: loki
+              instance: 'loki:3100'
+              severity: ticket
+            exp_annotations:
+              summary: 'Loki has been unreachable for 5 minutes'
+              description: 'Every service is dropping its log batches; until Loki is back those lines exist only in the Railway log explorer. RUNBOOK → Logs in Loki.'
+      - eval_time: 15m
+        alertname: LokiDown
+        exp_alerts: []
+
+  # Successful pushes, however many, are not failures; sustained 5xx are. The 500 series only
+  # appears at the first failure, as in Loki.
+  - interval: 15s
+    input_series:
+      - series: 'loki_request_duration_seconds_count{route="loki_api_v1_push", status_code="204", method="POST", ws="false"}'
+        values: '0+10x60'
+      - series: 'loki_request_duration_seconds_count{route="loki_api_v1_push", status_code="500", method="POST", ws="false"}'
+        values: '_x20 1+1x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LokiPushFailing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: LokiPushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Loki is failing log pushes'
+              description: 'Loki answers 5xx to pushes, and pino-loki drops each failed batch. Check `railway logs --service loki`.'
+
+  # The first burst for a reason: the counter appears already at 5. It must fire, name its reason,
+  # and age out of the window.
+  - interval: 15s
+    input_series:
+      - series: 'loki_discarded_samples_total{reason="rate_limited", tenant="fake"}'
+        values: '_x2 5x80'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LokiDiscardingLines
+        exp_alerts:
+          - exp_labels:
+              reason: rate_limited
+              severity: ticket
+            exp_annotations:
+              summary: 'Loki is discarding lines (rate_limited)'
+              description: 'Loki accepted the push but threw these lines away. The reason names the limit in infra/loki/config.yaml that rejected them.'
+      - eval_time: 15m
+        alertname: LokiDiscardingLines
+        exp_alerts: []
+
+  # A later burst on a counter that already exists.
+  - interval: 15s
+    input_series:
+      - series: 'loki_discarded_samples_total{reason="line_too_long", tenant="fake"}'
+        values: '3x60 9x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LokiDiscardingLines
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: LokiDiscardingLines
+        exp_alerts:
+          - exp_labels:
+              reason: line_too_long
+              severity: ticket
+            exp_annotations:
+              summary: 'Loki is discarding lines (line_too_long)'
+              description: 'Loki accepted the push but threw these lines away. The reason names the limit in infra/loki/config.yaml that rejected them.'
+
+  # A bucket that stays unreachable keeps failing flushes; the counter at rest never fires.
+  - interval: 15s
+    input_series:
+      - series: 'loki_ingester_chunks_flush_failures_total{job="loki", instance="loki:3100"}'
+        values: '0+1x120'
+      - series: 'loki_ingester_chunks_flush_failures_total{job="loki", instance="spare:3100"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LokiChunkFlushFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LokiChunkFlushFailing
+        exp_alerts:
+          - exp_labels:
+              job: loki
+              instance: 'loki:3100'
+              severity: ticket
+            exp_annotations:
+              summary: 'Loki cannot write chunks to its bucket'
+              description: 'Flushes to the loki-chunks bucket have been failing for 15 minutes. Check the LOKI_S3_* references on the loki service and `railway logs --service loki`.'

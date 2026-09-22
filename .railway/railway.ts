@@ -1,4 +1,4 @@
-import { database, defineRailway, github, preserve, project, service, volume } from 'railway/iac';
+import { bucket, database, defineRailway, github, preserve, project, ref, service, volume } from 'railway/iac';
 
 export const partial = 'api';
 
@@ -9,6 +9,10 @@ const ID_LB_PORT = '4000';
 const USER_SERVICE_PORT = '3000';
 const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
+const LOKI_PORT = '3100';
+
+// Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
+const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
@@ -95,6 +99,7 @@ export default defineRailway(() => {
       INTERNAL_API_TOKEN: '${{user-service.INTERNAL_API_TOKEN}}',
       USER_SERVICE_INTERNAL_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
       AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
+      LOKI_URL,
     },
   });
 
@@ -122,6 +127,7 @@ export default defineRailway(() => {
       PORT: ID_SERVICE_PORT,
       DATABASE_URL: idPostgres.env.DATABASE_URL,
       SHUTDOWN_GRACE_PERIOD_MS: '8000',
+      LOKI_URL,
     },
   });
 
@@ -178,6 +184,7 @@ export default defineRailway(() => {
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
       // Only ever reached over the private network.
       TRUST_PROXY: 'fd12::/16',
+      LOKI_URL,
     },
   });
 
@@ -199,6 +206,33 @@ export default defineRailway(() => {
       // like a missing endpoint.
       METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
       API_TARGET: `\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
+      LOKI_TARGET: `\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`,
+    },
+  });
+
+  // Chunks and index live in the bucket. The volume holds only the WAL and compactor state, so a
+  // restart replays what was not yet flushed instead of losing it.
+  const lokiChunks = bucket('loki-chunks', { region: 'iad' });
+  const lokiData = volume('loki-data', { sizeMB: 5_000, region: 'iad' });
+
+  // No domain: the apps push and Grafana queries over the private network, and auth is off.
+  const loki = service('loki', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/loki/Dockerfile' },
+    deploy: {
+      numReplicas: 1,
+      // 503 until the ingester has been in the ring for 15s.
+      healthcheckPath: '/ready',
+      healthcheckTimeout: 120,
+      restartPolicyMaxRetries: 5,
+    },
+    volumeMounts: { '/loki': lokiData },
+    env: {
+      PORT: LOKI_PORT,
+      LOKI_S3_ENDPOINT: ref(lokiChunks, 'ENDPOINT'),
+      LOKI_S3_REGION: ref(lokiChunks, 'REGION'),
+      LOKI_S3_BUCKET: ref(lokiChunks, 'BUCKET'),
+      LOKI_S3_ACCESS_KEY_ID: ref(lokiChunks, 'ACCESS_KEY_ID'),
+      LOKI_S3_SECRET_ACCESS_KEY: ref(lokiChunks, 'SECRET_ACCESS_KEY'),
     },
   });
 
@@ -230,6 +264,9 @@ export default defineRailway(() => {
       userService,
       prometheusData,
       prometheus,
+      lokiChunks,
+      lokiData,
+      loki,
       grafana,
     ],
   });

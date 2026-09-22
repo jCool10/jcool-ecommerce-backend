@@ -77,7 +77,7 @@ Two conventions that keep the volume honest:
 
 ## Who writes the request line
 
-`autoLogging` is **off** in `logger.module.ts`. A request produces exactly one summary line:
+`autoLogging` is **off** in `logger-params.ts`. A request produces exactly one summary line:
 
 - success → `CanonicalLogInterceptor` (`'request completed'`)
 - failure → `HttpExceptionFilter` (`'request failed'` at 5xx, `'request rejected'` below it)
@@ -86,7 +86,11 @@ Health and metrics probes are skipped entirely. In development both render a sin
 
 ## What is on every line for free
 
-The pino `mixin` in `logger.module.ts` adds, when present: `requestId` (from `nestjs-cls`, echoed as the `x-request-id` response header), `job` (set by `runInJobContext`, so its presence answers "request or timer?"), `traceId` and `spanId` (from the active OTel span). Never re-add these by hand.
+The pino `mixin` in `logger-params.ts` adds, when present: `requestId` (from `nestjs-cls`, echoed as the `x-request-id` response header), `job` (set by `runInJobContext`, so its presence answers "request or timer?"), `traceId` and `spanId` (from the active OTel span). Never re-add these by hand.
+
+## Where the lines go
+
+stdout, always. With `LOKI_URL` set (Railway sets it for every Node service), `logger-params.ts` also sends each line to Loki through a pino worker, labelled `service`, `env`, `level` (as `debug`, `info`, `warning`, `error`, `critical`) and `hostname`. Everything else, `requestId` included, stays a field in the line, because each distinct label value creates its own Loki stream. Operating it: `RUNBOOK.md` → *Logs in Loki*.
 
 `redactPaths` censors credentials and tokens. Email is deliberately *not* redacted — the auth audit trail exists to record it, and the Sentry sink strips it separately.
 

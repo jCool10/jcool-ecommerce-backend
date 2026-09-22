@@ -6,12 +6,13 @@ set -eu
 
 : "${METRICS_TOKEN:?METRICS_TOKEN is required — /metrics answers 404 without it}"
 : "${API_TARGET:?API_TARGET is required}"
+: "${LOKI_TARGET:?LOKI_TARGET is required}"
 
 mkdir -p /etc/prometheus/secrets
 printf '%s' "$METRICS_TOKEN" > /etc/prometheus/secrets/metrics-token
 chmod 600 /etc/prometheus/secrets/metrics-token
 
-sed "s|__API_TARGET__|${API_TARGET}|g" \
+sed -e "s|__API_TARGET__|${API_TARGET}|g" -e "s|__LOKI_TARGET__|${LOKI_TARGET}|g" \
   /etc/prometheus/prometheus.railway.yml > /etc/prometheus/prometheus.yml
 
 # Railway's private network is IPv6-only: bound to 0.0.0.0 (the default), Grafana could not reach it.

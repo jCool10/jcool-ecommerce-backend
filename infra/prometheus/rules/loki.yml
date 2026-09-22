@@ -1,0 +1,52 @@
+# Alerts for the log pipeline. Lost lines never show on the RED dashboard: the apps keep answering
+# and stdout still has every line, so without these the first sign is an empty Explore mid-incident.
+# Only Railway scrapes Loki (prometheus.railway.yml); locally the series are absent and all stay quiet.
+groups:
+  - name: loki
+    rules:
+      # pino-loki drops a batch it cannot deliver rather than retrying it.
+      - alert: LokiDown
+        expr: up{job="loki"} == 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Loki has been unreachable for 5 minutes'
+          description: 'Every service is dropping its log batches; until Loki is back those lines exist only in the Railway log explorer. RUNBOOK → Logs in Loki.'
+
+      - alert: LokiPushFailing
+        expr: sum(rate(loki_request_duration_seconds_count{route="loki_api_v1_push", status_code=~"5.."}[5m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Loki is failing log pushes'
+          description: 'Loki answers 5xx to pushes, and pino-loki drops each failed batch. Check `railway logs --service loki`.'
+
+      # Rejected at the door: rate or size limits, or a timestamp outside the accepted window. Loki
+      # creates each reason's counter at its first discard, already above zero, which increase()
+      # cannot see; the `unless … offset` arm catches that first burst. It must come first: `or`
+      # keeps the left side, and increase() would answer 0 for the same labels.
+      - alert: LokiDiscardingLines
+        expr: |
+          (
+            sum by (reason) (loki_discarded_samples_total unless loki_discarded_samples_total offset 10m)
+            or
+            sum by (reason) (increase(loki_discarded_samples_total[10m]))
+          ) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Loki is discarding lines ({{ $labels.reason }})'
+          description: 'Loki accepted the push but threw these lines away. The reason names the limit in infra/loki/config.yaml that rejected them.'
+
+      # Pushes still succeed while the bucket is unreachable: lines sit in memory and the WAL until
+      # the volume or the heap runs out. This is the only early sign of that.
+      - alert: LokiChunkFlushFailing
+        expr: increase(loki_ingester_chunks_flush_failures_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Loki cannot write chunks to its bucket'
+          description: 'Flushes to the loki-chunks bucket have been failing for 15 minutes. Check the LOKI_S3_* references on the loki service and `railway logs --service loki`.'

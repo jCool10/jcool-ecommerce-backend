@@ -1,4 +1,4 @@
-import { IsBooleanString, IsEnum, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBooleanString, IsEnum, IsNotEmpty, IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
 import type { EnvBase } from './validate-env';
 
 export enum LogLevel {
@@ -43,6 +43,12 @@ export function ObservabilityEnv<TBase extends EnvBase>(Base: TBase) {
     @IsString()
     @IsNotEmpty()
     SENTRY_DSN?: string;
+
+    // Unset → logs go to stdout only. Set → every line is also pushed to this Loki. A URL rather than a
+    // plain string: pino-loki swallows a bad one on every push instead of failing the boot.
+    @IsOptional()
+    @IsUrl({ require_tld: false, require_protocol: true, protocols: ['http', 'https'] })
+    LOKI_URL?: string;
   }
   return ObservabilityEnv;
 }
@@ -65,5 +71,8 @@ export const observabilityConfig = (defaults: { serviceName: string }) => ({
     enabled: Boolean(process.env.SENTRY_DSN),
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV,
+  },
+  loki: {
+    url: process.env.LOKI_URL,
   },
 });

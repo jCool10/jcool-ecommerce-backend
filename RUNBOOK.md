@@ -22,6 +22,7 @@ Conventions used below:
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
+- [Logs in Loki](#logs-in-loki)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
@@ -470,14 +471,86 @@ until then `/metrics` answers 404 and the target sits DOWN.
 
 Three constraints this stack depends on:
 
-- **One scrape job.** The recording rules in `infra/prometheus/rules/` aggregate globally, without
-  `by (job)`. Adding the user-service or id-service as a second job silently mixes two services into
-  one SLI; split the rules first.
+- **One app scrape job.** The recording rules in `infra/prometheus/rules/` aggregate globally,
+  without `by (job)`. Adding the user-service or id-service as a second job silently mixes two
+  services into one SLI; split the rules first. The `loki` job is safe only because its
+  `metric_relabel_configs` keep nothing but the `loki_*` series `rules/loki.yml` reads.
 - **Prometheus binds `[::]`** (`infra/prometheus/railway-entrypoint.sh`). Railway's private network
   is IPv6-only, and on the default `0.0.0.0` Grafana cannot reach it.
 - **Grafana is the only public surface**, and the only one with a login. Prometheus has no domain.
   Grafana has no volume either: datasources and dashboards are provisioned from the image on every
   start, so a redeploy loses only ad-hoc UI edits.
+
+---
+
+## Logs in Loki
+
+`loki` is a single-binary Loki (`infra/loki/`) with its chunks and index in the Railway Bucket
+`loki-chunks`, and its WAL and compactor state on the `loki-data` volume. It has no domain and no
+auth: only the private network reaches it. Grafana queries it through the provisioned `Loki`
+datasource.
+
+The api, user-service and id-service push every pino line to it when `LOKI_URL` is set, which
+`.railway/railway.ts` does for all three. stdout is unchanged, so Railway's log explorer still has
+every line for 30 days. The gateway's Caddy logs are not in Loki.
+
+First time, from an up-to-date `main`:
+
+```bash
+railway config plan      # adds loki-chunks, loki-data, loki, LOKI_URL on three services, LOKI_TARGET
+railway config apply
+railway up --ci --service loki
+scripts/railway-wait-for-rollout.sh loki
+railway up --ci --service prometheus   # scrapes loki
+railway up --ci --service grafana      # Loki datasource
+```
+
+The apply redeploys every service whose variables it changed, so the three apps restart at once on
+the code they already run (the api rebuilds `main` from its GitHub source). They read `LOKI_URL` at
+boot, and each starts pushing once it runs code that knows the variable. Loki itself is deployed by
+hand, like Prometheus and Grafana: a config change is `railway up --ci --service loki`.
+
+Querying, in Grafana → Explore → Loki:
+
+```logql
+{service="jcool-api", level="error"}
+{env="production"} | json | requestId="0f9c…"
+sum by (service) (count_over_time({env="production", level=~"error|critical"}[5m]))
+```
+
+Labels are `service`, `env`, `level` and `hostname` (one per replica, new on each deploy). `level`
+is pino-loki's name, not pino's: `debug`, `info`, `warning`, `error`, `critical` — `level="warn"`
+matches nothing. Anything unbounded (`requestId`, `traceId`, `userId`) is a field in the JSON line,
+filtered with `| json`, never a label: every label value starts a new stream.
+
+**Retention** is 30 days (`limits_config.retention_period` in `infra/loki/config.yaml`). The
+compactor is the only thing that deletes, since Railway Buckets have no lifecycle rules. The lines
+carry email and IP (the auth audit trail), so do not raise it without deciding that is acceptable.
+The delete API is disabled, because with auth off anything on the private network could call it.
+
+**When Loki is down or slow**, requests are unaffected: pino-loki runs in a worker thread and posts
+a batch every 5 seconds. A failed batch is dropped, not retried, and those lines exist only on
+stdout. Each failure also prints a multi-line `fetch failed` stack to stderr, every 5 seconds per
+process, so a Loki redeploy (which has downtime: a service with a volume never runs two
+deployments at once) leaves a few of these behind. A process holds at most 10,000 unsent lines,
+dropping the oldest. The batch in flight when a process stops is lost, so the last few seconds of
+every shutdown miss Loki. If the worker itself dies, the process prints `Loki transport failed` once
+and carries on with stdout only until its next restart.
+
+The rules in `infra/prometheus/rules/loki.yml` (`LokiDown`, `LokiPushFailing`,
+`LokiDiscardingLines`, `LokiChunkFlushFailing`) show in Prometheus and Grafana, but nothing delivers
+them: there is no Alertmanager or contact point. A bucket that breaks at boot fails Loki's
+healthcheck; one that breaks later shows only as `LokiChunkFlushFailing`, since pushes keep landing
+in memory and the WAL, and chunks flush after 30 minutes idle or 2 hours of age, so it can take
+hours to appear. To recover:
+
+1. `railway logs --service loki` — a bucket error means the `LOKI_S3_*` references are wrong;
+   `no space left` means the volume is full.
+2. `railway redeploy --service loki`. On restart it replays the WAL, so nothing it had
+   acknowledged is lost.
+
+To stop shipping, remove `LOKI_URL` from the three services in `.railway/railway.ts` and apply.
+Each service goes back to stdout only on its next deploy.
 
 ---
 

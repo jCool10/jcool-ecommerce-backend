@@ -1,8 +1,8 @@
-# Railway scrape config. Same shape as prometheus.yml, but the target is a placeholder: the
-# api's private domain is only known at runtime, so railway-entrypoint.sh substitutes it.
+# Railway scrape config. Same shape as prometheus.yml, but the targets are placeholders: private
+# domains are only known at runtime, so railway-entrypoint.sh substitutes them.
 #
-# One job only. The recording rules in rules/ aggregate globally without `by (job)`, so a second
-# scrape job would silently mix two services into one SLI.
+# The recording rules in rules/ aggregate globally without `by (job)`, so any job besides the api's
+# must keep only series those rules never read, or it silently mixes two services into one SLI.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -18,3 +18,12 @@ scrape_configs:
       credentials_file: /etc/prometheus/secrets/metrics-token
     static_configs:
       - targets: ['__API_TARGET__']
+
+  # Only the loki_* series rules/loki.yml reads, which the api never exports.
+  - job_name: loki
+    static_configs:
+      - targets: ['__LOKI_TARGET__']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: loki_(request_duration_seconds_count|discarded_samples_total|ingester_chunks_flush_failures_total)
+        action: keep

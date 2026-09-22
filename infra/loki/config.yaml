@@ -1,0 +1,60 @@
+# Railway Loki: single binary, chunks and index in a Railway Bucket, WAL and compactor state on the
+# service's volume. Read with -config.expand-env=true; the LOKI_S3_* variables reference the bucket
+# (.railway/railway.ts).
+auth_enabled: false
+
+server:
+  # Railway's private network is IPv6-only: bound to 0.0.0.0, the apps and Grafana could not reach it.
+  http_listen_address: '::'
+  http_listen_port: 3100
+  grpc_listen_address: '::'
+  grpc_listen_port: 9095
+  log_level: info
+
+common:
+  path_prefix: /loki
+  replication_factor: 1
+  # One process: the ring never leaves it, so skip the interface lookup, which finds no eth0 here.
+  instance_addr: 127.0.0.1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    s3:
+      endpoint: '${LOKI_S3_ENDPOINT}'
+      region: '${LOKI_S3_REGION}'
+      bucketnames: '${LOKI_S3_BUCKET}'
+      access_key_id: '${LOKI_S3_ACCESS_KEY_ID}'
+      secret_access_key: '${LOKI_S3_SECRET_ACCESS_KEY}'
+      # Railway Buckets are virtual-hosted: <bucket>.<endpoint>.
+      s3forcepathstyle: false
+
+schema_config:
+  configs:
+    # tsdb + v13 is what structured metadata, OTLP ingestion and retention need.
+    - from: 2026-09-01
+      store: tsdb
+      object_store: s3
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+ingester:
+  wal:
+    dir: /loki/wal
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: s3
+
+limits_config:
+  # The lines carry email and IP (the auth audit trail); keep them no longer than Railway Pro keeps
+  # its own logs.
+  retention_period: 720h
+  # auth is off, so the delete API would let anything on the private network erase the audit trail.
+  deletion_mode: disabled
+
+analytics:
+  reporting_enabled: false
