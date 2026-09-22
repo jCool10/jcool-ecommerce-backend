@@ -1,0 +1,152 @@
+{
+  "name": "@jcool/platform",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Nest infrastructure every service boots with: config, database, redis, observability, health, security",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "default": "./dist/config/index.js"
+    },
+    "./database": {
+      "types": "./dist/database/index.d.ts",
+      "default": "./dist/database/index.js"
+    },
+    "./error-tracking": {
+      "types": "./dist/observability/error-tracking/scrub-pii.d.ts",
+      "default": "./dist/observability/error-tracking/scrub-pii.js"
+    },
+    "./health": {
+      "types": "./dist/health/index.d.ts",
+      "default": "./dist/health/index.js"
+    },
+    "./interface": {
+      "types": "./dist/interface/index.d.ts",
+      "default": "./dist/interface/index.js"
+    },
+    "./mail": {
+      "types": "./dist/mail/index.d.ts",
+      "default": "./dist/mail/index.js"
+    },
+    "./metrics": {
+      "types": "./dist/observability/metrics/index.d.ts",
+      "default": "./dist/observability/metrics/index.js"
+    },
+    "./observability": {
+      "types": "./dist/observability/index.d.ts",
+      "default": "./dist/observability/index.js"
+    },
+    "./rbac": {
+      "types": "./dist/rbac/index.d.ts",
+      "default": "./dist/rbac/index.js"
+    },
+    "./redis": {
+      "types": "./dist/redis/index.d.ts",
+      "default": "./dist/redis/index.js"
+    },
+    "./resilience": {
+      "types": "./dist/resilience/index.d.ts",
+      "default": "./dist/resilience/index.js"
+    },
+    "./retention": {
+      "types": "./dist/retention/index.d.ts",
+      "default": "./dist/retention/index.js"
+    },
+    "./throttler": {
+      "types": "./dist/throttler/index.d.ts",
+      "default": "./dist/throttler/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint \"src/**/*.ts\" --fix",
+    "lint:check": "eslint \"src/**/*.ts\"",
+    "arch:check": "depcruise --config .dependency-cruiser.cjs src",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@jcool/id-codec": "workspace:*",
+    "@jcool/id-generator": "workspace:*",
+    "@jcool/kernel": "workspace:*",
+    "@jcool/metrics-port": "workspace:*",
+    "@nest-lab/throttler-storage-redis": "^1.2.0",
+    "@nestjs/terminus": "^11.1.1",
+    "nodemailer": "^10.0.1",
+    "opossum": "^10.0.0"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.0.1",
+    "@nestjs/schedule": "^6.1.3",
+    "@nestjs/swagger": "^11.4.5",
+    "@nestjs/throttler": "^6.5.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@sentry/nestjs": "^10.73.0",
+    "@willsoto/nestjs-prometheus": "^6.1.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "drizzle-orm": "^0.45.2",
+    "ioredis": "^6.0.0",
+    "nestjs-cls": "^6.2.2",
+    "nestjs-pino": "^4.6.1",
+    "pg": "^8.23.0",
+    "prom-client": "^15.1.3",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@jcool/id-codec": "workspace:*",
+    "@jcool/testing": "workspace:*",
+    "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.0.1",
+    "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/schedule": "^6.1.3",
+    "@nestjs/swagger": "^11.4.5",
+    "@nestjs/testing": "^11.0.1",
+    "@nestjs/throttler": "^6.5.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.11.0",
+    "@opentelemetry/core": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@sentry/nestjs": "^10.73.0",
+    "@swc/core": "^1.16.1",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/nodemailer": "^8.0.1",
+    "@types/opossum": "^8.1.9",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.0.0",
+    "@vitest/coverage-v8": "^5.0.0",
+    "@willsoto/nestjs-prometheus": "^6.1.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "dependency-cruiser": "^18.2.0",
+    "drizzle-orm": "^0.45.2",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.2",
+    "globals": "^17.12.0",
+    "ioredis": "^6.0.0",
+    "nestjs-cls": "^6.2.2",
+    "nestjs-pino": "^4.6.1",
+    "pg": "^8.23.0",
+    "pino": "^10.3.1",
+    "prettier": "^3.4.2",
+    "prom-client": "^15.1.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "supertest": "^7.0.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.69.0",
+    "unplugin-swc": "^1.5.11",
+    "vitest": "^5.0.0"
+  }
+}

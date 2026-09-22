@@ -27,7 +27,7 @@ tests:
               severity: page
             exp_annotations:
               summary: 'Circuit breaker payment_gateway has been refusing calls for a minute'
-              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app. For user-service, a session epoch missing from Redis answers 503 and order confirmations wait on their retry ladder.'
       - eval_time: 5m
         alertname: CircuitBreakerOpen
         exp_alerts:
@@ -36,7 +36,7 @@ tests:
               severity: page
             exp_annotations:
               summary: 'Circuit breaker payment_gateway has been refusing calls for a minute'
-              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app. For user-service, a session epoch missing from Redis answers 503 and order confirmations wait on their retry ladder.'
 
   # The overnight case: the breaker trips, the reset timer moves it to half-open, and then nothing
   # calls it. opossum leaves it at 1 indefinitely. The alert must fire for the outage and then clear
@@ -54,7 +54,7 @@ tests:
               severity: page
             exp_annotations:
               summary: 'Circuit breaker payment_gateway has been refusing calls for a minute'
-              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app.'
+              description: 'Calls to this dependency are being refused without being attempted. For payment_gateway that means checkout answers 502 and nobody can pay — check the provider status page before touching the app. For user-service, a session epoch missing from Redis answers 503 and order confirmations wait on their retry ladder.'
       - eval_time: 8m
         alertname: CircuitBreakerOpen
         exp_alerts: []

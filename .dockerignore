@@ -1,18 +1,19 @@
 # Keep the build context small and never leak secrets into the image.
 
-node_modules
+**/node_modules
 npm-debug.log*
-dist
+**/dist
 build
-coverage
+**/coverage
 .nyc_output
+**/.turbo
 
 .git
 .gitignore
 
 # Secrets: only the committed template is allowed in.
-.env
-.env.*
+**/.env
+**/.env.*
 !.env.example
 
 .DS_Store
@@ -22,6 +23,7 @@ coverage
 
 # Repo-only material not needed to build or run the app.
 .claude
+.railway
 plans
 docs
 README.md
@@ -36,6 +38,20 @@ infra
 bruno
 k6
 
+# Railway has no bind mounts: the prometheus and grafana images bake their config instead, so these
+# files must be in the context. Last match wins, which is why the secrets directory is re-excluded
+# below — it must stay out of every image, including the api's `COPY . .`.
+!infra/prometheus/Dockerfile
+!infra/prometheus/prometheus.railway.yml
+!infra/prometheus/railway-entrypoint.sh
+!infra/prometheus/rules
+!infra/grafana/Dockerfile
+!infra/grafana/provisioning
+!infra/grafana/railway
+infra/prometheus/secrets
+
 # Not compiled into the image — tsconfig.build.json already excludes both.
 test
 scripts
+apps/*/test
+apps/*/scripts

@@ -1,0 +1,119 @@
+{
+	admin off
+	# Railway's edge terminates TLS in front of us; certificates here would only fight it.
+	auto_https off
+	# Railway keeps sending traffic to an old deployment for a moment after SIGTERM: keep serving
+	# through the delay, then drain what is in flight. drainingSeconds must cover both.
+	shutdown_delay {$GATEWAY_SHUTDOWN_DELAY:5s}
+	grace_period {$GATEWAY_GRACE_PERIOD:10s}
+	servers :{$PORT:8080} {
+		# Only Railway's edge may name the client. From any other peer, the socket address is the client.
+		trusted_proxies static {$TRUSTED_PROXY_CIDRS}
+		client_ip_headers X-Real-IP
+	}
+}
+
+(upstream) {
+	# Exactly one entry, the client: an app that trusts this gateway gets the client whatever the
+	# edge put in front of it.
+	header_up X-Forwarded-For {client_ip}
+	header_up X-Real-IP {client_ip}
+	transport http {
+		# Below Node's 5s keepAliveTimeout, so a connection is never reused just as the app closes it.
+		keepalive 4s
+	}
+}
+
+# Public: the only port the platform exposes.
+:{$PORT:8080} {
+	# Mail links carry their token in the query.
+	log {
+		output stdout
+		format filter {
+			request>uri query {
+				delete token
+			}
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+		}
+	}
+	# Responses leave as the app wrote them. reverse_proxy adds Via after header_down would run.
+	header -Via
+
+	handle /health/live {
+		respond "ok" 200
+	}
+	# Service-to-service routes. The matcher is case-insensitive and sees the decoded, cleaned path.
+	@internal path /internal /internal/*
+	handle @internal {
+		respond 404
+	}
+	@auth path /auth /auth/* /.well-known/jwks.json
+	handle @auth {
+		# Stops auth writes while a migration must not race one, reads untouched. The expression is
+		# substituted at parse time, so the flag needs a redeploy.
+		@frozen {
+			method POST PUT PATCH DELETE
+			path /auth /auth/*
+			expression `"{$AUTH_WRITE_FREEZE:false}" == "true"`
+		}
+		handle @frozen {
+			# Long enough that a client retry lands after the freeze, short enough to stay a retry.
+			header Retry-After 120
+			respond "auth is read-only during a migration" 503
+		}
+		handle {
+			reverse_proxy {$AUTH_UPSTREAM} {
+				import upstream
+			}
+		}
+	}
+	handle {
+		reverse_proxy {$API_UPSTREAM} {
+			import upstream
+		}
+	}
+}
+
+# Private: reachable over the internal network only, never published.
+:{$ID_LB_PORT:4000} {
+	reverse_proxy {
+		# Re-resolved on a timer, so replicas that come and go (every deploy) are picked up by IP.
+		dynamic a {$ID_SERVICE_HOST:id-service} {$ID_SERVICE_PORT:3000} {
+			refresh {$ID_LB_DNS_REFRESH:5s}
+			# A dual-stack name lists every replica once per family, and passive health tracks each apart.
+			versions {$ID_LB_IP_VERSIONS:ipv4 ipv6}
+		}
+		lb_policy round_robin
+		# A failed dial is always retried. A request that reached a replica is retried only if it
+		# matches below: minting is safe to repeat, since an unanswered batch is never handed out.
+		# 0 is no count, only the try deadline: a deploy drops every old replica at once, and they
+		# come back into rotation together each time fail_duration lapses while DNS still lists them.
+		lb_retries {$ID_LB_RETRIES:0}
+		lb_try_duration {$ID_LB_TRY_DURATION:1s}
+		lb_try_interval {$ID_LB_TRY_INTERVAL:50ms}
+		lb_retry_match {
+			method POST
+			path /v1/ids
+		}
+		# A set with an expression is matched against the response. A 503 is a replica without a
+		# usable lease, which minted nothing, so another replica takes the request.
+		lb_retry_match {
+			method POST
+			path /v1/ids
+			expression `{rp.status_code} == 503`
+		}
+		# Only a body held whole in this buffer can be sent again; unbuffered, a retry goes out empty.
+		request_buffers 4KiB
+		# Passive health only (active checks do not apply to dynamic upstreams): a replica that
+		# answered 503 or failed a try sits out fail_duration. Short, because a 503 is retried anyway
+		# and the whole fleet sits out together after a shared outage.
+		fail_duration {$ID_LB_FAIL_DURATION:2s}
+		max_fails 1
+		unhealthy_status 503
+		transport http {
+			dial_timeout {$ID_LB_DIAL_TIMEOUT:200ms}
+			response_header_timeout {$ID_LB_RESPONSE_HEADER_TIMEOUT:300ms}
+		}
+	}
+}

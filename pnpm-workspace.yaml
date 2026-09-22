@@ -1,0 +1,18 @@
+packages:
+  - apps/*
+  - packages/*
+
+overrides:
+  multer: ^2.3.0
+
+# argon2 compiles from source when no prebuild matches the platform. The rest only verify or
+# optimize binaries that already arrive as platform packages.
+allowBuilds:
+  '@scarf/scarf': false
+  '@swc/core': false
+  argon2: true
+  cpu-features: false
+  esbuild: false
+  msgpackr-extract: false
+  protobufjs: false
+  ssh2: false

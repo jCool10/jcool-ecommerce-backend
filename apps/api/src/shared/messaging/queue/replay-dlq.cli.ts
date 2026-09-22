@@ -1,0 +1,124 @@
+/**
+ * Drain the domain-events dead-letter queue back onto the main queue:
+ *   npm run queue:replay-dlq                       # list what would be replayed, change nothing
+ *   npm run queue:replay-dlq -- --apply            # actually replay
+ *   npm run queue:replay-dlq -- --apply --limit 20
+ *   npm run queue:replay-dlq -- --apply --force    # past the retention horizon; it can never
+ *                                                 # override a claim that is actually there
+ * In a deployed container (no devDependencies, so no `tsx`), the compiled twin:
+ *   npm run queue:replay-dlq:prod -- --apply
+ *
+ * A replay cannot fix the reason the message failed — read the printed `failedReason` and deploy the
+ * fix first, or the same messages come straight back.
+ *
+ * Runs standalone rather than booting Nest, since a replay happens while the app is what is broken.
+ * Needs Redis AND Postgres. Lives under `src/` because `scripts/` is excluded from the build and
+ * `tsx` is a devDependency, so a `scripts/` entrypoint cannot run in the deployed image.
+ */
+import 'dotenv/config';
+import { Queue } from 'bullmq';
+import { and, eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Redis } from 'ioredis';
+import { Pool } from 'pg';
+import configuration from '@shared/config/configuration';
+import { inbox } from '../inbox/schema/inbox.schema';
+import { replayDeadLetters, type InboxClaimLookup } from './dead-letter.replay';
+import {
+  buildJobOptions,
+  DOMAIN_EVENTS_CONSUMER,
+  jobOptionsFor,
+  QUEUE_DOMAIN_EVENTS,
+  QUEUE_DOMAIN_EVENTS_DLQ,
+} from './queue.constants';
+
+const DAY_MS = 86_400_000;
+
+const apply = process.argv.includes('--apply');
+const force = process.argv.includes('--force');
+const limitArg = process.argv.indexOf('--limit');
+const limit = limitArg === -1 ? 100 : Number(process.argv[limitArg + 1]);
+
+async function main(): Promise<void> {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`--limit must be a positive integer, got "${process.argv[limitArg + 1]}"`);
+  }
+
+  // The app's own config factory, but read from THIS process's environment, so every value here can
+  // silently disagree with the deployment being repaired — the Redis it drains, the inbox it checks,
+  // the retention window, the retry policy it replays under. Only the window is echoed below.
+  const { redis, queue, database, retention } = configuration();
+  if (!redis.url) throw new Error('REDIS_URL is not set');
+  if (!database.url) throw new Error('DATABASE_URL is not set — the inbox check cannot be skipped');
+  const prefix = queue.prefix;
+
+  // maxRetriesPerRequest: null is BullMQ's requirement — it refuses a finite budget, not a preference.
+  const connection = new Redis(redis.url, { maxRetriesPerRequest: null });
+  const domainEvents = new Queue(QUEUE_DOMAIN_EVENTS, {
+    connection,
+    prefix,
+    // BullMQ stamps these onto the job at add time, so a queue built without them replays with
+    // attempts: 0 — no retry budget on the one path where the message is known to have failed, and
+    // a failed record kept forever instead of expiring with the inbox claim that guards it.
+    defaultJobOptions: buildJobOptions(queue.consumerAttempts, queue.consumerBackoffMs),
+  });
+  // Still no defaults here, for the reason queue.providers.ts gives: nothing consumes the DLQ, so
+  // retention rules would delete the record it exists to keep.
+  const dlq = new Queue(QUEUE_DOMAIN_EVENTS_DLQ, { connection, prefix });
+
+  // One connection: this reads at most `limit` rows, one at a time, and then exits.
+  const pool = new Pool({ connectionString: database.url, max: 1 });
+  const db = drizzle(pool);
+
+  const inboxLookup: InboxClaimLookup = async (messageId) => {
+    const [row] = await db
+      .select({ processedAt: inbox.processedAt })
+      .from(inbox)
+      .where(and(eq(inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(inbox.messageId, messageId)))
+      .limit(1);
+    return row?.processedAt ?? null;
+  };
+
+  try {
+    const summary = await replayDeadLetters(domainEvents, dlq, {
+      limit,
+      dryRun: !apply,
+      inboxLookup,
+      inboxRetentionMs: retention.inboxDays * DAY_MS,
+      force,
+      jobOptionsFor: (eventType) => jobOptionsFor(eventType, queue.orderPaidAttempts),
+    });
+
+    // The window is printed because the guard is only as good as its match with the deployment whose
+    // inbox is being swept, and nothing here can detect a mismatch.
+    console.log(
+      `\n--- dead-letter replay (${apply ? 'APPLY' : 'dry run'}, limit ${limit}, ` +
+        `inbox window ${retention.inboxDays}d${force ? ', FORCED' : ''}) ---`,
+    );
+    if (summary.outcomes.length === 0) {
+      console.log('dead-letter queue is empty');
+    }
+    for (const outcome of summary.outcomes) {
+      // The diagnosis the header tells the operator to act on before replaying; Redis is the only
+      // other place it exists, and this tool runs precisely when the app is what is broken. Labelled
+      // because on a `replayed` line an unlabelled reason reads as a failure that just happened.
+      const reason = outcome.failedReason ? ` [parked: ${outcome.failedReason}]` : '';
+      const detail = outcome.detail ? ` — ${outcome.detail}` : '';
+      console.log(`${outcome.status.padEnd(8)} ${outcome.eventType.padEnd(16)} ${outcome.messageId}${reason}${detail}`);
+    }
+    console.log(`\nreplayed: ${summary.replayed}   skipped: ${summary.skipped}`);
+    if (!apply && summary.outcomes.length > 0) {
+      console.log('re-run with --apply to replay these messages');
+    }
+  } finally {
+    await domainEvents.close();
+    await dlq.close();
+    await connection.quit().catch(() => connection.disconnect());
+    await pool.end();
+  }
+}
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

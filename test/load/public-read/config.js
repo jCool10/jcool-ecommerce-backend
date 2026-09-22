@@ -21,7 +21,7 @@ export { BASE, JSON_HDR } from '../shared/config.js';
 export const PROFILE = __ENV.PROFILE || 'steady';
 
 // GLOBAL_THROTTLERS default tier: 100 requests / 60s, keyed by IP, applied app-wide
-// (src/shared/infrastructure/throttler/throttler.constants.ts). 3 per 2s = 90/min leaves headroom
+// (apps/api/src/shared/infrastructure/throttler/throttler.constants.ts). 3 per 2s = 90/min leaves headroom
 // for the setup() discovery call, which is charged to the same bucket.
 //
 // k6 requires an INTEGER rate, so a sub-1/s offered load is expressed as a count over a wider

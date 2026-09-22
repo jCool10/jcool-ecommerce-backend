@@ -4,7 +4,7 @@ Procedures an operator needs that the code cannot express on its own. Everything
 
 Conventions used below:
 
-- **local** — a developer machine with the repo, `npm ci` done, and `.env` pointing at the target.
+- **local** — a developer machine with the repo, `pnpm install` and `pnpm dev:link-env` done, and `.env` pointing at the target. Arguments go without `--` (`pnpm queue:replay-dlq --apply`): pnpm forwards a literal `--` to the command.
 - **container** — a shell inside the deployed image (`railway ssh --service "$RAILWAY_SERVICE"`), where `dist/` exists and `devDependencies` (including `tsx`) do **not**.
 
 ---
@@ -20,6 +20,11 @@ Conventions used below:
 - [Retention sweeps](#retention-sweeps)
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
+- [Change Railway service config](#change-railway-service-config)
+- [Deploy the monitoring stack](#deploy-the-monitoring-stack)
+- [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
+- [The user-service](#the-user-service)
+- [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -30,17 +35,19 @@ Conventions used below:
 
 Every user-context id embeds a 12-bit routing bucket derived by HMAC from the account's normalized email, under this key. The bucket is what a future `users` shard split routes on. Rotating the key does not invalidate anything visibly — it mints *new* ids into buckets their emails no longer hash to, and nothing reads a bucket until the split. The damage would surface years after the key that caused it was lost.
 
-The application defends this on every boot, in two layers (`src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
+The key and the pin live in the **user-service** and its database; the api holds neither. The
+user-service defends this on every boot, in two layers
+(`apps/user-service/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
 
 1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use the same wrong key).
-2. **Key pin** — a fingerprint of the key stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. Runs *after* the canary on purpose: the pin **writes**, so pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
+2. **Key pin** — a fingerprint of the key, and the id layout version, stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. It is read and compared *before* the canary, so a changed layout is reported as one instead of being misread as a key fault, but **written** only after the canary passes: pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
 
 Both **fail open** if the database is unreachable (no id is minted while it is down) and **fail closed** only on a disagreement actually read back.
 
 The first boot against an empty database logs the line that matters:
 
 ```
-Pinned identity bucket key <fingerprint> — no key was pinned here before
+identity bucket key pinned — no key was pinned here before   (fields: fingerprint, layoutVersion)
 ```
 
 **Record that fingerprint with the key.** It prints only on the boot that *writes* the pin; a boot against an already-pinned database is silent.
@@ -58,20 +65,34 @@ There are exactly two correct responses:
 
 There is no third option. Do not delete the pin row to make the message go away: that removes the only evidence of which key the existing ids were minted under, and the canary alone cannot rebuild it.
 
+### The id layout is the same kind of one-way door
+
+```
+The id layout does not match the one this database was built with (pinned X, current Y)
+```
+
+An id is a 63-bit integer laid out `41 ts_ms │ 12 bucket │ 5 node │ 5 seq` over an epoch of `2026-01-01T00:00:00Z` (`packages/id-codec/src/snowflake.codec.ts`). The epoch and the field widths are **permanent in the same way the key is**, and moving either is silent: a new epoch makes every stored id decode to a different timestamp, and a new width makes it decode into different fields, the bucket among them once the change reaches past `node │ seq`. `identity_key_pin.layout_version` is what makes that loud — a build carrying a different `LAYOUT_VERSION` refuses to boot against this database.
+
+The two correct responses are the same two: restore the original build, or reset the database if it holds nothing worth keeping. Changing the layout deliberately is a data migration that rewrites every id and the pinned version, shipped with a `LAYOUT_VERSION` bump. The bump alone only makes every existing database refuse to boot.
+
 ---
 
 ## Backup and restore
 
-The `IDENTITY_BUCKET_KEY` and the database are **one artifact**. Back them up together; a dump without its key is a dump you cannot serve.
+Each service owns one database and is backed up on its own: the api's (catalog, cart, orders,
+payments, inventory, media, messaging), the user-service's (accounts, tokens, the key pin), and the
+id-service's (node leases). They share no foreign keys, so there is no cross-database consistency to
+preserve — but the **user-service's** dump and its `IDENTITY_BUCKET_KEY` are one artifact. Back them
+up together; that dump without its key is a dump you cannot serve.
 
 ### Back up
 
 ```bash
-# local — against whatever DATABASE_URL points at
+# local — against whatever DATABASE_URL points at, one service at a time
 pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" > backup-$(date +%Y%m%d-%H%M).dump
 ```
 
-Then record, alongside the dump:
+For the user-service's dump, record alongside it:
 
 - the `IDENTITY_BUCKET_KEY` fingerprint (`SELECT fingerprint FROM identity_key_pin WHERE id = 1;`),
 - which secret-manager entry holds the key itself.
@@ -84,17 +105,35 @@ createdb jcool_restore
 pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges backup-….dump
 ```
 
-Then boot the app against it **with the key that dump was taken under**.
+A user-service dump then needs the service booted against it **with the key that dump was taken
+under**; the api's and the id-service's carry no key.
 
 ### Restoring into an environment with a different key
 
-The dump carries the `identity_key_pin` row, so the restored database still remembers the original key's fingerprint. Booting the app against it under a different `IDENTITY_BUCKET_KEY` **refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not a restore problem.
+The user-service's dump carries the `identity_key_pin` row, so the restored database still remembers the original key's fingerprint. Booting the user-service against it under a different `IDENTITY_BUCKET_KEY` **refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not a restore problem.
 
 Consequences to plan for:
 
 - Restoring production data into staging requires **production's key** in staging, which usually means you should not be doing that. Prefer a seeded staging database.
 - A dump restored into a database that already has a *different* pin row will fail on the primary key of `identity_key_pin` during `pg_restore`, not at boot. Restore into an empty database.
 - Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the pinned key; changing the pin makes the database lie about its own history.
+
+### Restoring or recreating the id-service database
+
+`id-postgres` holds only node leases. A restored dump, like a freshly migrated database, can sit behind ids the replicas already minted, and a new holder of a node would then mint at those timestamps again. Before any replica starts against it:
+
+1. Stop every id-service replica, then wait `ID_LEASE_TTL_MS` (5 minutes by default). No id was stamped past its holder's lease end, so once every lease the old rows knew of has ended, the database clock is above every id minted.
+2. Lift every floor to that clock:
+
+   ```sql
+   -- psql against id-service's DATABASE_URL
+   UPDATE node_leases
+   SET holder = NULL,
+       lease_until = LEAST(lease_until, now()),
+       max_ts_ms = GREATEST(COALESCE(max_ts_ms, 0), (extract(epoch FROM now()) * 1000)::bigint);
+   ```
+
+3. Start the replicas.
 
 ---
 
@@ -104,10 +143,10 @@ Consequences to plan for:
 
 ```bash
 # local — requires SEARCH_ENABLED=true, SEARCH_URL and (if the engine is keyed) SEARCH_API_KEY
-npm run search:reindex
+pnpm search:reindex
 
 # drop the index and rebuild it from scratch (schema/settings changes)
-npm run search:reindex -- --reset
+pnpm search:reindex --reset
 ```
 
 The command boots a **minimal** Nest context — config + database + the search adapter only — so no queue consumers or scheduled sweeps run for its lifetime.
@@ -124,10 +163,10 @@ Stores that must agree and cannot all be kept in one transaction. Three ways the
 
 ```bash
 # local — needs DATABASE_URL and the four STORAGE_* settings
-npm run storage:verify
+pnpm storage:verify
 
 # narrow the scan
-npm run storage:verify -- --prefix media/ --limit 5000
+pnpm storage:verify --prefix media/ --limit 5000
 
 # container — the compiled twin, since `tsx` is a devDependency and is not installed there
 npm run storage:verify:prod
@@ -177,7 +216,7 @@ A row here has **not** been dead-lettered — it was never delivered at all, so 
 
 ## Replay the dead-letter queue
 
-A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
+A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service). A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
 
 **Replay used to be unconditionally safe. It is not any more, and the tool now says so.** The old guarantee was that a message goes back under its outbox row id, the inbox dedups on that id, and a needless replay collapses into nothing. [Inbox retention](#retention-sweeps) ends it: once a claim has been swept, "no claim" no longer means "never applied", and replaying such a message applies its effect a second time.
 
@@ -201,10 +240,10 @@ What replay **cannot** fix in any case is the reason the message failed. Each li
 
 ```bash
 # local — dry run is the default, because this puts real traffic back on a live queue
-npm run queue:replay-dlq
-npm run queue:replay-dlq -- --apply
-npm run queue:replay-dlq -- --apply --limit 20
-npm run queue:replay-dlq -- --apply --force   # past the retention horizon; read above first
+pnpm queue:replay-dlq
+pnpm queue:replay-dlq --apply
+pnpm queue:replay-dlq --apply --limit 20
+pnpm queue:replay-dlq --apply --force   # past the retention horizon; read above first
 ```
 
 ```bash
@@ -221,7 +260,7 @@ The CLI reads its Redis URL, queue prefix **and inbox window** through the app's
 
 ## Retention sweeps
 
-One timer (`RETENTION_INTERVAL_MS`, hourly by default) drives eight independent sweeps, each reclaiming one table. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
+Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — five sweeps in the api, the three `auth-tokens:*` ones in the user-service. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
 
 Every window is sized by **what still has to be able to retry against the row**, never by disk. Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say only during an incident.
 
@@ -231,9 +270,9 @@ Every window is sized by **what still has to be able to retry against the row**,
 | `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
 | `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
 | `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
-| `auth-tokens:email-verification` | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
-| `auth-tokens:password-reset` | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
-| `auth-tokens:refresh` | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
+| `auth-tokens:email-verification` *(user-service)* | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:password-reset` *(user-service)* | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
+| `auth-tokens:refresh` *(user-service)* | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
 | `media:assets` | `media_assets` **and the objects behind them** | `expires_at` past, or a `SWEEPING` claim older than `RETENTION_SWEEP_TIMEOUT_MS` | **Anything `ATTACHED`** — those rows have no `expires_at` at all, so no query the sweep can write will match them | `MEDIA_UPLOAD_TTL_SEC` (3600) / `MEDIA_READY_TTL_SEC` (86400) |
 
 `media:assets` is the only sweep that deletes something outside Postgres, and the only one whose work is not undoable by restoring a backup. It deletes **the object first, then the row**: a crash between the two leaves a row whose object is gone, which the next pass re-scans and finishes (deleting an absent object is a no-op). The reverse order would leave bytes nothing points at — unfindable and billed forever. If a pass dies mid-flight the claim is left at `SWEEPING`, and a claim older than the sweep's own timeout is assumed dead and picked up again.
@@ -344,13 +383,314 @@ npm run db:migrate:prod
 ```
 
 ```bash
-# local — drizzle-kit, reads drizzle.config.ts
-npm run db:migrate
+# local — drizzle-kit, reads apps/api/drizzle.config.ts
+pnpm db:migrate
 ```
 
 The compiled CLI fails loudly if its migrations directory resolves to a readable but wrong path: a directory with zero `.sql` files would otherwise make drizzle report "nothing pending" and exit 0 — a green deploy onto an empty schema. In the image `MIGRATIONS_DIR=/app/migrations`, absolute because the image ships no `src/` tree.
 
-**Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why there is a single deployable service.
+**Run exactly one migration process at a time.** `runMigrations()` takes no advisory lock, so two concurrent runs race on `__drizzle_migrations`. This is why the api is a single Railway service.
+
+### The id-type migrations only apply to empty tables
+
+Three migrations moved user ids from `uuid` to `bigint`, and they are written to fail rather than guess:
+
+| Service | Migration | What it does |
+| --- | --- | --- |
+| api | `0022_round_green_goblin.sql` | drops and re-adds `carts.user_id`, `orders.user_id`, `media_assets.uploaded_by` as `bigint NOT NULL`, then rebuilds the indexes over them |
+| user-service | `0000_users_baseline.sql` | the baseline itself was regenerated; there is no in-place step from the old one |
+| id-service | `0002_bright_dreadnoughts.sql` | deletes `node_leases` rows above 30 and narrows the range constraint to 1..30 |
+
+Postgres has no cast from `uuid` to `bigint`, so an `ALTER COLUMN … SET DATA TYPE` would be refused outright. `ADD COLUMN … NOT NULL` with no default succeeds on an empty table — every new environment and every CI run — and fails on a populated one. That failure is the correct outcome, not an obstacle: those rows point at user ids that no longer exist anywhere, and there is no mapping back.
+
+Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, add a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`). They validate the rows already there, so either one fails on a database holding an id below 2^22. No app writer produces such an id; a row like that was written by hand.
+
+So on a development or staging database that still holds rows, recreate it rather than migrating it:
+
+```bash
+docker compose --profile '*' down -v   # every profile, so all three Postgres volumes go
+docker compose up -d postgres redis meilisearch mailpit minio minio-init
+pnpm db:migrate && pnpm db:seed
+```
+
+The user-service and id-service databases come back the same way — their containers run their own migrate step (`--profile user-service`, and the one-shot in front of the id-service replicas). Back up first if anything in there is worth keeping; see [Backup and restore](#backup-and-restore).
+
+---
+
+## Change Railway service config
+
+`.railway/railway.ts` owns every service's build and deploy settings and the **names** of their variables. Values set by hand stay in Railway (`preserve()`); the rest are literals or references in the file. CD runs `railway config apply --yes` before every deploy, so:
+
+- **Settings** (healthcheck, pre-deploy command, overlap, replicas) change only in that file. A dashboard edit is reverted by the next deploy.
+- **Deploys** go id-service → api → gateway → user-service, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`). Only the api has a repo source, so only CD's `railway up` deploys the others; a dashboard redeploy rebuilds their last upload.
+- **New variable**: add its name to the service's `env` (for the api, `API_VARIABLES`) in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the apply into a delete, which CD refuses: the deploy stops at "Apply Railway config". This includes one set by hand during an incident.
+- **Removing a variable** is the one destructive path. Drop the name and merge. CD then stops at the apply. From an up-to-date `main`, run:
+
+```bash
+# local, after `railway link` to the production service
+railway config plan                          # the only destroy must be that variable
+railway config apply --confirm-destructive
+```
+
+Then re-run the failed CD job.
+
+Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs.
+
+---
+
+## Deploy the monitoring stack
+
+`prometheus` and `grafana` are two ordinary Railway services declared in `.railway/railway.ts`, built
+from `infra/prometheus/Dockerfile` and `infra/grafana/Dockerfile`. Railway has no bind mounts, so
+each image **bakes** the config that compose mounts from the host; `.dockerignore` re-includes those
+files from the otherwise excluded `infra/` and keeps `infra/prometheus/secrets/` out.
+
+Neither is in `cd.yml`, and neither has a repo source: they are deployed by hand, which is right for
+config that changes a few times a year.
+
+First time, from an up-to-date `main`:
+
+```bash
+# A token shorter than 16 characters fails the api's env validation at boot.
+railway variable set "METRICS_TOKEN=$(openssl rand -hex 24)" --service jcool-ecommerce-backend
+railway variable set "GF_SECURITY_ADMIN_PASSWORD=$(openssl rand -hex 16)" --service grafana
+
+# GRAFANA_ADMIN_PASSWORD leaves the api in the same change, so this first apply is destructive.
+railway config plan                          # the only destroy must be that variable
+railway config apply --confirm-destructive
+
+railway up --ci --service prometheus
+railway up --ci --service grafana
+railway domain --service grafana --port 3000
+```
+
+Afterwards, a config change is `railway up --ci --service <prometheus|grafana>` on its own. The api
+needs a redeploy the first time `METRICS_TOKEN` is set: `MetricsTokenGuard` reads it at boot, and
+until then `/metrics` answers 404 and the target sits DOWN.
+
+Three constraints this stack depends on:
+
+- **One scrape job.** The recording rules in `infra/prometheus/rules/` aggregate globally, without
+  `by (job)`. Adding the user-service or id-service as a second job silently mixes two services into
+  one SLI; split the rules first.
+- **Prometheus binds `[::]`** (`infra/prometheus/railway-entrypoint.sh`). Railway's private network
+  is IPv6-only, and on the default `0.0.0.0` Grafana cannot reach it.
+- **Grafana is the only public surface**, and the only one with a login. Prometheus has no domain.
+  Grafana has no volume either: datasources and dashboards are provisioned from the image on every
+  start, so a redeploy loses only ad-hoc UI edits.
+
+---
+
+## Put the gateway in front of the api
+
+The `gateway` service (Caddy, `apps/gateway`) hands every public route to the api unchanged, answers `/internal/*` with 404, and tells the api who the client is. CD creates and deploys it without a public domain. Moving `jcool-ecommerce.up.railway.app` onto it is this manual step. Do it off-peak, because between the two renames the name routes nowhere for a few seconds.
+
+**How the client address travels.** Railway's edge reaches the gateway from `100.64.0.0/10` and names the client in `X-Real-IP`. That is the only header Railway documents: its `X-Forwarded-For` arrives with two entries, and the last one is not the client. The gateway believes `X-Real-IP` only from `TRUSTED_PROXY_CIDRS`, and sends the api `X-Forwarded-For` with one entry, the client. It dials the api over IPv6 (`API_UPSTREAM=tcp6/…`): the private DNS also answers IPv4, and Go would dial that first. The api believes the header only from the private network's IPv6 range (`TRUST_PROXY=fd12::/16`), and the edge is not in it. So the same api value is right before the flip, after it, and after a rollback.
+
+### Before the gateway change reaches `main`
+
+Production refuses to boot without `TRUST_PROXY`:
+
+```bash
+railway variable set 'TRUST_PROXY=fd12::/16' --service jcool-ecommerce-backend --skip-deploys
+```
+
+Until the flip, nothing on the private network sends the api requests, so clients see no change.
+
+### Probe on a temporary domain
+
+```bash
+railway domain --service gateway --port 8080     # prints gateway-….up.railway.app
+GW=https://gateway-….up.railway.app
+API=https://jcool-ecommerce.up.railway.app
+```
+
+1. **Contract.**
+   - `curl -fsS "$GW/health/ready"` answers.
+   - `diff <(curl -fsS "$API/docs-json") <(curl -fsS "$GW/docs-json")` prints nothing.
+   - `curl -s -o /dev/null -w '%{http_code}\n' "$GW/internal/x"` prints `404`.
+2. **The edge's range.**
+   - Send `curl -fsS "$GW/health/live?probe=1"`, then find that request's access-log line in `railway logs --service gateway --lines 100`.
+   - With `TRUSTED_PROXY_CIDRS` unset, `remote_ip` and `client_ip` both hold the edge's address. Check that it falls inside `100.64.0.0/10`, then trust that range (a redeploy follows):
+
+   ```bash
+   railway variable set 'TRUSTED_PROXY_CIDRS=100.64.0.0/10' --service gateway
+   ```
+
+   Separate several ranges with spaces. Never use `0.0.0.0/0` or `private_ranges`: they would let any client pick its own throttle key.
+3. **Forged headers.**
+   - Send `curl -fsS -H 'X-Real-IP: 203.0.113.9' -H 'X-Forwarded-For: 203.0.113.9' "$GW/health/live?probe=2"`.
+   - The log line must show your own public IP (`curl -s https://api.ipify.org`) as `client_ip`, never `203.0.113.9`.
+   - If it shows the forged address, the edge passes `X-Real-IP` through unchecked. Delete `TRUSTED_PROXY_CIDRS` and do not flip.
+4. **Two clients stay two clients.**
+   - From two networks (a laptop and a phone hotspot), take turns running `curl -si "$GW/products" | grep -i x-ratelimit-remaining`.
+   - Each network must count down on its own.
+   - If they count down together, the api is not believing the gateway. Either `API_UPSTREAM` lost its `tcp6/` prefix, or the gateway's private address is outside `TRUST_PROXY`. Fix that before going on.
+
+### Flip
+
+```bash
+railway domain update jcool-ecommerce.up.railway.app --service jcool-ecommerce-backend --domain jcool-ecommerce-direct
+railway domain update "${GW#https://}" --service gateway --domain jcool-ecommerce
+```
+
+Then check the result:
+
+- `curl -fsS "$API/health/ready"` answers.
+- Step 4 passes against `$API`.
+- The 429 rate per route stays normal for the next hour.
+
+`APP_PUBLIC_URL` and the CD smoke test need no change, because the name stayed the same. Once the flip has held for a day, delete the direct domain, so the api can only be reached through the gateway:
+
+```bash
+railway domain delete jcool-ecommerce-direct.up.railway.app --service jcool-ecommerce-backend --yes
+```
+
+### Roll back
+
+Reverse the renames. `TRUST_PROXY` stays as it is.
+
+```bash
+railway domain update jcool-ecommerce.up.railway.app --service gateway --domain jcool-ecommerce-gateway
+railway domain update jcool-ecommerce-direct.up.railway.app --service jcool-ecommerce-backend --domain jcool-ecommerce
+```
+
+If the direct domain is already gone, create one with `railway domain --service jcool-ecommerce-backend --port 8080` and rename it the same way.
+
+### Route `/auth` to another service
+
+- `AUTH_UPSTREAM` on the gateway sends `/auth`, `/auth/*` and `/.well-known/jwks.json` there. Give it as `tcp6/<private domain>:<port>`, for the same reason as `API_UPSTREAM`.
+- `AUTH_UPSTREAM_REQUIRED=true` is on: the gateway refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of routing auth to an api that answers 404.
+- `AUTH_WRITE_FREEZE=true` answers every write under `/auth` with `503` and `Retry-After: 120`, reads untouched. Use it while a migration must not race a login or a password change, and unset it after. It is off unless set.
+- All three are set by hand and kept across every apply.
+
+---
+
+## The user-service
+
+`apps/user-service` owns `/auth`, the user tables and the ES256 signing keys, on its own Postgres
+(`user-postgres`). The gateway routes `/auth`, `/auth/*` and `/.well-known/jwks.json` to it; it has
+no public domain of its own. It is deployed last by CD, after the smoke test of the public URL.
+
+### Redis durability
+
+The user-service writes `auth:epoch:{userId}` and `auth:denylist:{jti}` to the shared Redis, and the api reads them. Both refuse to boot unless that Redis cannot silently lose them:
+
+```
+Redis cannot hold auth state: maxmemory-policy is allkeys-lru, not noeviction; appendonly is off. See RUNBOOK.md, "Redis durability".
+```
+
+An evicted denylist entry revives a logged-out token, and an evicted epoch lets a revoked session back in. The boot reads both settings from `INFO`, since managed Redis often disables `CONFIG`. Check the instance the same way after any Redis plan or provider change:
+
+```bash
+railway connect <redis service>             # opens redis-cli on the production instance
+INFO memory                                 # maxmemory_policy must be noeviction; note maxmemory and used_memory
+INFO persistence                            # aof_enabled must be 1
+```
+
+To turn AOF on, do it live first, then make it permanent:
+
+1. `CONFIG SET appendonly yes`. Redis writes the AOF from what it holds in memory. Wait until `INFO persistence` shows `aof_enabled:1` and `aof_rewrite_in_progress:0`.
+2. `CONFIG SET maxmemory-policy noeviction` if it is not already.
+3. Put both in the Redis service's start command (Settings → Custom Start Command), for example `redis-server --appendonly yes --maxmemory-policy noeviction` plus whatever the command already carried, so a restart keeps them.
+
+Doing it in this order matters: a Redis that restarts with AOF newly enabled and no AOF file on disk can come up empty instead of loading its RDB snapshot.
+
+`noeviction` means a full Redis refuses writes. The catalog cache already reads through to Postgres when a `SET` fails, but the throttler writes on every request and answers 500 when it cannot. Keep `used_memory` under 80% of `maxmemory` and alert on it.
+
+Locally, `docker-compose.yml` starts Redis with `--appendonly yes`. If the `redisdata` volume holds something you want to keep, run `docker exec jcool-redis redis-cli CONFIG SET appendonly yes` before recreating the container.
+
+### Rebuilding the service from scratch
+
+`railway config plan && railway config apply --yes` creates `user-postgres` and `user-service`, but
+the service will not boot until its variables have values. Two of them are one-way doors:
+
+- `IDENTITY_BUCKET_KEY` — the key the existing ids were minted under, never a fresh one. See
+  [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key). Leave
+  `IDENTITY_PIN_BOOTSTRAP` unset against a database that already holds the pin.
+- `CSRF_SECRET` — changing it invalidates every CSRF cookie in circulation.
+
+`REDIS_URL` is a reference to the api's instance (`auth:*` lives there). `JWT_ISSUER` is the public
+URL and `JWT_AUDIENCE` is `jcool-api`; the api references both, so pick them once.
+
+Generate the new secrets locally, and paste them in the dashboard (user-service → Variables), never on a command line:
+
+```bash
+openssl rand -hex 32                                                   # INTERNAL_API_TOKEN
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out es256.pem
+awk '{printf "%s\\n", $0}' es256.pem                                   # the PEM on one line
+rm es256.pem
+```
+
+`JWT_ES256_PRIVATE_KEYS` is `<kid>:<pem>`, for example `2026-09:-----BEGIN PRIVATE KEY-----\n…`, and `JWT_ES256_ACTIVE_KID` is that kid.
+
+Then set the gateway's `AUTH_UPSTREAM` to `tcp6/${{user-service.RAILWAY_PRIVATE_DOMAIN}}:3000` and
+`AUTH_UPSTREAM_REQUIRED=true`, and redeploy it. Check the service from inside first, since it has no
+domain of its own:
+
+```bash
+railway ssh --service user-service
+node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"
+node -e "fetch('http://127.0.0.1:3000/.well-known/jwks.json').then(r => r.text()).then(console.log)"
+```
+
+Then from outside: `curl -s "$PUBLIC_URL/.well-known/jwks.json"` must answer the same key set, and a
+login must succeed. The api refuses every token until it can read that document — it is down for
+everyone if the user-service is down.
+
+### Rotate the ES256 signing key
+
+Verifiers fetch `/.well-known/jwks.json`: the api keeps it for up to 10 minutes and refetches for a kid it has not seen at most every 30 seconds. A new key must be published before anything is signed with it:
+
+1. Append the new `kid:pem` to `JWT_ES256_PRIVATE_KEYS` (comma-separated) and deploy. Both keys are now published; tokens are still signed with the old one.
+2. Wait at least 10 minutes, then set `JWT_ES256_ACTIVE_KID` to the new kid and deploy.
+3. Once `JWT_ACCESS_TTL` has passed, remove the old entry and deploy.
+
+A key that leaked is the exception: drop it at once. Every token it signed is then refused, and clients log in again.
+
+### Rotate `INTERNAL_API_TOKEN`
+
+Move the current value to `INTERNAL_API_TOKEN_PREVIOUS`, set a new `INTERNAL_API_TOKEN`, and deploy. Both are accepted. The api reads the token as a reference, so it sends the new value only once it is redeployed too. A token the user-service refuses shows up as 503s on epoch misses and `order.paid` retries, with the breaker still closed. Once every caller sends the new value, delete `INTERNAL_API_TOKEN_PREVIOUS` (see [Change Railway service config](#change-railway-service-config) for removing a variable).
+
+---
+
+## The api depends on the user-service
+
+The api holds no user rows, no signing key and no `/auth` route. Four variables wire it to the
+user-service, all required — the api refuses to boot without them, and `.railway/railway.ts` sets
+each as a reference so the two cannot drift.
+
+| Variable | Value |
+| -------- | ----- |
+| `AUTH_JWKS_URL` | the user-service's JWKS. The only key source: without it every request is refused |
+| `JWT_ISSUER`, `JWT_AUDIENCE` | what the user-service signs |
+| `USER_SERVICE_INTERNAL_URL`, `INTERNAL_API_TOKEN` | its internal API: session epochs on a Redis miss, the buyer's address for `order.paid` |
+
+Session epochs come from the keys the user-service publishes to the shared Redis. A missing key
+costs a call to the user-service on the request path; if that call fails the request answers 503 —
+never an open door, never a logout. A sustained `session_epoch_lookups_total{result="miss"}` means
+Redis lost keys it should have kept; refill them from the database rather than through the request
+path, with `USER_DATABASE_URL=… REDIS_URL=… pnpm --filter @jcool/user-service epochs:prewarm`. It
+writes each epoch as a max, so a login racing it is never lowered back.
+
+If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the
+endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that
+succeeds, not before.
+
+### `order.paid` waits for the user-service
+
+The order confirmation reads the buyer's address from the user-service before its transaction opens,
+with a 500 ms timeout (`USER_SERVICE_TIMEOUT_MS`) behind the `user-service` breaker. A failure goes
+back on a ladder of its own: `ORDER_PAID_CONSUMER_ATTEMPTS` (15) deliveries, doubling from
+`QUEUE_CONSUMER_BACKOFF_MS` up to `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` (5 minutes). That rides out
+about 33 minutes of outage.
+
+A buyer the user-service does not know is retried until the event is `USER_DIRECTORY_NOT_FOUND_GRACE`
+(10m) old, since a freshly restored directory can miss the newest accounts. After that it is parked
+as permanent.
+
+Either way `DeadLetterQueued` pages. Once the user-service answers again,
+[replay the dead-letter queue](#replay-the-dead-letter-queue).
 
 ---
 
@@ -360,4 +700,4 @@ Anything here that suppresses a gate must carry an expiry date and an owner. An 
 
 | Gate | Exception | Expires | Reason |
 | ---- | --------- | ------- | ------ |
-| — | none | — | `npm audit --omit=dev --audit-level=high` is clean as of 2026-09-07 |
+| — | none | — | `pnpm audit --prod --audit-level high` is clean as of 2026-09-18 |

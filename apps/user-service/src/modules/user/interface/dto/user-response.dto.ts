@@ -1,0 +1,31 @@
+import { ApiProperty } from '@nestjs/swagger';
+import type { User } from '../../domain/entities/user.entity';
+import { ROLES } from '@jcool/platform/rbac';
+
+/** Always build through `fromEntity`: naming the safe fields is what keeps `passwordHash` from leaking. */
+export class UserResponseDto {
+  @ApiProperty({
+    example: '137465797020397179',
+    description:
+      'User id — a 63-bit integer carrying the routing bucket, sent as a decimal string because it exceeds what a JSON number holds exactly.',
+  })
+  id!: string;
+
+  @ApiProperty({ example: 'user@example.com', format: 'email' })
+  email!: string;
+
+  @ApiProperty({ enum: ROLES, example: 'CUSTOMER' })
+  role!: string;
+
+  @ApiProperty({ example: false, description: 'Whether the email address has been verified.' })
+  emailVerified!: boolean;
+
+  static fromEntity(user: User): UserResponseDto {
+    const dto = new UserResponseDto();
+    dto.id = user.id;
+    dto.email = user.email;
+    dto.role = user.role;
+    dto.emailVerified = user.isEmailVerified;
+    return dto;
+  }
+}
