@@ -1,12 +1,16 @@
 name: CD
 
 # Deploy is chained off CI rather than off `push` so that a direct push to main — which no branch
-# protection rule can gate — still cannot reach Railway with red code. Railway's own autodeploy must
-# stay OFF for the api (the one service with a repo source), or every push deploys it twice.
+# protection rule can gate — still cannot reach Railway with red code. This workflow is the only
+# deploy path: the api's repo source carries no branch trigger (.railway/railway.ts), so Railway
+# never deploys a push on its own.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+    # PR runs never start this workflow; a red run on main starts it only to skip the job below,
+    # since GitHub cannot filter a workflow_run trigger on the run's conclusion.
+    branches: [main]
 
 # Never cancel a deploy in flight: a half-applied rollout is worse than a queued one.
 concurrency:

@@ -71,14 +71,15 @@ const preserved = (names: string[]) => Object.fromEntries(names.map((name) => [n
 
 export default defineRailway(() => {
   const api = service(API_SERVICE, {
-    source: github('jCool10/jcool-ecommerce-backend', { branch: 'main' }),
+    // No branch: a branch here is Railway's autodeploy trigger, which deploys every push to main
+    // before CI has run. Only cd.yml deploys, and only once CI is green.
+    source: github('jCool10/jcool-ecommerce-backend'),
     build: { builder: 'DOCKERFILE', dockerfilePath: 'Dockerfile' },
     deploy: {
       numReplicas: 1,
       preDeployCommand: ['npm run db:migrate:prod'],
       healthcheckPath: '/health/ready',
       healthcheckTimeout: 120,
-      restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 5,
       overlapSeconds: 20,
       drainingSeconds: 15,
@@ -111,7 +112,6 @@ export default defineRailway(() => {
       preDeployCommand: ['node dist/database/migrate-cli.js'],
       healthcheckPath: '/health/ready',
       healthcheckTimeout: 60,
-      restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 5,
       overlapSeconds: 20,
       // Grace period, HTTP close, then the worst-case node release: about 16s.
@@ -132,7 +132,6 @@ export default defineRailway(() => {
       // Proxied to the api: a gateway that cannot reach it never takes traffic.
       healthcheckPath: '/health/ready',
       healthcheckTimeout: 60,
-      restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 5,
       overlapSeconds: 20,
       // Caddy's shutdown_delay plus grace_period.
@@ -167,7 +166,6 @@ export default defineRailway(() => {
       preDeployCommand: ['node dist/database/migrate-cli.js'],
       healthcheckPath: '/health/ready',
       healthcheckTimeout: 60,
-      restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 5,
       overlapSeconds: 20,
       drainingSeconds: 15,
@@ -184,7 +182,7 @@ export default defineRailway(() => {
   });
 
   // The tsdb outlives a deploy; the retention window is set in railway-entrypoint.sh.
-  const prometheusData = volume('prometheus-data', { sizeMB: 5_000 });
+  const prometheusData = volume('prometheus-data', { sizeMB: 5_000, region: 'iad' });
 
   const prometheus = service('prometheus', {
     build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/prometheus/Dockerfile' },
@@ -192,7 +190,6 @@ export default defineRailway(() => {
       numReplicas: 1,
       healthcheckPath: '/-/healthy',
       healthcheckTimeout: 60,
-      restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 5,
     },
     volumeMounts: { '/prometheus': prometheusData },
@@ -212,7 +209,6 @@ export default defineRailway(() => {
       numReplicas: 1,
       healthcheckPath: '/api/health',
       healthcheckTimeout: 60,
-      restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 5,
     },
     env: {

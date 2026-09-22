@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
+import { ObservabilityLoggerModule } from '@jcool/platform/observability';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import * as schema from '@shared/infrastructure/database/schema';
@@ -17,7 +18,13 @@ import { reindexAll } from './reindex-runner';
 // `inject` array): tsx compiles with esbuild, which emits no decorator metadata, so a dependency
 // inferred from a constructor's parameter type arrives as undefined and only fails at runtime.
 @Module({
-  imports: [ConfigModule, ClsModule.forRoot({ global: true }), DrizzleModule.forRoot({ schema })],
+  // DrizzleModule's pool injects PinoLogger, so the logger module has to be here too.
+  imports: [
+    ConfigModule,
+    ClsModule.forRoot({ global: true }),
+    ObservabilityLoggerModule,
+    DrizzleModule.forRoot({ schema }),
+  ],
   providers: [DrizzleProductRepository, MeilisearchCatalogSearch],
 })
 class ReindexContext {}
