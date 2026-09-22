@@ -195,7 +195,7 @@ export default defineRailway(() => {
       restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 5,
     },
-    volumeMounts: { [prometheusData.name]: { mountPath: '/prometheus' } },
+    volumeMounts: { '/prometheus': prometheusData },
     env: {
       PORT: PROMETHEUS_PORT,
       // Referenced, not preserved: a scraper whose token drifts from the api's gets 404s that look
