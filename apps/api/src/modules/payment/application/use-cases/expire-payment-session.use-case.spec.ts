@@ -55,6 +55,17 @@ describe('ExpirePaymentSessionUseCase', () => {
     });
   });
 
+  it('logs the payment session expiry at info, carrying the trigger', async () => {
+    const { useCase, logger } = build();
+
+    expect(await useCase.execute(ORDER_ID, TX, 'cancel')).toBe('expired');
+
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith(
+      { orderId: ORDER_ID, paymentId: PAYMENT_ID, trigger: 'cancel' },
+      'payment session expired',
+    );
+  });
+
   it('reads the payment on the consumer tx rather than taking a second connection', async () => {
     const { useCase, findByOrderId } = build();
 

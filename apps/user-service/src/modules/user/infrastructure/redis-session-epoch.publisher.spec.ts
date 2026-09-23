@@ -43,7 +43,12 @@ describe('RedisSessionEpochPublisher', () => {
     const client = new FakeRedisClient();
     client.failuresLeft = 3;
 
-    await expect(publisherOver(client).publish('u1', 4)).rejects.toThrow('Connection is closed.');
+    const rejection = (await publisherOver(client)
+      .publish('u1', 4)
+      .catch((error: unknown) => error)) as Error;
+
+    expect(rejection.message).toBe('session epoch publish failed after 3 attempts');
+    expect((rejection.cause as Error).message).toBe('Connection is closed.');
     expect(client.evals).toHaveLength(3);
   });
 });

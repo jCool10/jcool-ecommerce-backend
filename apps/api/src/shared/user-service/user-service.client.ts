@@ -15,9 +15,10 @@ export interface UserSummary {
 export class UserServiceRejection extends Error {
   constructor(
     readonly status: number,
+    readonly path: string,
     detail?: string,
   ) {
-    super(`user-service answered ${status}${detail ? ` (${detail})` : ''}`);
+    super(`user-service ${path} answered ${status}${detail ? ` (${detail})` : ''}`);
     this.name = 'UserServiceRejection';
   }
 }
@@ -72,11 +73,11 @@ export class UserServiceClient {
         // Unread, the body would hold its socket until GC.
         await response.body?.cancel();
         if (response.status === 404) return null;
-        throw new UserServiceRejection(response.status);
+        throw new UserServiceRejection(response.status, path);
       }
 
       const body: unknown = await response.json().catch(() => null);
-      if (!isValid(body)) throw new UserServiceRejection(response.status, 'malformed body');
+      if (!isValid(body)) throw new UserServiceRejection(response.status, path, 'malformed body');
       return body;
     });
   }

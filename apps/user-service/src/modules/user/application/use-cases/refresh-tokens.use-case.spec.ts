@@ -132,7 +132,7 @@ describe('RefreshTokensUseCase', () => {
   it('rotates a valid token: hashes the presented token, passes the successor, returns the new pair', async () => {
     repo.outcome = { status: 'rotated', userId: 'u1', role: 'CUSTOMER', tokenEpoch: 3 };
 
-    const result: AuthTokens = await useCase.execute(PRESENTED_RAW);
+    const result: AuthTokens & { userId: string } = await useCase.execute(PRESENTED_RAW);
 
     expect(repo.lastRotate).toEqual({
       presentedTokenHash: hashRefreshToken(PRESENTED_RAW),
@@ -146,6 +146,7 @@ describe('RefreshTokensUseCase', () => {
       accessToken: 'signed-access-token',
       refreshToken: SUCCESSOR.raw,
       expiresIn: 900,
+      userId: 'u1',
     });
   });
 

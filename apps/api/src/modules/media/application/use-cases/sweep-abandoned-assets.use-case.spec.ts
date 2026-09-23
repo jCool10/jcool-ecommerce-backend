@@ -77,4 +77,22 @@ describe('SweepAbandonedAssetsUseCase', () => {
     await ctx.useCase.sweep(10);
     expect(ctx.recordMediaBytesReclaimed).toHaveBeenCalledExactlyOnceWith(0);
   });
+
+  // The scheduler's one failure line has no per-asset field, so the asset id/storageKey has to
+  // travel up the `cause` chain of the error the sweep throws instead.
+  it('names the asset and storage key on a failed object delete, via cause', async () => {
+    const deleteObject = vi.fn().mockRejectedValue(new Error('bucket unreachable'));
+    const useCase = new SweepAbandonedAssetsUseCase(
+      fakeMediaAssetRepository({ claimForSweep: vi.fn().mockResolvedValue([claim('a', 400)]) }),
+      fakeObjectStorage({ delete: deleteObject }),
+      fakeMetricsPort(),
+      fakeConfigService({ 'retention.sweepTimeoutMs': STALE_CLAIM_MS }),
+      { register: vi.fn() } as unknown as RetentionSweepRegistry,
+    );
+
+    await expect(useCase.sweep(10)).rejects.toMatchObject({
+      message: 'media sweep failed on asset a (storageKey: media/a.png)',
+      cause: expect.objectContaining({ message: 'bucket unreachable' }) as unknown,
+    });
+  });
 });

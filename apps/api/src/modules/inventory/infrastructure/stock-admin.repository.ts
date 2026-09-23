@@ -74,10 +74,12 @@ export class StockAdminRepository implements StockAdminPort {
       // A write can break both at once (on-hand below zero with nothing reserved), and Postgres names
       // only the first alphabetically — the oversell one. Hence a message covering both bounds.
       if (isCheckViolation(error, NO_OVERSELL)) {
-        throw new ConflictException('Stock level must stay at or above zero and at or above the quantity reserved');
+        throw new ConflictException('Stock level must stay at or above zero and at or above the quantity reserved', {
+          cause: error,
+        });
       }
       if (isCheckViolation(error, ON_HAND_NONNEG)) {
-        throw new ConflictException('Stock level would fall below zero');
+        throw new ConflictException('Stock level would fall below zero', { cause: error });
       }
       throw error;
     }

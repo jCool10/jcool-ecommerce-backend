@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectStoragePort } from '@shared/infrastructure/storage';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { UnsupportedContentTypeError } from '../../domain/asset-content-type';
 import type { MediaAsset } from '../../domain/media-asset.entity';
 import type { MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
@@ -30,12 +31,14 @@ function build() {
     });
   });
 
+  const info = vi.fn();
   const useCase = new InitiateUploadUseCase(
     { insertPending } as unknown as MediaAssetRepositoryPort,
     { presignPut } as unknown as ObjectStoragePort,
     configWith(PRESIGN_TTL_SEC),
+    fakePinoLogger({ info }),
   );
-  return { useCase, calls, inserted, presignPut };
+  return { useCase, calls, inserted, presignPut, info };
 }
 
 describe('InitiateUploadUseCase', () => {
@@ -49,6 +52,15 @@ describe('InitiateUploadUseCase', () => {
     await ctx.useCase.execute({ contentType: 'image/png', uploadedBy: 'admin-1' });
 
     expect(ctx.calls).toEqual(['insert', 'presign']);
+  });
+
+  it('logs the initiated upload with the minted asset id and content type', async () => {
+    const result = await ctx.useCase.execute({ contentType: 'image/png', uploadedBy: 'admin-1' });
+
+    expect(ctx.info).toHaveBeenCalledExactlyOnceWith(
+      { assetId: result.assetId, contentType: 'image/png' },
+      'media upload initiated',
+    );
   });
 
   it('mints the storage key from the id and the server-side extension table', async () => {
@@ -83,6 +95,7 @@ describe('InitiateUploadUseCase', () => {
           {} as unknown as MediaAssetRepositoryPort,
           {} as unknown as ObjectStoragePort,
           configWith(presignTtlSec),
+          fakePinoLogger(),
         ),
     ).toThrow(/STORAGE_PRESIGN_TTL_SEC/);
   });

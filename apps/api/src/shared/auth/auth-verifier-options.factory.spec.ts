@@ -1,7 +1,9 @@
 import { type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { type JWK, SignJWT, exportJWK, generateKeyPair, jwtVerify } from 'jose';
+import type { Mock } from 'vitest';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { authVerifierOptions } from './auth-verifier-options.factory';
 
 const ISSUER = 'https://users.jcool.test';
@@ -65,15 +67,17 @@ describe('authVerifierOptions', () => {
   describe('with a JWKS URL', () => {
     let jwks: JwksServer;
     let url: string;
+    let warn: Mock;
 
     beforeEach(async () => {
       jwks = new JwksServer();
       url = await jwks.start();
+      warn = vi.fn();
     });
 
     afterEach(() => jwks.stop());
 
-    const es256 = () => authVerifierOptions(config({ 'auth.jwksUrl': url })).es256;
+    const es256 = () => authVerifierOptions(config({ 'auth.jwksUrl': url }), fakePinoLogger({ warn })).es256;
     const verify = (token: string, { keys, issuer, audience } = es256()) =>
       jwtVerify(token, keys, { algorithms: ['ES256'], issuer, audience });
 
@@ -113,6 +117,10 @@ describe('authVerifierOptions', () => {
 
         await expect(verify(await sign(key), options)).resolves.toBeDefined();
         expect(jwks.requests).toBe(2);
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          { context: 'AuthVerifierOptions', err: expect.any(Error) as unknown },
+          'jwks refetch failed, serving cached keys',
+        );
       });
 
       it('leaves a failing endpoint alone for a while instead of retrying it per request', async () => {
@@ -126,11 +134,29 @@ describe('authVerifierOptions', () => {
 
         await verify(await sign(key), options);
         expect(jwks.requests).toBe(2);
+        // One line for the failure that started the cooldown, not one per request served from it.
+        expect(warn).toHaveBeenCalledTimes(1);
 
         jwks.down = false;
         vi.advanceTimersByTime(30_001);
         await verify(await sign(key), options);
         expect(jwks.requests).toBe(3);
+        expect(warn).toHaveBeenCalledTimes(1);
+      });
+
+      it('logs a refetch failure once even when concurrent requests all waited on it', async () => {
+        const key = await signingKey('k1');
+        jwks.published = [key.jwk];
+        const options = es256();
+        await verify(await sign(key), options);
+        jwks.down = true;
+        vi.advanceTimersByTime(CACHE_MAX_AGE_MS + 1);
+
+        const token = await sign(key);
+        await Promise.all(Array.from({ length: 5 }, () => verify(token, options)));
+
+        expect(jwks.requests).toBe(2);
+        expect(warn).toHaveBeenCalledTimes(1);
       });
 
       it('gives up on an endpoint that never answers at the user-service timeout', async () => {

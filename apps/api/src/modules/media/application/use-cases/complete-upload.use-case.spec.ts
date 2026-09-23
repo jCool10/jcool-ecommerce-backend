@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectStoragePort, StoredObjectHead } from '@shared/infrastructure/storage';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { AssetTransitionError } from '../../domain/asset-state-machine';
 import { AssetStatus } from '../../domain/asset-status';
 import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-found.error';
@@ -35,12 +36,14 @@ function build(overrides: { asset?: MediaAsset | null; head?: StoredObjectHead |
   );
 
   const config = fakeConfigService(CONFIG);
+  const info = vi.fn();
   const useCase = new CompleteUploadUseCase(
     { findById, markReady } as unknown as MediaAssetRepositoryPort,
     { head } as unknown as ObjectStoragePort,
     config,
+    fakePinoLogger({ info }),
   );
-  return { useCase, markReady };
+  return { useCase, markReady, info };
 }
 
 describe('CompleteUploadUseCase', () => {
@@ -60,6 +63,15 @@ describe('CompleteUploadUseCase', () => {
     expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + READY_TTL_SEC * 1000);
   });
 
+  it('logs the completed upload with the confirmed size and content type', async () => {
+    await ctx.useCase.execute('asset-1');
+
+    expect(ctx.info).toHaveBeenCalledExactlyOnceWith(
+      { assetId: 'asset-1', sizeBytes: 512, contentType: 'image/png' },
+      'media upload completed',
+    );
+  });
+
   it('throws when the asset does not exist', async () => {
     await expect(build({ asset: null }).useCase.execute('asset-1')).rejects.toBeInstanceOf(MediaAssetNotFoundError);
   });
@@ -70,11 +82,12 @@ describe('CompleteUploadUseCase', () => {
     );
   });
 
-  it('rejects when nothing was actually uploaded', async () => {
-    const { useCase, markReady } = build({ head: null });
+  it('rejects when nothing was actually uploaded, and logs no completion', async () => {
+    const { useCase, markReady, info } = build({ head: null });
 
     await expect(useCase.execute('asset-1')).rejects.toBeInstanceOf(UploadRejectedError);
     expect(markReady).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
   });
 
   it('rejects an object over the size limit — the signature could not have capped it', async () => {

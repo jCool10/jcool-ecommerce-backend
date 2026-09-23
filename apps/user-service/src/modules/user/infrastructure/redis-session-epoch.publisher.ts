@@ -29,7 +29,9 @@ export class RedisSessionEpochPublisher implements SessionEpochPublisherPort {
         const published = await this.redis.getClient().eval(RAISE_EPOCH, 1, SESSION_EPOCH_KEY_PREFIX + userId, epoch);
         return Number(published);
       } catch (error) {
-        if (attempt === MAX_ATTEMPTS) throw error;
+        if (attempt === MAX_ATTEMPTS) {
+          throw new Error(`session epoch publish failed after ${MAX_ATTEMPTS} attempts`, { cause: error });
+        }
         await sleep(BACKOFF_MS * attempt);
       }
     }

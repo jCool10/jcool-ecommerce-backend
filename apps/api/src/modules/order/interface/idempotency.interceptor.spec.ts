@@ -4,6 +4,7 @@ import type { ClsService } from 'nestjs-cls';
 import { firstValueFrom, of, throwError } from 'rxjs';
 import { type Mock, describe, expect, it, vi } from 'vitest';
 import { computeRequestHash } from '@shared/idempotency';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { IdempotencyRecord, IdempotencyStorePort } from '../application/ports/idempotency-store.port';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
 
@@ -46,8 +47,13 @@ function record(overrides: Partial<IdempotencyRecord> = {}): IdempotencyRecord {
 function build(store: StoreMock) {
   const set = vi.fn();
   const cls = { set, isActive: () => true, get: vi.fn() } as unknown as ClsService;
-  const interceptor = new IdempotencyInterceptor(store as unknown as IdempotencyStorePort, cls);
-  return { interceptor, set };
+  const warn = vi.fn();
+  const interceptor = new IdempotencyInterceptor(
+    store as unknown as IdempotencyStorePort,
+    cls,
+    fakePinoLogger({ warn }),
+  );
+  return { interceptor, set, warn };
 }
 
 function context(status?: Mock): ExecutionContext {
@@ -115,5 +121,22 @@ describe('IdempotencyInterceptor', () => {
     await expect(firstValueFrom(obs)).rejects.toBe(boom);
     expect(store.deleteInProgress).toHaveBeenCalledWith(SCOPE, KEY);
     expect(store.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it('logs and still propagates the original error when the IN_PROGRESS cleanup itself fails', async () => {
+    const store = makeStore();
+    store.tryInsertInProgress.mockResolvedValue(record());
+    const cleanupError = new Error('connection reset');
+    store.deleteInProgress.mockRejectedValue(cleanupError);
+    const { interceptor, warn } = build(store);
+    const boom = new Error('boom');
+
+    const obs = await interceptor.intercept(context(), throwingHandler(boom));
+
+    await expect(firstValueFrom(obs)).rejects.toBe(boom);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      { scope: SCOPE, key: KEY, err: expect.objectContaining({ message: 'connection reset' }) as unknown },
+      'idempotency key cleanup failed after handler error — key stays claimed until it expires',
+    );
   });
 });

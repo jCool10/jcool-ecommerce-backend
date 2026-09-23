@@ -37,4 +37,33 @@ describe('RolesGuard', () => {
   it('denies 403 (fail-safe) when @Roles is present but no user is attached', () => {
     expect(() => guardRequiring([Role.Admin]).canActivate(makeContext(undefined))).toThrow(ForbiddenException);
   });
+
+  function caught(fn: () => unknown): unknown {
+    try {
+      fn();
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  it('carries which role was required vs held in `cause`, for the rejection log line only', () => {
+    const error = caught(() => guardRequiring([Role.Admin]).canActivate(makeContext(CUSTOMER)));
+
+    expect(error).toBeInstanceOf(ForbiddenException);
+    const forbidden = error as ForbiddenException;
+    expect((forbidden.cause as Error).message).toBe('required role ADMIN, held CUSTOMER');
+    // Response body unchanged: message and the Nest-default `error` description still read 'Forbidden'.
+    expect(forbidden.getResponse()).toEqual({
+      statusCode: 403,
+      message: 'Insufficient permissions',
+      error: 'Forbidden',
+    });
+  });
+
+  it('names "none" in `cause` when no user is attached', () => {
+    const error = caught(() => guardRequiring([Role.Admin]).canActivate(makeContext(undefined)));
+
+    expect(((error as ForbiddenException).cause as Error).message).toBe('required role ADMIN, held none');
+  });
 });

@@ -1,11 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { OBJECT_STORAGE, type ObjectStoragePort } from '@shared/infrastructure/storage';
 import { AssetTransitionError } from '../../domain/asset-state-machine';
 import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-found.error';
 import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
 import { MediaAssetUnavailableError, type MediaFacade } from '../public/media-facade.port';
+
+const LOG_CONTEXT = 'MediaFacade';
 
 @Injectable()
 export class MediaFacadeService implements MediaFacade {
@@ -15,8 +18,10 @@ export class MediaFacadeService implements MediaFacade {
     @Inject(MEDIA_ASSET_REPOSITORY) private readonly repository: MediaAssetRepositoryPort,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStoragePort,
     config: ConfigService,
+    private readonly logger: PinoLogger,
   ) {
     this.readyTtlSec = config.getOrThrow<number>('media.readyTtlSec');
+    logger.setContext(LOG_CONTEXT);
   }
 
   async getPublicUrls(assetIds: string[]): Promise<Map<string, string>> {
@@ -48,7 +53,11 @@ export class MediaFacadeService implements MediaFacade {
     } catch (error) {
       // Nothing left to give back, and dropping the link row is exactly the repair for an asset whose
       // row is already gone. The lookup found no row rather than failing, so the caller's tx commits.
-      if (error instanceof MediaAssetNotFoundError) return;
+      if (error instanceof MediaAssetNotFoundError) {
+        // ATTACHED never expires, so a linked asset with no row means an invariant broke.
+        this.logger.warn({ assetId }, 'detach found no asset row for a still-linked image; dropping the dangling link');
+        return;
+      }
       throw this.translate(error, assetId);
     }
   }

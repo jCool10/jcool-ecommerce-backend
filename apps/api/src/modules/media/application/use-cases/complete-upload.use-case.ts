@@ -1,11 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
 import { OBJECT_STORAGE, type ObjectStoragePort } from '@shared/infrastructure/storage';
 import { assertTransition } from '../../domain/asset-state-machine';
 import { AssetStatus } from '../../domain/asset-status';
 import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-found.error';
 import { UploadRejectedError } from '../../domain/errors/upload-rejected.error';
 import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
+
+const LOG_CONTEXT = 'CompleteUpload';
 
 /**
  * The size limit lives here because this is the first place it can: a presigned PUT signs an exact
@@ -21,9 +24,11 @@ export class CompleteUploadUseCase {
     @Inject(MEDIA_ASSET_REPOSITORY) private readonly repository: MediaAssetRepositoryPort,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStoragePort,
     config: ConfigService,
+    private readonly logger: PinoLogger,
   ) {
     this.maxBytes = config.getOrThrow<number>('media.maxBytes');
     this.readyTtlSec = config.getOrThrow<number>('media.readyTtlSec');
+    logger.setContext(LOG_CONTEXT);
   }
 
   async execute(assetId: string): Promise<void> {
@@ -52,5 +57,6 @@ export class CompleteUploadUseCase {
       new Date(Date.now() + this.readyTtlSec * 1000),
     );
     if (!moved) throw new UploadRejectedError('The asset changed state while its upload was being confirmed', assetId);
+    this.logger.info({ assetId, sizeBytes: head.sizeBytes, contentType: asset.contentType }, 'media upload completed');
   }
 }

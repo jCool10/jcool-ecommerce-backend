@@ -242,7 +242,11 @@ describe('ProcessWebhookEventUseCase', () => {
 
     const result = await useCase.execute(RAW, HEADERS);
 
-    expect(result).toEqual({ outcome: 'duplicate' });
+    expect(result).toEqual({
+      outcome: 'duplicate',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
+    });
     expect(findByProviderSessionId).not.toHaveBeenCalled();
     expect(updateStatus).not.toHaveBeenCalled();
     expect(markProcessed).not.toHaveBeenCalled();
@@ -255,7 +259,7 @@ describe('ProcessWebhookEventUseCase', () => {
       existing: payment(PaymentStatus.PENDING),
     });
     const result = await useCase.execute(RAW, HEADERS);
-    expect(result).toEqual({ outcome: 'ignored' });
+    expect(result).toEqual({ outcome: 'ignored', providerEventId: 'evt_1', eventType: 'charge.refunded' });
     expect(updateStatus).not.toHaveBeenCalled();
     expect(markProcessed).not.toHaveBeenCalled();
     expect(markSkipped).not.toHaveBeenCalled();
@@ -267,7 +271,12 @@ describe('ProcessWebhookEventUseCase', () => {
       existing: null,
     });
     const result = await useCase.execute(RAW, HEADERS);
-    expect(result).toEqual({ outcome: 'skipped', reason: 'payment_not_found' });
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'payment_not_found',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
+    });
     expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());
     expect(updateStatus).not.toHaveBeenCalled();
   });
@@ -280,7 +289,12 @@ describe('ProcessWebhookEventUseCase', () => {
 
     const result = await useCase.execute(RAW, HEADERS);
 
-    expect(result).toEqual({ outcome: 'skipped', reason: 'awaiting_payment' });
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'awaiting_payment',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
+    });
     // Decided from the event alone, so the payment is never even read, let alone moved.
     expect(findByProviderSessionId).not.toHaveBeenCalled();
     expect(updateStatus).not.toHaveBeenCalled();
@@ -294,7 +308,12 @@ describe('ProcessWebhookEventUseCase', () => {
       existing: payment(PaymentStatus.PENDING),
     });
     const result = await useCase.execute(RAW, HEADERS);
-    expect(result).toEqual({ outcome: 'skipped', reason: 'awaiting_payment' });
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'awaiting_payment',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
+    });
     expect(updateStatus).not.toHaveBeenCalled();
   });
 
@@ -309,6 +328,8 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(result).toEqual({
       outcome: 'skipped',
       reason: 'amount_mismatch',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
       charge: {
         orderId: ORDER_ID,
         expectedMinor: AMOUNT_MINOR,
@@ -363,6 +384,8 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(result).toEqual({
       outcome: 'skipped',
       reason: 'conflict',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.expired',
       conflict: { orderId: ORDER_ID, from: PaymentStatus.SUCCEEDED, to: PaymentStatus.FAILED },
     });
     expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());

@@ -67,6 +67,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // A DomainError gets no Sentry event, but a defensive guard that fires is still a bug: keep its
     // stack on the warn line, because the route alone cannot say which guard deep in the model threw.
     const warnErr = !isServerError && exception instanceof DomainError ? exception : undefined;
+    const message = this.resolveMessage(exception, status);
+    const rejection = isServerError ? {} : this.rejectionFields(exception, message, request.url);
 
     if (this.devPretty) {
       const line = formatDevRequestLine({
@@ -79,8 +81,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
       });
       // 5xx still carries the stack (as an object) so the pretty console prints it below the line.
       if (isServerError) this.logger.error({ err }, line);
-      else if (warnErr) this.logger.warn({ err: warnErr }, line);
-      else this.logger.warn(line);
+      else if (warnErr) this.logger.warn({ ...rejection, err: warnErr }, line);
+      else this.logger.warn(rejection, line);
     } else {
       const logFields = {
         statusCode: status,
@@ -90,7 +92,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         'db.queries': dbQueries,
       };
       if (isServerError) this.logger.error({ ...logFields, err }, 'request failed');
-      else this.logger.warn(warnErr ? { ...logFields, err: warnErr } : logFields, 'request rejected');
+      else this.logger.warn({ ...logFields, ...rejection, ...(warnErr ? { err: warnErr } : {}) }, 'request rejected');
     }
 
     // Separate from requestId; only present when tracing is on. Added to the envelope only —
@@ -121,8 +123,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       requestId,
       ...(traceId ? { traceId } : {}),
-      message: this.resolveMessage(exception, status),
+      message,
     });
+  }
+
+  // `cause` is never sent to the client, so a guard can keep the real reason behind a bare 401.
+  private rejectionFields(exception: unknown, message: unknown, url: string): { reason: unknown; cause?: string } {
+    const reason = withoutQueryString(message, url);
+    const cause = exception instanceof HttpException ? exception.cause : undefined;
+    return cause === undefined ? { reason } : { reason, cause: toError(cause).message };
   }
 
   // Echo the correlation id (defensive — the CLS middleware already sets it on the way in).
@@ -188,4 +197,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
       'details' in payload
     );
   }
+}
+
+// Nest's unmatched-route 404 reads `Cannot GET <originalUrl>`, and mailed links carry `?token=`.
+function withoutQueryString(message: unknown, url: string): unknown {
+  const queryAt = url.indexOf('?');
+  if (queryAt === -1) return message;
+  const query = url.slice(queryAt);
+  const strip = (value: unknown): unknown => (typeof value === 'string' ? value.replaceAll(query, '') : value);
+  return Array.isArray(message) ? message.map(strip) : strip(message);
 }

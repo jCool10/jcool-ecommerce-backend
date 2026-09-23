@@ -9,6 +9,8 @@ import { TOKEN_DENYLIST, type TokenDenylistReader } from './token-denylist.port'
 
 type VerifiedClaims = AccessTokenClaims & { exp: number };
 
+const SESSION_REVOKED = 'Session has been revoked';
+
 /**
  * ES256 is the only path, so the algorithm in the header can never pick the kind of key a token is
  * checked against — anything else is refused before its signature is looked at.
@@ -22,38 +24,54 @@ export class AccessTokenVerifier {
   ) {}
 
   async verify(token: string | undefined): Promise<AuthenticatedUser> {
-    const claims = token ? await this.verifiedClaims(token) : null;
-    if (!claims) {
-      throw new UnauthorizedException();
+    if (!token) {
+      throw refused('no bearer token');
     }
+    const claims = await this.verifiedClaims(token);
 
     if (await this.denylist.isDenylisted(claims.jti)) {
       throw new UnauthorizedException('Token has been revoked');
     }
     const currentEpoch = await this.sessionEpoch.current(claims.sub);
-    if (currentEpoch === null || claims.epoch < currentEpoch) {
-      throw new UnauthorizedException('Session has been revoked');
+    if (currentEpoch === null) {
+      throw refused('no session epoch for the subject', SESSION_REVOKED);
+    }
+    if (claims.epoch < currentEpoch) {
+      throw refused('token epoch is behind the session epoch', SESSION_REVOKED);
     }
 
     return { userId: claims.sub, role: claims.role, jti: claims.jti, exp: claims.exp };
   }
 
-  private async verifiedClaims(token: string): Promise<VerifiedClaims | null> {
+  private async verifiedClaims(token: string): Promise<VerifiedClaims> {
+    let payload: JWTPayload;
     try {
-      return toClaims((await this.verifySignature(token)).payload);
-    } catch {
-      return null;
+      ({ payload } = await this.verifySignature(token));
+    } catch (error) {
+      throw refused(error);
     }
+    const claims = toClaims(payload);
+    if (!claims) {
+      throw refused('token claims are malformed');
+    }
+    return claims;
   }
 
   private verifySignature(token: string): Promise<JWTVerifyResult> {
     const { alg } = decodeProtectedHeader(token);
     if (alg !== 'ES256') {
-      return Promise.reject(new Error(`no verification path for alg ${String(alg)}`));
+      // The header is the caller's to fill, and this message reaches the 401 log line.
+      return Promise.reject(new Error(`no verification path for alg ${String(alg).slice(0, 32)}`));
     }
     const { keys, issuer, audience } = this.options.es256;
     return jwtVerify(token, keys, { algorithms: ['ES256'], issuer, audience });
   }
+}
+
+// `cause` is logged, never sent. Passing options drops Nest's default description, so it is restated.
+function refused(reason: unknown, message = 'Unauthorized'): UnauthorizedException {
+  const cause = typeof reason === 'string' ? new Error(reason) : reason;
+  return new UnauthorizedException(message, { cause, description: 'Unauthorized' });
 }
 
 function isRole(value: unknown): value is Role {

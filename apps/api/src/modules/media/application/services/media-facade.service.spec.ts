@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { ObjectStoragePort } from '@shared/infrastructure/storage';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { AssetTransitionError } from '../../domain/asset-state-machine';
 import { AssetStatus } from '../../domain/asset-status';
 import { MediaAssetNotFoundError } from '../../domain/errors/media-asset-not-found.error';
@@ -21,12 +22,14 @@ function build() {
   const publicUrl = vi.fn((key: string) => Promise.resolve(`https://cdn.example/${key}`));
 
   const config = fakeConfigService({ 'media.readyTtlSec': READY_TTL_SEC });
+  const warn = vi.fn();
   const facade = new MediaFacadeService(
     { findStorageKeys, attach, detach } as unknown as MediaAssetRepositoryPort,
     { publicUrl } as unknown as ObjectStoragePort,
     config,
+    fakePinoLogger({ warn }),
   );
-  return { facade, findStorageKeys, attach, detach };
+  return { facade, findStorageKeys, attach, detach, warn };
 }
 
 describe('MediaFacadeService', () => {
@@ -69,6 +72,10 @@ describe('MediaFacadeService', () => {
     ctx.detach.mockRejectedValue(new MediaAssetNotFoundError('a'));
 
     await expect(ctx.facade.detach(TX, 'a')).resolves.toBeUndefined();
+    expect(ctx.warn).toHaveBeenCalledExactlyOnceWith(
+      { assetId: 'a' },
+      'detach found no asset row for a still-linked image; dropping the dangling link',
+    );
   });
 
   it('refuses a give-back the state machine rejects', async () => {

@@ -1,9 +1,12 @@
 import { createTransport, type Transporter } from 'nodemailer';
+import type { PinoLogger } from 'nestjs-pino';
 import type { OutboundCall } from '../resilience';
 import type { MailMessage, MailTransportPort } from './mail-transport.port';
 
 /** Metric label; a fixed name rather than anything derived per call. */
 export const MAIL_BREAKER = 'mail';
+
+const LOG_CONTEXT = 'SmtpMailTransport';
 
 export interface SmtpMailOptions {
   url: string;
@@ -11,6 +14,7 @@ export interface SmtpMailOptions {
   breaker: OutboundCall;
   /** Budget for each socket phase. Required: nodemailer's own defaults run to ten minutes. */
   timeoutMs: number;
+  logger: PinoLogger;
   /** Test seam, so the send path is covered without a server. */
   transporter?: Pick<Transporter, 'sendMail'>;
 }
@@ -23,6 +27,7 @@ export class SmtpMailTransport implements MailTransportPort {
   private readonly transporter: Pick<Transporter, 'sendMail'>;
   private readonly from: string;
   private readonly breaker: OutboundCall;
+  private readonly logger: PinoLogger;
 
   constructor(options: SmtpMailOptions) {
     // Per phase, not per send: a breaker timeout cannot cancel a request already on the wire, so
@@ -38,9 +43,13 @@ export class SmtpMailTransport implements MailTransportPort {
       });
     this.from = options.from;
     this.breaker = options.breaker;
+    this.logger = options.logger;
+    this.logger.setContext(LOG_CONTEXT);
   }
 
+  // Callers log a failed send; the to-address stays off the success line.
   async sendMail(message: MailMessage): Promise<void> {
-    await this.breaker.run(() => this.transporter.sendMail({ from: this.from, ...message }));
+    const info = await this.breaker.run(() => this.transporter.sendMail({ from: this.from, ...message }));
+    this.logger.info({ subject: message.subject, messageId: info.messageId }, 'mail sent');
   }
 }

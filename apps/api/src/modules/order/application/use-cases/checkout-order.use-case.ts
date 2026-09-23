@@ -7,6 +7,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
+import { PinoLogger } from 'nestjs-pino';
 import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
@@ -20,6 +21,8 @@ import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/i
 import { IDEMPOTENCY_STORE, type IdempotencyStorePort } from '../ports/idempotency-store.port';
 import { loadOrderView, toView, type OrderView } from '../order-view.mapper';
 import { toPlacedOutboxRecord } from '../order-outbox.mapper';
+
+const LOG_CONTEXT = 'CheckoutOrder';
 
 /**
  * Order + reservation + outbox event + idempotency COMPLETED commit in ONE transaction: a stock
@@ -37,7 +40,10 @@ export class CheckoutOrderUseCase {
     @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly cls: ClsService,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async execute(userId: string): Promise<OrderView> {
     const { currency, items } = await this.snapshotCart(userId);
@@ -87,12 +93,22 @@ export class CheckoutOrderUseCase {
       this.metrics.recordSagaStep('reserve', 'success');
       this.metrics.recordOrderCreated(placed.status);
       this.metrics.observeOrderValue(placed.totalAmountMinor);
+      this.logger.info(
+        {
+          orderId: result.orderId,
+          itemCount: items.length,
+          totalAmountMinor: placed.totalAmountMinor,
+          currency,
+        },
+        'order placed',
+      );
       return this.viewOf(placed, result.orderId);
     }
 
     // Crash-reclaim heal: an order already carried this key (a prior attempt committed, then its
     // idempotency row was reclaimed). Point the key at the existing order and replay it — no second
     // order, no second hold.
+    this.logger.warn({ orderId: result.orderId }, 'checkout key already placed an order — replaying it');
     const view = await loadOrderView(this.repo, result.orderId, userId);
     await this.idempotency.markCompleted({
       scope: idem.scope,

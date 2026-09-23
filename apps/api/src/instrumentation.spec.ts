@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TelemetryFlushGlobal } from '@jcool/platform/observability';
 
 const telemetryGlobal = globalThis as TelemetryFlushGlobal;
+type Flush = NonNullable<TelemetryFlushGlobal['__flushTelemetry']>;
 
 // Must match FLUSH_TIMEOUT_MS in instrumentation.ts — the ceiling is a deliberate number, not a
 // detail: it is what has to fit inside terminationGracePeriodSeconds next to the readiness grace.
@@ -18,7 +19,7 @@ describe('TelemetryFlushService', () => {
   async function withInstrumentation(
     env: Record<string, string | undefined>,
     otelShutdown: () => Promise<void>,
-    body: (flush: () => Promise<void>, sentryFlush: ReturnType<typeof vi.fn>) => Promise<void>,
+    body: (flush: Flush, sentryFlush: ReturnType<typeof vi.fn>) => Promise<void>,
   ): Promise<void> {
     const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
     for (const [key, value] of Object.entries(env)) {
@@ -65,15 +66,25 @@ describe('TelemetryFlushService', () => {
       never,
       async (flush) => {
         vi.useFakeTimers();
-        let settled = false;
-        void flush().then(() => {
-          settled = true;
+        let outcome: string | undefined;
+        void flush().then((settled) => {
+          outcome = settled;
         });
 
         await vi.advanceTimersByTimeAsync(FLUSH_CEILING_MS - 1);
-        expect(settled).toBe(false);
+        expect(outcome).toBeUndefined();
         await vi.advanceTimersByTimeAsync(1);
-        expect(settled).toBe(true);
+        expect(outcome).toBe('timed_out');
+      },
+    );
+  });
+
+  it('reports a flush that landed inside the ceiling', async () => {
+    await withInstrumentation(
+      { SENTRY_DSN: 'https://public@sentry.invalid/1', OTEL_ENABLED: 'true' },
+      () => Promise.resolve(),
+      async (flush) => {
+        await expect(flush()).resolves.toBe('flushed');
       },
     );
   });

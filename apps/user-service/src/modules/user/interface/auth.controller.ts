@@ -303,7 +303,7 @@ export class AuthController {
 
     const tokens = await this.refreshTokens.execute(refreshToken);
     this.authCookies.setSession(res, tokens.refreshToken);
-    this.audit.record({ event: 'token.refreshed', outcome: 'success', ip, userAgent });
+    this.audit.record({ event: 'token.refreshed', outcome: 'success', userId: tokens.userId, ip, userAgent });
     return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
   }
 

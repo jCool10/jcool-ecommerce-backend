@@ -4,6 +4,7 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SentryModule } from '@sentry/nestjs/setup';
 import { ClsModule } from 'nestjs-cls';
+import { PinoLogger } from 'nestjs-pino';
 import { AuthVerifierModule } from '@jcool/auth-verifier';
 import { ConfigModule } from '@shared/config';
 import { authVerifierOptions } from '@shared/auth/auth-verifier-options.factory';
@@ -45,7 +46,7 @@ import { PaymentModule } from '@modules/payment/payment.module';
     ThrottlerSecurityModule,
     AuthVerifierModule.forRootAsync({
       imports: [SessionStateModule],
-      inject: [ConfigService],
+      inject: [ConfigService, PinoLogger],
       useFactory: authVerifierOptions,
     }),
     ScheduleModule.forRoot(),

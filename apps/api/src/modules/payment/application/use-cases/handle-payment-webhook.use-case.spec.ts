@@ -25,15 +25,17 @@ function build(opts: { process: WebhookProcessResult; finalize?: unknown; finali
     : vi.fn().mockResolvedValue(opts.finalize ?? { status: 'finalized' });
   const warn = vi.fn();
   const error = vi.fn();
+  const debug = vi.fn();
+  const info = vi.fn();
   const recordRefundOwed = vi.fn();
 
   const processEvent = { execute: processExec } as unknown as ProcessWebhookEventUseCase;
   const finalizeOrder = { execute: finalizeExec } as unknown as FinalizeOrderUseCase;
   const metrics = fakeMetricsPort({ recordRefundOwed });
-  const logger = fakePinoLogger({ warn, error });
+  const logger = fakePinoLogger({ warn, error, debug, info });
 
   const useCase = new HandlePaymentWebhookUseCase(processEvent, finalizeOrder, metrics, logger);
-  return { useCase, spies: { processExec, finalizeExec, warn, error, recordRefundOwed } };
+  return { useCase, spies: { processExec, finalizeExec, warn, error, debug, info, recordRefundOwed } };
 }
 
 describe('HandlePaymentWebhookUseCase', () => {
@@ -75,9 +77,17 @@ describe('HandlePaymentWebhookUseCase', () => {
 
   it.each([
     ['rejected', { outcome: 'rejected', reason: 'invalid_signature' }],
-    ['duplicate', { outcome: 'duplicate' }],
-    ['ignored', { outcome: 'ignored' }],
-    ['skipped', { outcome: 'skipped', reason: 'payment_not_found' }],
+    ['duplicate', { outcome: 'duplicate', providerEventId: 'evt_1', eventType: 'checkout.session.completed' }],
+    ['ignored', { outcome: 'ignored', providerEventId: 'evt_1', eventType: 'charge.refunded' }],
+    [
+      'skipped',
+      {
+        outcome: 'skipped',
+        reason: 'payment_not_found',
+        providerEventId: 'evt_1',
+        eventType: 'checkout.session.completed',
+      },
+    ],
   ] as const)('never finalizes when the payment did not settle (%s)', async (_label, process) => {
     const { useCase, spies } = build({ process });
 
@@ -85,6 +95,91 @@ describe('HandlePaymentWebhookUseCase', () => {
 
     expect(spies.finalizeExec).not.toHaveBeenCalled();
     expect(result).toBe(process);
+  });
+
+  it('logs a debug line for a duplicate delivery, carrying the event that was redelivered', async () => {
+    const process: WebhookProcessResult = {
+      outcome: 'duplicate',
+      providerEventId: 'evt_dup',
+      eventType: 'checkout.session.completed',
+    };
+    const { useCase, spies } = build({ process });
+
+    await useCase.execute(RAW, HEADERS);
+
+    expect(spies.debug).toHaveBeenCalledExactlyOnceWith(
+      { outcome: 'duplicate', providerEventId: 'evt_dup', eventType: 'checkout.session.completed' },
+      'webhook event accepted but not applied',
+    );
+    expect(spies.info).not.toHaveBeenCalled();
+    expect(spies.error).not.toHaveBeenCalled();
+  });
+
+  it('logs a debug line for an event type we do not act on', async () => {
+    const process: WebhookProcessResult = {
+      outcome: 'ignored',
+      providerEventId: 'evt_ignored',
+      eventType: 'charge.refunded',
+    };
+    const { useCase, spies } = build({ process });
+
+    await useCase.execute(RAW, HEADERS);
+
+    expect(spies.debug).toHaveBeenCalledExactlyOnceWith(
+      { outcome: 'ignored', providerEventId: 'evt_ignored', eventType: 'charge.refunded' },
+      'webhook event accepted but not applied',
+    );
+  });
+
+  it('logs an info line for a harmless skip with no conflict/charge (payment not found yet)', async () => {
+    const process: WebhookProcessResult = {
+      outcome: 'skipped',
+      reason: 'payment_not_found',
+      providerEventId: 'evt_no_payment',
+      eventType: 'checkout.session.completed',
+    };
+    const { useCase, spies } = build({ process });
+
+    await useCase.execute(RAW, HEADERS);
+
+    expect(spies.info).toHaveBeenCalledExactlyOnceWith(
+      {
+        outcome: 'skipped',
+        reason: 'payment_not_found',
+        providerEventId: 'evt_no_payment',
+        eventType: 'checkout.session.completed',
+      },
+      'webhook event accepted but not applied',
+    );
+    expect(spies.debug).not.toHaveBeenCalled();
+    expect(spies.error).not.toHaveBeenCalled();
+    expect(spies.recordRefundOwed).not.toHaveBeenCalled();
+  });
+
+  it('logs an info line (not error) for a conflict that never touched money — a late failure after success', async () => {
+    const process: WebhookProcessResult = {
+      outcome: 'skipped',
+      reason: 'conflict',
+      providerEventId: 'evt_late_failure',
+      eventType: 'checkout.session.expired',
+      conflict: { orderId: ORDER_ID, from: PaymentStatus.SUCCEEDED, to: PaymentStatus.FAILED },
+    };
+    const { useCase, spies } = build({ process });
+
+    await useCase.execute(RAW, HEADERS);
+
+    expect(spies.info).toHaveBeenCalledExactlyOnceWith(
+      {
+        outcome: 'skipped',
+        reason: 'conflict',
+        providerEventId: 'evt_late_failure',
+        eventType: 'checkout.session.expired',
+        conflict: { orderId: ORDER_ID, from: PaymentStatus.SUCCEEDED, to: PaymentStatus.FAILED },
+      },
+      'webhook event accepted but not applied',
+    );
+    expect(spies.error).not.toHaveBeenCalled();
+    expect(spies.recordRefundOwed).not.toHaveBeenCalled();
   });
 
   it('swallows a finalize failure and still acks (order left for reconciliation)', async () => {

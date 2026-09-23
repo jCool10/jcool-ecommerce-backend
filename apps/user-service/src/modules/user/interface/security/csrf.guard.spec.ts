@@ -31,4 +31,27 @@ describe('CsrfGuard', () => {
     const token = csrf.issue();
     expect(() => guard.canActivate(contextWith(undefined, token))).toThrow(ForbiddenException);
   });
+
+  it.each([
+    ['the cookie is missing', () => [undefined, csrf.issue()], 'csrf cookie missing'],
+    ['the header is missing', () => [csrf.issue(), undefined], 'csrf header missing'],
+    ['the header echoes another token', () => [csrf.issue(), csrf.issue()], 'csrf header does not match the cookie'],
+    ['the token is unsigned', () => ['forged.signature', 'forged.signature'], 'csrf token signature invalid'],
+  ])('names the failed check as the cause when %s, keeping the client message generic', (_case, values, reason) => {
+    const [cookieValue, headerValue] = values();
+    let refusal: unknown;
+    try {
+      guard.canActivate(contextWith(cookieValue, headerValue));
+    } catch (error) {
+      refusal = error;
+    }
+
+    expect(refusal).toBeInstanceOf(ForbiddenException);
+    expect((refusal as ForbiddenException).getResponse()).toEqual({
+      message: 'Invalid or missing CSRF token',
+      error: 'Forbidden',
+      statusCode: 403,
+    });
+    expect((refusal as { cause?: Error }).cause?.message).toBe(reason);
+  });
 });

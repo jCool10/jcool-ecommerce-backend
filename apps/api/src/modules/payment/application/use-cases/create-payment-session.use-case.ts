@@ -119,6 +119,10 @@ export class CreatePaymentSessionUseCase {
     await this.abortIfOrderDiedMeanwhile(orderId, saved);
 
     this.metrics.recordSagaStep('payment_session', 'success');
+    this.logger.info(
+      { orderId, paymentId: saved.id, providerSessionId: saved.providerSessionId },
+      'payment session created',
+    );
     return {
       paymentId: saved.id as string,
       providerSessionId: saved.providerSessionId,

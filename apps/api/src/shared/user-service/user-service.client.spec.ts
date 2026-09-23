@@ -133,6 +133,15 @@ describe('UserServiceClient', () => {
     await expect(client().userSummary(USER_ID)).rejects.toBeInstanceOf(UserServiceRejection);
   });
 
+  it('carries the endpoint path on a rejection, so the failure line says which call failed', async () => {
+    userService.reply = () => ({ status: 503, body: {} });
+
+    await expect(client().userSummary(USER_ID)).rejects.toMatchObject({
+      status: 503,
+      path: `/internal/v1/users/${USER_ID}/summary`,
+    });
+  });
+
   it('reads a summary whose role it does not know', async () => {
     userService.reply = () => ({ status: 200, body: { ...SUMMARY, role: 'SUPPORT' } });
 

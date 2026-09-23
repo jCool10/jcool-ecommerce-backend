@@ -186,6 +186,38 @@ describe('AccessTokenVerifier', () => {
     await expect(verifier().verify(await es256(current, { claims }))).resolves.toMatchObject({ userId: USER_ID });
   });
 
+  it.each([
+    ['a missing token', () => undefined, 'no bearer token'],
+    ['an expired token', () => es256(current, { expiresIn: Math.floor(Date.now() / 1000) - 1 }), '"exp" claim'],
+    ['a token for another issuer', () => es256(current, { issuer: 'https://elsewhere.invalid' }), '"iss" claim'],
+    ['malformed claims', () => es256(current, { claims: { ...CLAIMS, role: 'ROOT' } }), 'token claims are malformed'],
+  ])('keeps the reason for refusing %s as the cause', async (_case, token, reason) => {
+    const refusal: unknown = await verifier()
+      .verify(await token())
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(UnauthorizedException);
+    expect((refusal as UnauthorizedException).getResponse()).toMatchObject({
+      message: 'Unauthorized',
+      statusCode: 401,
+    });
+    expect(String((refusal as { cause?: Error }).cause?.message)).toContain(reason);
+  });
+
+  it('says which session check refused the token', async () => {
+    epochs.current.mockResolvedValueOnce(null).mockResolvedValueOnce(3);
+
+    const gone: unknown = await verifier()
+      .verify(await es256(current))
+      .catch((error: unknown) => error);
+    const stale: unknown = await verifier()
+      .verify(await es256(current))
+      .catch((error: unknown) => error);
+
+    expect((gone as { cause?: Error }).cause?.message).toBe('no session epoch for the subject');
+    expect((stale as { cause?: Error }).cause?.message).toBe('token epoch is behind the session epoch');
+  });
+
   it('checks no revocation state for a token it refused on signature', async () => {
     await expectRefused(es256(await signingKey(current.kid)));
 

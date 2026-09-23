@@ -1,6 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
 import { isSpanContextValid, trace } from '@opentelemetry/api';
-import type { ClsService } from 'nestjs-cls';
+import { CLS_REQ, type ClsService } from 'nestjs-cls';
 import type { Params } from 'nestjs-pino';
 import { destination, type Level, multistream, transport, type TransportSingleOptions } from 'pino';
 import type { LokiOptions } from 'pino-loki';
@@ -9,6 +9,10 @@ import { redactPaths } from './redact-paths';
 import { requestWithoutQuery } from './request-serializer';
 
 const REDACT_CENSOR = '[Redacted]';
+
+interface AuthenticatedRequest {
+  user?: { userId?: unknown };
+}
 
 const PRETTY_TRANSPORT: TransportSingleOptions = {
   target: 'pino-pretty',
@@ -39,6 +43,9 @@ export function createLoggerParams(config: ConfigService, cls: ClsService): Para
         // the requestId alone cannot tell you.
         const jobName = cls.get<string>(JOB_NAME_KEY);
         if (jobName) fields.job = jobName;
+        // Set by the auth guard, so every line after authentication says whose request it was.
+        const userId = cls.get<AuthenticatedRequest | undefined>(CLS_REQ)?.user?.userId;
+        if (typeof userId === 'string') fields.userId = userId;
       }
       const spanContext = trace.getActiveSpan()?.spanContext();
       if (spanContext && isSpanContextValid(spanContext)) {

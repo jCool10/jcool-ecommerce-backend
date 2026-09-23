@@ -1,4 +1,7 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
+
+const LOG_CONTEXT = 'TelemetryFlushService';
 
 /**
  * Shape the preloaded instrumentation publishes on globalThis. A global handle rather than an
@@ -6,7 +9,7 @@ import { Injectable, OnApplicationShutdown } from '@nestjs/common';
  * `--import`.
  */
 export interface TelemetryFlushGlobal {
-  __flushTelemetry?: () => Promise<void>;
+  __flushTelemetry?: () => Promise<'flushed' | 'timed_out'>;
 }
 
 /**
@@ -15,7 +18,24 @@ export interface TelemetryFlushGlobal {
  */
 @Injectable()
 export class TelemetryFlushService implements OnApplicationShutdown {
+  constructor(private readonly logger: PinoLogger) {
+    logger.setContext(LOG_CONTEXT);
+  }
+
   async onApplicationShutdown(): Promise<void> {
-    await (globalThis as TelemetryFlushGlobal).__flushTelemetry?.();
+    const flush = (globalThis as TelemetryFlushGlobal).__flushTelemetry;
+    if (!flush) return; // No instrumentation preload (dev, tests) — nothing to flush.
+
+    const startedAt = process.hrtime.bigint();
+    const outcome = await flush();
+    const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    if (outcome === 'flushed') {
+      this.logger.info({ seconds }, 'telemetry flushed on shutdown');
+    } else {
+      this.logger.warn(
+        { seconds },
+        'telemetry flush hit its ceiling on shutdown — drain-window spans and errors may be lost',
+      );
+    }
   }
 }

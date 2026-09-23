@@ -10,15 +10,19 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ClsService } from 'nestjs-cls';
+import { PinoLogger } from 'nestjs-pino';
 import { type Observable, catchError, concatMap, from, of, throwError } from 'rxjs';
 import { computeRequestHash, setIdempotencyContext } from '@shared/idempotency';
 import type { AuthenticatedUser } from '@jcool/platform/rbac';
+import { toError } from '@jcool/kernel';
 import {
   IDEMPOTENCY_STORE,
   type IdempotencyRecord,
   type IdempotencyStorePort,
 } from '../application/ports/idempotency-store.port';
 import type { IdempotentRequest } from './require-idempotency-key.guard';
+
+const LOG_CONTEXT = 'IdempotencyInterceptor';
 
 // How long an IN_PROGRESS row is trusted before it counts as abandoned (owner crashed mid-flight)
 // and may be reclaimed.
@@ -34,7 +38,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
   constructor(
     @Inject(IDEMPOTENCY_STORE) private readonly store: IdempotencyStorePort,
     private readonly cls: ClsService,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
     if (context.getType() !== 'http') {
@@ -111,7 +118,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
       // retry. Cleanup failure must not mask the original error.
       catchError((err: unknown) =>
         from(this.store.deleteInProgress(scope, key)).pipe(
-          catchError(() => of(undefined)),
+          catchError((cleanupErr: unknown) => {
+            // Every retry now 409s until IDEMPOTENCY_TTL_MS reclaims the row.
+            this.logger.warn(
+              { scope, key, err: toError(cleanupErr) },
+              'idempotency key cleanup failed after handler error — key stays claimed until it expires',
+            );
+            return of(undefined);
+          }),
           concatMap(() => throwError(() => err)),
         ),
       ),

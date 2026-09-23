@@ -8,6 +8,7 @@ export * from './logging/db-query-counter';
 export * from './logging/dev-request-line.format';
 export * from './logging/canonical-log.interceptor';
 export * from './logging/log-sampler';
+export * from './logging/process-crash-logger';
 export * from './tracing';
 export * from './http-route.util';
 export * from './telemetry-flush.service';

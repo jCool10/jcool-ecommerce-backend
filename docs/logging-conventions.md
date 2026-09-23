@@ -59,7 +59,7 @@ export function createQueueConnection(url: string, logger: PinoLogger): Redis {
 }
 ```
 
-The lint rule matches `this.logger.*` only, so `logger.*` in a free function is deliberately not fenced. Current instances: `src/shared/messaging/queue/queue-connection.ts`, `src/shared/messaging/outbox/outbox-backlog.collector.ts`, `src/modules/media/infrastructure/media-sweeping.collector.ts` — the last two are prom-client `collect` hooks, which are plain closures registered on a gauge.
+The lint rule matches `this.logger.*` only, so `logger.*` in a free function is deliberately not fenced. Current instances: `src/shared/messaging/queue/queue-connection.ts`, `src/shared/auth/auth-verifier-options.factory.ts` (the JWKS key getter jose calls per token), `src/shared/messaging/outbox/outbox-backlog.collector.ts`, `src/modules/media/infrastructure/media-sweeping.collector.ts` — the last two are prom-client `collect` hooks, which are plain closures registered on a gauge.
 
 ## Levels
 
@@ -75,6 +75,21 @@ Two conventions that keep the volume honest:
 - **Idle work logs nothing.** A sweep that deleted 0 rows, a relay tick that moved 0 events — the steady state is silence, so a line means something happened. Every scheduler, shared or per-context, returns early on an idle result.
 - **One line per failure, not one per observer.** The outbox backlog collector reports a failed read once even though two gauges await it; the dead-letter router logs the routing failure, not each retry.
 
+## Where a line belongs
+
+The test for a missing line: start from what a bug report hands you — an `x-request-id`, a user, an order — and follow the logs. Wherever the trail stops (no id to pivot on, no reason, an error that vanished), a line is missing. They cluster in six places:
+
+1. **Where an error is swallowed or converted.** A `catch` that returns a fallback or moves on leaves no other trace, so it logs. A `catch` that throws a different error keeps the original as `{ cause }` instead of logging.
+2. **At the boundary with another system** — Postgres, Redis, BullMQ, the payment gateway, object storage, the search engine, SMTP, the user-service and id-service: a failure, a timeout, a retry budget running out.
+3. **On a business state change**, at `info`: the timeline someone rebuilds for one order, payment, asset or account.
+4. **In background work** — schedulers, consumers, the outbox relay. There is no request line to lean on, so each logs a pass that did work, and every failure.
+5. **On an unusual branch**: a fallback or degraded mode taken, a data mismatch, a branch the comments call unreachable.
+6. **Around the process lifecycle**: boot, each shutdown stage, a crash.
+
+A line carries what the next step of the investigation needs: the ids that find the row (`orderId`, `skuId`, `paymentId`, `messageId`, `assetId`), the caught error as `err`, and the inputs of the decision it records (status from/to, `outcome`, `reason`, `attempt`). Correlation fields come from the mixin, never by hand.
+
+It does not belong in `domain/` (log at the caller), on function entry and exit, per item inside a hot loop, or beside an error that propagates to a layer that already logs it — `HttpExceptionFilter` for a request, the worker's failure path for a job. There, enrich the error with a `cause` instead. A 4xx message is client contract, so it is not rewritten to carry an id; the route already does.
+
 ## Who writes the request line
 
 `autoLogging` is **off** in `logger-params.ts`. A request produces exactly one summary line:
@@ -82,11 +97,17 @@ Two conventions that keep the volume honest:
 - success → `CanonicalLogInterceptor` (`'request completed'`)
 - failure → `HttpExceptionFilter` (`'request failed'` at 5xx, `'request rejected'` below it)
 
+A `'request rejected'` line carries `reason` — the message the client was given, e.g. the validation errors, with the request's query string cut out (Nest's unmatched-route 404 echoes the url, and mailed links carry `?token=`) — and, when the exception has one, `cause`: the message of the `HttpException`'s `cause`, which is logged but never sent. That is how a guard keeps a bare `401` on the wire and still says which check refused it: `AccessTokenVerifier` puts `"exp" claim timestamp check failed`, `token epoch is behind the session epoch` and the like there. To explain a 4xx, throw it with `{ cause }` rather than logging beside it.
+
 Health and metrics probes are skipped entirely. In development both render a single human-readable line through `formatDevRequestLine` instead of JSON.
 
 ## What is on every line for free
 
-The pino `mixin` in `logger-params.ts` adds, when present: `requestId` (from `nestjs-cls`, echoed as the `x-request-id` response header), `job` (set by `runInJobContext`, so its presence answers "request or timer?"), `traceId` and `spanId` (from the active OTel span). Never re-add these by hand.
+The pino `mixin` in `logger-params.ts` adds, when present: `requestId` (from `nestjs-cls`, echoed as the `x-request-id` response header), `job` (set by `runInJobContext`, so its presence answers "request or timer?"), `userId` (read off the request `JwtAuthGuard` authenticated, so only lines written after the guard carry it), `traceId` and `spanId` (from the active OTel span). Never re-add these by hand.
+
+## Crashes
+
+Each `main.ts` calls `logProcessCrashes`, which listens on `uncaughtExceptionMonitor`: the process still dies exactly as Node would kill it, but the reason is written first as one `fatal` line (`'process crashing on an uncaught error'`, with `err` and `origin`). Without Sentry an unhandled rejection becomes an uncaught exception and is logged the same way; with Sentry, its integration keeps the process alive and reports the rejection itself.
 
 ## Where the lines go
 

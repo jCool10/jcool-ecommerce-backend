@@ -32,6 +32,7 @@ class MockAudit implements AuthAuditPort {
 const IP = '203.0.113.9';
 const UA = 'vitest-agent';
 const TOKENS: AuthTokens = { accessToken: 'access', refreshToken: 'refresh', expiresIn: 300 };
+const REFRESHED_TOKENS: AuthTokens & { userId: string } = { ...TOKENS, userId: 'u1' };
 const CURRENT: AuthenticatedUser = { userId: 'u1', role: 'CUSTOMER', jti: 'jti-1', exp: 9999999999 };
 const res = {} as Response; // cookie service is mocked, so it never touches res
 
@@ -67,7 +68,8 @@ describe('AuthController (audit trail)', () => {
       ({
         execute: () => Promise.resolve({ id: 'u1', email: 'user@test.local', role: 'CUSTOMER' }),
       } as unknown as RegisterUserUseCase);
-    const refresh = over.refresh ?? ({ execute: () => Promise.resolve(TOKENS) } as unknown as RefreshTokensUseCase);
+    const refresh =
+      over.refresh ?? ({ execute: () => Promise.resolve(REFRESHED_TOKENS) } as unknown as RefreshTokensUseCase);
     const logout = over.logout ?? ({ execute: () => Promise.resolve() } as unknown as LogoutUserUseCase);
     const getProfile = { execute: () => Promise.reject(new Error('unused')) } as unknown as GetProfileUseCase;
     const emailVerification =
@@ -163,7 +165,9 @@ describe('AuthController (audit trail)', () => {
     await controller.refresh('refresh', res, IP, UA);
 
     expect(cookieCalls.set).toBe(1);
-    expect(audit.records).toEqual([{ event: 'token.refreshed', outcome: 'success', ip: IP, userAgent: UA }]);
+    expect(audit.records).toEqual([
+      { event: 'token.refreshed', outcome: 'success', userId: 'u1', ip: IP, userAgent: UA },
+    ]);
   });
 
   it('verifies an email token and audits email.verified with the subject', async () => {

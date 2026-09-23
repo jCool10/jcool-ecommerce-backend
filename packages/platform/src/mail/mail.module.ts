@@ -58,6 +58,7 @@ export function createMailTransport(
     from,
     timeoutMs,
     breaker: breakers.create(MAIL_BREAKER, { timeoutMs }),
+    logger,
   });
 }
 

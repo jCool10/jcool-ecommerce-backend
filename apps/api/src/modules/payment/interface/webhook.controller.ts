@@ -48,7 +48,11 @@ export class WebhookController {
 
     const result = await this.handleWebhook.execute(rawBody, req.headers as Record<string, string>);
     if (result.outcome === 'rejected') {
-      throw new UnauthorizedException('Invalid webhook signature');
+      // The cause is logged, not sent: it tells a wrong secret apart from a clock or replay problem.
+      throw new UnauthorizedException('Invalid webhook signature', {
+        cause: new Error(result.reason),
+        description: 'Unauthorized',
+      });
     }
     return { status: result.outcome };
   }

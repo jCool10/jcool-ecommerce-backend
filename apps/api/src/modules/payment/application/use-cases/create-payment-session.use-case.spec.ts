@@ -82,15 +82,28 @@ function build(
   const gateway = fakePaymentGateway({ createSession, expireSession });
 
   const recordSagaStep = vi.fn();
+  const info = vi.fn();
+  const error = vi.fn();
 
   const useCase = new CreatePaymentSessionUseCase(
     orders,
     payments,
     gateway,
     fakeMetricsPort({ recordSagaStep }),
-    fakePinoLogger(),
+    fakePinoLogger({ info, error }),
   );
-  return { useCase, findForPayment, findByOrderId, create, createSession, expireSession, updateStatus, recordSagaStep };
+  return {
+    useCase,
+    findForPayment,
+    findByOrderId,
+    create,
+    createSession,
+    expireSession,
+    updateStatus,
+    recordSagaStep,
+    info,
+    error,
+  };
 }
 
 describe('CreatePaymentSessionUseCase', () => {
@@ -113,6 +126,21 @@ describe('CreatePaymentSessionUseCase', () => {
       redirectUrl: 'https://checkout.stripe.test/pay/cs_test_new',
       clientSecret: undefined,
     });
+  });
+
+  it('logs the session creation at info with the ids needed to trace it', async () => {
+    const { useCase, info } = build();
+
+    await useCase.execute(ORDER_ID, OWNER);
+
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      {
+        orderId: ORDER_ID,
+        paymentId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        providerSessionId: 'cs_test_new',
+      },
+      'payment session created',
+    );
   });
 
   it('404s when the order does not exist (no gateway call, no persist)', async () => {

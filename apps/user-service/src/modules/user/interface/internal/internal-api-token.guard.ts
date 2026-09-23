@@ -27,6 +27,10 @@ export class InternalApiTokenGuard implements CanActivate {
       const matches = this.accepted.filter((token) => timingSafeEqual(token, candidate));
       if (matches.length > 0) return true;
     }
-    throw new UnauthorizedException();
+    // `cause` is logged, never sent. Passing options drops Nest's default description, so it is restated.
+    throw new UnauthorizedException(undefined, {
+      cause: new Error(presented ? 'internal api token not recognized' : 'missing internal api bearer token'),
+      description: 'Unauthorized',
+    });
   }
 }

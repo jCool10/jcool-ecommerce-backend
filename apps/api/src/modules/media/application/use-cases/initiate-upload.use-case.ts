@@ -1,10 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
 import { v7 as uuidv7 } from 'uuid';
 import { OBJECT_STORAGE, type ObjectStoragePort } from '@shared/infrastructure/storage';
 import { assertAllowedContentType, extensionFor } from '../../domain/asset-content-type';
 import { MediaAsset } from '../../domain/media-asset.entity';
 import { MEDIA_ASSET_REPOSITORY, type MediaAssetRepositoryPort } from '../ports/media-asset-repository.port';
+
+const LOG_CONTEXT = 'InitiateUpload';
 
 export interface InitiateUploadInput {
   contentType: string;
@@ -31,9 +34,11 @@ export class InitiateUploadUseCase {
     @Inject(MEDIA_ASSET_REPOSITORY) private readonly repository: MediaAssetRepositoryPort,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStoragePort,
     config: ConfigService,
+    private readonly logger: PinoLogger,
   ) {
     this.uploadTtlSec = config.getOrThrow<number>('media.uploadTtlSec');
     assertUrlDiesBeforeRow(config.getOrThrow<number>('storage.presignTtlSec'), this.uploadTtlSec);
+    logger.setContext(LOG_CONTEXT);
   }
 
   async execute(input: InitiateUploadInput): Promise<InitiateUploadResult> {
@@ -52,6 +57,7 @@ export class InitiateUploadUseCase {
     );
 
     const upload = await this.storage.presignPut(storageKey, contentType);
+    this.logger.info({ assetId, contentType }, 'media upload initiated');
     return { assetId, uploadUrl: upload.url, headers: upload.headers, expiresInSec: upload.expiresInSec };
   }
 }

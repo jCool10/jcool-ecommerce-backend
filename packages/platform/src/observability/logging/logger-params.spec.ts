@@ -2,7 +2,7 @@ import type { EventEmitter } from 'node:events';
 import { context, trace, TraceFlags } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
-import type { ClsService } from 'nestjs-cls';
+import { CLS_REQ, type ClsService } from 'nestjs-cls';
 import type { Params } from 'nestjs-pino';
 import { destination, multistream, transport, type DestinationStream } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,11 +25,15 @@ type Options = Exclude<NonNullable<Params['pinoHttp']>, DestinationStream | unkn
 
 const inactiveCls = { isActive: () => false } as unknown as ClsService;
 
-function clsWith(requestId: string | undefined, jobName?: string): ClsService {
+function clsWith(requestId: string | undefined, jobName?: string, request?: object): ClsService {
+  const values = new Map<string | symbol, unknown>([
+    [JOB_NAME_KEY, jobName],
+    [CLS_REQ, request],
+  ]);
   return {
     isActive: () => true,
     getId: () => requestId,
-    get: (key: string) => (key === JOB_NAME_KEY ? jobName : undefined),
+    get: (key: string | symbol) => values.get(key),
   } as unknown as ClsService;
 }
 
@@ -88,6 +92,20 @@ describe('createLoggerParams — mixin', () => {
     expect(mixinFields(httpOptions({ 'app.env': 'production' }, clsWith('req-2', 'retention-sweep')))).toEqual({
       requestId: 'req-2',
       job: 'retention-sweep',
+    });
+  });
+
+  it('adds the userId once the request is authenticated', () => {
+    const request = { user: { userId: '7318349394477056', role: 'CUSTOMER' } };
+    expect(mixinFields(httpOptions({ 'app.env': 'production' }, clsWith('req-3', undefined, request)))).toEqual({
+      requestId: 'req-3',
+      userId: '7318349394477056',
+    });
+  });
+
+  it('adds no userId before authentication', () => {
+    expect(mixinFields(httpOptions({ 'app.env': 'production' }, clsWith('req-4', undefined, {})))).toEqual({
+      requestId: 'req-4',
     });
   });
 

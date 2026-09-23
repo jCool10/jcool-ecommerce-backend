@@ -40,9 +40,9 @@ function toP256Key(kid: string, pem: string): KeyObject {
   let key: KeyObject;
   try {
     key = createPrivateKey(pem.trim());
-  } catch {
-    // The parser's own message can quote the input.
-    throw new Error(`JWT_ES256_PRIVATE_KEYS: key "${kid}" is not a PEM private key`);
+  } catch (error) {
+    // The parser's own message can quote the input, so it goes in `cause`, not the thrown message.
+    throw new Error(`JWT_ES256_PRIVATE_KEYS: key "${kid}" is not a PEM private key`, { cause: error });
   }
   if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
     throw new Error(`JWT_ES256_PRIVATE_KEYS: key "${kid}" must be an EC P-256 key`);

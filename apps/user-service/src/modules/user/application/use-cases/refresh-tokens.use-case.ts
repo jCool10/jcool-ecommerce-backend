@@ -29,7 +29,8 @@ export class RefreshTokensUseCase {
     logger.setContext(LOG_CONTEXT);
   }
 
-  async execute(rawRefreshToken: string): Promise<AuthTokens> {
+  // Cookie-authenticated, so no request.user carries the userId the caller's audit line needs.
+  async execute(rawRefreshToken: string): Promise<AuthTokens & { userId: string }> {
     const presentedTokenHash = hashRefreshToken(rawRefreshToken);
     const owner = await this.refreshTokens.findOwner(presentedTokenHash);
     if (!owner) {
@@ -80,6 +81,7 @@ export class RefreshTokensUseCase {
       accessToken,
       refreshToken: successor.raw,
       expiresIn: this.authTokens.accessExpiresIn,
+      userId: outcome.userId,
     };
   }
 }

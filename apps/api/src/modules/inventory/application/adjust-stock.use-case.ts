@@ -1,5 +1,8 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { STOCK_ADMIN, type StockAdminPort, type StockView } from './ports/stock-admin.port';
+
+const LOG_CONTEXT = 'AdjustStock';
 
 /**
  * `setOnHand` creates the row it cannot find ("this SKU now has 40 units" stands on its own), while
@@ -9,7 +12,12 @@ import { STOCK_ADMIN, type StockAdminPort, type StockView } from './ports/stock-
  */
 @Injectable()
 export class AdjustStockUseCase {
-  constructor(@Inject(STOCK_ADMIN) private readonly stock: StockAdminPort) {}
+  constructor(
+    @Inject(STOCK_ADMIN) private readonly stock: StockAdminPort,
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   async getLevel(variantId: string): Promise<StockView> {
     const level = await this.stock.getLevel(variantId);
@@ -19,8 +27,10 @@ export class AdjustStockUseCase {
     return level;
   }
 
-  setOnHand(variantId: string, quantity: number): Promise<StockView> {
-    return this.stock.setOnHand(variantId, quantity);
+  async setOnHand(variantId: string, quantity: number): Promise<StockView> {
+    const level = await this.stock.setOnHand(variantId, quantity);
+    this.logger.info({ variantId, quantityOnHand: quantity }, 'stock level set by admin');
+    return level;
   }
 
   async adjust(variantId: string, delta: number): Promise<StockView> {
@@ -28,6 +38,7 @@ export class AdjustStockUseCase {
     if (level === null) {
       throw new NotFoundException(`No stock level for variant: ${variantId}`);
     }
+    this.logger.info({ variantId, delta }, 'stock adjusted by admin');
     return level;
   }
 }

@@ -1,4 +1,4 @@
-import { ArgumentsHost, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import * as Sentry from '@sentry/nestjs';
 import { ClockStalledError } from '@jcool/id-generator/errors';
 import { DomainError } from '@jcool/kernel';
@@ -156,5 +156,56 @@ describe('HttpExceptionFilter — log fields', () => {
     filter.catch(domainError, host);
 
     expect(logWarn).toHaveBeenCalledWith(expect.objectContaining({ err: domainError }), 'request rejected');
+  });
+
+  it('logs the message the client was given as the rejection reason', () => {
+    const { host } = makeHost('POST', '/orders');
+
+    filter.catch(new BadRequestException(['items must not be empty', 'currency must be a string']), host);
+
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: ['items must not be empty', 'currency must be a string'] }),
+      'request rejected',
+    );
+  });
+
+  it('logs the cause behind a rejection without sending it to the client', () => {
+    const { host, response } = makeHost('GET', '/cart');
+
+    const cause = new Error('"exp" claim timestamp check failed');
+
+    filter.catch(new UnauthorizedException('Unauthorized', { cause }), host);
+
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'Unauthorized', cause: '"exp" claim timestamp check failed' }),
+      'request rejected',
+    );
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401, message: 'Unauthorized' }));
+    expect(response.json).toHaveBeenCalledWith(expect.not.objectContaining({ cause: expect.anything() as unknown }));
+  });
+
+  // An unmatched GET on a mailed `?token=` link is answered `Cannot GET <url>`, query and all.
+  it('drops the query string from a reason that echoes the url', () => {
+    const { host } = makeHost('GET', '/auth/verify-email?token=mailed-secret', null);
+
+    filter.catch(new NotFoundException('Cannot GET /auth/verify-email?token=mailed-secret'), host);
+
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'Cannot GET /auth/verify-email' }),
+      'request rejected',
+    );
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain('mailed-secret');
+  });
+
+  it('keeps the rejection fields off a 5xx line, which carries the error instead', () => {
+    const logError = vi.fn();
+    const errorFilter = new HttpExceptionFilter(fakePinoLogger({ error: logError }), cls, config);
+
+    errorFilter.catch(new Error('boom'), makeHost('GET', '/debug/boom').host);
+
+    expect(logError).toHaveBeenCalledWith(
+      expect.not.objectContaining({ reason: expect.anything() as unknown }),
+      'request failed',
+    );
   });
 });

@@ -20,7 +20,11 @@ export class RolesGuard implements CanActivate {
 
     const { user } = context.switchToHttp().getRequest<{ user?: { role?: Role } }>();
     if (!user || user.role === undefined || !required.includes(user.role)) {
-      throw new ForbiddenException('Insufficient permissions');
+      // `cause` is logged, never sent. Passing options drops Nest's default description, so it is restated.
+      throw new ForbiddenException('Insufficient permissions', {
+        cause: new Error(`required role ${required.join('|')}, held ${user?.role ?? 'none'}`),
+        description: 'Forbidden',
+      });
     }
     return true;
   }

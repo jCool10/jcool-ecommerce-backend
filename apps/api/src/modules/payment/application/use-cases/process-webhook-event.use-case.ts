@@ -17,13 +17,15 @@ import { toSettledOutboxRecord } from '../payment-outbox.mapper';
  */
 export type WebhookProcessResult =
   | { outcome: 'rejected'; reason: 'invalid_signature' | 'expired_timestamp' }
-  | { outcome: 'duplicate' }
-  | { outcome: 'ignored' }
+  | { outcome: 'duplicate'; providerEventId: string; eventType: string }
+  | { outcome: 'ignored'; providerEventId: string; eventType: string }
   // The reason separates the harmless (a late notice, a session still clearing) from the two that
   // need a human: a success landing on a payment we already closed, and a charge that isn't ours.
   | {
       outcome: 'skipped';
       reason: 'payment_not_found' | 'conflict' | 'awaiting_payment' | 'amount_mismatch';
+      providerEventId: string;
+      eventType: string;
       conflict?: { orderId: string; from: PaymentStatus; to: PaymentStatus };
       charge?: {
         orderId: string;
@@ -56,6 +58,7 @@ export class ProcessWebhookEventUseCase {
     if (verified.kind !== 'valid') {
       return { outcome: 'rejected', reason: verified.kind };
     }
+    const delivery = { providerEventId: verified.providerEventId, eventType: verified.type };
 
     return this.txRunner.run(async (tx) => {
       const { inserted, event } = await this.webhookEvents.insertIfNew(
@@ -67,7 +70,7 @@ export class ProcessWebhookEventUseCase {
         },
         tx,
       );
-      if (!inserted) return { outcome: 'duplicate' };
+      if (!inserted) return { outcome: 'duplicate', ...delivery };
 
       const eventId = event.id;
       if (eventId === null) throw new Error('inserted webhook_events row has no id');
@@ -75,13 +78,13 @@ export class ProcessWebhookEventUseCase {
       const facts = readCheckoutSession(verified.payload);
       const settlement = mapEventToOutcome(verified.type, facts.paymentStatus);
       // Left RECEIVED, not skipped: logged for audit, never a candidate for application.
-      if (settlement.kind === 'ignore') return { outcome: 'ignored' };
+      if (settlement.kind === 'ignore') return { outcome: 'ignored', ...delivery };
 
       // The session finished but the money has not cleared. Leaving the payment PENDING is the whole
       // point: the sweep settles it once the gateway reports it paid, and never before.
       if (settlement.kind === 'awaiting_payment') {
         await this.webhookEvents.markSkipped(eventId, tx);
-        return { outcome: 'skipped', reason: 'awaiting_payment' };
+        return { outcome: 'skipped', reason: 'awaiting_payment', ...delivery };
       }
 
       const target = settlement.status;
@@ -90,7 +93,7 @@ export class ProcessWebhookEventUseCase {
       // Keep the audit row and skip applying; the sweep settles the order either way.
       if (!payment || payment.id === null) {
         await this.webhookEvents.markSkipped(eventId, tx);
-        return { outcome: 'skipped', reason: 'payment_not_found' };
+        return { outcome: 'skipped', reason: 'payment_not_found', ...delivery };
       }
 
       // Only a success moves money, so only a success has to prove it moved OUR money.
@@ -99,6 +102,7 @@ export class ProcessWebhookEventUseCase {
         return {
           outcome: 'skipped',
           reason: 'amount_mismatch',
+          ...delivery,
           charge: {
             orderId: payment.orderId,
             expectedMinor: payment.amountMinor,
@@ -116,6 +120,7 @@ export class ProcessWebhookEventUseCase {
         return {
           outcome: 'skipped',
           reason: 'conflict',
+          ...delivery,
           conflict: { orderId: payment.orderId, from: payment.status, to: target },
         };
       }

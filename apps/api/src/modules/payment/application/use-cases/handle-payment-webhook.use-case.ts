@@ -36,12 +36,28 @@ export class HandlePaymentWebhookUseCase {
           { ...result.conflict },
           'gateway reported a success on an already-settled payment — funds may be captured with no matching order',
         );
-      }
-      if (result.outcome === 'skipped' && result.charge) {
+      } else if (result.outcome === 'skipped' && result.charge) {
         // The signature was ours, the charge was not. Deliberately left unsettled for a human.
         this.logger.error(
           { ...result.charge },
           'gateway reported a charge that does not match the recorded payment — payment left unsettled for manual review',
+        );
+      } else if (result.outcome === 'duplicate' || result.outcome === 'ignored') {
+        // A redelivery or an event type we do not act on: routine, so debug only.
+        this.logger.debug(
+          { outcome: result.outcome, providerEventId: result.providerEventId, eventType: result.eventType },
+          'webhook event accepted but not applied',
+        );
+      } else if (result.outcome === 'skipped') {
+        this.logger.info(
+          {
+            outcome: result.outcome,
+            reason: result.reason,
+            providerEventId: result.providerEventId,
+            eventType: result.eventType,
+            ...(result.conflict ? { conflict: result.conflict } : {}),
+          },
+          'webhook event accepted but not applied',
         );
       }
       return result;

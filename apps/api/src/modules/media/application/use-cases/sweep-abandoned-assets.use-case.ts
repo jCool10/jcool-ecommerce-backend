@@ -42,10 +42,14 @@ export class SweepAbandonedAssetsUseCase implements RetentionSweep, OnModuleInit
     for (const asset of claimed) {
       // Serial, not `Promise.all`: the batch is the unit of work the scheduler timed, and firing a
       // whole batch of bucket deletes at once turns one slow storage day into a timed-out sweep.
-      await this.storage.delete(asset.storageKey);
-      if (await this.repository.deleteClaimed(asset.id)) {
-        deleted += 1;
-        this.metrics.recordMediaBytesReclaimed(asset.sizeBytes ?? 0);
+      try {
+        await this.storage.delete(asset.storageKey);
+        if (await this.repository.deleteClaimed(asset.id)) {
+          deleted += 1;
+          this.metrics.recordMediaBytesReclaimed(asset.sizeBytes ?? 0);
+        }
+      } catch (error) {
+        throw new Error(`media sweep failed on asset ${asset.id} (storageKey: ${asset.storageKey})`, { cause: error });
       }
     }
     return deleted;

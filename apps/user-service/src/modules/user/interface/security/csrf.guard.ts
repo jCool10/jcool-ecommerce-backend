@@ -14,8 +14,18 @@ export class CsrfGuard implements CanActivate {
     const headerValue = request.header(CSRF_HEADER);
 
     if (!this.csrf.verify(cookieValue, headerValue)) {
-      throw new ForbiddenException('Invalid or missing CSRF token');
+      // `cause` is logged, never sent. Passing options drops Nest's default description, so it is restated.
+      throw new ForbiddenException('Invalid or missing CSRF token', {
+        cause: new Error(csrfFailure(cookieValue, headerValue)),
+        description: 'Forbidden',
+      });
     }
     return true;
   }
+}
+
+function csrfFailure(cookieValue: string | undefined, headerValue: string | undefined): string {
+  if (!cookieValue) return 'csrf cookie missing';
+  if (!headerValue) return 'csrf header missing';
+  return cookieValue === headerValue ? 'csrf token signature invalid' : 'csrf header does not match the cookie';
 }

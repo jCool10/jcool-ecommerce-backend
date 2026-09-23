@@ -10,6 +10,9 @@ const LOG_CONTEXT = 'RedisHealthIndicator';
 // commands still fail); enableOfflineQueue=false makes PING reject fast when down, so readiness 503s.
 @Injectable()
 export class RedisHealthIndicator {
+  // Readiness is polled, so only up/down transitions are logged; null until the first check.
+  private lastUp: boolean | null = null;
+
   constructor(
     private readonly healthIndicatorService: HealthIndicatorService,
     private readonly redis: RedisService,
@@ -23,12 +26,16 @@ export class RedisHealthIndicator {
     try {
       const reply = await this.redis.ping();
       if (reply !== 'PONG') {
-        this.logger.error({ reply }, 'redis readiness check got an unexpected ping reply');
+        if (this.lastUp !== false) this.logger.error({ reply }, 'redis readiness check got an unexpected ping reply');
+        this.lastUp = false;
         return indicator.down({ message: 'redis unreachable' });
       }
+      if (this.lastUp === false) this.logger.info('redis readiness recovered');
+      this.lastUp = true;
       return indicator.up();
     } catch (error) {
-      this.logger.error({ err: toError(error) }, 'redis readiness check failed');
+      if (this.lastUp !== false) this.logger.error({ err: toError(error) }, 'redis readiness check failed');
+      this.lastUp = false;
       return indicator.down({ message: 'redis unreachable' });
     }
   }

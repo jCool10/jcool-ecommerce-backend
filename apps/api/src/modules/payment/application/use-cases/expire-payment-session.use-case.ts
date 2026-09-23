@@ -81,6 +81,7 @@ export class ExpirePaymentSessionUseCase {
       return 'raced';
     }
 
+    this.logger.info({ orderId, paymentId: payment.id, trigger }, 'payment session expired');
     return 'expired';
   }
 

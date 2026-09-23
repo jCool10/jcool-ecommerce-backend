@@ -6,8 +6,9 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-import { Logger } from 'nestjs-pino';
+import { Logger, PinoLogger } from 'nestjs-pino';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
+import { logProcessCrashes } from '@jcool/platform/observability';
 import { AppModule } from './app.module';
 
 /**
@@ -33,6 +34,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true, rawBody: true });
   const logger = app.get(Logger);
   app.useLogger(logger);
+  logProcessCrashes(await app.resolve(PinoLogger));
   const configService = app.get(ConfigService);
 
   // Trusting the proxy makes `req.ip` the rate-limit and audit key, so it stays off by default:
@@ -85,7 +87,37 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.listen(port);
-  logger.log(`Application running on http://localhost:${port}`, 'Bootstrap');
+  logger.log(
+    {
+      port,
+      env: configService.get<string>('app.env'),
+      logLevel: configService.get<string>('log.level'),
+      swaggerEnabled,
+      trustProxy,
+      corsOrigins: corsOrigins.length,
+      searchEnabled: configService.get<boolean>('search.enabled'),
+      inventoryLockStrategy: configService.get<string>('inventory.lockStrategy'),
+      queueWorkerEnabled: configService.get<boolean>('queue.workerEnabled'),
+      queueWorkerConcurrency: configService.get<number>('queue.workerConcurrency'),
+      tracingEnabled: configService.get<boolean>('tracing.enabled'),
+      sentryEnabled: configService.get<boolean>('sentry.enabled'),
+      lokiEnabled: Boolean(configService.get<string>('loki.url')),
+      storageBucket: configService.get<string>('storage.bucket'),
+      storageEndpointHost: hostOnly(configService.get<string>('storage.endpoint')),
+    },
+    'application started',
+    'Bootstrap',
+  );
+}
+
+/** Host only, so credentials embedded in the URL never reach the log. */
+function hostOnly(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
+  }
 }
 
 void bootstrap().catch((error: unknown) => {

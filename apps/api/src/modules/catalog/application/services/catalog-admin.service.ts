@@ -44,9 +44,11 @@ export class CatalogAdminService {
     logger.setContext(LOG_CONTEXT);
   }
 
-  createCategory(data: CreateCategoryData): Promise<Category> {
+  async createCategory(data: CreateCategoryData): Promise<Category> {
     // Uniqueness is enforced by the DB; the adapter maps 23505 -> 409.
-    return this.repo.createCategory({ ...data, slug: Slug.of(data.slug).value });
+    const created = await this.repo.createCategory({ ...data, slug: Slug.of(data.slug).value });
+    this.logger.info({ categoryId: created.id }, 'category created');
+    return created;
   }
 
   async updateCategory(id: string, data: UpdateCategoryData): Promise<Category> {
@@ -55,6 +57,7 @@ export class CatalogAdminService {
     if (!updated) {
       throw new NotFoundException(`Category not found: ${id}`);
     }
+    this.logger.info({ categoryId: id }, 'category updated');
     // A rename lands in the category fields denormalized into every product document underneath —
     // an unbounded fan-out this request deliberately does not run; `search:reindex` converges them.
     if (data.name !== undefined || data.slug !== undefined) {
@@ -71,6 +74,7 @@ export class CatalogAdminService {
     if (!category) {
       throw new NotFoundException(`Category not found: ${id}`);
     }
+    this.logger.info({ categoryId: id }, 'category archived');
     // No search sync: the archive's row lock serializes against the product writes that name this
     // category (a create, and a categoryId move), so none of those can commit behind the count. A
     // status-only PATCH names no category and takes no lock, so a product can still be activated
@@ -82,6 +86,7 @@ export class CatalogAdminService {
   async createProduct(data: CreateProductData): Promise<AdminProduct> {
     await this.assertCategoryUsable(data.categoryId);
     const created = await this.repo.createProduct({ ...data, slug: Slug.of(data.slug).value });
+    this.logger.info({ productId: created.id, categoryId: created.categoryId }, 'product created');
     await this.syncSearchDocument(created.id);
     return created;
   }
@@ -95,6 +100,7 @@ export class CatalogAdminService {
     if (!updated) {
       throw new NotFoundException(`Product not found: ${id}`);
     }
+    this.logger.info({ productId: id }, 'product updated');
     await this.syncSearchDocument(updated.id);
     return updated;
   }
@@ -104,6 +110,7 @@ export class CatalogAdminService {
     if (!archived) {
       throw new NotFoundException(`Product not found: ${id}`);
     }
+    this.logger.info({ productId: id }, 'product archived');
     await this.syncSearchDocument(archived.id);
     return archived;
   }
@@ -111,6 +118,7 @@ export class CatalogAdminService {
   async createSku(productId: string, data: CreateSkuData): Promise<Sku> {
     await this.assertProductExists(productId);
     const created = await this.repo.createSku(productId, data);
+    this.logger.info({ skuId: created.id, productId }, 'sku created');
     await this.syncSearchDocument(created.productId);
     return created;
   }
@@ -120,6 +128,7 @@ export class CatalogAdminService {
     if (!updated) {
       throw new NotFoundException(`SKU not found: ${id}`);
     }
+    this.logger.info({ skuId: id, productId: updated.productId }, 'sku updated');
     await this.syncSearchDocument(updated.productId);
     return updated;
   }
@@ -129,6 +138,7 @@ export class CatalogAdminService {
     if (!archived) {
       throw new NotFoundException(`SKU not found: ${id}`);
     }
+    this.logger.info({ skuId: id, productId: archived.productId }, 'sku archived');
     await this.syncSearchDocument(archived.productId);
     return archived;
   }
@@ -145,11 +155,13 @@ export class CatalogAdminService {
   async attachProductImage(productId: string, data: AttachImageData): Promise<ProductImage> {
     await this.assertProductExists(productId);
     try {
-      return await this.repo.attachImage(productId, data);
+      const attached = await this.repo.attachImage(productId, data);
+      this.logger.info({ productId, imageId: attached.id, assetId: data.assetId }, 'product image attached');
+      return attached;
     } catch (error) {
       // Missing, still uploading, or already attached elsewhere — a state conflict, not a bad request.
       if (error instanceof MediaAssetUnavailableError) {
-        throw new ConflictException(`Image asset is not available to attach: ${error.assetId}`);
+        throw new ConflictException(`Image asset is not available to attach: ${error.assetId}`, { cause: error });
       }
       throw error;
     }
@@ -160,6 +172,7 @@ export class CatalogAdminService {
     if (!detached) {
       throw new NotFoundException(`Image not found on product ${productId}: ${imageId}`);
     }
+    this.logger.info({ productId, imageId }, 'product image detached');
     return detached;
   }
 
@@ -181,6 +194,7 @@ export class CatalogAdminService {
     }
     const payload: SetPriceData = { currency: data.currency ?? DEFAULT_CURRENCY, amountMinor: data.amountMinor };
     const price = await this.repo.setPrice(skuId, payload);
+    this.logger.info({ skuId, amountMinor: price.amountMinor, currency: price.currency }, 'price set');
     // A variant's price is denormalized into its parent's document, so the parent is what re-indexes.
     await this.syncSearchDocument(sku.productId);
     return price;

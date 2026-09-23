@@ -38,7 +38,10 @@ const FLUSH_TIMEOUT_MS = 3000;
 function publishTelemetryFlush(flush: () => Promise<void>): void {
   // unref'd so the ceiling itself never holds the event loop open once the flush has won the race.
   (globalThis as TelemetryFlushGlobal).__flushTelemetry = () =>
-    Promise.race([flush(), new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS).unref())]);
+    Promise.race([
+      flush().then(() => 'flushed' as const),
+      new Promise<'timed_out'>((resolve) => setTimeout(() => resolve('timed_out'), FLUSH_TIMEOUT_MS).unref()),
+    ]);
 }
 
 if (process.env.OTEL_ENABLED === 'true') {

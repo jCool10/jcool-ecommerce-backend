@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, InternalServerErrorException } from '@nestjs/common';
 import type { ClsService } from 'nestjs-cls';
 import { describe, expect, it, vi } from 'vitest';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
 import type { MetricsPort } from '@jcool/metrics-port';
 import type { OutboxRecord, OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
@@ -58,6 +59,8 @@ function build(
   const recordOrderCreated = vi.fn();
   const observeOrderValue = vi.fn();
   const recordSagaStep = vi.fn();
+  const logInfo = vi.fn();
+  const logWarn = vi.fn();
 
   const repo = { createCheckout, findForUser } as unknown as OrderRepositoryPort;
   const cart: CartSnapshotReaderPort = { getLines };
@@ -71,10 +74,13 @@ function build(
     get: () => ({ scope: SCOPE, key: KEY }),
   } as unknown as ClsService;
 
-  const useCase = new CheckoutOrderUseCase(repo, cart, catalog, reservation, store, outbox, metrics, cls);
+  const logger = fakePinoLogger({ info: logInfo, warn: logWarn });
+  const useCase = new CheckoutOrderUseCase(repo, cart, catalog, reservation, store, outbox, metrics, cls, logger);
   return {
     useCase,
     spies: {
+      logInfo,
+      logWarn,
       createCheckout,
       findForUser,
       reserve,
@@ -180,6 +186,10 @@ describe('CheckoutOrderUseCase', () => {
     expect(spies.recordOrderCreated).toHaveBeenCalledWith(OrderStatus.PENDING);
     expect(spies.observeOrderValue).toHaveBeenCalledWith(200_000);
     expect(spies.recordSagaStep).toHaveBeenCalledExactlyOnceWith('reserve', 'success');
+    expect(spies.logInfo).toHaveBeenCalledExactlyOnceWith(
+      { orderId: 'order-1', itemCount: 1, totalAmountMinor: 200_000, currency: 'VND' },
+      'order placed',
+    );
   });
 
   it('fails loud (500) when the idempotency context is missing, never opening the checkout', async () => {
@@ -226,5 +236,10 @@ describe('CheckoutOrderUseCase', () => {
     );
     expect(spies.recordOrderCreated).not.toHaveBeenCalled();
     expect(spies.recordSagaStep).not.toHaveBeenCalled();
+    expect(spies.logInfo).not.toHaveBeenCalled();
+    expect(spies.logWarn).toHaveBeenCalledExactlyOnceWith(
+      { orderId: 'order-existing' },
+      'checkout key already placed an order — replaying it',
+    );
   });
 });
