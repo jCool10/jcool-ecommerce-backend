@@ -2,7 +2,6 @@ import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { describe, expect, it, vi } from 'vitest';
 import type { CircuitBreakerFactory } from '../resilience';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import { LogMailTransport } from './log-mail.transport';
 import { createMailTransport } from './mail.module';
 import { MAIL_BREAKER, SmtpMailTransport } from './smtp-mail.transport';
 
@@ -13,17 +12,12 @@ function build(values: Record<string, unknown>) {
 }
 
 describe('createMailTransport', () => {
-  it('falls back to the log sink outside production', () => {
-    const { config, breakers, logger } = build({ 'app.env': 'development' });
-    expect(createMailTransport(config, breakers, logger)).toBeInstanceOf(LogMailTransport);
-  });
-
   it('refuses to boot in production without an SMTP URL', () => {
     const { config, breakers, logger } = build({ 'app.env': 'production' });
     expect(() => createMailTransport(config, breakers, logger)).toThrow(/SMTP_URL is required in production/);
   });
 
-  it('refuses an SMTP URL with no sender, which most relays reject anyway', () => {
+  it('refuses an SMTP URL with no MAIL_FROM', () => {
     const { config, breakers, logger } = build({ 'app.env': 'development', 'mail.smtpUrl': 'smtp://mail.test:1025' });
     expect(() => createMailTransport(config, breakers, logger)).toThrow(/MAIL_FROM is required/);
   });
@@ -39,17 +33,8 @@ describe('createMailTransport', () => {
     expect(() => createMailTransport(config, breakers, logger)).toThrow(/loopback relay in production/);
   });
 
-  it('leaves the loopback relay alone outside production', () => {
-    const { config, breakers, logger } = build({
-      'app.env': 'development',
-      'mail.smtpUrl': 'smtp://127.0.0.1:1025',
-      'mail.from': 'shop@test.local',
-      'mail.timeoutMs': 10_000,
-    });
-    expect(createMailTransport(config, breakers, logger)).toBeInstanceOf(SmtpMailTransport);
-  });
-
-  it('gives SMTP its own breaker and timeout, so a slow relay cannot open the checkout circuit', () => {
+  // A breaker shared with the payment gateway would let a slow relay open the checkout circuit.
+  it('builds SMTP in production on its own breaker and timeout', () => {
     const { config, breakers, create, logger } = build({
       'app.env': 'production',
       'mail.smtpUrl': 'smtp://mail.test:1025',

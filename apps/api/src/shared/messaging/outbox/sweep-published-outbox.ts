@@ -31,8 +31,13 @@ export class SweepPublishedOutbox implements RetentionSweep, OnModuleInit {
     this.registry.register(this);
   }
 
+  // Read per tick: a cutoff fixed at construction would reclaim less and less as the process aged.
+  cutoff(): Date {
+    return new Date(Date.now() - this.retentionMs);
+  }
+
   async sweep(batchSize: number): Promise<number> {
-    const cutoff = new Date(Date.now() - this.retentionMs);
+    const cutoff = this.cutoff();
 
     // Postgres has no LIMIT on DELETE, so the batch bound comes from a subquery. No
     // `FOR UPDATE SKIP LOCKED` needed — `DELETE ... WHERE id IN (...)` is idempotent between ticks.

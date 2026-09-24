@@ -5,7 +5,6 @@ import type { Redis } from 'ioredis';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
 import {
-  buildJobOptions,
   DOMAIN_EVENTS_QUEUE,
   QUEUE_CONNECTION,
   QUEUE_DOMAIN_EVENTS,
@@ -14,11 +13,7 @@ import { QueueLifecycle } from '../../src/shared/messaging/queue/queue.lifecycle
 import { closeAppAfterAll, obliterateQueueBeforeEach } from '../setup/harness';
 import { createTestApp } from '../setup/test-app.factory';
 
-// The producer half of the queue over real Redis. Nothing consumes yet — a job added here stays
-// waiting, which is what the relay hands off and the worker later picks up.
-//
-// The connection-lifecycle tests each boot their own app because each one ends by breaking or
-// closing the connection it was given, which the shared app's remaining tests still need alive.
+// The lifecycle tests boot their own app because each breaks or closes its connection.
 describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   let app: INestApplication;
   let queue: Queue;
@@ -29,7 +24,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   const job = { outboxId: '0198f0d8-0000-7000-8000-000000000001', occurredAt: '2026-08-24T00:00:00.000Z' };
 
   beforeAll(async () => {
-    app = await createTestApp();
+    app = await createTestApp({ QUEUE_CONSUMER_ATTEMPTS: '5', QUEUE_CONSUMER_BACKOFF_MS: '250' });
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     connection = app.get<Redis>(QUEUE_CONNECTION);
     prefix = app.get(ConfigService).getOrThrow<string>('queue.prefix');
@@ -46,18 +41,12 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
     expect(waiting).toHaveLength(1);
     expect(waiting[0].name).toBe('order.placed');
     expect(waiting[0].data).toEqual(job);
-    // Proves defaultJobOptions reached the queue rather than sitting unread in the constants file.
-    // The retry policy above all: it is stamped onto the job at publish time, so a queue built
-    // without it would hand the worker jobs that fail on their first try and never come back.
-    const expected = buildJobOptions(
-      app.get(ConfigService).getOrThrow<number>('queue.consumerAttempts'),
-      app.get(ConfigService).getOrThrow<number>('queue.consumerBackoffMs'),
-    );
+    // Stamped at publish time: without it the worker would get jobs that never retry.
     expect(waiting[0].opts).toMatchObject({
-      attempts: expected.attempts,
-      backoff: expected.backoff,
-      removeOnComplete: expected.removeOnComplete,
-      removeOnFail: expected.removeOnFail,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 250 },
+      removeOnComplete: { age: 3_600, count: 1_000 },
+      removeOnFail: { age: 604_800, count: 10_000 },
     });
   });
 
@@ -68,9 +57,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
     expect(keys.length).toBeGreaterThan(0);
   });
 
-  // The bug this whole file exists to prevent: BullMQ's blocking reads need an unbounded retry
-  // budget, while the cache client is tuned to give up after one so a Redis outage falls through to
-  // Postgres. One client cannot be both, so the queue gets its own.
+  // BullMQ's blocking reads need unbounded retries; the cache client gives up after one.
   it('uses a connection separate from the cache client, tuned for blocking reads', () => {
     const cacheClient = app.get(RedisService).getClient();
 
@@ -80,30 +67,23 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('rejects a publish mid-reconnect instead of buffering it in memory', async () => {
-    // Its own app: this test breaks the queue connection, which the shared app above still needs.
     const isolated = await createTestApp();
     const isolatedQueue = isolated.get<Queue>(DOMAIN_EVENTS_QUEUE);
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
 
-    await isolatedQueue.add('order.placed', job); // force the connection ready before breaking it
+    await isolatedQueue.add('order.placed', job);
 
-    // Reconnecting — NOT disconnected — is the only state where the offline queue would kick in: a
-    // closed client rejects everything before ever consulting it. Slow the retry so the window can't
-    // close mid-assertion.
+    // Only a reconnecting client consults the offline queue; the slow retry holds that state.
     isolatedConnection.options.retryStrategy = () => 5_000;
     isolatedConnection.stream.destroy();
     await vi.waitFor(() => expect(isolatedConnection.status).toBe('reconnecting'));
 
-    // The message is the assertion: with the offline queue on, this publish would resolve after the
-    // reconnect instead. Failing here leaves the outbox row unpublished for the next relay tick,
-    // whereas buffering would accept a publish that dies with the process.
     await expect(isolatedQueue.add('order.placed', job)).rejects.toThrow(/enableOfflineQueue/);
 
     await isolated.close();
   });
 
   it('closes the queue and its connection when the app shuts down', async () => {
-    // Its own app: shutdown is the subject, so the app under test has to be one this file can close.
     const isolated = await createTestApp();
     const isolatedQueue = isolated.get<Queue>(DOMAIN_EVENTS_QUEUE);
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
@@ -113,19 +93,15 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
 
     await isolated.close();
 
-    // BullMQ treats a client it was handed as shared and never quits it, so a live connection here
-    // would mean every boot leaks a socket. quit() resolves a macrotask before the status flips.
+    // BullMQ never quits a client it was handed, so the app has to.
     await vi.waitFor(() => expect(isolatedConnection.status).toBe('end'));
   });
 
   it('does not hang shutting down when Redis is already gone', async () => {
-    // Its own app: it disconnects Redis and drives shutdown, neither of which the shared app survives.
     const isolated = await createTestApp();
     const lifecycle = isolated.get(QueueLifecycle);
     isolated.get<Redis>(QUEUE_CONNECTION).disconnect();
 
-    // quit() rejects against a dead server; teardown has to fall through to disconnect() rather
-    // than wait on it, or SIGTERM would stall until the orchestrator's kill timeout.
     const startedAt = Date.now();
     await lifecycle.onApplicationShutdown();
     expect(Date.now() - startedAt).toBeLessThan(2_000);

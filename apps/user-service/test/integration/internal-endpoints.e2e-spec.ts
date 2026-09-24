@@ -47,19 +47,16 @@ describe('Internal service-to-service API (integration)', () => {
   const unknownUserId = async (): Promise<string> => (await inProcessIdGenerator.mint(7))[0];
 
   describe('service token', () => {
-    it('refuses a call with no token (401)', async () => {
+    it('refuses a call with no token or a wrong one with 401', async () => {
       const { user } = await createTestUser(app);
+      const paths = [`/users/${user.id}/summary`, `/sessions/${user.id}/epoch`, '/cutover/digest'];
 
-      await internal(`/users/${user.id}/summary`, null).expect(401);
-      await internal(`/sessions/${user.id}/epoch`, null).expect(401);
-      await internal('/cutover/digest', null).expect(401);
-    });
+      const statuses: number[] = [];
+      for (const token of [null, 'not-the-internal-token-but-just-as-long-000']) {
+        for (const path of paths) statuses.push((await internal(path, token)).status);
+      }
 
-    it('refuses a wrong token (401)', async () => {
-      const { user } = await createTestUser(app);
-
-      await internal(`/users/${user.id}/summary`, 'not-the-internal-token-but-just-as-long-000').expect(401);
-      await internal(`/sessions/${user.id}/epoch`, 'not-the-internal-token-but-just-as-long-000').expect(401);
+      expect(statuses).toEqual(Array(6).fill(401));
     });
 
     // `@Public` lifts the user guard only; a user's token is not a service credential.
@@ -136,23 +133,25 @@ describe('Internal service-to-service API (integration)', () => {
 
   // Every caller shares one private address, where a per-IP limit would throttle the caller as a whole.
   // Counters are per route, so each route gets the whole burst.
-  it.each(['summary', 'epoch'])(`never throttles %s, even ${BURST} rapid calls from one address`, async (route) => {
+  it(`never throttles a lookup route, even ${BURST} rapid calls from one address`, async () => {
     const { user } = await createTestUser(app);
-    const path = route === 'summary' ? `/users/${user.id}/summary` : `/sessions/${user.id}/epoch`;
 
-    const statuses: number[] = [];
-    for (let i = 0; i < BURST; i++) {
-      statuses.push((await internal(path)).status);
+    const refused: string[] = [];
+    for (const path of [`/users/${user.id}/summary`, `/sessions/${user.id}/epoch`]) {
+      for (let i = 0; i < BURST; i++) {
+        const { status } = await internal(path);
+        if (status !== 200) refused.push(`${path} ${status}`);
+      }
     }
 
-    expect(statuses.filter((status) => status !== 200)).toEqual([]);
+    expect(refused).toEqual([]);
   });
 
-  it('stays out of the published API docs', async () => {
+  it('keeps the internal and well-known routes out of the published API docs', async () => {
     const { body } = await request(app.getHttpServer()).get('/auth/docs-json').expect(200);
     const paths = Object.keys(body.paths as Record<string, unknown>);
 
     expect(paths).toContain('/auth/login');
-    expect(paths.filter((path) => path.startsWith('/internal'))).toEqual([]);
+    expect(paths.filter((path) => path.startsWith('/internal') || path.startsWith('/.well-known'))).toEqual([]);
   });
 });

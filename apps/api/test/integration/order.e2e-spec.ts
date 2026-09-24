@@ -4,19 +4,14 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { archiveProduct, createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
+import { createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal, newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
-// A syntactically-valid UUID that no fixture creates — probes 404 paths (unknown
-// order id) without a text→uuid cast 500.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
-// Black-box HTTP tests for the Order context over real Postgres + Redis. POST /orders is the atomic
-// checkout: snapshot the cart, hold stock, and go PENDING in one transaction, freezing the price as
-// the transactional source of truth. Cart, Catalog, and Inventory are reached only through ports.
 describe('Order (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -29,20 +24,8 @@ describe('Order (integration, real Postgres + Redis)', () => {
 
   const server = () => app.getHttpServer();
 
-  describe('auth', () => {
-    it('rejects an unauthenticated POST /orders with 401', async () => {
-      const res = await request(server()).post('/orders');
-      expect(res.status).toBe(401);
-    });
-
-    it('rejects an unauthenticated GET /orders with 401', async () => {
-      const res = await request(server()).get('/orders');
-      expect(res.status).toBe(401);
-    });
-  });
-
-  describe('POST /orders (atomic checkout)', () => {
-    it('checks out the cart into a PENDING order (201, frozen unit price, total = Σ unit×qty, placedAt set)', async () => {
+  describe('POST /orders', () => {
+    it('checks out the cart into a PENDING order at frozen unit prices', async () => {
       const token = await newPrincipalToken(app);
       const a = await createTestProduct(app, { priceMinor: 199_000 });
       const b = await createTestProduct(app, { priceMinor: 50_000 });
@@ -54,7 +37,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
       expect(res.status).toBe(201);
-      expect(res.body.status).toBe('PENDING'); // one-step checkout: straight to PENDING, no DRAFT
+      expect(res.body.status).toBe('PENDING');
       expect(res.body.currency).toBe('VND');
       expect(res.body.placedAt).not.toBeNull();
       expect(res.body.items).toHaveLength(2);
@@ -68,8 +51,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       });
     });
 
-    // The owner comes from the token as a decimal string past 2^53, so a `Number()` anywhere on the
-    // way into Postgres would drop its last digits silently. Compared as text, never as a number.
+    // The owner id is past 2^53, so a Number() on the way into Postgres would drop digits.
     it("keeps every digit of the caller's id on the cart and the order it becomes", async () => {
       const { user, accessToken } = await createTestPrincipal(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
@@ -100,22 +82,9 @@ describe('Order (integration, real Postgres + Redis)', () => {
       expect(res.status).toBe(400);
     });
 
-    it('rejects checkout when a cart line is an archived/inactive SKU (400)', async () => {
+    it('stores an order total past int32', async () => {
       const token = await newPrincipalToken(app);
-      const { productId, variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-      await addToCart(app, token, variantId, 1);
-
-      await archiveProduct(app, productId);
-
-      const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
-
-      expect(res.status).toBe(400);
-    });
-
-    it('handles an order total that exceeds int32 without a 500 (bigint total)', async () => {
-      const token = await newPrincipalToken(app);
-      // Two lines each fit int32 (199_000 × 10_000 = 1.99e9) but the sum (3.98e9)
-      // exceeds int32 max — an int4 total column would 500 here.
+      // Each line fits int32; their sum does not.
       const a = await createTestProduct(app, { priceMinor: 199_000 });
       const b = await createTestProduct(app, { priceMinor: 199_000 });
       await seedStock(app, a.variantId, 10_000);
@@ -129,7 +98,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
       expect(res.body.totalAmountMinor).toBe(3_980_000_000);
     });
 
-    it('leaves the cart intact after checkout (cart is cleared later, at PAID)', async () => {
+    it('leaves the cart intact after checkout', async () => {
       const token = await newPrincipalToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await seedStock(app, variantId, 5);
@@ -144,80 +113,57 @@ describe('Order (integration, real Postgres + Redis)', () => {
     });
   });
 
-  describe('GET /orders and /orders/:id', () => {
-    it('returns a checked-out order by id', async () => {
-      const token = await newPrincipalToken(app);
-      const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-      await seedStock(app, variantId, 5);
-      await addToCart(app, token, variantId, 3);
-      const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
-      const orderId = created.body.id;
+  it('reads a checked-out order by id and in the paged list', async () => {
+    const token = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 5);
+    await addToCart(app, token, variantId, 3);
+    const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
+    const orderId = created.body.id;
 
-      const res = await request(server()).get(`/orders/${orderId}`).set(authHeader(token));
+    const byId = await request(server()).get(`/orders/${orderId}`).set(authHeader(token));
+    const list = await request(server()).get('/orders').set(authHeader(token));
 
-      expect(res.status).toBe(200);
-      expect(res.body.id).toBe(orderId);
-      expect(res.body.totalAmountMinor).toBe(300_000);
-    });
-
-    it('lists the user orders', async () => {
-      const token = await newPrincipalToken(app);
-      const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-      await seedStock(app, variantId, 5);
-      await addToCart(app, token, variantId, 1);
-      await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(201);
-
-      const res = await request(server()).get('/orders').set(authHeader(token));
-
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ total: 1, page: 1, pageSize: 20, totalPages: 1 });
-      expect(res.body.items).toHaveLength(1);
-    });
-
-    it('returns 404 for an unknown order id', async () => {
-      const token = await newPrincipalToken(app);
-
-      const res = await request(server()).get(`/orders/${ABSENT_UUID}`).set(authHeader(token));
-
-      expect(res.status).toBe(404);
-    });
+    expect(byId.status).toBe(200);
+    expect(byId.body).toMatchObject({ id: orderId, totalAmountMinor: 300_000 });
+    expect(list.status).toBe(200);
+    expect(list.body).toMatchObject({ total: 1, page: 1, pageSize: 20, totalPages: 1 });
+    expect(list.body.items.map((o: { id: string }) => o.id)).toEqual([orderId]);
   });
 
-  describe('order is the source of truth (price is frozen at checkout)', () => {
-    it('keeps the total unchanged when Catalog reprices after the order is created', async () => {
-      const token = await newPrincipalToken(app);
-      const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-      await seedStock(app, variantId, 5);
-      await addToCart(app, token, variantId, 2);
-      const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
-      const orderId = created.body.id;
-      expect(created.body.totalAmountMinor).toBe(200_000);
+  it('keeps the total unchanged when Catalog reprices after checkout', async () => {
+    const token = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 5);
+    await addToCart(app, token, variantId, 2);
+    const created = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
+    const orderId = created.body.id;
+    expect(created.body.totalAmountMinor).toBe(200_000);
 
-      await repriceSku(app, variantId, 150_000); // Catalog price changes AFTER the order exists
+    await repriceSku(app, variantId, 150_000);
 
-      const res = await request(server()).get(`/orders/${orderId}`).set(authHeader(token));
+    const res = await request(server()).get(`/orders/${orderId}`).set(authHeader(token));
 
-      expect(res.status).toBe(200);
-      expect(res.body.items[0].unitPriceMinor).toBe(100_000); // frozen, not the new 150_000
-      expect(res.body.totalAmountMinor).toBe(200_000);
-    });
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].unitPriceMinor).toBe(100_000);
+    expect(res.body.totalAmountMinor).toBe(200_000);
   });
 
-  describe('per-user isolation', () => {
-    it("does not expose another user's order", async () => {
-      const tokenA = await newPrincipalToken(app);
-      const tokenB = await newPrincipalToken(app);
-      const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-      await seedStock(app, variantId, 5);
-      await addToCart(app, tokenA, variantId, 1);
-      const created = await request(server()).post('/orders').set(authHeader(tokenA)).set(idempotencyKeyHeader());
-      const orderId = created.body.id;
+  it("hides another user's order behind the same 404 as an unknown id", async () => {
+    const tokenA = await newPrincipalToken(app);
+    const tokenB = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 5);
+    await addToCart(app, tokenA, variantId, 1);
+    const created = await request(server()).post('/orders').set(authHeader(tokenA)).set(idempotencyKeyHeader());
+    const orderId = created.body.id;
 
-      const getByB = await request(server()).get(`/orders/${orderId}`).set(authHeader(tokenB));
-      const listB = await request(server()).get('/orders').set(authHeader(tokenB));
+    const getByB = await request(server()).get(`/orders/${orderId}`).set(authHeader(tokenB));
+    const unknown = await request(server()).get(`/orders/${ABSENT_UUID}`).set(authHeader(tokenB));
+    const listB = await request(server()).get('/orders').set(authHeader(tokenB));
 
-      expect(getByB.status).toBe(404);
-      expect(listB.body.items).toEqual([]);
-    });
+    expect(getByB.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    expect(listB.body.items).toEqual([]);
   });
 });

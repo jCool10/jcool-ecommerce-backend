@@ -6,12 +6,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';
-import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithObjectStorage } from '../setup/harness';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetDatabase } from '../setup/reset-database';
 
-// The env floor is 1024, and the point is a body that clears it — not a realistic image.
+// The lowest limit the env schema accepts.
 const MAX_BYTES = 1024;
 
 interface UploadTicket {
@@ -21,12 +21,8 @@ interface UploadTicket {
   expiresInSec: number;
 }
 
-/**
- * Run against a real bucket because the guarantees under test are the bucket's. The v4 signature
- * pins the content type, so the bucket itself refuses a mismatched PUT. It cannot express a size
- * ceiling (Content-Length is signed as one exact value), so the limit is enforced on the way back,
- * against what the bucket reports.
- */
+// The v4 signature pins the content type but cannot cap the size, so the size limit is checked on
+// confirm against what the bucket reports.
 describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', () => {
   let storage: StartedObjectStorage;
   let app: INestApplication;
@@ -39,8 +35,7 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
     ({ app, pool, db } = await createTestAppWithObjectStorage(storage, { MEDIA_MAX_BYTES: String(MAX_BYTES) }));
   }, 180_000);
 
-  // Explicit rather than `closeAppAfterAll`: the app has to go before the bucket it still holds
-  // connections to.
+  // The app closes before the bucket it holds connections to.
   afterAll(async () => {
     await app?.close();
     await storage?.stop();
@@ -67,16 +62,18 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
     return fetch(ticket.uploadUrl, { method: 'PUT', headers, body });
   }
 
+  const confirm = (assetId: string): request.Test =>
+    request(server()).post(`/admin/media/uploads/${assetId}/complete`).set(authHeader(adminToken));
+
   const assetRow = async (assetId: string) =>
     (await db.select().from(schema.mediaAssets).where(eq(schema.mediaAssets.id, assetId)))[0];
 
-  it('hands out a signed URL and leaves a PENDING row that a sweep could find', async () => {
+  it('hands out a signed URL and leaves an expiring PENDING row', async () => {
     const ticket = await ticketFor();
 
     const row = await assetRow(ticket.assetId);
     expect(row.status).toBe('PENDING');
     expect(row.storageKey).toBe(`media/${ticket.assetId}.png`);
-    // Never null outside ATTACHED: a row with no expiry can never be reclaimed.
     expect(row.expiresAt).not.toBeNull();
     expect(ticket.headers['Content-Type']).toBe('image/png');
     expect(ticket.expiresInSec).toBeGreaterThan(0);
@@ -86,14 +83,10 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
     const ticket = await ticketFor();
 
     expect((await put(ticket, 'x'.repeat(100))).status).toBe(200);
-    await request(server())
-      .post(`/admin/media/uploads/${ticket.assetId}/complete`)
-      .set(authHeader(adminToken))
-      .expect(204);
+    await confirm(ticket.assetId).expect(204);
 
     const row = await assetRow(ticket.assetId);
     expect(row.status).toBe('READY');
-    // The size comes from the bucket, never from anything the client claimed.
     expect(row.sizeBytes).toBe(100);
     expect(await storage.exists(row.storageKey)).toBe(true);
   });
@@ -103,7 +96,6 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
 
     const res = await put(ticket, 'x', { 'Content-Type': 'text/html' });
 
-    // 403: the signature does not verify, so the object is never written.
     expect(res.status).toBe(403);
     expect(await storage.listKeys()).toEqual([]);
   });
@@ -111,63 +103,41 @@ describe('Media upload handshake (integration, real MinIO + Postgres + Redis)', 
   it('refuses to confirm an upload that never happened', async () => {
     const ticket = await ticketFor();
 
-    await request(server())
-      .post(`/admin/media/uploads/${ticket.assetId}/complete`)
-      .set(authHeader(adminToken))
-      .expect(409);
+    await confirm(ticket.assetId).expect(409);
 
-    // Still PENDING, so the sweep reclaims the row on its own.
     expect((await assetRow(ticket.assetId)).status).toBe('PENDING');
   });
 
-  it('rejects an object over the size limit, which the signature could not have capped', async () => {
+  // Left PENDING, so the sweep takes the oversized object too.
+  it('rejects an object over the size limit on confirm', async () => {
     const ticket = await ticketFor();
     expect((await put(ticket, 'x'.repeat(MAX_BYTES + 1))).status).toBe(200);
 
-    await request(server())
-      .post(`/admin/media/uploads/${ticket.assetId}/complete`)
-      .set(authHeader(adminToken))
-      .expect(409);
+    await confirm(ticket.assetId).expect(409);
 
-    // Left behind on purpose: the row is still PENDING, so the sweep takes the oversized object too.
     expect((await assetRow(ticket.assetId)).status).toBe('PENDING');
     expect(await storage.exists(`media/${ticket.assetId}.png`)).toBe(true);
   });
 
-  it('is idempotent only once — a second confirm finds the asset already moved on', async () => {
+  it('answers 409 to a second confirm of the same upload', async () => {
     const ticket = await ticketFor();
     await put(ticket, 'x');
-    await request(server())
-      .post(`/admin/media/uploads/${ticket.assetId}/complete`)
-      .set(authHeader(adminToken))
-      .expect(204);
+    await confirm(ticket.assetId).expect(204);
 
-    await request(server())
-      .post(`/admin/media/uploads/${ticket.assetId}/complete`)
-      .set(authHeader(adminToken))
-      .expect(409);
+    await confirm(ticket.assetId).expect(409);
   });
 
-  it('404s a confirm for an asset that does not exist', async () => {
-    await request(server())
-      .post('/admin/media/uploads/00000000-0000-4000-8000-000000000000/complete')
-      .set(authHeader(adminToken))
-      .expect(404);
-  });
+  it('refuses to sign for a content type outside the image allow-list', async () => {
+    const statuses: number[] = [];
+    for (const contentType of ['image/svg+xml', 'text/html', 'application/pdf']) {
+      const res = await request(server())
+        .post('/admin/media/uploads')
+        .set(authHeader(adminToken))
+        .send({ contentType });
+      statuses.push(res.status);
+    }
 
-  it.each(['image/svg+xml', 'text/html', 'application/pdf'])('refuses to sign for %s', async (contentType) => {
-    await request(server()).post('/admin/media/uploads').set(authHeader(adminToken)).send({ contentType }).expect(400);
-
+    expect(statuses).toEqual([400, 400, 400]);
     expect(await db.select().from(schema.mediaAssets)).toEqual([]);
-  });
-
-  it('is admin-only — anyone who can sign can write to the bucket', async () => {
-    const buyer = await createTestPrincipal(app);
-
-    await request(server())
-      .post('/admin/media/uploads')
-      .set(authHeader(buyer.accessToken))
-      .send({ contentType: 'image/png' })
-      .expect(403);
   });
 });

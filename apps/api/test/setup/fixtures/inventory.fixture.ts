@@ -50,11 +50,11 @@ export async function getStockView(app: INestApplication, variantId: string): Pr
 
 /**
  * Blocks until at least one backend is parked on a row lock, so a race test can commit the holder
- * only once the contender has provably arrived — rather than after a sleep that is a guess.
+ * only once the contender has provably arrived, rather than after a sleep that is a guess.
  *
  * `datname = current_database()` is load-bearing under file parallelism: `pg_stat_activity` is
  * server-wide, so without it a worker sees a *different* worker's blocked backend, returns early,
- * and the race under test never happens — the test then passes for the wrong reason.
+ * and the race under test never happens, so the test passes for the wrong reason.
  */
 export async function waitUntilBlockedOnLock(
   pool: Pool,

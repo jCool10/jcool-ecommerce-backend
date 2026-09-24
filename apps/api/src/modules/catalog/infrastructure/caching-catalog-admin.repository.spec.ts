@@ -23,6 +23,7 @@ const MUTATIONS = [
 const PASSTHROUGH_READS = ['findCategoryById', 'findProductById', 'findSkuById', 'listImages'] as const;
 
 type AsyncMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type AnyMethod = (...args: unknown[]) => Promise<unknown>;
 
 function build() {
   const source = Object.fromEntries(
@@ -36,11 +37,10 @@ function build() {
   const bumpCounter = vi.fn<(key: string) => Promise<void>>().mockResolvedValue(undefined);
   const repo = new CachingCatalogAdminRepository(
     source as unknown as DrizzleCatalogAdminRepository,
-    {
-      bumpCounter,
-    } as unknown as CacheService,
+    { bumpCounter } as unknown as CacheService,
   );
-  return { repo, source, bumpCounter };
+  const call = (method: string, ...args: unknown[]) => (repo[method as keyof typeof repo] as AnyMethod)(...args);
+  return { call, source, bumpCounter };
 }
 
 describe('CachingCatalogAdminRepository', () => {
@@ -50,22 +50,27 @@ describe('CachingCatalogAdminRepository', () => {
     ctx = build();
   });
 
-  // A non-empty payload throughout: the update methods treat an all-undefined patch as a no-op.
-  it.each(MUTATIONS)('bumps the catalog generation after %s commits', async (mutation) => {
-    await (ctx.repo[mutation] as (...args: unknown[]) => Promise<unknown>)('id', { name: 'x' });
+  it('bumps the catalog generation once after each committed mutation', async () => {
+    for (const mutation of MUTATIONS) {
+      ctx.bumpCounter.mockClear();
 
-    expect(ctx.source[mutation]).toHaveBeenCalled();
-    expect(ctx.bumpCounter).toHaveBeenCalledExactlyOnceWith(CATALOG_CACHE_VERSION_KEY);
+      // A non-empty payload: the update methods treat an all-undefined patch as a no-op.
+      await ctx.call(mutation, 'id', { name: 'x' });
+
+      expect(ctx.bumpCounter, mutation).toHaveBeenCalledExactlyOnceWith(CATALOG_CACHE_VERSION_KEY);
+    }
   });
 
-  it.each(PASSTHROUGH_READS)('leaves the generation alone on %s', async (read) => {
-    await (ctx.repo[read] as (...args: unknown[]) => Promise<unknown>)('id');
+  it('leaves the generation alone on reads', async () => {
+    for (const read of PASSTHROUGH_READS) {
+      await ctx.call(read, 'id');
+      expect(ctx.source[read], read).toHaveBeenCalled();
+    }
 
-    expect(ctx.source[read]).toHaveBeenCalled();
     expect(ctx.bumpCounter).not.toHaveBeenCalled();
   });
 
-  it('classifies every port method — a new one must be declared a mutation or a read', () => {
+  it('declares every port method as either a mutation or a read', () => {
     const declared = new Set<string>([...MUTATIONS, ...PASSTHROUGH_READS]);
     const implemented = Object.getOwnPropertyNames(CachingCatalogAdminRepository.prototype).filter(
       (name) => name !== 'constructor' && !name.startsWith('invalidating'),
@@ -74,31 +79,28 @@ describe('CachingCatalogAdminRepository', () => {
     expect(implemented.filter((name) => !declared.has(name))).toEqual([]);
   });
 
-  // The adapter degrades a patch with nothing defined into a plain read, which returns the existing
-  // row — so a non-null result alone must not be read as "something changed".
-  it.each([
-    ['updateProduct', {}],
-    ['updateCategory', { name: undefined }],
-    ['updateSku', {}],
-  ] as const)('does not bump when %s carries no field to write', async (mutation, patch) => {
-    await (ctx.repo[mutation] as (...args: unknown[]) => Promise<unknown>)('id', patch);
-
-    expect(ctx.source[mutation]).toHaveBeenCalled();
-    expect(ctx.bumpCounter).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['blocked by a live product', { category: null, blocked: true }],
-    ['an unknown id', { category: null, blocked: false }],
-  ])('does not bump when the category archive is refused by %s', async (_label, outcome) => {
-    ctx.source.archiveCategoryIfEmpty.mockResolvedValue(outcome);
-
-    await ctx.repo.archiveCategoryIfEmpty('cat1');
+  // The adapter turns a patch with nothing defined into a plain read that returns the existing row,
+  // so a non-null result alone does not mean something changed.
+  it('does not bump for an update that carries no field to write', async () => {
+    await ctx.call('updateProduct', 'id', {});
+    await ctx.call('updateCategory', 'id', { name: undefined });
+    await ctx.call('updateSku', 'id', {});
 
     expect(ctx.bumpCounter).not.toHaveBeenCalled();
   });
 
-  it('bumps only after the write resolves, never before', async () => {
+  it('does not bump when a category archive is refused or the category is unknown', async () => {
+    ctx.source.archiveCategoryIfEmpty
+      .mockResolvedValueOnce({ category: null, blocked: true })
+      .mockResolvedValueOnce({ category: null, blocked: false });
+
+    await ctx.call('archiveCategoryIfEmpty', 'cat1');
+    await ctx.call('archiveCategoryIfEmpty', 'missing');
+
+    expect(ctx.bumpCounter).not.toHaveBeenCalled();
+  });
+
+  it('bumps only after the write resolves', async () => {
     const order: string[] = [];
     ctx.source.archiveProduct.mockImplementation(() => {
       order.push('write');
@@ -109,7 +111,7 @@ describe('CachingCatalogAdminRepository', () => {
       return Promise.resolve();
     });
 
-    await ctx.repo.archiveProduct('p-1');
+    await ctx.call('archiveProduct', 'p-1');
 
     expect(order).toEqual(['write', 'bump']);
   });

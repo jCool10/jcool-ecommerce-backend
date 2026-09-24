@@ -46,29 +46,9 @@ export class Money extends ValueObject<MoneyProps> {
     return Money.of(this.amountMinor + other.amountMinor, this.currency);
   }
 
-  subtract(other: Money): Money {
-    this.assertSameCurrency(other);
-    return Money.of(this.amountMinor - other.amountMinor, this.currency);
-  }
-
   multiply(qtyInt: number): Money {
     assertInteger(qtyInt, 'Money.multiply factor');
     return Money.of(this.amountMinor * qtyInt, this.currency);
-  }
-
-  compare(other: Money): number {
-    this.assertSameCurrency(other);
-    if (this.amountMinor < other.amountMinor) return -1;
-    if (this.amountMinor > other.amountMinor) return 1;
-    return 0;
-  }
-
-  isZero(): boolean {
-    return this.amountMinor === 0;
-  }
-
-  isNegative(): boolean {
-    return this.amountMinor < 0;
   }
 
   equals(other?: Money): boolean {

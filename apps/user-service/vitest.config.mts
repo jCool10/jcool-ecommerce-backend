@@ -30,8 +30,11 @@ export default defineConfig({
         'src/modules/user/interface/session-epoch-reconcile.scheduler.ts',
         'src/modules/user/interface/dto/**',
       ],
-      // Measured minus two.
-      thresholds: { statements: 96, branches: 94, functions: 93, lines: 97 },
+      // Glob-scoped, not global: adapters and guards lean on the e2e tier, which `test:cov` does not
+      // run. Measured minus two.
+      thresholds: {
+        'src/**/{domain,application}/**': { statements: 92, branches: 83, functions: 88, lines: 93 },
+      },
     },
   },
   plugins: [

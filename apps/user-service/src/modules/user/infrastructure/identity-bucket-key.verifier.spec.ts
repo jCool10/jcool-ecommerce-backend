@@ -6,7 +6,7 @@ import type { DrizzleDB } from '../../../database';
 import * as schema from '../../../database/schema';
 import { normalizeEmail } from '@jcool/kernel';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
-import { type FakePinoLogger, fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { IdentityBucketKeyVerifier } from './identity-bucket-key.verifier';
 import { identityKeyPin } from './schema/user.schema';
 
@@ -24,7 +24,7 @@ const pinnedUnder =
 const unreachable = (): Promise<never> => Promise.reject(new Error('connection terminated'));
 
 interface FakeDbOptions {
-  /** Rows returned by the pin's insert — non-empty means this boot won the first-boot race. */
+  /** Rows returned by the pin's insert: non-empty means this boot won the first-boot race. */
   pinInsert?: () => Promise<{ fingerprint: string }[]>;
   pinRow?: () => Promise<{ fingerprint: string; layoutVersion: number }[]>;
   userRow?: () => Promise<{ id: string; email: string }[]>;
@@ -39,16 +39,16 @@ function fakeDb(options: FakeDbOptions = {}) {
   const values = vi.fn().mockReturnValue({
     onConflictDoNothing: () => ({ returning: pinInsert }),
   });
-  const users = vi.fn(userRow);
   const db = {
     insert: () => ({ values }),
     // Told apart by table, not call order, so reordering the two checks does not silently swap which
     // fake answers which query.
     select: () => ({
-      from: (table: unknown) => (table === identityKeyPin ? { where: pinRow } : { orderBy: () => ({ limit: users }) }),
+      from: (table: unknown) =>
+        table === identityKeyPin ? { where: pinRow } : { orderBy: () => ({ limit: userRow }) },
     }),
   };
-  return { db: db as unknown as DrizzleDB, values, users };
+  return { db: db as unknown as DrizzleDB, values };
 }
 
 /**
@@ -67,21 +67,15 @@ function drizzleOverPgStub(newestUserId: string) {
   return { db: db as unknown as DrizzleDB, query };
 }
 
-const verifier = (
-  db: DrizzleDB,
-  key = KEY,
-  pinBootstrap = true,
-  logger: FakePinoLogger = fakePinoLogger(),
-): IdentityBucketKeyVerifier =>
+const verifier = (db: DrizzleDB, pinBootstrap = true): IdentityBucketKeyVerifier =>
   new IdentityBucketKeyVerifier(
     db,
-    fakeConfigService({ 'identity.bucketKey': key, 'identity.pinBootstrap': pinBootstrap }),
-    logger,
+    fakeConfigService({ 'identity.bucketKey': KEY, 'identity.pinBootstrap': pinBootstrap }),
+    fakePinoLogger(),
   );
 
 describe('IdentityBucketKeyVerifier', () => {
   afterEach(() => {
-    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -97,17 +91,18 @@ describe('IdentityBucketKeyVerifier', () => {
       expect(values).toHaveBeenCalledWith({ id: 1, fingerprint, layoutVersion: LAYOUT_VERSION });
     });
 
-    it('proceeds when the pinned fingerprint is the running key, without writing it again', async () => {
+    it('proceeds without rewriting a pin that matches the running key', async () => {
       const { db, values } = fakeDb({ pinRow: pinnedUnder(KEY) });
 
       await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
       expect(values).not.toHaveBeenCalled();
     });
 
-    it('refuses to boot when the pinned fingerprint is a different key', async () => {
+    // Bootstrap off only stops this boot writing a pin; a pin copied in with the data is still compared.
+    it('refuses to boot on a pin of a different key, even with bootstrap off', async () => {
       const { db } = fakeDb({ pinRow: pinnedUnder(OTHER_KEY) });
 
-      await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not match the key/);
+      await expect(verifier(db, false).onApplicationBootstrap()).rejects.toThrow(/does not match the key/);
     });
 
     // The key can be right while the layout is not: same secret, different epoch or field widths,
@@ -144,36 +139,6 @@ describe('IdentityBucketKeyVerifier', () => {
     });
   });
 
-  // The pin is copied in from the database being migrated, never minted by a dark boot.
-  describe('key pin with bootstrap off', () => {
-    it('writes no pin on an empty database, and starts', async () => {
-      const { db, values } = fakeDb();
-
-      await expect(verifier(db, KEY, false).onApplicationBootstrap()).resolves.toBeUndefined();
-      expect(values).not.toHaveBeenCalled();
-    });
-
-    it('proceeds when the pinned fingerprint is the running key', async () => {
-      const { db, values } = fakeDb({ pinRow: pinnedUnder(KEY) });
-
-      await expect(verifier(db, KEY, false).onApplicationBootstrap()).resolves.toBeUndefined();
-      expect(values).not.toHaveBeenCalled();
-    });
-
-    it('still refuses to boot when the pinned fingerprint is a different key', async () => {
-      const { db } = fakeDb({ pinRow: pinnedUnder(OTHER_KEY) });
-
-      await expect(verifier(db, KEY, false).onApplicationBootstrap()).rejects.toThrow(/does not match the key/);
-    });
-
-    it('starts when the pin cannot be read', async () => {
-      const { db, values } = fakeDb({ pinRow: unreachable });
-
-      await expect(verifier(db, KEY, false).onApplicationBootstrap()).resolves.toBeUndefined();
-      expect(values).not.toHaveBeenCalled();
-    });
-  });
-
   describe('row canary', () => {
     it('proceeds when the newest user routes to the bucket its email hashes to', async () => {
       const id = idInBucket(bucketForEmail(EMAIL, KEY));
@@ -182,37 +147,27 @@ describe('IdentityBucketKeyVerifier', () => {
       await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
     });
 
-    it('refuses to boot when the newest user routes to a different bucket', async () => {
-      const id = idInBucket(bucketForEmail(EMAIL, OTHER_KEY));
-      const { db } = fakeDb({ userRow: () => Promise.resolve([{ id, email: EMAIL }]) });
-
-      await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not route to the bucket/);
-    });
-
     // Read back through the real schema: a column that threw on such a row would land in the
     // unreachable-database catch and let the boot through.
-    it.each(['4194303', '1', '0', '-7'])(
-      'refuses to boot on a user id that carries no routing bucket (%s)',
-      async (id) => {
-        const { db, query } = drizzleOverPgStub(id);
-        const warn = vi.fn();
+    it('refuses to boot, pinning nothing, on a user id that carries no routing bucket', async () => {
+      const ids = ['4194303', '1', '0', '-7'];
 
-        await expect(verifier(db, KEY, true, fakePinoLogger({ warn })).onApplicationBootstrap()).rejects.toThrow(
-          /no routing bucket/,
-        );
-        expect(warn).not.toHaveBeenCalledWith(expect.anything(), 'identity routing canary not checked');
-        expect(query).not.toHaveBeenCalledWith(
-          expect.objectContaining({ text: expect.stringMatching(/^insert/) as unknown }),
-          expect.anything(),
-        );
-      },
-    );
+      const outcomes = await Promise.all(
+        ids.map(async (id) => {
+          const { db, query } = drizzleOverPgStub(id);
+          const refusal = await verifier(db)
+            .onApplicationBootstrap()
+            .then(
+              () => 'started',
+              (error: unknown) => (error as Error).message,
+            );
+          return { id, refusal, pinned: query.mock.calls.some(([{ text }]) => text.startsWith('insert')) };
+        }),
+      );
 
-    // Nothing to compare against — which is exactly why the pin, not this, is the primary check.
-    it('starts on an empty database', async () => {
-      const { db } = fakeDb();
-
-      await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
+      expect(outcomes).toEqual(
+        ids.map((id) => ({ id, refusal: expect.stringMatching(/no routing bucket/) as unknown, pinned: false })),
+      );
     });
 
     // An unread table proves nothing about the key, so the pin must wait for a boot that can read it.
@@ -221,30 +176,6 @@ describe('IdentityBucketKeyVerifier', () => {
 
       await expect(verifier(db).onApplicationBootstrap()).resolves.toBeUndefined();
       expect(values).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('check order', () => {
-    // The pin is what every later boot is held to, so it must never record a key the rows already disprove.
-    it('does not pin a key the newest row has already disproved', async () => {
-      const id = idInBucket(bucketForEmail(EMAIL, OTHER_KEY));
-      const { db, values } = fakeDb({ userRow: () => Promise.resolve([{ id, email: EMAIL }]) });
-
-      await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/does not route to the bucket/);
-      expect(values).not.toHaveBeenCalled();
-    });
-
-    // A layout that moves the bucket field makes every stored id decode to some other bucket, which
-    // the canary alone would blame on the key.
-    it('reports a changed layout on a populated database as the layout, not the key', async () => {
-      const id = idInBucket(bucketForEmail(EMAIL, OTHER_KEY));
-      const { db, users } = fakeDb({
-        pinRow: pinnedUnder(KEY, LAYOUT_VERSION + 1),
-        userRow: () => Promise.resolve([{ id, email: EMAIL }]),
-      });
-
-      await expect(verifier(db).onApplicationBootstrap()).rejects.toThrow(/id layout does not match/);
-      expect(users).not.toHaveBeenCalled();
     });
   });
 

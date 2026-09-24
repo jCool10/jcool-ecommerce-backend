@@ -14,44 +14,49 @@ function requestWith(authorization?: string): ExecutionContext {
 const guard = (tokens: string[]): InternalApiTokenGuard =>
   new InternalApiTokenGuard(fakeConfigService({ 'internalApi.tokens': tokens }));
 
-function catchThrown(fn: () => unknown): UnauthorizedException {
+function answerTo(tokens: string[], authorization?: string): unknown {
   try {
-    fn();
+    return guard(tokens).canActivate(requestWith(authorization));
   } catch (error) {
-    return error as UnauthorizedException;
+    return error;
   }
-  throw new Error('expected fn to throw');
 }
 
 describe('InternalApiTokenGuard', () => {
-  it('admits the current token', () => {
-    expect(guard([CURRENT, PREVIOUS]).canActivate(requestWith(`Bearer ${CURRENT}`))).toBe(true);
+  it('admits the current token and, during a rotation, the previous one', () => {
+    expect([
+      answerTo([CURRENT, PREVIOUS], `Bearer ${CURRENT}`),
+      answerTo([CURRENT, PREVIOUS], `bearer ${PREVIOUS}`),
+    ]).toEqual([true, true]);
   });
 
-  it('admits the previous token while a rotation is under way', () => {
-    expect(guard([CURRENT, PREVIOUS]).canActivate(requestWith(`bearer ${PREVIOUS}`))).toBe(true);
+  it('refuses a missing, empty, foreign-scheme, wrong or truncated token with 401', () => {
+    const headers: Record<string, string | undefined> = {
+      'no header': undefined,
+      'an empty bearer': 'Bearer ',
+      'another scheme': `Basic ${CURRENT}`,
+      'a wrong token': 'Bearer not-the-token',
+      'a prefix of the token': `Bearer ${CURRENT.slice(0, -1)}`,
+    };
+
+    const refusals = Object.entries(headers).map(([name, header]) => [
+      name,
+      answerTo([CURRENT], header) instanceof UnauthorizedException,
+    ]);
+
+    expect(Object.fromEntries(refusals)).toEqual(Object.fromEntries(Object.keys(headers).map((n) => [n, true])));
   });
 
-  it.each([
-    ['no header', undefined],
-    ['an empty bearer', 'Bearer '],
-    ['another scheme', `Basic ${CURRENT}`],
-    ['a wrong token', 'Bearer not-the-token'],
-    ['a prefix of the token', `Bearer ${CURRENT.slice(0, -1)}`],
-  ])('refuses %s', (_case, header) => {
-    expect(() => guard([CURRENT]).canActivate(requestWith(header))).toThrow(UnauthorizedException);
+  // The cause only reaches the rejected-request log line; the client sees the same body either way.
+  it('tells a missing token from a wrong one in the cause, not in the response', () => {
+    const missing = answerTo([CURRENT]) as UnauthorizedException;
+    const wrong = answerTo([CURRENT], 'Bearer not-the-token') as UnauthorizedException;
+
+    expect(missing.getResponse()).toEqual(wrong.getResponse());
+    expect((missing.cause as Error).message).not.toBe((wrong.cause as Error).message);
   });
 
-  // `cause` never reaches the client body; it only shows up on the rejected-request log line.
-  it('marks a missing bearer header with a distinct cause from a token that fails to match', () => {
-    const caughtNoHeader = catchThrown(() => guard([CURRENT]).canActivate(requestWith(undefined)));
-    const caughtWrongToken = catchThrown(() => guard([CURRENT]).canActivate(requestWith('Bearer not-the-token')));
-
-    expect((caughtNoHeader.cause as Error).message).toBe('missing internal api bearer token');
-    expect((caughtWrongToken.cause as Error).message).toBe('internal api token not recognized');
-  });
-
-  it('refuses to build without a token, rather than admit everyone', () => {
+  it('refuses to build without an accepted token, rather than admit everyone', () => {
     expect(() => guard([])).toThrow(/INTERNAL_API_TOKEN/);
   });
 });

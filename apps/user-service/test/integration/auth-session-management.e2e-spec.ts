@@ -21,6 +21,18 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
+  it('refuses every session route without a bearer token with 401', async () => {
+    const server = app.getHttpServer();
+
+    const statuses = [
+      (await request(server).post('/auth/change-password').send({ currentPassword: password, newPassword })).status,
+      (await request(server).get('/auth/sessions')).status,
+      (await request(server).post('/auth/logout-all')).status,
+    ];
+
+    expect(statuses).toEqual([401, 401, 401]);
+  });
+
   describe('POST /auth/change-password', () => {
     it('swaps the credential: the new password logs in, the old one no longer does', async () => {
       const { user } = await createTestUser(app, { password });
@@ -39,7 +51,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
         .expect(200);
     });
 
-    it('revokes every session: the caller’s access token and refresh cookie both stop working', async () => {
+    it("revokes every session, the caller's access token and refresh cookie included", async () => {
       const { user } = await createTestUser(app, { password });
       const session = await loginAs(app, { email: user.email, password });
 
@@ -68,7 +80,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/login').send({ email: user.email, password }).expect(200);
     });
 
-    it('rejects a too-short new password with 400 (DTO validation)', async () => {
+    it('rejects a too-short new password with 400', async () => {
       const { user } = await createTestUser(app, { password });
       const session = await loginAs(app, { email: user.email, password });
 
@@ -78,17 +90,10 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
         .send({ currentPassword: password, newPassword: 'short' })
         .expect(400);
     });
-
-    it('requires authentication (401 without a Bearer token)', async () => {
-      await request(app.getHttpServer())
-        .post('/auth/change-password')
-        .send({ currentPassword: password, newPassword })
-        .expect(401);
-    });
   });
 
   describe('GET /auth/sessions + DELETE /auth/sessions/:id', () => {
-    it('lists a user’s active sessions and flags the one making the request', async () => {
+    it("lists a user's active sessions and flags the one making the request", async () => {
       const { user } = await createTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
       await loginAs(app, { email: user.email, password });
@@ -111,7 +116,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
       }
     });
 
-    it('revokes one remote session: that session can’t rotate, the caller’s still can', async () => {
+    it("revokes one remote session and leaves the caller's own able to rotate", async () => {
       const { user } = await createTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
       const b = await loginAs(app, { email: user.email, password });
@@ -132,7 +137,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(a)).expect(200);
     });
 
-    it('404s revoking a session id that isn’t the caller’s (cross-user isolation)', async () => {
+    it('404s revoking a session that belongs to another user', async () => {
       const owner = await createTestUser(app, { password });
       const ownerSession = await loginAs(app, { email: owner.user.email, password });
       const ownerList = await request(app.getHttpServer())
@@ -162,14 +167,10 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
         .expect(404);
       await request(app.getHttpServer()).delete('/auth/sessions/not-a-uuid').set(authHeader(a.accessToken)).expect(400);
     });
-
-    it('requires authentication to list sessions (401)', async () => {
-      await request(app.getHttpServer()).get('/auth/sessions').expect(401);
-    });
   });
 
   describe('POST /auth/logout-all (session epoch)', () => {
-    it('kills every session at once — all access tokens and refresh cookies stop working', async () => {
+    it('kills every access token and refresh cookie of the user at once', async () => {
       const { user } = await createTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
       const b = await loginAs(app, { email: user.email, password });
@@ -185,7 +186,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(b)).expect(401);
     });
 
-    it('lets the user log in again afterward (a fresh session under the new epoch works)', async () => {
+    it('lets the user log in again afterward under the new epoch', async () => {
       const { user } = await createTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
 
@@ -193,10 +194,6 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
 
       const fresh = await loginAs(app, { email: user.email, password });
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(fresh.accessToken)).expect(200);
-    });
-
-    it('requires authentication (401 without a Bearer token)', async () => {
-      await request(app.getHttpServer()).post('/auth/logout-all').expect(401);
     });
   });
 });

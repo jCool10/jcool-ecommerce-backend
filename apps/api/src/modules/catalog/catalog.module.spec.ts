@@ -12,6 +12,7 @@ import {
 import { CatalogAdminService } from './application/services/catalog-admin.service';
 import { CatalogModule } from './catalog.module';
 import { CachingProductRepository, DrizzleProductRepository } from './infrastructure';
+import { fakeCatalogSearch, fakeProductRepository } from './testing/catalog-port.doubles';
 
 interface ProviderEntry {
   provide?: unknown;
@@ -25,37 +26,28 @@ function boundTo(token: symbol): unknown {
   return entry?.useExisting ?? entry?.useClass;
 }
 
-/**
- * The search document is re-derived right after a write commits, so the read behind it must hit
- * Postgres: the caching adapter answers from a generation whose invalidation may not have landed
- * yet, which would index the state the write just replaced. Both halves of that wiring are asserted
- * — the token the service asks for, and the class the module binds it to.
- */
-describe('CatalogModule search-sync wiring', () => {
-  it('binds the product source token to the uncached repository', () => {
-    expect(boundTo(PRODUCT_SOURCE_REPOSITORY)).toBe(DrizzleProductRepository);
-    expect(boundTo(PRODUCT_SOURCE_REPOSITORY)).not.toBe(CachingProductRepository);
-    // The public read path stays on the cached one — this is a second binding, not a swap.
-    expect(boundTo(PRODUCT_REPOSITORY)).toBe(CachingProductRepository);
-  });
-
-  it('injects the product source, not the cached repository, into the admin service', async () => {
-    const source = { findActiveByIdOrSlug: vi.fn().mockResolvedValue(null) };
-    const cached = { findActiveByIdOrSlug: vi.fn().mockResolvedValue(null) };
+describe('CatalogModule', () => {
+  // The search document is re-derived right after a write commits. A cached read could answer from
+  // a generation whose invalidation has not landed yet and index the state the write replaced.
+  it('feeds the admin search sync from the uncached repository', async () => {
+    const sourceRead = vi.fn().mockResolvedValue(null);
+    const cachedRead = vi.fn().mockResolvedValue(null);
     const moduleRef = await Test.createTestingModule({
       providers: [
         CatalogAdminService,
         { provide: CATALOG_ADMIN_REPOSITORY, useValue: { archiveProduct: vi.fn().mockResolvedValue({ id: 'prod1' }) } },
-        { provide: CATALOG_SEARCH, useValue: { indexProduct: vi.fn(), deleteProduct: vi.fn() } },
-        { provide: PRODUCT_REPOSITORY, useValue: cached },
-        { provide: PRODUCT_SOURCE_REPOSITORY, useValue: source },
+        { provide: CATALOG_SEARCH, useValue: fakeCatalogSearch() },
+        { provide: PRODUCT_REPOSITORY, useValue: fakeProductRepository({ findActiveByIdOrSlug: cachedRead }) },
+        { provide: PRODUCT_SOURCE_REPOSITORY, useValue: fakeProductRepository({ findActiveByIdOrSlug: sourceRead }) },
         { provide: PinoLogger, useFactory: () => fakePinoLogger() },
       ],
     }).compile();
 
     await moduleRef.get(CatalogAdminService).archiveProduct('prod1');
 
-    expect(source.findActiveByIdOrSlug).toHaveBeenCalledWith('prod1');
-    expect(cached.findActiveByIdOrSlug).not.toHaveBeenCalled();
+    expect(boundTo(PRODUCT_SOURCE_REPOSITORY)).toBe(DrizzleProductRepository);
+    expect(boundTo(PRODUCT_REPOSITORY)).toBe(CachingProductRepository);
+    expect(sourceRead).toHaveBeenCalledWith('prod1');
+    expect(cachedRead).not.toHaveBeenCalled();
   });
 });

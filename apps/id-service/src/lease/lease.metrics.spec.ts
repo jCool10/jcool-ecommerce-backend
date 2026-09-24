@@ -19,12 +19,7 @@ async function series(name: string): Promise<string[]> {
 }
 
 describe('lease metrics', () => {
-  it('reports nothing while no lease is bound', async () => {
-    await expect(series(ID_LEASE_STATE)).resolves.toEqual([]);
-    await expect(series(ID_LEASE_NODE_INFO)).resolves.toEqual([]);
-  });
-
-  it('marks the current state and the node held, and withdraws the node once it is gone', async () => {
+  it('marks the current state and held node, and withdraws the node once released', async () => {
     const lease = testNodeLease(new FakeLeaseStore().grant(12));
     await lease.acquire();
     bindLeaseMetrics(lease);
@@ -50,5 +45,6 @@ describe('lease metrics', () => {
 
     unbindLeaseMetrics(newer);
     await expect(series(ID_LEASE_STATE)).resolves.toEqual([]);
+    await expect(series(ID_LEASE_NODE_INFO)).resolves.toEqual([]);
   });
 });

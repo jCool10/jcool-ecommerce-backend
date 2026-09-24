@@ -20,7 +20,7 @@ describe('createLogSampler', () => {
     expect(burst).not.toContain(true);
   });
 
-  it('keeps keys apart, so one noisy route cannot silence another', () => {
+  it('keeps keys apart', () => {
     const shouldLog = createLogSampler(WINDOW_MS);
 
     expect(shouldLog('user|/orders')).toBe(true);

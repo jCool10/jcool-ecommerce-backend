@@ -46,7 +46,7 @@ export async function createTestCategory(app: INestApplication, name = 'Test Cat
 }
 
 // Direct update rather than the admin endpoint, which refuses to archive a category that still
-// has products — and a category with products is the case worth testing.
+// has products, and a category with products is the case worth testing.
 export async function archiveTestCategory(app: INestApplication, categoryId: string): Promise<void> {
   const db = app.get<DrizzleDB>(DRIZZLE);
   await db.update(schema.categories).set({ archivedAt: new Date() }).where(eq(schema.categories.id, categoryId));
@@ -98,7 +98,7 @@ export async function createTestProduct(app: INestApplication, options: TestProd
 
 // Direct writes rather than the admin endpoints, for the same reason as `archiveTestCategory`: the
 // write API refuses some of these, and the refused state is exactly what the cart and order suites
-// need to arrange — a line whose product went away, or whose price moved after the snapshot.
+// need to arrange: a line whose product went away, or whose price moved after the snapshot.
 
 export async function archiveProduct(app: INestApplication, productId: string): Promise<void> {
   const db = app.get<DrizzleDB>(DRIZZLE);

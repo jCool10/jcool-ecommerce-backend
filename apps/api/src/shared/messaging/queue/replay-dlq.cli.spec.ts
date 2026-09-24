@@ -1,12 +1,14 @@
 import type { QueueOptions } from 'bullmq';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { buildJobOptions, QUEUE_DOMAIN_EVENTS, QUEUE_DOMAIN_EVENTS_DLQ } from './queue.constants';
+import type { ReplayOptions } from './dead-letter.replay';
+import { buildJobOptions, ORDER_PAID_BACKOFF, QUEUE_DOMAIN_EVENTS, QUEUE_DOMAIN_EVENTS_DLQ } from './queue.constants';
 
 // Hoisted because the mock factories below run before this module's own initialisation.
-const built = vi.hoisted(() => ({ queues: [] as { name: string; opts: QueueOptions }[] }));
+const built = vi.hoisted(() => ({
+  queues: [] as { name: string; opts: QueueOptions }[],
+  replayOptions: undefined as ReplayOptions | undefined,
+}));
 
-// The summary the CLI renders. Both fields exist only in Redis, so the printed line is the operator's
-// only sight of them.
 const outcome = vi.hoisted(() => ({
   skipped: {
     messageId: '0193c1f0-1111-7000-8000-000000000001',
@@ -24,7 +26,7 @@ const outcome = vi.hoisted(() => ({
 }));
 
 // The CLI runs `main()` on import, so every I/O client it opens is stubbed and the run is observed
-// through the constructor arguments — the queue's options are what decide a replayed job's policy.
+// through the constructor arguments and the options it hands the replay.
 vi.mock('bullmq', () => ({
   Queue: class {
     constructor(name: string, opts: QueueOptions) {
@@ -56,11 +58,15 @@ vi.mock('pg', () => ({
 vi.mock('drizzle-orm/node-postgres', () => ({ drizzle: () => ({}) }));
 
 vi.mock('./dead-letter.replay', () => ({
-  replayDeadLetters: () => Promise.resolve({ replayed: 1, skipped: 1, outcomes: [outcome.skipped, outcome.replayed] }),
+  replayDeadLetters: (_queue: unknown, _dlq: unknown, options: ReplayOptions) => {
+    built.replayOptions = options;
+    return Promise.resolve({ replayed: 1, skipped: 1, outcomes: [outcome.skipped, outcome.replayed] });
+  },
 }));
 
 const ATTEMPTS = 3;
 const BACKOFF_MS = 250;
+const ORDER_PAID_ATTEMPTS = 12;
 
 describe('replay-dlq CLI', () => {
   const lines: string[] = [];
@@ -69,10 +75,11 @@ describe('replay-dlq CLI', () => {
   const lineFor = (messageId: string): string => lines.find((line) => line.includes(messageId)) ?? '';
 
   beforeAll(async () => {
-    process.env.REDIS_URL = 'redis://localhost:6379';
-    process.env.DATABASE_URL = 'postgres://localhost:5432/test';
-    process.env.QUEUE_CONSUMER_ATTEMPTS = String(ATTEMPTS);
-    process.env.QUEUE_CONSUMER_BACKOFF_MS = String(BACKOFF_MS);
+    vi.stubEnv('REDIS_URL', 'redis://localhost:6379');
+    vi.stubEnv('DATABASE_URL', 'postgres://localhost:5432/test');
+    vi.stubEnv('QUEUE_CONSUMER_ATTEMPTS', String(ATTEMPTS));
+    vi.stubEnv('QUEUE_CONSUMER_BACKOFF_MS', String(BACKOFF_MS));
+    vi.stubEnv('ORDER_PAID_CONSUMER_ATTEMPTS', String(ORDER_PAID_ATTEMPTS));
     // Extensioned because `import()` resolves in ESM mode under nodenext, even from a CJS file.
     await import('./replay-dlq.cli.js');
     // `main()` is a floating promise the import does not await, and the summary is printed after it.
@@ -83,41 +90,29 @@ describe('replay-dlq CLI', () => {
 
   afterAll(() => {
     log.mockRestore();
+    vi.unstubAllEnvs();
   });
 
-  // A dead letter is by definition a message that already failed, so replaying it without the app's
-  // retry budget spends no attempts before parking it again — and its failed record, kept forever
-  // without the retention bound, can outlive the inbox claim that stops a second application.
-  it('publishes replays under the same retry and retention policy the app runs', () => {
-    const domainEvents = built.queues.find((q) => q.name === QUEUE_DOMAIN_EVENTS);
+  // Replayed without the app's ladder, a message that already failed gets no retry budget. The DLQ
+  // has no consumer, so retention defaults there would delete the record it exists to keep.
+  it("replays on the app's retry ladders and keeps job defaults off the DLQ", () => {
+    const options = (name: string) => built.queues.find((queue) => queue.name === name)?.opts;
 
-    expect(domainEvents?.opts.defaultJobOptions).toEqual(buildJobOptions(ATTEMPTS, BACKOFF_MS));
+    expect(options(QUEUE_DOMAIN_EVENTS)?.defaultJobOptions).toEqual(buildJobOptions(ATTEMPTS, BACKOFF_MS));
+    expect(built.replayOptions?.jobOptionsFor('order.paid')).toEqual({
+      attempts: ORDER_PAID_ATTEMPTS,
+      backoff: { type: ORDER_PAID_BACKOFF },
+    });
+    expect(options(QUEUE_DOMAIN_EVENTS_DLQ)).toBeDefined();
+    expect(options(QUEUE_DOMAIN_EVENTS_DLQ)?.defaultJobOptions).toBeUndefined();
   });
 
-  // Retention rules on the queue nothing consumes would delete the record it exists to keep.
-  it('leaves the dead-letter queue itself without job defaults', () => {
-    const dlq = built.queues.find((q) => q.name === QUEUE_DOMAIN_EVENTS_DLQ);
+  // Redis is the only other place the parked reason exists, and this tool runs when the app is broken.
+  it('prints the labelled parked reason on each line, before the skip verdict', () => {
+    const skipped = lineFor(outcome.skipped.messageId);
 
-    expect(dlq).toBeDefined();
-    expect(dlq?.opts.defaultJobOptions).toBeUndefined();
-  });
-
-  // The header tells the operator to fix the failure before replaying, so the failure has to be on
-  // the line — after the message it belongs to and before the tool's own verdict on it.
-  it('prints why a skipped message was parked, then why it was skipped', () => {
-    const line = lineFor(outcome.skipped.messageId);
-
-    expect(line).toContain(`[parked: ${outcome.skipped.failedReason}]`);
-    expect(line).toContain(outcome.skipped.detail);
-    expect(line.indexOf(outcome.skipped.failedReason)).toBeGreaterThan(line.indexOf(outcome.skipped.messageId));
-    expect(line.indexOf(outcome.skipped.detail)).toBeGreaterThan(line.indexOf(outcome.skipped.failedReason));
-  });
-
-  // A replayed message carries its reason too, but it is why the message was dead-lettered in the
-  // first place — unlabelled it reads as a failure this run just produced.
-  it('labels the reason on a replayed line as the one it was parked with', () => {
-    const line = lineFor(outcome.replayed.messageId);
-
-    expect(line).toContain(`[parked: ${outcome.replayed.failedReason}]`);
+    expect(lineFor(outcome.replayed.messageId)).toContain(`[parked: ${outcome.replayed.failedReason}]`);
+    expect(skipped).toContain(`[parked: ${outcome.skipped.failedReason}]`);
+    expect(skipped.indexOf(outcome.skipped.failedReason)).toBeLessThan(skipped.indexOf(outcome.skipped.detail));
   });
 });

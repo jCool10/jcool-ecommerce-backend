@@ -15,9 +15,6 @@ import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from
 
 const FIXED_KEY = '5c3f2b1a-9d8e-4c7b-8a6f-1e2d3c4b5a69';
 
-// Wired-route contract for the idempotency layer on POST /orders over real Postgres. The
-// concurrent-race and reclaim proofs live in the concurrency spec; the interceptor's per-branch
-// logic is unit-tested separately.
 describe('Idempotency on POST /orders (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -31,26 +28,22 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
 
   const server = () => app.getHttpServer();
 
-  it('rejects an authenticated POST /orders without an Idempotency-Key (400)', async () => {
+  it('rejects a missing or non-UUID Idempotency-Key with 400', async () => {
     const token = await newPrincipalToken(app);
 
-    const res = await request(server()).post('/orders').set(authHeader(token));
+    const missing = await request(server()).post('/orders').set(authHeader(token));
+    const malformed = await request(server())
+      .post('/orders')
+      .set(authHeader(token))
+      .set({ 'Idempotency-Key': 'not-a-uuid' });
 
-    expect(res.status).toBe(400);
+    expect([missing.status, malformed.status]).toEqual([400, 400]);
   });
 
-  it('rejects a non-UUID Idempotency-Key (400)', async () => {
-    const token = await newPrincipalToken(app);
-
-    const res = await request(server()).post('/orders').set(authHeader(token)).set({ 'Idempotency-Key': 'not-a-uuid' });
-
-    expect(res.status).toBe(400);
-  });
-
-  it('replays the first order on a sequential retry with the same key (one order, not two)', async () => {
+  it('replays the first order on a sequential retry with the same key', async () => {
     const token = await newPrincipalToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-    await seedStock(app, variantId, 5); // checkout now holds stock — seed enough on-hand
+    await seedStock(app, variantId, 5);
     await addToCart(app, token, variantId, 2);
 
     const first = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader(FIXED_KEY));
@@ -58,11 +51,8 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
-    // Same result replayed byte-for-byte — same order id, not a freshly created second order.
-    expect(second.body.id).toBe(first.body.id);
     expect(second.body).toEqual(first.body);
 
-    // Exactly one order exists for the user, and the key is frozen COMPLETED (single stored row).
     const list = await request(server()).get('/orders').set(authHeader(token));
     expect(list.body.items).toHaveLength(1);
 
@@ -70,7 +60,6 @@ describe('Idempotency on POST /orders (integration, real Postgres)', () => {
       .select({ status: schema.idempotencyKeys.status })
       .from(schema.idempotencyKeys)
       .where(eq(schema.idempotencyKeys.key, FIXED_KEY));
-    expect(keyRows).toHaveLength(1);
-    expect(keyRows[0].status).toBe('COMPLETED');
+    expect(keyRows).toEqual([{ status: 'COMPLETED' }]);
   });
 });

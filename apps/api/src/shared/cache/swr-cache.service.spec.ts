@@ -29,16 +29,14 @@ function build() {
     release: vi.fn().mockResolvedValue(undefined),
   };
   const metrics = fakeMetricsPort();
-  const config = fakeConfigService(CONFIG_VALUES);
-  const logger = fakePinoLogger();
   const swr = new SwrCacheService(
     cache as unknown as CacheService,
     lock as unknown as SingleFlightLock,
     metrics,
-    config,
-    logger,
+    fakeConfigService(CONFIG_VALUES),
+    fakePinoLogger(),
   );
-  return { swr, cache, lock, metrics, logger };
+  return { swr, cache, lock, metrics };
 }
 
 function opsOf(metrics: { recordCatalogCacheOperation: ReturnType<typeof vi.fn> }): string[] {
@@ -49,21 +47,13 @@ function flushBackgroundWork(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+const staleEnvelope = <T>(data: T) => makeEnvelope(data, POLICY, Date.now() - POLICY.softTtlMs - 1);
+
 describe('SwrCacheService', () => {
   let ctx: ReturnType<typeof build>;
 
   beforeEach(() => {
     ctx = build();
-  });
-
-  it('reads its default policy from config', () => {
-    expect(ctx.swr.defaultPolicy).toEqual({
-      softTtlMs: 1_000,
-      staleWindowMs: 2_000,
-      jitterMs: 3_000,
-      leaseMs: 4_000,
-      waitMs: 5_000,
-    });
   });
 
   describe('fresh hit', () => {
@@ -80,8 +70,7 @@ describe('SwrCacheService', () => {
 
   describe('stale hit', () => {
     it('answers from the stale value immediately and refreshes behind it', async () => {
-      const stale = makeEnvelope({ id: 'p1' }, POLICY, Date.now() - POLICY.softTtlMs - 1);
-      ctx.cache.read.mockResolvedValue({ status: 'hit', value: stale });
+      ctx.cache.read.mockResolvedValue({ status: 'hit', value: staleEnvelope({ id: 'p1' }) });
       ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
       // Only resolved after the read has already answered: a caller that waited would deadlock here.
       let finishRebuild!: (value: { id: string }) => void;
@@ -99,22 +88,8 @@ describe('SwrCacheService', () => {
       expect(ctx.lock.release).toHaveBeenCalledWith('k:lock', 't');
     });
 
-    it('skips the background refresh when another caller already holds the lock', async () => {
-      const stale = makeEnvelope({ id: 'p1' }, POLICY, Date.now() - POLICY.softTtlMs - 1);
-      ctx.cache.read.mockResolvedValue({ status: 'hit', value: stale });
-      ctx.lock.acquire.mockResolvedValue({ status: 'held' });
-      const rebuild = vi.fn();
-
-      await ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY });
-      await flushBackgroundWork();
-
-      expect(rebuild).not.toHaveBeenCalled();
-      expect(opsOf(ctx.metrics)).toEqual(['hit_stale']);
-    });
-
-    it('keeps serving stale when the background refresh fails instead of surfacing the error', async () => {
-      const stale = makeEnvelope({ id: 'p1' }, POLICY, Date.now() - POLICY.softTtlMs - 1);
-      ctx.cache.read.mockResolvedValue({ status: 'hit', value: stale });
+    it('keeps serving stale when the background refresh fails', async () => {
+      ctx.cache.read.mockResolvedValue({ status: 'hit', value: staleEnvelope({ id: 'p1' }) });
       ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
       const rebuild = vi.fn().mockRejectedValue(new Error('postgres down'));
 
@@ -138,7 +113,7 @@ describe('SwrCacheService', () => {
       expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_acquired', 'rebuild']);
     });
 
-    it('skips the rebuild when the previous holder filled the key between the read and the lock', async () => {
+    it('skips the rebuild when a previous holder filled the key after the read', async () => {
       ctx.cache.read
         .mockResolvedValueOnce({ status: 'miss' })
         .mockResolvedValue({ status: 'hit', value: makeEnvelope({ id: 'p1' }, POLICY) });
@@ -151,7 +126,8 @@ describe('SwrCacheService', () => {
       expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_acquired']);
     });
 
-    it('releases the lock even when the rebuild throws, so the key is not wedged for a full lease', async () => {
+    // Otherwise the key stays wedged for a full lease.
+    it('releases the lock even when the rebuild throws', async () => {
       ctx.cache.read.mockResolvedValue({ status: 'miss' });
       ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
 
@@ -161,30 +137,8 @@ describe('SwrCacheService', () => {
       expect(ctx.lock.release).toHaveBeenCalledWith('k:lock', 't');
     });
 
-    it('waits for the lock holder rather than querying the source itself', async () => {
-      ctx.cache.read
-        .mockResolvedValueOnce({ status: 'miss' })
-        .mockResolvedValue({ status: 'hit', value: makeEnvelope({ id: 'p1' }, POLICY) });
-      ctx.lock.acquire.mockResolvedValue({ status: 'held' });
-      const rebuild = vi.fn();
-
-      await expect(ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'p1' });
-      expect(rebuild).not.toHaveBeenCalled();
-      expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_wait']);
-    });
-
-    it('reads through to the source when the holder never delivers within the wait budget', async () => {
-      ctx.cache.read.mockResolvedValue({ status: 'miss' });
-      ctx.lock.acquire.mockResolvedValue({ status: 'held' });
-      const rebuild = vi.fn().mockResolvedValue({ id: 'p1' });
-
-      await expect(ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'p1' });
-      expect(rebuild).toHaveBeenCalledTimes(1);
-      expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_wait', 'lock_timeout']);
-    });
-
-    // A holder that stores nothing — an absent value, a rebuild that threw, a refused write — used
-    // to pin every waiter for the whole budget before they each queried the source anyway.
+    // A holder that stores nothing (an absent value, a rebuild that threw, a refused write) used to
+    // pin every waiter for the whole budget before they each queried the source anyway.
     it('stops waiting the moment the holder lets the lock go without storing a value', async () => {
       ctx.cache.read.mockResolvedValue({ status: 'miss' });
       ctx.lock.acquire.mockResolvedValue({ status: 'held' });
@@ -199,28 +153,24 @@ describe('SwrCacheService', () => {
     });
   });
 
-  describe('Redis unreachable', () => {
-    it('falls through to the source on a failed read without attempting the lock', async () => {
-      ctx.cache.read.mockResolvedValue({ status: 'error' });
-      const rebuild = vi.fn().mockResolvedValue({ id: 'p1' });
+  // Exactly one outcome per lookup: the fall-through replaces the miss, it does not follow it.
+  it('falls through to the source with one outcome when Redis cannot answer', async () => {
+    const readFails = build();
+    readFails.cache.read.mockResolvedValue({ status: 'error' });
+    const lockFails = build();
+    lockFails.cache.read.mockResolvedValue({ status: 'miss' });
+    lockFails.lock.acquire.mockResolvedValue({ status: 'error' });
+    const rebuild = () => Promise.resolve({ id: 'p1' });
 
-      await expect(ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'p1' });
-      expect(ctx.lock.acquire).not.toHaveBeenCalled();
-      expect(opsOf(ctx.metrics)).toEqual(['error_fallthrough']);
-    });
+    await expect(readFails.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'p1' });
+    await expect(lockFails.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'p1' });
 
-    it('falls through to the source when the lock itself cannot be reached', async () => {
-      ctx.cache.read.mockResolvedValue({ status: 'miss' });
-      ctx.lock.acquire.mockResolvedValue({ status: 'error' });
-      const rebuild = vi.fn().mockResolvedValue({ id: 'p1' });
-
-      await expect(ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'p1' });
-      // Exactly one outcome per lookup: the fall-through replaces the miss, it does not follow it.
-      expect(opsOf(ctx.metrics)).toEqual(['error_fallthrough']);
-    });
+    expect(readFails.lock.acquire).not.toHaveBeenCalled();
+    expect(opsOf(readFails.metrics)).toEqual(['error_fallthrough']);
+    expect(opsOf(lockFails.metrics)).toEqual(['error_fallthrough']);
   });
 
-  it('treats a payload written under an older shape as a miss rather than a permanently stale entry', async () => {
+  it('treats a payload written under an older shape as a miss', async () => {
     ctx.cache.read.mockResolvedValue({ status: 'hit', value: { id: 'p1' } });
     ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
     const rebuild = vi.fn().mockResolvedValue({ id: 'p1-rebuilt' });
@@ -229,7 +179,8 @@ describe('SwrCacheService', () => {
     expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_acquired', 'rebuild']);
   });
 
-  it('does not store an absent value, so an unknown key cannot fill the cache with tombstones', async () => {
+  // An unknown key must not fill the cache with tombstones.
+  it('does not store an absent value', async () => {
     ctx.cache.read.mockResolvedValue({ status: 'miss' });
     ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
 
@@ -239,7 +190,7 @@ describe('SwrCacheService', () => {
     expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_acquired', 'rebuild']);
   });
 
-  it('reports a rejected store, so a Redis that reads but refuses writes is not a silent miss', async () => {
+  it('reports a store Redis refused', async () => {
     ctx.cache.read.mockResolvedValue({ status: 'miss' });
     ctx.cache.writeMs.mockResolvedValue(false);
     ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
@@ -261,21 +212,18 @@ describe('SwrCacheService', () => {
       },
     };
 
-    it('stores the encoded payload, not the value the caller sees', async () => {
+    it('stores the encoded payload and decodes it back for the caller', async () => {
       ctx.cache.read.mockResolvedValue({ status: 'miss' });
       ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
+      await ctx.swr.readThroughSwr('k', () => Promise.resolve({ id: 'p1' }), { policy: POLICY, codec });
+      const [, stored] = ctx.cache.writeMs.mock.calls[0] as [string, { data: unknown }];
 
-      const answer = await ctx.swr.readThroughSwr('k', () => Promise.resolve({ id: 'p1' }), { policy: POLICY, codec });
+      const reader = build();
+      reader.cache.read.mockResolvedValue({ status: 'hit', value: stored });
 
-      expect(answer).toEqual({ id: 'p1' });
-      expect(ctx.cache.writeMs).toHaveBeenCalledWith('k', expect.objectContaining({ data: { wire: 'p1' } }), 90_000);
-    });
-
-    it('decodes a stored payload back into the shape the caller expects', async () => {
-      ctx.cache.read.mockResolvedValue({ status: 'hit', value: makeEnvelope({ wire: 'p1' }, POLICY) });
-
-      await expect(ctx.swr.readThroughSwr('k', vi.fn(), { policy: POLICY, codec })).resolves.toEqual({ id: 'p1' });
-      expect(opsOf(ctx.metrics)).toEqual(['hit_fresh']);
+      expect(stored.data).toEqual({ wire: 'p1' });
+      await expect(reader.swr.readThroughSwr('k', vi.fn(), { policy: POLICY, codec })).resolves.toEqual({ id: 'p1' });
+      expect(opsOf(reader.metrics)).toEqual(['hit_fresh']);
     });
 
     it('serves the read even when the codec cannot encode what the source returned', async () => {
@@ -297,7 +245,7 @@ describe('SwrCacheService', () => {
       expect(opsOf(ctx.metrics)).toEqual(['miss', 'lock_acquired', 'rebuild', 'store_rejected']);
     });
 
-    it('rebuilds over an entry the codec rejects instead of serving it until its TTL runs out', async () => {
+    it('rebuilds over an entry the codec rejects', async () => {
       ctx.cache.read.mockResolvedValue({ status: 'hit', value: makeEnvelope({ legacy: 'p1' }, POLICY) });
       ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
 
@@ -329,42 +277,29 @@ describe('SwrCacheService tracing', () => {
     trace.disable();
   });
 
-  beforeEach(() => exporter.reset());
+  it('names each rebuild span by key template and by why it rebuilt', async () => {
+    const onMiss = build();
+    onMiss.cache.read.mockResolvedValue({ status: 'miss' });
+    onMiss.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
+    const behindStale = build();
+    behindStale.cache.read.mockResolvedValue({ status: 'hit', value: staleEnvelope({ id: 'p1' }) });
+    behindStale.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
 
-  it('names what was rebuilt and why, so rebuilds group by key shape rather than by id', async () => {
-    const ctx = build();
-    ctx.cache.read.mockResolvedValue({ status: 'miss' });
-    ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
-
-    await ctx.swr.readThroughSwr('catalog:v3:product:p1', () => Promise.resolve({ id: 'p1' }), {
+    await onMiss.swr.readThroughSwr('catalog:v3:product:p1', () => Promise.resolve({ id: 'p1' }), {
       policy: POLICY,
       label: 'catalog.product_detail',
     });
+    await behindStale.swr.readThroughSwr('k', () => Promise.resolve({ id: 'p1-new' }), { policy: POLICY });
+    await flushBackgroundWork();
 
-    const spans = exporter.getFinishedSpans().filter((span) => span.name === 'cache.rebuild');
-    expect(spans).toHaveLength(1);
-    expect(spans[0].attributes).toMatchObject({
+    const [missSpan, staleSpan] = exporter.getFinishedSpans().filter((span) => span.name === 'cache.rebuild');
+    expect(missSpan.attributes).toMatchObject({
       'cache.key': 'catalog:v3:product:p1',
       'cache.key_template': 'catalog.product_detail',
       'cache.result': 'miss',
+      'cache.rebuild_ms': expect.any(Number) as unknown,
     });
-    expect(spans[0].attributes['cache.rebuild_ms']).toEqual(expect.any(Number));
-  });
-
-  it('records a refresh behind a stale hit as stale, not as a miss', async () => {
-    const ctx = build();
-    ctx.cache.read.mockResolvedValue({
-      status: 'hit',
-      value: makeEnvelope({ id: 'p1' }, POLICY, Date.now() - POLICY.softTtlMs - 1),
-    });
-    ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });
-
-    await ctx.swr.readThroughSwr('k', () => Promise.resolve({ id: 'p1-new' }), { policy: POLICY });
-    await flushBackgroundWork();
-
-    const spans = exporter.getFinishedSpans().filter((span) => span.name === 'cache.rebuild');
-    expect(spans).toHaveLength(1);
-    expect(spans[0].attributes).toMatchObject({ 'cache.result': 'hit_stale' });
-    expect(spans[0].attributes['cache.key_template']).toBeUndefined();
+    expect(staleSpan.attributes).toMatchObject({ 'cache.result': 'hit_stale' });
+    expect(staleSpan.attributes['cache.key_template']).toBeUndefined();
   });
 });

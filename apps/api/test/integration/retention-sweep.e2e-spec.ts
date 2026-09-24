@@ -23,11 +23,8 @@ const WINDOWS = {
   RETENTION_IDEMPOTENCY_GRACE_SEC: '0',
 };
 
-/**
- * Every test inserts a row on each side of the boundary and asserts on the SURVIVOR: each of these
- * tables exists to make some retry safe, so over-collecting produces a correct-looking app that
- * fails only under retry. Sweeps are driven directly — a timer tick would delete the row under test.
- */
+// Each table exists to make some retry safe, so every test asserts on the survivor: over-collecting
+// looks correct until a retry. Sweeps are driven directly, since a timer tick would race the test.
 describe('Retention sweeps (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -37,7 +34,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
   const sweepNamed = (name: string): RetentionSweep => {
     const sweep = registry.all().find((s) => s.name === name);
-    if (!sweep) throw new Error(`no retention sweep named "${name}" — registration is what makes it run`);
+    if (!sweep) throw new Error(`no retention sweep named "${name}"`);
     return sweep;
   };
 
@@ -79,8 +76,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  // A sweep that was never registered produces no error and no metric — the table simply stops
-  // being collected.
+  // A sweep that was never registered produces no error and no metric; the table just grows.
   it('registers a sweep for every table with a retention rule', () => {
     expect([...registry.names()].sort()).toEqual([
       'media:assets',
@@ -92,32 +88,21 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   });
 
   describe('messaging:outbox', () => {
-    it('never collects an unpublished row, however old — that is an unsent event, not a stale record', async () => {
-      await db.insert(schema.outbox).values([
-        // A hundred days old and still the relay's work queue — no age makes it collectable.
-        outboxRow({ createdAt: daysAgo(100), publishedAt: null }),
-        outboxRow({ eventType: 'order.paid', createdAt: daysAgo(60), publishedAt: daysAgo(60) }),
-      ]);
-
-      const deleted = await sweepNamed('messaging:outbox').sweep(500);
-
-      expect(deleted).toBe(1);
-      const [survivor] = await db.select().from(schema.outbox);
-      expect(survivor).toMatchObject({ eventType: 'order.placed', publishedAt: null });
-    });
-
-    it('keeps a row published inside the window', async () => {
+    // An unpublished row is the relay's work queue, an unsent event rather than a stale record.
+    it('keeps unpublished rows at any age and published ones inside the window', async () => {
       await db
         .insert(schema.outbox)
         .values([
+          outboxRow({ eventType: 'unsent', createdAt: daysAgo(100), publishedAt: null }),
           outboxRow({ eventType: 'old', createdAt: daysAgo(31), publishedAt: daysAgo(31) }),
           outboxRow({ eventType: 'recent', createdAt: daysAgo(29), publishedAt: daysAgo(29) }),
         ]);
 
-      await sweepNamed('messaging:outbox').sweep(500);
+      const deleted = await sweepNamed('messaging:outbox').sweep(500);
 
+      expect(deleted).toBe(1);
       const left = await db.select({ eventType: schema.outbox.eventType }).from(schema.outbox);
-      expect(left).toEqual([{ eventType: 'recent' }]);
+      expect(left.map((row) => row.eventType).sort()).toEqual(['recent', 'unsent']);
     });
   });
 
@@ -179,8 +164,8 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   });
 
   describe('payment:webhook-events', () => {
-    // The window here is the GATEWAY's redelivery window, not the queue's: this table is read only
-    // at ingress, where the unique (provider, provider_event_id) turns a repeat into a no-op.
+    // The window is the gateway's redelivery window, not the queue's: the unique
+    // (provider, provider_event_id) turns a repeat into a no-op at ingress.
     it('keeps an event the gateway could still redeliver', async () => {
       await db
         .insert(schema.webhookEvents)
@@ -215,9 +200,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
       const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
-      // Every registered sweep has a series after ONE tick, so none is silently missing from the
-      // roster. That the TIMER starts late enough to see them all is a separate claim, asserted in
-      // `retention.scheduler.spec.ts`; this suite drives `tick()` directly.
+      // Every registered sweep has a series after one tick, so none is silently missing.
       for (const name of registry.names()) {
         if (name === 'test:always-fails') continue;
         expect(text).toContain(`retention_rows_deleted_total{sweep="${name}"}`);

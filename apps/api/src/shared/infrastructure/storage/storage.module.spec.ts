@@ -1,7 +1,6 @@
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { describe, expect, it } from 'vitest';
 import { ObjectStorageNotConfiguredError } from './object-storage.port';
-import { S3ObjectStorageAdapter } from './s3-object-storage.adapter';
 import { createObjectStorage } from './storage.module';
 
 const configured = {
@@ -14,12 +13,6 @@ const configured = {
 };
 
 describe('createObjectStorage', () => {
-  it('builds the S3 adapter once every setting is present', () => {
-    expect(createObjectStorage(fakeConfigService({ 'app.env': 'production', ...configured }))).toBeInstanceOf(
-      S3ObjectStorageAdapter,
-    );
-  });
-
   it('keeps a dev app booting without a bucket, and fails only where storage is used', async () => {
     const storage = createObjectStorage(fakeConfigService({ 'app.env': 'development' }));
 

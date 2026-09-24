@@ -2,27 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { UnsupportedContentTypeError, assertAllowedContentType, extensionFor } from './asset-content-type';
 
 describe('asset content types', () => {
-  it.each([
-    ['image/jpeg', 'jpg'],
-    ['image/png', 'png'],
-    ['image/webp', 'webp'],
-    ['image/avif', 'avif'],
-  ] as const)('maps %s to .%s', (contentType, extension) => {
-    expect(extensionFor(assertAllowedContentType(contentType))).toBe(extension);
+  it('normalises case and whitespace, and takes the extension from its own table', () => {
+    const contentType = assertAllowedContentType('  IMAGE/WEBP ');
+
+    expect(contentType).toBe('image/webp');
+    expect(extensionFor(contentType)).toBe('webp');
   });
 
-  it('normalises case and surrounding whitespace before matching', () => {
-    expect(assertAllowedContentType('  IMAGE/PNG ')).toBe('image/png');
-  });
+  it('refuses anything outside the raster allowlist', () => {
+    // SVG is executable XML; a parameterised type is not the signed one; `constructor` is an
+    // inherited Object key that a plain `in` lookup would accept.
+    const refused = ['image/svg+xml', 'text/html', 'image/png; charset=utf-8', '', 'constructor', '__proto__'];
 
-  it.each(['image/svg+xml', 'text/html', 'application/pdf', 'image/png; charset=utf-8', ''])(
-    'refuses %s',
-    (contentType) => {
-      expect(() => assertAllowedContentType(contentType)).toThrow(UnsupportedContentTypeError);
-    },
-  );
-
-  it('is not fooled by inherited Object properties', () => {
-    expect(() => assertAllowedContentType('constructor')).toThrow(UnsupportedContentTypeError);
+    for (const contentType of refused) {
+      expect(() => assertAllowedContentType(contentType), contentType).toThrow(UnsupportedContentTypeError);
+    }
   });
 });

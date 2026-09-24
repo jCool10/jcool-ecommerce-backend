@@ -7,6 +7,7 @@ import {
   SignJWT,
   UnsecuredJWT,
   createLocalJWKSet,
+  errors,
   exportJWK,
   exportSPKI,
   generateKeyPair,
@@ -21,6 +22,7 @@ const ISSUER = 'https://users.test.invalid';
 const AUDIENCE = 'jcool-test';
 const USER_ID = '137465797020397179';
 const CLAIMS = { sub: USER_ID, role: 'CUSTOMER', jti: 'jti-1', epoch: 2 };
+const MALFORMED = 'token claims are malformed';
 
 interface SigningKey {
   kid: string;
@@ -61,6 +63,13 @@ function es256(key: SigningKey, options: Es256Options = {}): Promise<string> {
     .sign(key.privateKey);
 }
 
+interface Refusal {
+  /** What the client is told. */
+  message?: string;
+  /** Why, as logged: this package's own reason string, or the jose error class. */
+  cause?: string | (abstract new (...args: never[]) => Error);
+}
+
 describe('AccessTokenVerifier', () => {
   let current: SigningKey;
   let previous: SigningKey;
@@ -84,10 +93,19 @@ describe('AccessTokenVerifier', () => {
     return new AccessTokenVerifier(options, epochs, denylist);
   }
 
-  async function expectRefused(token: Promise<string> | string | undefined, subject = verifier(), message?: string) {
-    const outcome = subject.verify(await token);
-    await expect(outcome).rejects.toBeInstanceOf(UnauthorizedException);
-    await expect(outcome).rejects.toThrow(message ?? 'Unauthorized');
+  async function expectRefused(token: Promise<string> | string | undefined, { message, cause }: Refusal = {}) {
+    const refusal: unknown = await verifier()
+      .verify(await token)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(refusal).toBeInstanceOf(UnauthorizedException);
+    const exception = refusal as UnauthorizedException;
+    expect(exception.getResponse()).toMatchObject({ message: message ?? 'Unauthorized', statusCode: 401 });
+    if (typeof cause === 'string') expect((exception.cause as Error).message).toBe(cause);
+    else if (cause) expect(exception.cause).toBeInstanceOf(cause);
   }
 
   it('accepts an ES256 token signed by the current key', async () => {
@@ -100,122 +118,106 @@ describe('AccessTokenVerifier', () => {
     await expect(verifier().verify(await es256(previous))).resolves.toMatchObject({ userId: USER_ID });
   });
 
-  it('refuses an HS256 token under any secret', async () => {
-    await expectRefused(hs256(randomBytes(32).toString('hex')));
+  it('refuses an HS256 token keyed with the public key', async () => {
+    const cause = 'no verification path for alg HS256';
+
+    await expectRefused(hs256(await exportSPKI(current.publicKey)), { cause });
+    await expectRefused(hs256(JSON.stringify(current.jwk)), { cause });
   });
 
-  it('refuses an HS256 token keyed with the public key', async () => {
-    await expectRefused(hs256(await exportSPKI(current.publicKey)));
-    await expectRefused(hs256(JSON.stringify(current.jwk)));
+  it('refuses every header alg other than ES256', async () => {
+    await expectRefused(hs256(randomBytes(32).toString('hex')), { cause: 'no verification path for alg HS256' });
+    await expectRefused(new UnsecuredJWT(CLAIMS).setIssuedAt().setExpirationTime('5m').encode(), {
+      cause: 'no verification path for alg none',
+    });
+    await expectRefused(es256(await signingKey(current.kid, 'ES384'), { alg: 'ES384' }), {
+      cause: 'no verification path for alg ES384',
+    });
   });
 
   it('refuses a key id that is not published', async () => {
-    await expectRefused(es256(await signingKey('unknown')));
+    await expectRefused(es256(await signingKey('unknown')), { cause: errors.JWKSNoMatchingKey });
   });
 
   it('refuses a published key id over a signature from another key', async () => {
     const impostor = await signingKey(current.kid);
 
-    await expectRefused(es256(impostor));
+    await expectRefused(es256(impostor), { cause: errors.JWSSignatureVerificationFailed });
   });
 
-  it('refuses an unsigned token', async () => {
-    await expectRefused(new UnsecuredJWT(CLAIMS).setIssuedAt().setExpirationTime('5m').encode());
-  });
+  it('refuses a token for another issuer or audience', async () => {
+    const cause = errors.JWTClaimValidationFailed;
 
-  it('refuses an algorithm it has no path for', async () => {
-    await expectRefused(es256(await signingKey(current.kid, 'ES384'), { alg: 'ES384' }));
-  });
-
-  it.each([
-    ['issuer', { issuer: 'https://elsewhere.invalid' }],
-    ['audience', { audience: 'someone-else' }],
-  ])('refuses an ES256 token for another %s', async (_field, overrides) => {
-    await expectRefused(es256(current, overrides));
+    await expectRefused(es256(current, { issuer: 'https://elsewhere.invalid' }), { cause });
+    await expectRefused(es256(current, { audience: 'someone-else' }), { cause });
   });
 
   it('refuses an expired token', async () => {
-    await expectRefused(es256(current, { expiresIn: Math.floor(Date.now() / 1000) - 1 }));
+    await expectRefused(es256(current, { expiresIn: Math.floor(Date.now() / 1000) - 1 }), {
+      cause: errors.JWTExpired,
+    });
   });
 
-  it.each([
-    ['no subject', { role: 'CUSTOMER', jti: 'jti-1', epoch: 2 }],
-    ['an unknown role', { ...CLAIMS, role: 'ROOT' }],
-    ['no jti', { sub: USER_ID, role: 'CUSTOMER', epoch: 2 }],
-  ])('refuses a token with %s', async (_case, claims) => {
-    await expectRefused(es256(current, { claims }));
+  it('refuses a token with no subject, an unknown role or no jti', async () => {
+    const { sub: _sub, ...noSubject } = CLAIMS;
+    const { jti: _jti, ...noJti } = CLAIMS;
+
+    await expectRefused(es256(current, { claims: noSubject }), { cause: MALFORMED });
+    await expectRefused(es256(current, { claims: { ...CLAIMS, role: 'ROOT' } }), { cause: MALFORMED });
+    await expectRefused(es256(current, { claims: noJti }), { cause: MALFORMED });
   });
 
-  it.each([
-    ['a UUID', '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f'],
-    ['an integer below the routable range', '42'],
-  ])('refuses a correctly signed, unexpired token whose subject is %s', async (_case, sub) => {
-    await expectRefused(es256(current, { claims: { ...CLAIMS, sub } }));
+  // Every id column downstream throws on a non-routable id, which would surface as a 500.
+  it('refuses a signed token whose subject is not a routable id', async () => {
+    await expectRefused(es256(current, { claims: { ...CLAIMS, sub: '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f' } }), {
+      cause: MALFORMED,
+    });
+    await expectRefused(es256(current, { claims: { ...CLAIMS, sub: '42' } }), { cause: MALFORMED });
 
     expect(epochs.current).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, '', 'not-a-jwt'])('refuses %j as a token', async (token) => {
-    await expectRefused(token);
+  it('refuses a missing or unparsable bearer token', async () => {
+    await expectRefused(undefined, { cause: 'no bearer token' });
+    await expectRefused('', { cause: 'no bearer token' });
+    await expectRefused('not-a-jwt');
   });
 
   it('refuses a denylisted token', async () => {
     denylist.isDenylisted.mockResolvedValue(true);
 
-    await expectRefused(es256(current), verifier(), 'Token has been revoked');
+    await expectRefused(es256(current), { message: 'Token has been revoked' });
     expect(denylist.isDenylisted).toHaveBeenCalledWith('jti-1');
   });
 
   it('refuses a token minted before the current session epoch', async () => {
     epochs.current.mockResolvedValue(3);
 
-    await expectRefused(es256(current), verifier(), 'Session has been revoked');
+    await expectRefused(es256(current), {
+      message: 'Session has been revoked',
+      cause: 'token epoch is behind the session epoch',
+    });
     expect(epochs.current).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it('treats a token with no epoch claim as epoch 0', async () => {
+    const { epoch: _epoch, ...noEpoch } = CLAIMS;
+    epochs.current.mockResolvedValue(0);
+    await expect(verifier().verify(await es256(current, { claims: noEpoch }))).resolves.toMatchObject({
+      userId: USER_ID,
+    });
+
+    epochs.current.mockResolvedValue(1);
+    await expectRefused(es256(current, { claims: noEpoch }), { message: 'Session has been revoked' });
   });
 
   it('refuses a token whose user is gone', async () => {
     epochs.current.mockResolvedValue(null);
 
-    await expectRefused(es256(current), verifier(), 'Session has been revoked');
-  });
-
-  it('reads a token without an epoch claim as epoch 0', async () => {
-    const { epoch: _epoch, ...claims } = CLAIMS;
-    epochs.current.mockResolvedValue(0);
-
-    await expect(verifier().verify(await es256(current, { claims }))).resolves.toMatchObject({ userId: USER_ID });
-  });
-
-  it.each([
-    ['a missing token', () => undefined, 'no bearer token'],
-    ['an expired token', () => es256(current, { expiresIn: Math.floor(Date.now() / 1000) - 1 }), '"exp" claim'],
-    ['a token for another issuer', () => es256(current, { issuer: 'https://elsewhere.invalid' }), '"iss" claim'],
-    ['malformed claims', () => es256(current, { claims: { ...CLAIMS, role: 'ROOT' } }), 'token claims are malformed'],
-  ])('keeps the reason for refusing %s as the cause', async (_case, token, reason) => {
-    const refusal: unknown = await verifier()
-      .verify(await token())
-      .catch((error: unknown) => error);
-
-    expect(refusal).toBeInstanceOf(UnauthorizedException);
-    expect((refusal as UnauthorizedException).getResponse()).toMatchObject({
-      message: 'Unauthorized',
-      statusCode: 401,
+    await expectRefused(es256(current), {
+      message: 'Session has been revoked',
+      cause: 'no session epoch for the subject',
     });
-    expect(String((refusal as { cause?: Error }).cause?.message)).toContain(reason);
-  });
-
-  it('says which session check refused the token', async () => {
-    epochs.current.mockResolvedValueOnce(null).mockResolvedValueOnce(3);
-
-    const gone: unknown = await verifier()
-      .verify(await es256(current))
-      .catch((error: unknown) => error);
-    const stale: unknown = await verifier()
-      .verify(await es256(current))
-      .catch((error: unknown) => error);
-
-    expect((gone as { cause?: Error }).cause?.message).toBe('no session epoch for the subject');
-    expect((stale as { cause?: Error }).cause?.message).toBe('token epoch is behind the session epoch');
   });
 
   it('checks no revocation state for a token it refused on signature', async () => {

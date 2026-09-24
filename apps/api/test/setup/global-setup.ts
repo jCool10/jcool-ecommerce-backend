@@ -16,7 +16,7 @@ const REDIS_IMAGE = 'redis:7-alpine';
 // Postgres 16 ships max_connections=100, which four workers can reach. No spec holds more than two
 // apps open at once (`queue-connection.e2e-spec.ts`; the identity-key-pin files boot apps one at a
 // time and close each in a `finally`), so the realistic peak is 2 apps × DB_POOL_MAX × workers plus
-// a handful of raw pools — around 100 at W=4. Raised to 300 so that peak sits well inside the limit
+// a handful of raw pools, around 100 at W=4. Raised to 300 so that peak sits well inside the limit
 // and a file that boots more apps later fails on its own pool rather than on the server's global one.
 const MAX_CONNECTIONS = 300;
 
@@ -24,13 +24,13 @@ declare module 'vitest' {
   interface ProvidedContext {
     /** The container's own database. Worker URLs are derived from it; nothing connects to it directly. */
     PG_BASE_URL: string;
-    /** No logical-db index — each worker appends its own. */
+    /** No logical-db index: each worker appends its own. */
     REDIS_BASE_URL: string;
   }
 }
 
 // Runs once per test:e2e in its own process; URLs reach workers via provide()/inject(), which is
-// run-global — the per-worker scoping is applied worker-side in worker-resources.ts.
+// run-global; the per-worker scoping is applied worker-side in worker-resources.ts.
 export default async function setup({
   provide,
 }: {
@@ -38,7 +38,7 @@ export default async function setup({
 }): Promise<() => Promise<void>> {
   // Before any `docker run`: the Redis cap is knowable here, and `assertWorkerBudget` can only
   // report it per worker, i.e. after both containers are up, the template is migrated and N
-  // databases are cloned — minutes of setup to reach a config error we can see now. `workerCount()`
+  // databases are cloned: minutes of setup to reach a config error we can see now. `workerCount()`
   // also throws here on a malformed E2E_WORKERS, which is the earliest point anything reads it.
   if (workerCount() > MAX_REDIS_DB_INDEX) {
     throw new Error(
@@ -94,7 +94,7 @@ export default async function setup({
  */
 async function createWorkerDatabases(baseUrl: string): Promise<void> {
   // Connected to the container's own database, never to the template: `CREATE DATABASE ... TEMPLATE`
-  // is refused while any session holds the source. runMigrations releases its pool (migrate.ts:21).
+  // is refused while any session holds the source. runMigrations releases its own pool.
   const admin = new Client({ connectionString: baseUrl });
   await admin.connect();
   try {

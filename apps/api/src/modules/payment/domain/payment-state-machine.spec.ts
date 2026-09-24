@@ -13,10 +13,12 @@ function isWired(from: PaymentStatus, to: PaymentStatus): boolean {
 }
 
 describe('payment state machine', () => {
-  it('allows the wired transitions', () => {
-    expect(canTransition(PaymentStatus.PENDING, PaymentStatus.SUCCEEDED)).toBe(true);
-    expect(canTransition(PaymentStatus.PENDING, PaymentStatus.FAILED)).toBe(true);
-    expect(canTransition(PaymentStatus.PENDING, PaymentStatus.EXPIRED)).toBe(true);
+  it('is exhaustive: across every (from, to) pair, only the wired ones are allowed', () => {
+    for (const from of PAYMENT_STATUSES) {
+      for (const to of PAYMENT_STATUSES) {
+        expect(canTransition(from, to)).toBe(isWired(from, to));
+      }
+    }
   });
 
   it('rejects every transition out of a terminal state', () => {
@@ -27,36 +29,15 @@ describe('payment state machine', () => {
     }
   });
 
-  it('is exhaustive: across every (from, to) pair, only the wired ones are allowed', () => {
-    for (const from of PAYMENT_STATUSES) {
-      for (const to of PAYMENT_STATUSES) {
-        expect(canTransition(from, to)).toBe(isWired(from, to));
-      }
+  it('throws PaymentTransitionError carrying the from/to for an illegal transition', () => {
+    let error: unknown;
+    try {
+      assertTransition(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED);
+    } catch (thrown) {
+      error = thrown;
     }
-  });
 
-  describe('assertTransition', () => {
-    it('passes for a wired transition', () => {
-      expect(() => assertTransition(PaymentStatus.PENDING, PaymentStatus.SUCCEEDED)).not.toThrow();
-    });
-
-    it('throws PaymentTransitionError for an illegal transition', () => {
-      expect(() => assertTransition(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED)).toThrow(PaymentTransitionError);
-    });
-
-    it('throws when re-expiring an already-expired payment', () => {
-      expect(() => assertTransition(PaymentStatus.EXPIRED, PaymentStatus.EXPIRED)).toThrow(PaymentTransitionError);
-    });
-
-    it('carries the from/to on the error', () => {
-      try {
-        assertTransition(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED);
-        expect.unreachable('assertTransition should have thrown');
-      } catch (error) {
-        expect(error).toBeInstanceOf(PaymentTransitionError);
-        expect((error as PaymentTransitionError).from).toBe(PaymentStatus.SUCCEEDED);
-        expect((error as PaymentTransitionError).to).toBe(PaymentStatus.FAILED);
-      }
-    });
+    expect(error).toBeInstanceOf(PaymentTransitionError);
+    expect(error).toMatchObject({ from: PaymentStatus.SUCCEEDED, to: PaymentStatus.FAILED });
   });
 });

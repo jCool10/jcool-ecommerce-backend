@@ -32,7 +32,7 @@ describe('Auth verified-email login gate (integration)', () => {
     expect(res.body.accessToken.split('.')).toHaveLength(3);
   });
 
-  it('still returns the generic 401 (not 403) for a wrong password on an unverified account', async () => {
+  it('answers a wrong password on an unverified account with the generic 401', async () => {
     const { user } = await createTestUser(app, { password });
 
     // The gate runs after the credential check, so a bad password must not reveal it exists.

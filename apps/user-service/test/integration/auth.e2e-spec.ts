@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { INestApplication } from '@nestjs/common';
 import { decodeProtectedHeader } from 'jose';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { hashRefreshToken } from '../../src/modules/user/application/hash-refresh-token';
 import {
   EMAIL_VERIFICATION_TOKEN_REPOSITORY,
   type EmailVerificationTokenRepositoryPort,
@@ -17,12 +19,23 @@ import {
   CSRF_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,
 } from '../../src/modules/user/interface/security/auth-cookie.constants';
-import { authHeader, cookieValueOf, loginAs, sessionHeaders, setCookieEntry } from '../setup/auth.helper';
+import {
+  authHeader,
+  cookieValueOf,
+  loginAs,
+  sessionFrom,
+  sessionHeaders,
+  setCookieEntry,
+  type Session,
+} from '../setup/auth.helper';
 import { E2E_ES256_KID } from '../setup/e2e-env';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { RbacProbeController } from '../setup/rbac-probe.controller';
 import { signHs256 } from '../setup/signing-keys';
+
+const LOCK_WAIT_TIMEOUT_MS = 5_000;
+const LOCK_POLL_MS = 10;
 
 describe('Auth (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -68,16 +81,15 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(res.status).toBe(409);
     });
 
-    it('rejects an invalid email with 400', async () => {
-      const res = await request(app.getHttpServer()).post('/auth/register').send({ email: 'not-an-email', password });
-      expect(res.status).toBe(400);
-    });
-
-    it('rejects a too-short password with 400', async () => {
-      const res = await request(app.getHttpServer())
+    it('rejects an invalid email or a too-short password with 400', async () => {
+      const badEmail = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ email: 'not-an-email', password });
+      const shortPassword = await request(app.getHttpServer())
         .post('/auth/register')
         .send({ email: 'shortpw@test.local', password: 'short' });
-      expect(res.status).toBe(400);
+
+      expect([badEmail.status, shortPassword.status]).toEqual([400, 400]);
     });
   });
 
@@ -100,33 +112,24 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(me.body.emailVerified).toBe(true);
     });
 
-    it('rejects a second use of the same token (single-use → 400)', async () => {
+    it('rejects a spent, expired or unknown token with 400', async () => {
       const { user } = await createTestUser(app);
-      const token = await issueToken(user.id);
+      const spent = await issueToken(user.id);
+      await request(app.getHttpServer()).post('/auth/verify-email').send({ token: spent }).expect(204);
+      const expired = await issueToken(user.id, new Date(Date.now() - 1_000));
+      const unknown = randomBytes(32).toString('base64url');
 
-      await request(app.getHttpServer()).post('/auth/verify-email').send({ token }).expect(204);
-      const replay = await request(app.getHttpServer()).post('/auth/verify-email').send({ token });
-      expect(replay.status).toBe(400);
-    });
+      const statuses: number[] = [];
+      for (const token of [spent, expired, unknown]) {
+        statuses.push((await request(app.getHttpServer()).post('/auth/verify-email').send({ token })).status);
+      }
 
-    it('rejects an expired token with 400', async () => {
-      const { user } = await createTestUser(app);
-      const token = await issueToken(user.id, new Date(Date.now() - 1_000));
-
-      const res = await request(app.getHttpServer()).post('/auth/verify-email').send({ token });
-      expect(res.status).toBe(400);
-    });
-
-    it('rejects an unknown token with 400', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/auth/verify-email')
-        .send({ token: randomBytes(32).toString('base64url') });
-      expect(res.status).toBe(400);
+      expect(statuses).toEqual([400, 400, 400]);
     });
   });
 
   describe('POST /auth/resend-verification', () => {
-    it('returns the same generic 202 for unknown, unverified, and already-verified addresses', async () => {
+    it('answers unknown, unverified and verified addresses with the same 202', async () => {
       const { user } = await createTestUser(app);
       const verified = await createTestUser(app, { emailVerified: true });
 
@@ -198,7 +201,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(withOld.status).toBe(401);
     });
 
-    it('revokes all existing sessions — the pre-reset access token and refresh cookie both stop working', async () => {
+    it('ends every existing session, access token and refresh cookie alike', async () => {
       const { user, password } = await createTestUser(app);
       const session = await loginAs(app, { email: user.email, password });
       const token = await issueResetToken(user.id);
@@ -215,35 +218,25 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(rotate.status).toBe(401);
     });
 
-    it('rejects a second use of the same token (single-use → 400)', async () => {
+    it('rejects a spent, expired or unknown token with 400', async () => {
       const { user } = await createTestUser(app);
-      const token = await issueResetToken(user.id);
-
+      const spent = await issueResetToken(user.id);
       await request(app.getHttpServer())
         .post('/auth/reset-password')
-        .send({ token, password: newPassword })
+        .send({ token: spent, password: newPassword })
         .expect(204);
-      const replay = await request(app.getHttpServer())
-        .post('/auth/reset-password')
-        .send({ token, password: 'AnotherPass789!' });
-      expect(replay.status).toBe(400);
-    });
+      const expired = await issueResetToken(user.id, new Date(Date.now() - 1_000));
+      const unknown = randomBytes(32).toString('base64url');
 
-    it('rejects an expired token with 400', async () => {
-      const { user } = await createTestUser(app);
-      const token = await issueResetToken(user.id, new Date(Date.now() - 1_000));
+      const statuses: number[] = [];
+      for (const token of [spent, expired, unknown]) {
+        const res = await request(app.getHttpServer())
+          .post('/auth/reset-password')
+          .send({ token, password: 'AnotherPass789!' });
+        statuses.push(res.status);
+      }
 
-      const res = await request(app.getHttpServer())
-        .post('/auth/reset-password')
-        .send({ token, password: newPassword });
-      expect(res.status).toBe(400);
-    });
-
-    it('rejects an unknown token with 400', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/auth/reset-password')
-        .send({ token: randomBytes(32).toString('base64url'), password: newPassword });
-      expect(res.status).toBe(400);
+      expect(statuses).toEqual([400, 400, 400]);
     });
 
     it('rejects a too-short new password with 400', async () => {
@@ -262,7 +255,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
     });
 
-    it('returns an ES256 access token in the body + refresh/csrf as cookies, usable on a protected route', async () => {
+    it('returns an ES256 access token in the body and refresh/csrf as cookies', async () => {
       const res = await request(app.getHttpServer()).post('/auth/login').send({ email, password });
 
       expect(res.status).toBe(200);
@@ -285,28 +278,41 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(me.body.email).toBe(email);
     });
 
-    it('rejects a wrong password with 401', async () => {
-      const res = await request(app.getHttpServer()).post('/auth/login').send({ email, password: 'WrongPassword9!' });
-      expect(res.status).toBe(401);
-    });
+    it('answers a wrong password and an unknown user with the same 401', async () => {
+      const wrong = await request(app.getHttpServer()).post('/auth/login').send({ email, password: 'WrongPassword9!' });
+      const unknown = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: 'ghost@test.local', password });
 
-    it('rejects an unknown user with 401 (no user-existence disclosure)', async () => {
-      const res = await request(app.getHttpServer()).post('/auth/login').send({ email: 'ghost@test.local', password });
-      expect(res.status).toBe(401);
+      const envelope = (res: request.Response) => ({ status: res.status, message: res.body.message });
+      expect(envelope(wrong).status).toBe(401);
+      expect(envelope(unknown)).toEqual(envelope(wrong));
     });
   });
 
-  describe('POST /auth/refresh (rotation + reuse detection)', () => {
+  describe('POST /auth/refresh (rotation and reuse detection)', () => {
     const email = 'refresh@test.local';
 
     beforeEach(async () => {
       await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
     });
 
-    it('rotates the token pair on a valid refresh cookie (200, new refresh cookie issued)', async () => {
+    const refresh = (session: Session) =>
+      request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session));
+
+    const familyOf = async (session: Session) => {
+      const { rows } = await pool.query<{ revoked_at: Date | null }>(
+        `SELECT revoked_at FROM refresh_tokens
+          WHERE family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = $1)`,
+        [hashRefreshToken(session.refreshToken)],
+      );
+      return rows;
+    };
+
+    it('rotates the token pair on a valid refresh cookie', async () => {
       const first = await loginAs(app, { email, password });
 
-      const res = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first));
+      const res = await refresh(first);
 
       expect(res.status).toBe(200);
       expect(decodeProtectedHeader(res.body.accessToken as string).alg).toBe('ES256');
@@ -316,22 +322,64 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     it('rejects reuse of a rotated-away refresh cookie with 401', async () => {
       const first = await loginAs(app, { email, password });
 
-      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(200);
+      await refresh(first).expect(200);
 
-      const reuse = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first));
+      const reuse = await refresh(first);
       expect(reuse.status).toBe(401);
     });
 
-    it('reuse detection also kills the rotated-out access token (epoch bump, not just the family)', async () => {
+    it('kills the rotated-out access token too when it detects reuse', async () => {
       const first = await loginAs(app, { email, password });
 
-      const rotated = await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(200);
+      const rotated = await refresh(first).expect(200);
       const successorAccess = rotated.body.accessToken as string;
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(200);
 
-      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(401);
+      await refresh(first).expect(401);
 
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(401);
+    });
+
+    it('lets one of two concurrent refreshes rotate and treats the other as reuse', async () => {
+      const first = await loginAs(app, { email, password });
+
+      // Holding the row lets both requests pass the unlocked owner read and queue on the rotate lock.
+      const holder = await pool.connect();
+      await holder.query('BEGIN');
+      await holder.query(`SELECT 1 FROM refresh_tokens WHERE token_hash = $1 FOR UPDATE`, [
+        hashRefreshToken(first.refreshToken),
+      ]);
+      const racing = Promise.all([refresh(first), refresh(first)]);
+      try {
+        await waitForLockWaiters(pool, 2);
+      } finally {
+        await holder.query('COMMIT');
+        holder.release();
+        await racing.catch(() => undefined);
+      }
+      const results = await racing;
+
+      expect(results.map((res) => res.status).sort()).toEqual([200, 401]);
+      const family = await familyOf(first);
+      expect(family).toHaveLength(2);
+      expect(family.every((token) => token.revoked_at !== null)).toBe(true);
+      const winner = results.find((res) => res.status === 200)!;
+      await refresh(sessionFrom(winner)).expect(401);
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(winner.body.accessToken)).expect(401);
+    });
+
+    it('treats a replaced token that has also expired as reuse and revokes the family', async () => {
+      const first = await loginAs(app, { email, password });
+      const rotated = await refresh(first).expect(200);
+      await pool.query(`UPDATE refresh_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1`, [
+        hashRefreshToken(first.refreshToken),
+      ]);
+
+      await refresh(first).expect(401);
+
+      expect((await familyOf(first)).every((token) => token.revoked_at !== null)).toBe(true);
+      await refresh(sessionFrom(rotated)).expect(401);
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(rotated.body.accessToken)).expect(401);
     });
 
     it('rejects a refresh with no cookie at all with 403', async () => {
@@ -348,7 +396,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
     });
 
-    it('rejects refresh when the CSRF header is missing even though the cookie is present (403)', async () => {
+    it('rejects a refresh with the cookie but no CSRF header with 403', async () => {
       const session = await loginAs(app, { email, password });
       const cookie = session.setCookies.map((c) => c.split(';')[0].trim()).join('; ');
 
@@ -356,7 +404,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(res.status).toBe(403);
     });
 
-    it('rejects refresh when the CSRF header does not match the cookie (403)', async () => {
+    it('rejects a refresh whose CSRF header does not match the cookie with 403', async () => {
       const session = await loginAs(app, { email, password });
 
       const res = await request(app.getHttpServer())
@@ -374,7 +422,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
     });
 
-    it('revokes the access token immediately + clears the refresh cookie', async () => {
+    it('revokes the access token immediately and clears the refresh cookie', async () => {
       const session = await loginAs(app, { email, password });
 
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(session.accessToken)).expect(200);
@@ -391,7 +439,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(me.status).toBe(401);
     });
 
-    it('revokes the refresh token — it can no longer rotate after logout (401)', async () => {
+    it('refuses to rotate the refresh token after logout with 401', async () => {
       const session = await loginAs(app, { email, password });
 
       await request(app.getHttpServer())
@@ -423,19 +471,6 @@ describe('Auth (integration, real Postgres + Redis)', () => {
   });
 
   describe('Route protection (JwtAuthGuard) and RBAC (RolesGuard)', () => {
-    it('rejects a protected route without a token with 401', async () => {
-      const res = await request(app.getHttpServer()).get('/auth/me');
-      expect(res.status).toBe(401);
-    });
-
-    it('allows a protected route with a valid token (200)', async () => {
-      const { user, accessToken } = await createTestUser(app);
-      const res = await request(app.getHttpServer()).get('/auth/me').set(authHeader(accessToken));
-
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ id: user.id, email: user.email, role: user.role });
-    });
-
     it('rejects an HS256 token (401)', async () => {
       const { user } = await createTestUser(app);
       const forged = await signHs256({ sub: user.id, role: user.role }, 'not-a-real-secret-but-just-as-long-000000');
@@ -450,7 +485,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(res.status).toBe(403);
     });
 
-    it('rejects an admin route without a token with 401 (authenticate before authorize)', async () => {
+    it('authenticates before it authorizes an admin route, answering 401 without a token', async () => {
       const res = await request(app.getHttpServer()).post('/admin-probe');
       expect(res.status).toBe(401);
     });
@@ -462,3 +497,17 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
   });
 });
+
+// Counts backends in this worker's database parked on a lock; pg_stat_activity is server-wide.
+async function waitForLockWaiters(pool: Pool, count: number): Promise<void> {
+  const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
+  for (;;) {
+    const { rows } = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM pg_stat_activity
+        WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'`,
+    );
+    if (Number(rows[0].n) >= count) return;
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${count} refreshes to block on the row lock`);
+    await sleep(LOCK_POLL_MS);
+  }
+}

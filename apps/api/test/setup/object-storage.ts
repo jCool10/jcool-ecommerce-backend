@@ -21,7 +21,7 @@ export interface StartedObjectStorage {
   secretAccessKey: string;
   listKeys(prefix?: string): Promise<string[]>;
   exists(key: string): Promise<boolean>;
-  /** Writes directly, bypassing the presigned URL — for arranging state a test needs. */
+  /** Writes directly, bypassing the presigned URL, to arrange state a test needs. */
   put(key: string, body: string | Uint8Array, contentType: string): Promise<void>;
   /** One spec's bucket contents must not become another's orphans. */
   clear(): Promise<void>;

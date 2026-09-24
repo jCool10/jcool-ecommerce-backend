@@ -15,17 +15,14 @@ import { addToCart } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
-// The count on the DB, not the HTTP status, is the verdict: a replay is also a 201, so status alone
-// cannot tell one order from two.
-//
-// Stock is seeded WELL above one order's need on purpose: a duplicate order would then succeed on
-// stock and reveal itself as a second row/hold, instead of being masked by a shortfall 409.
+// A replay is also a 201, so the order and hold counts are the verdict. Ample stock lets a duplicate
+// order show up as a second row instead of a shortfall 409.
 const CONTENDERS = 16;
 const AMPLE_STOCK = 50;
 
 const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
 
-describe('Idempotent checkout — concurrency, reclaim & body mismatch (integration, real Postgres)', () => {
+describe('Idempotent checkout (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
@@ -52,7 +49,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     return (res.body as { items: { id: string }[] }).items;
   }
 
-  it('N concurrent requests with the SAME key → exactly one order + one hold (rest replay/409, never 5xx)', async () => {
+  it('creates one order and one hold for concurrent requests sharing a key', async () => {
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
@@ -64,13 +61,10 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     for (const r of settled) {
       if (r.status === 'fulfilled') responses.push(r.value);
     }
-    // None errored at the socket/framework level — every contender got a real HTTP answer.
     expect(responses).toHaveLength(CONTENDERS);
-    // Winner + any replays answer 201; losers still in-flight answer 409. Nothing 5xx's.
     expect(responses.every((r) => r.status === 201 || r.status === 409)).toBe(true);
     const created = responses.filter((r) => r.status === 201);
     expect(created.length).toBeGreaterThanOrEqual(1);
-    // Every 201 points at the one order — replays return the winner's id, not a fresh one.
     expect(new Set(created.map((r) => r.body.id as string)).size).toBe(1);
 
     expect(await ordersOf(token)).toHaveLength(1);
@@ -82,7 +76,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     });
   });
 
-  it('two sequential requests with DIFFERENT keys (same cart) → two distinct orders', async () => {
+  it('creates two orders for two keys on the same cart', async () => {
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
@@ -93,7 +87,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
-    expect(second.body.id).not.toBe(first.body.id); // idempotency never swallows a genuinely new request
+    expect(second.body.id).not.toBe(first.body.id);
 
     expect(await ordersOf(token)).toHaveLength(2);
     expect(await countHeldReservations(app, variantId)).toBe(2);
@@ -104,7 +98,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     });
   });
 
-  it('same key replayed with a DIFFERENT request body → 422, no second order', async () => {
+  it('answers 422 to a key reused with a different body, with no second order', async () => {
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
@@ -114,15 +108,13 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const first = await postOrder(token, key);
     expect(first.status).toBe(201);
 
-    // Same key, different payload → stored request hash no longer matches → reused-key error, not a
-    // stale replay of the first request's result.
     const reused = await postOrder(token, key).send({ tampered: true });
     expect(reused.status).toBe(422);
 
     expect(await ordersOf(token)).toHaveLength(1);
   });
 
-  it('crash-reclaim heal: order committed but idempotency row swept → retry returns the SAME order, no duplicate hold', async () => {
+  it('returns the committed order when its key row was swept, with no second hold', async () => {
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
@@ -133,16 +125,15 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     expect(first.status).toBe(201);
     const orderId = first.body.id as string;
 
-    // Simulate a TTL sweep / crash after the order committed: the idempotency row is gone, but
-    // orders.idempotency_key still stamps the committed order — the second-line defence.
+    // orders.idempotency_key still stamps the committed order after the key row is gone.
     await db.delete(schema.idempotencyKeys).where(eq(schema.idempotencyKeys.key, key));
 
     const retry = await postOrder(token, key);
     expect(retry.status).toBe(201);
-    expect(retry.body.id).toBe(orderId); // healed onto the existing order, not created anew
+    expect(retry.body.id).toBe(orderId);
 
     expect(await ordersOf(token)).toHaveLength(1);
-    expect(await countHeldReservations(app, variantId)).toBe(1); // no second hold
+    expect(await countHeldReservations(app, variantId)).toBe(1);
     expect(await getStockView(app, variantId)).toEqual({
       onHand: AMPLE_STOCK,
       reserved: 1,
@@ -157,7 +148,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     expect(row.orderId).toBe(orderId);
   });
 
-  it('reclaims an expired IN_PROGRESS holder (crashed owner, no order) → retry checks out exactly one order', async () => {
+  it('reclaims an expired IN_PROGRESS key and checks out exactly one order', async () => {
     const { token, userId } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
@@ -165,8 +156,7 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const key = randomUUID();
     const scope = `user:${userId}`;
 
-    // A prior attempt crashed mid-flight: an IN_PROGRESS row lingers past its TTL with no order behind
-    // it. Its request hash matches the retry's shape so we exercise the reclaim path, not the 422 branch.
+    // A matching request hash reaches the reclaim path rather than the 422 branch.
     const body = { marker: true };
     await db.insert(schema.idempotencyKeys).values({
       scope,
@@ -181,37 +171,34 @@ describe('Idempotent checkout — concurrency, reclaim & body mismatch (integrat
     const retry = await postOrder(token, key).send(body);
     expect(retry.status).toBe(201);
 
-    expect(await ordersOf(token)).toHaveLength(1); // reclaimed the stale holder and created one order
+    expect(await ordersOf(token)).toHaveLength(1);
     expect(await countHeldReservations(app, variantId)).toBe(1);
 
     const rows = await db
       .select({ status: schema.idempotencyKeys.status })
       .from(schema.idempotencyKeys)
       .where(eq(schema.idempotencyKeys.key, key));
-    expect(rows).toHaveLength(1); // stale row replaced, not duplicated
+    expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe('COMPLETED');
   });
 
-  it('insufficient stock: retrying the same key stays 409 (business errors are never cached) — no order, no hold', async () => {
+  it('re-runs a key whose checkout failed on stock instead of caching the 409', async () => {
     const { token } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, 1);
-    await addToCart(app, token, variantId, 2); // order needs 2, only 1 on hand → whole checkout rolls back
+    await addToCart(app, token, variantId, 2);
     const key = randomUUID();
 
     const first = await postOrder(token, key);
     const second = await postOrder(token, key);
 
     expect(first.status).toBe(409);
-    // IN_PROGRESS is dropped on failure, so the retry re-runs the handler (and 409s again) rather than
-    // replaying a cached error.
     expect(second.status).toBe(409);
 
     expect(await ordersOf(token)).toEqual([]);
     expect(await countHeldReservations(app, variantId)).toBe(0);
     expect(await getStockView(app, variantId)).toEqual({ onHand: 1, reserved: 0, available: 1 });
 
-    // Nothing cached: both failed attempts cleaned up their IN_PROGRESS rows.
     const rows = await db
       .select({ status: schema.idempotencyKeys.status })
       .from(schema.idempotencyKeys)

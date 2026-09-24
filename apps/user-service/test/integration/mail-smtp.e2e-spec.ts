@@ -97,7 +97,7 @@ describe('Auth mail over SMTP (integration, real Mailpit + Postgres + Redis)', (
   });
 
   // A throwing mailer would turn the existing-account branch into a 500: an enumeration oracle.
-  it('keeps registering, and keeps its answers uniform, when the mail server is unreachable', async () => {
+  it('keeps registering with uniform answers while the mail server is down', async () => {
     // SMTP_URL is read once at compile, so an unreachable server means an app built that way.
     const broken = await createTestApp({
       SMTP_URL: UNREACHABLE_SMTP_URL,

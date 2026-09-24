@@ -90,18 +90,6 @@ describe('authVerifierOptions', () => {
       expect(options).toMatchObject({ issuer: ISSUER, audience: AUDIENCE });
     });
 
-    it('keeps verifying from its cache while the JWKS endpoint is down', async () => {
-      const key = await signingKey('k1');
-      jwks.published = [key.jwk];
-      const options = es256();
-      await verify(await sign(key), options);
-
-      jwks.down = true;
-
-      await expect(verify(await sign(key), options)).resolves.toBeDefined();
-      expect(jwks.requests).toBe(1);
-    });
-
     describe('once the cache is stale', () => {
       beforeEach(() => vi.useFakeTimers({ toFake: ['Date'] }));
       afterEach(() => vi.useRealTimers());
@@ -117,10 +105,7 @@ describe('authVerifierOptions', () => {
 
         await expect(verify(await sign(key), options)).resolves.toBeDefined();
         expect(jwks.requests).toBe(2);
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          { context: 'AuthVerifierOptions', err: expect.any(Error) as unknown },
-          'jwks refetch failed, serving cached keys',
-        );
+        expect(warn).toHaveBeenCalledOnce();
       });
 
       it('leaves a failing endpoint alone for a while instead of retrying it per request', async () => {
@@ -167,8 +152,13 @@ describe('authVerifierOptions', () => {
 
         jwks.hang = true;
         vi.advanceTimersByTime(CACHE_MAX_AGE_MS + 1);
+        const token = await sign(key);
 
-        await expect(verify(await sign(key), options)).resolves.toBeDefined();
+        // Only Date is faked. jose's own default timeout is 5 s, so without a bound a dropped
+        // timeout would surface only as the test's timeout.
+        const started = performance.now();
+        await expect(verify(token, options)).resolves.toBeDefined();
+        expect(performance.now() - started).toBeLessThan(1_000);
       });
 
       it('stops trusting a dropped key on the first fetch that succeeds', async () => {

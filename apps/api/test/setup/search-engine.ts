@@ -16,7 +16,7 @@ export interface StartedSearchEngine {
 
 /**
  * There is no `@testcontainers/meilisearch`, so this is a GenericContainer whose readiness is the
- * engine's own `/health` — returning before that leaves the first request racing the boot.
+ * engine's own `/health`; returning before that leaves the first request racing the boot.
  */
 export async function startSearchEngine(): Promise<StartedSearchEngine> {
   const container: StartedTestContainer = await new GenericContainer(SEARCH_IMAGE)
@@ -37,7 +37,7 @@ export async function startSearchEngine(): Promise<StartedSearchEngine> {
 /**
  * Postgres is truncated per test but the engine is not, so without this a document outlives the row
  * it came from and the next test searches a catalog that no longer exists. Resolves only once the
- * engine has applied it — every adapter write awaits its task — so no assertion has to poll.
+ * engine has applied it (every adapter write awaits its task), so no assertion has to poll.
  */
 export async function resetSearchIndex(app: INestApplication): Promise<void> {
   await app.get<CatalogSearchPort>(CATALOG_SEARCH).resetIndex();

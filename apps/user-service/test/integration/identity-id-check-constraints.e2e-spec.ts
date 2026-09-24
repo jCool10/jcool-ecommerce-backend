@@ -23,7 +23,7 @@ const TOKEN_ID_COLUMNS: [TokenTable, string][] = [
 ];
 
 // Raw SQL on purpose: the column type already refuses these on a Drizzle write, and the database is
-// what holds every other writer — psql, a restore, a script — to the same bound.
+// what holds every other writer (psql, a restore, a script) to the same bound.
 describe('Routable id CHECK constraints (integration)', () => {
   let pool: Pool;
   const generator = SnowflakeGenerator.create({ nodeId: SCRIPTS_NODE_ID });
@@ -68,8 +68,17 @@ describe('Routable id CHECK constraints (integration)', () => {
     await resetDatabase(pool);
   });
 
-  it.each(['4194303', '0', '-1'])('refuses a users.id of %s', async (id) => {
-    await expect(insertUser(id)).rejects.toMatchObject({ code: CHECK_VIOLATION, constraint: 'ck_users_id_routable' });
+  const refusal = (insert: Promise<unknown>): Promise<string> =>
+    insert.then(
+      () => 'accepted',
+      (error: { code?: string; constraint?: string }) => `${error.code} ${error.constraint}`,
+    );
+
+  it('refuses a users.id below the routable floor', async () => {
+    const outcomes: string[] = [];
+    for (const id of ['4194303', '0', '-1']) outcomes.push(await refusal(insertUser(id)));
+
+    expect(outcomes).toEqual(Array(3).fill(`${CHECK_VIOLATION} ck_users_id_routable`));
   });
 
   it('accepts a minted users.id, and the smallest routable one', async () => {
@@ -80,26 +89,24 @@ describe('Routable id CHECK constraints (integration)', () => {
     expect(rows[0].count).toBe('2');
   });
 
-  it.each(TOKEN_ID_COLUMNS)('refuses a non-routable %s.%s', async (table, column) => {
-    await expect(insertToken(table, { [column]: '0' })).rejects.toMatchObject({
-      code: CHECK_VIOLATION,
-      constraint: `ck_${table}_${column}_routable`,
-    });
-  });
+  it('refuses a non-routable value in every token id column', async () => {
+    const outcomes: string[] = [];
+    for (const [table, column] of TOKEN_ID_COLUMNS) outcomes.push(await refusal(insertToken(table, { [column]: '0' })));
 
-  it.each(TOKEN_TABLES)('accepts a %s row whose ids are all minted', async (table) => {
-    await insertToken(table);
-
-    const { rows } = await pool.query<{ count: string }>(`SELECT count(*) FROM ${table}`);
-    expect(rows[0].count).toBe('1');
+    expect(outcomes).toEqual(
+      TOKEN_ID_COLUMNS.map(([table, column]) => `${CHECK_VIOLATION} ck_${table}_${column}_routable`),
+    );
   });
 
   // Only a rotated token has a successor; a CHECK lets NULL through.
-  it('accepts a refresh token with no successor yet, and one with a minted successor', async () => {
-    await insertToken('refresh_tokens', { replaced_by_token_id: null });
+  it('accepts token rows with minted ids, with or without a successor', async () => {
+    for (const table of TOKEN_TABLES) await insertToken(table);
     await insertToken('refresh_tokens', { replaced_by_token_id: generator.generate(0) });
 
-    const { rows } = await pool.query<{ count: string }>(`SELECT count(*) FROM refresh_tokens`);
-    expect(rows[0].count).toBe('2');
+    const counts: string[] = [];
+    for (const table of TOKEN_TABLES) {
+      counts.push((await pool.query<{ count: string }>(`SELECT count(*) FROM ${table}`)).rows[0].count);
+    }
+    expect(counts).toEqual(['1', '1', '2']);
   });
 });

@@ -1,7 +1,7 @@
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
-import type { DrizzleDB, DrizzleTx } from '../../../database';
+import type { DrizzleDB } from '../../../database';
 import type { IdentityService } from '../application/services/identity.service';
 import { DrizzleUserRepository } from './drizzle-user.repository';
 
@@ -25,48 +25,14 @@ function fakeDb() {
   };
 }
 
-// Just enough of the select chain to see which handle it was issued on.
-function fakeReader() {
-  const limit = vi.fn().mockResolvedValue([]);
-  const from = vi.fn(() => ({ where: vi.fn(() => ({ limit })) }));
-  return { select: vi.fn(() => ({ from })) };
-}
+describe('DrizzleUserRepository.markEmailVerified', () => {
+  it('stamps the verification date only on a row that has none yet', async () => {
+    const { db, set, predicateSql } = fakeDb();
 
-describe('DrizzleUserRepository', () => {
-  describe('findById', () => {
-    // The pool handle would check out a connection of its own, which is one too many while the
-    // caller's transaction is already holding one.
-    it('reads on the caller transaction when it is given one, leaving the pool alone', async () => {
-      const pool = fakeReader();
-      const tx = fakeReader();
+    await new DrizzleUserRepository(db, {} as IdentityService).markEmailVerified(USER_ID);
 
-      await new DrizzleUserRepository(pool as unknown as DrizzleDB, {} as IdentityService).findById(
-        USER_ID,
-        tx as unknown as DrizzleTx,
-      );
-
-      expect(tx.select).toHaveBeenCalled();
-      expect(pool.select).not.toHaveBeenCalled();
-    });
-
-    it('falls back to the pool when there is no transaction to join', async () => {
-      const pool = fakeReader();
-
-      await new DrizzleUserRepository(pool as unknown as DrizzleDB, {} as IdentityService).findById(USER_ID);
-
-      expect(pool.select).toHaveBeenCalled();
-    });
-  });
-
-  describe('markEmailVerified', () => {
-    it('only stamps a row that is not verified yet, so a repeat call keeps the original date', async () => {
-      const { db, set, predicateSql } = fakeDb();
-
-      await new DrizzleUserRepository(db, {} as IdentityService).markEmailVerified(USER_ID);
-
-      expect(set.mock.calls[0][0].emailVerifiedAt).toBeInstanceOf(Date);
-      expect(predicateSql()).toContain('"email_verified_at" is null');
-      expect(predicateSql()).toContain('"id" = $1');
-    });
+    expect(set.mock.calls[0][0].emailVerifiedAt).toBeInstanceOf(Date);
+    expect(predicateSql()).toContain('"email_verified_at" is null');
+    expect(predicateSql()).toContain('"id" = $1');
   });
 });

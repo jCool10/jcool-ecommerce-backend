@@ -2,28 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { PaymentStatus } from '../../domain/payment-status';
 import { mapEventToOutcome } from './map-event-to-outcome';
 
+const SUCCEEDED = { kind: 'settle', status: PaymentStatus.SUCCEEDED };
+const AWAITING = { kind: 'awaiting_payment' };
+
 describe('mapEventToOutcome', () => {
-  it('settles a completed Checkout Session as SUCCEEDED once the money has cleared', () => {
-    expect(mapEventToOutcome('checkout.session.completed', 'paid')).toEqual({
-      kind: 'settle',
-      status: PaymentStatus.SUCCEEDED,
-    });
-  });
+  it('settles a completed session only once its payment_status says the money cleared', () => {
+    const statuses = ['paid', 'no_payment_required', 'unpaid', undefined, ''];
 
-  it('settles a fully-discounted session as SUCCEEDED — there is nothing left to capture', () => {
-    expect(mapEventToOutcome('checkout.session.completed', 'no_payment_required')).toEqual({
-      kind: 'settle',
-      status: PaymentStatus.SUCCEEDED,
-    });
-  });
-
-  it('refuses to settle a completed session whose payment has not cleared', () => {
-    expect(mapEventToOutcome('checkout.session.completed', 'unpaid')).toEqual({ kind: 'awaiting_payment' });
-  });
-
-  it('refuses to settle a completed session that reports no payment_status at all', () => {
-    expect(mapEventToOutcome('checkout.session.completed', undefined)).toEqual({ kind: 'awaiting_payment' });
-    expect(mapEventToOutcome('checkout.session.completed', '')).toEqual({ kind: 'awaiting_payment' });
+    expect(statuses.map((status) => mapEventToOutcome('checkout.session.completed', status))).toEqual([
+      SUCCEEDED,
+      SUCCEEDED,
+      AWAITING,
+      AWAITING,
+      AWAITING,
+    ]);
   });
 
   it('maps the Checkout Session expiry event to FAILED regardless of payment_status', () => {
@@ -37,14 +29,10 @@ describe('mapEventToOutcome', () => {
     });
   });
 
-  it('ignores PaymentIntent events — that flow is not the coded path and cannot resolve by session id', () => {
-    expect(mapEventToOutcome('payment_intent.succeeded', 'paid')).toEqual({ kind: 'ignore' });
-    expect(mapEventToOutcome('payment_intent.payment_failed', undefined)).toEqual({ kind: 'ignore' });
-  });
+  // PaymentIntent events cannot resolve a payment by session id, so they are not the coded path.
+  it('ignores every other event, even one reporting a cleared payment', () => {
+    const events = ['payment_intent.succeeded', 'payment_intent.payment_failed', 'charge.refunded', 'invoice.paid', ''];
 
-  it('ignores events we log but do not act on, even when they report a cleared payment', () => {
-    expect(mapEventToOutcome('charge.refunded', 'paid')).toEqual({ kind: 'ignore' });
-    expect(mapEventToOutcome('invoice.paid', 'paid')).toEqual({ kind: 'ignore' });
-    expect(mapEventToOutcome('', 'paid')).toEqual({ kind: 'ignore' });
+    expect(events.map((event) => mapEventToOutcome(event, 'paid'))).toEqual(events.map(() => ({ kind: 'ignore' })));
   });
 });

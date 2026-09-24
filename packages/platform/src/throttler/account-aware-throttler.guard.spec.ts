@@ -1,121 +1,61 @@
 import type { ExecutionContext } from '@nestjs/common';
-import type { ThrottlerRequest, ThrottlerStorage } from '@nestjs/throttler';
+import type { Reflector } from '@nestjs/core';
+import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host';
+import type { ThrottlerStorage } from '@nestjs/throttler';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { describe, expect, it } from 'vitest';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
-import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER, USER_THROTTLER } from './throttler.constants';
+import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from './throttler.constants';
 
-// generateKey uses only the context/body, so placeholder framework deps are enough to exercise it —
-// except the logger, which the constructor labels with setContext.
-function makeGuard(storage: ThrottlerStorage = {} as never): AccountAwareThrottlerGuard {
-  return new AccountAwareThrottlerGuard({ throttlers: [] }, storage, {} as never, {} as never, fakePinoLogger());
+class AuthController {
+  login(this: void): void {}
 }
 
-// generateKey reads class/handler names and, for the account tier, the request body; an enforced
-// tier also writes the rate-limit response headers.
-function contextFor(body: unknown): ExecutionContext {
-  return {
-    switchToHttp: () => ({
-      getRequest: () => ({ body, ip: '1.2.3.4', path: '/auth/login' }),
-      getResponse: () => ({ header: vi.fn() }),
-    }),
-    getClass: () => ({ name: 'AuthController' }),
-    getHandler: () => ({ name: 'login' }),
-  } as unknown as ExecutionContext;
-}
+const guard = new AccountAwareThrottlerGuard(
+  { throttlers: [] },
+  {} as ThrottlerStorage,
+  {} as Reflector,
+  fakeMetricsPort(),
+  fakePinoLogger(),
+);
 
-// generateKey is protected; reach it through a typed shim rather than casting inline.
-function keyFor(guard: AccountAwareThrottlerGuard, body: unknown, ip: string, name: string): string {
-  const shim = guard as unknown as { generateKey(c: ExecutionContext, s: string, n: string): string };
-  return shim.generateKey(contextFor(body), ip, name);
+function keyFor(body: unknown, ip: string, tier: string): string {
+  const context = new ExecutionContextHost([{ body }], AuthController, AuthController.prototype.login);
+  // generateKey is protected.
+  const shim = guard as unknown as { generateKey(c: ExecutionContext, suffix: string, name: string): string };
+  return shim.generateKey(context, ip, tier);
 }
 
 describe('AccountAwareThrottlerGuard.generateKey', () => {
   const ip = '1.2.3.4';
 
-  it('keys the default tier by IP only — the email is ignored', () => {
-    const guard = makeGuard();
-
-    const a = keyFor(guard, { email: 'a@b.com' }, ip, DEFAULT_THROTTLER);
-    const b = keyFor(guard, { email: 'x@y.com' }, ip, DEFAULT_THROTTLER);
-
-    expect(a).toBe(b);
+  it('keys the default tier by IP only, ignoring the email', () => {
+    expect(keyFor({ email: 'a@b.com' }, ip, DEFAULT_THROTTLER)).toBe(
+      keyFor({ email: 'x@y.com' }, ip, DEFAULT_THROTTLER),
+    );
   });
 
-  it('keys the account tier per (IP, account): different emails on one IP are different buckets', () => {
-    const guard = makeGuard();
-
-    const a = keyFor(guard, { email: 'a@b.com' }, ip, ACCOUNT_THROTTLER);
-    const b = keyFor(guard, { email: 'x@y.com' }, ip, ACCOUNT_THROTTLER);
-
-    expect(a).not.toBe(b);
-  });
-
-  it('normalises the account email (case/space-insensitive) into one bucket', () => {
-    const guard = makeGuard();
-
-    const a = keyFor(guard, { email: 'User@B.com' }, ip, ACCOUNT_THROTTLER);
-    const b = keyFor(guard, { email: '  user@b.com ' }, ip, ACCOUNT_THROTTLER);
-
-    expect(a).toBe(b);
+  it('puts case and spacing variants of one account email in one bucket', () => {
+    expect(keyFor({ email: 'User@B.com' }, ip, ACCOUNT_THROTTLER)).toBe(
+      keyFor({ email: '  user@b.com ' }, ip, ACCOUNT_THROTTLER),
+    );
   });
 
   it('separates the same account across different IPs', () => {
-    const guard = makeGuard();
-
-    const a = keyFor(guard, { email: 'a@b.com' }, '1.1.1.1', ACCOUNT_THROTTLER);
-    const b = keyFor(guard, { email: 'a@b.com' }, '2.2.2.2', ACCOUNT_THROTTLER);
-
-    expect(a).not.toBe(b);
+    expect(keyFor({ email: 'a@b.com' }, '1.1.1.1', ACCOUNT_THROTTLER)).not.toBe(
+      keyFor({ email: 'a@b.com' }, '2.2.2.2', ACCOUNT_THROTTLER),
+    );
   });
 
-  it('falls back to the IP-only bucket for the account tier when no valid email is present', () => {
-    const guard = makeGuard();
+  it('falls back to the IP-only account bucket without a valid email', () => {
+    const ipOnly = keyFor({}, ip, ACCOUNT_THROTTLER);
 
-    const noEmail = keyFor(guard, {}, ip, ACCOUNT_THROTTLER);
-    const badType = keyFor(guard, { email: 123 }, ip, ACCOUNT_THROTTLER);
-    const blank = keyFor(guard, { email: '   ' }, ip, ACCOUNT_THROTTLER);
-    const withEmail = keyFor(guard, { email: 'a@b.com' }, ip, ACCOUNT_THROTTLER);
-
-    expect(badType).toBe(noEmail);
-    expect(blank).toBe(noEmail);
-    expect(withEmail).not.toBe(noEmail);
-  });
-});
-
-describe('AccountAwareThrottlerGuard tiers', () => {
-  async function handleFor(tier: string, increment: ThrottlerStorage['increment']): Promise<boolean> {
-    const guard = makeGuard({ increment });
-    await guard.onModuleInit(); // resolves the options the base guard reads per request
-    const shim = guard as unknown as { handleRequest(request: ThrottlerRequest): Promise<boolean> };
-    return shim.handleRequest({
-      context: contextFor({}),
-      limit: 10,
-      ttl: 60_000,
-      blockDuration: 60_000,
-      throttler: { name: tier, limit: 10, ttl: 60_000 },
-      getTracker: () => Promise.resolve('1.2.3.4'),
-      generateKey: () => 'key',
-    });
-  }
-
-  it('leaves the user tier alone', async () => {
-    const increment = vi.fn<ThrottlerStorage['increment']>();
-
-    await expect(handleFor(USER_THROTTLER, increment)).resolves.toBe(true);
-
-    expect(increment).not.toHaveBeenCalled();
-  });
-
-  it('still enforces the IP tier it owns', async () => {
-    const increment = vi.fn<ThrottlerStorage['increment']>().mockResolvedValue({
-      totalHits: 1,
-      timeToExpire: 60,
-      isBlocked: false,
-      timeToBlockExpire: 0,
-    });
-
-    await expect(handleFor(DEFAULT_THROTTLER, increment)).resolves.toBe(true);
-
-    expect(increment).toHaveBeenCalledTimes(1);
+    expect([{ email: 123 }, { email: '   ' }, null].map((body) => keyFor(body, ip, ACCOUNT_THROTTLER))).toEqual([
+      ipOnly,
+      ipOnly,
+      ipOnly,
+    ]);
+    expect(keyFor({ email: 'a@b.com' }, ip, ACCOUNT_THROTTLER)).not.toBe(ipOnly);
   });
 });

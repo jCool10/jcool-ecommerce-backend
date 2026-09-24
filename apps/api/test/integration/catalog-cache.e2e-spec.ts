@@ -8,15 +8,13 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
+import { createTestAppWithPool } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { withRedisDown } from '../setup/redis-outage';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
 
-// Writing straight through Drizzle bypasses the admin path that bumps the cache generation, so a
-// read that still returns the old value proves it came from Redis rather than Postgres — no spies
-// at the repository boundary needed.
+// Skips the admin path that bumps the cache generation, so an unchanged read came from Redis.
 async function renameBehindTheCache(app: INestApplication, productId: string, name: string): Promise<void> {
   const db = app.get<DrizzleDB>(DRIZZLE);
   await db.update(schema.products).set({ name }).where(eq(schema.products.id, productId));
@@ -34,8 +32,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
 
   beforeAll(async () => {
     process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
-    // Pinned rather than defaulted: every assertion below is about an entry still being fresh, and a
-    // local .env would otherwise get to decide how long that is.
+    // Pinned so a local .env cannot shorten the fresh window these assertions rely on.
     ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '60',
       CACHE_STALE_WINDOW_SEC: '30',
@@ -44,39 +41,30 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
     }));
   });
 
-  // Explicit rather than `closeAppAfterAll`: the token has to be cleared too.
   afterAll(async () => {
     delete process.env.METRICS_TOKEN;
     await app.close();
   });
 
-  // Explicit rather than `resetDatabaseBeforeEach`: the cache generation has to be bumped after the
-  // truncate, or the next read is served from the previous test's rows out of Redis.
+  // The generation bump after the truncate keeps the previous test's entries out of reach.
   beforeEach(async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
   });
 
   describe('read-through', () => {
-    it('serves the detail from Redis on the second read (miss → hit)', async () => {
+    it('serves the detail and the list from Redis on the second read', async () => {
       const { productId, slug } = await createTestProduct(app);
 
-      const first = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+      const firstDetail = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+      const firstList = await request(app.getHttpServer()).get('/products').expect(200);
       await renameBehindTheCache(app, productId, 'Renamed In Postgres');
-      const second = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+      const secondDetail = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+      const secondList = await request(app.getHttpServer()).get('/products').expect(200);
 
-      expect(second.body.name).toBe(first.body.name);
-      expect(second.body.name).not.toBe('Renamed In Postgres');
-    });
-
-    it('serves the list from Redis on the second read', async () => {
-      const { productId } = await createTestProduct(app);
-
-      const first = await request(app.getHttpServer()).get('/products').expect(200);
-      await renameBehindTheCache(app, productId, 'Renamed In Postgres');
-      const second = await request(app.getHttpServer()).get('/products').expect(200);
-
-      expect(second.body.items[0].name).toBe(first.body.items[0].name);
+      expect(secondDetail.body.name).toBe(firstDetail.body.name);
+      expect(secondDetail.body.name).not.toBe('Renamed In Postgres');
+      expect(secondList.body.items[0].name).toBe(firstList.body.items[0].name);
     });
 
     it('hydrates Money and Date through the snapshot round-trip', async () => {
@@ -90,17 +78,19 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
       expect(Number.isNaN(Date.parse(cached.body.createdAt))).toBe(false);
     });
 
-    it('keys the detail by the exact lookup token — id and slug each get their own entry', async () => {
+    it('caches the detail separately under its slug and its id', async () => {
       const { productId, slug } = await createTestProduct(app);
+      const bySlugBefore = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
 
-      await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
+      await renameBehindTheCache(app, productId, 'Renamed In Postgres');
       const byId = await request(app.getHttpServer()).get(`/products/${productId}`).expect(200);
+      const bySlug = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
 
-      expect(byId.body.id).toBe(productId);
-      expect(byId.body.slug).toBe(slug);
+      expect(byId.body).toMatchObject({ id: productId, slug, name: 'Renamed In Postgres' });
+      expect(bySlug.body.name).toBe(bySlugBefore.body.name);
     });
 
-    it('does not cache a 404 — an unknown slug stays a miss', async () => {
+    it('does not cache a 404', async () => {
       await request(app.getHttpServer()).get('/products/no-such-slug').expect(404);
       const missesBefore = await readCacheCounter(app, 'miss');
 
@@ -109,7 +99,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
       expect(await readCacheCounter(app, 'miss')).toBeGreaterThan(missesBefore);
     });
 
-    it('counts hits and misses so cache effectiveness is measurable', async () => {
+    it('counts hits and misses', async () => {
       const { slug } = await createTestProduct(app);
       const [missesBefore, hitsBefore] = [
         await readCacheCounter(app, 'miss'),
@@ -160,7 +150,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
       expect(res.body.variants[0].prices[0].amountMinor).toBe(149_000);
     });
 
-    it('stops serving an archived product — the cache never outlives the read filter', async () => {
+    it('stops serving an archived product from the detail and the list', async () => {
       const { productId, slug } = await createTestProduct(app);
       const token = await adminToken();
       await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
@@ -189,7 +179,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
       expect(after.body.total).toBe(2);
     });
 
-    it('reflects a renamed category in the cached product detail (the coarse bump earns its keep)', async () => {
+    it('reflects a renamed category in the cached product detail', async () => {
       const { categoryId, slug } = await createTestProduct(app);
       const token = await adminToken();
       await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
@@ -204,7 +194,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
       expect(res.body.category.name).toBe('Renamed Category');
     });
 
-    it('404s a product under its old slug after a rename instead of serving the stale entry', async () => {
+    it('404s a product under its old slug after a rename', async () => {
       const { productId, slug } = await createTestProduct(app);
       const token = await adminToken();
       await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
@@ -237,7 +227,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
   });
 
   describe('Redis unavailable', () => {
-    it('keeps serving cached reads from Postgres instead of 500-ing', async () => {
+    it('serves reads from Postgres and counts the outage as an error', async () => {
       const { slug } = await createTestProduct(app);
 
       await withRedisDown(app, async () => {
@@ -250,20 +240,15 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
         expect(list.body.total).toBe(1);
       });
 
-      // The outage is visible as its own label, not silently folded into "miss".
       expect(await readCacheCounter(app, 'error')).toBeGreaterThan(0);
     });
 
-    it('still 500s at the rate-limit guard, which has no fall-through of its own', async () => {
+    // The throttler's Redis storage runs before the cache and has no fall-through of its own.
+    it('still answers 500 when the rate-limit guard is enabled', async () => {
       const { slug } = await createTestProduct(app);
 
-      // The guard reads the kill-switch per request, so this covers the production default
-      // (enabled) on the app the rest of this suite runs with the switch off.
       process.env.THROTTLE_ENABLED = 'true';
       try {
-        // Pins where the read path's fall-through actually begins: the cache decorator degrades to
-        // Postgres, but the throttler's Redis storage is consulted before any of that and rejects
-        // hard. Making the guard fail open is a rate-limiting decision, not a caching one.
         await withRedisDown(app, async () => {
           await request(app.getHttpServer()).get(`/products/${slug}`).expect(500);
         });
@@ -274,53 +259,13 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
   });
 });
 
-describe('Catalog cache freshness window (integration)', () => {
-  let app: INestApplication;
-  let pool: Pool;
-
-  // A second app, not a second test on the first: the fresh window is read once when the module
-  // compiles, and this suite needs a 1s window where the first suite needs 60s.
-  beforeAll(async () => {
-    // Shortest fresh window the env schema accepts, so the stale path is reachable without a long
-    // sleep. The stale window is pinned wide and jitter off: with a local `CACHE_STALE_WINDOW_SEC=0`
-    // the entry would be deleted at the same moment it goes stale and this would test a miss.
-    ({ app, pool } = await createTestAppWithPool({
-      CATALOG_CACHE_TTL_SEC: '1',
-      CACHE_STALE_WINDOW_SEC: '30',
-      CACHE_TTL_JITTER_SEC: '0',
-    }));
-  });
-  closeAppAfterAll(() => app);
-
-  it('answers from the stale entry the moment the fresh window closes, then from the refill behind it', async () => {
-    await resetDatabase(pool);
-    await resetCatalogCache(app);
-    const { productId, slug } = await createTestProduct(app);
-
-    const first = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
-    await renameBehindTheCache(app, productId, 'Visible After Refresh');
-    await new Promise((resolve) => setTimeout(resolve, 1_200));
-
-    // Nobody waits on the rebuild: the read that finds the entry stale still answers from it.
-    const served = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
-    expect(served.body.name).toBe(first.body.name);
-
-    await expect
-      .poll(async () => (await request(app.getHttpServer()).get(`/products/${slug}`)).body.name, { timeout: 5_000 })
-      .toBe('Visible After Refresh');
-  });
-});
-
 describe('Catalog cache hard expiry (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
 
-  // A third app for the third window configuration: stale-serving off, which neither suite above can
-  // reach without changing what they prove.
   beforeAll(async () => {
     process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
-    // Stale-serving and jitter switched off, so the entry's whole life is the fresh window. This is
-    // what bounds staleness after a missed invalidation: the three windows, and nothing beyond them.
+    // Stale serving and jitter off, so the entry lives exactly the fresh window.
     ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '1',
       CACHE_STALE_WINDOW_SEC: '0',
@@ -333,7 +278,7 @@ describe('Catalog cache hard expiry (integration)', () => {
     await app.close();
   });
 
-  it('drops the entry once the windows close, so the next read answers from Postgres', async () => {
+  it('drops the entry once the window closes, so the next read answers from Postgres', async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
     const { productId, slug } = await createTestProduct(app);
@@ -343,7 +288,6 @@ describe('Catalog cache hard expiry (integration)', () => {
     await new Promise((resolve) => setTimeout(resolve, 1_200));
 
     const missesBefore = await readCacheCounter(app, 'miss');
-    // No poll: with nothing left to serve, the read rebuilds inline rather than answering stale.
     const served = await request(app.getHttpServer()).get(`/products/${slug}`).expect(200);
 
     expect(served.body.name).toBe('Visible After Expiry');

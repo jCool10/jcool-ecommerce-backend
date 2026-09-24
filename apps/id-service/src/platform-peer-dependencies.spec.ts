@@ -23,7 +23,10 @@ const fromService = createRequire(join(serviceRoot, 'package.json'));
 const fromPlatform = createRequire(join(platformRoot, 'package.json'));
 
 describe('@jcool/platform peer dependencies', () => {
-  it.each(sharedPeers)('%s resolves to the install id-service loads', (name) => {
-    expect(fromPlatform.resolve(name)).toBe(fromService.resolve(name));
+  it('resolve to the installs id-service loads', () => {
+    const drifted = sharedPeers.filter((name) => fromPlatform.resolve(name) !== fromService.resolve(name));
+
+    expect(sharedPeers.length).toBeGreaterThan(0);
+    expect(drifted).toEqual([]);
   });
 });

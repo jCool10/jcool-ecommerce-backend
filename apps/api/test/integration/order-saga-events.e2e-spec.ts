@@ -34,9 +34,9 @@ const QUANTITY = 2;
 /**
  * Order settles itself from Payment's event instead of from an in-process call a crash can swallow.
  * The webhook still finalizes directly for latency, so most assertions here are about the event
- * reaching an ALREADY settled order and costing nothing — and about the case where it is all there is.
+ * reaching an already settled order and costing nothing, and about the case where it is all there is.
  */
-describe('Payment settlement events → order saga (integration, real Postgres + Redis)', () => {
+describe('Payment settlement events driving the order saga (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
@@ -106,7 +106,7 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     expect(emitted.payload).toMatchObject({ orderId: order.orderId });
   });
 
-  it('emits nothing for a delivery that settles no payment, so no order is driven off a non-event', async () => {
+  it('emits one payment event for a redelivered webhook', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     const delivery = signOutcome(WEBHOOK_SECRET, order.sessionId, order.charge, 'PAID', 'evt_dup');
 
@@ -196,11 +196,8 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     expect((await readStock(app, sku.variantId)).quantityOnHand).toBe(ON_HAND - QUANTITY);
   });
 
-  it('acknowledges a settlement whose order does not exist, and books the refund it now owes', async () => {
-    // The refund signal is the point, not a detail: money moved at the gateway and there is no order
-    // to ship, so acknowledging the job silently would retire the event with nothing recording that
-    // someone is owed a refund. `order-cancel.e2e-spec.ts` covers the sibling `ignored` branch;
-    // this is the only assertion on the `not_found` one.
+  it('acknowledges a settlement for a missing order and books the refund owed', async () => {
+    // Money moved at the gateway with no order to ship; a silent ack would record no refund owed.
     const refundOwed = vi.spyOn(app.get<MetricsPort>(METRICS), 'recordRefundOwed');
 
     const orphan: DomainEventJob = {
@@ -217,7 +214,7 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     expect(refundOwed).toHaveBeenCalledWith('settlement_event');
   });
 
-  it('sends a settlement it cannot read straight to the dead-letter path, without retrying', async () => {
+  it('sends an unreadable settlement to the dead-letter path without retrying', async () => {
     const malformed: DomainEventJob = {
       outboxId: '0198f0d8-9999-7000-8000-000000000003',
       aggregateType: 'Payment',
@@ -232,9 +229,8 @@ describe('Payment settlement events → order saga (integration, real Postgres +
     expect(await inboxRows()).toHaveLength(0);
   });
 
-  // The invariant the whole consumer design rests on, asserted where it can actually break: the
-  // settlement is a multi-row write in another context, and it has to live or die with the claim.
-  it('leaves neither the settlement nor the claim when the worker dies after applying the effect', async () => {
+  // The settlement is a multi-row write in another context, and it has to live or die with the claim.
+  it('rolls back the settlement and the claim when the worker dies after the effect', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     const lost = vi.spyOn(finalize, 'execute').mockRejectedValueOnce(new Error('killed before the order settled'));
     await settle(order, 'PAID', 'evt_atomic').expect(200);

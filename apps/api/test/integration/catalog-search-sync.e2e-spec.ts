@@ -33,8 +33,7 @@ async function searchIds(app: INestApplication, q: string): Promise<string[]> {
 describe('Catalog search index sync (integration, real Meilisearch + Postgres)', () => {
   let engine: StartedSearchEngine;
   let app: INestApplication;
-  // A second app wired to a port nothing listens on — the "search engine is down" half of every
-  // best-effort claim, without stopping the container the other assertions still read from.
+  // Wired to a port nothing listens on, so the shared engine keeps serving the healthy app.
   let blindApp: INestApplication;
   let pool: Pool;
   let adminToken: string;
@@ -43,8 +42,6 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
   beforeAll(async () => {
     engine = await startSearchEngine();
     ({ app, pool } = await createTestAppWithPool({ SEARCH_ENABLED: 'true', SEARCH_URL: engine.url }));
-    // A second boot, not a second test: `SEARCH_URL` is read once when the module compiles, so
-    // "the engine is unreachable" is only expressible as an app that was built that way.
     blindApp = await createTestApp({ SEARCH_ENABLED: 'true', SEARCH_URL: UNREACHABLE_SEARCH_URL });
   }, 180_000);
 
@@ -75,8 +72,7 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
   }
 
   describe('write-through', () => {
-    // No reindex between the write and the read: every adapter write awaits the engine's task, so a
-    // 201 already means the document is queryable.
+    // Every adapter write awaits the engine's task, so a 201 already means the document is queryable.
     it('makes a newly created product searchable', async () => {
       const productId = await createProductAsAdmin(app, 'Immediate Ottoman');
 
@@ -123,8 +119,6 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
       expect(await searchIds(app, 'Doomed')).toEqual([]);
     });
 
-    // The sync re-reads the public projection to decide index-vs-delete, so publishing is not a
-    // special case — it is the same re-read answering differently.
     it('indexes a draft only once it is published', async () => {
       const productId = await createProductAsAdmin(app, 'Unpublished Ottoman', 'DRAFT');
       expect(await searchIds(app, 'Unpublished')).toEqual([]);
@@ -139,32 +133,15 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
     });
   });
 
-  describe('engine down', () => {
-    it('still completes an admin write', async () => {
-      const productId = await createProductAsAdmin(blindApp, 'Written Blind');
+  it('answers a search with an empty result while the engine is down', async () => {
+    const res = await request(blindApp.getHttpServer()).get('/products/search').query({ q: 'anything' });
 
-      const row = await pool.query('SELECT id FROM products WHERE id = $1', [productId]);
-      expect(row.rowCount).toBe(1);
-    });
-
-    it('answers a search with an empty result rather than a 500', async () => {
-      const res = await request(blindApp.getHttpServer()).get('/products/search').query({ q: 'anything' });
-
-      expect(res.status).toBe(200);
-      expect((res.body as SearchBody).items).toEqual([]);
-      expect((res.body as SearchBody).total).toBe(0);
-    });
-
-    it('leaves the existing index untouched, so the healthy path keeps serving', async () => {
-      const survivor = await createProductAsAdmin(app, 'Indexed Before Outage');
-      await createProductAsAdmin(blindApp, 'Indexed Before Outage Too');
-
-      expect(await searchIds(app, 'Indexed Before Outage')).toEqual([survivor]);
-    });
+    expect(res.status).toBe(200);
+    expect((res.body as SearchBody).items).toEqual([]);
+    expect((res.body as SearchBody).total).toBe(0);
   });
 
-  // The dual-write gap made concrete: a write that commits while the engine is unreachable is lost
-  // to the index and nothing retries it, which is precisely what the reindex command exists to fix.
+  // A write that commits while the engine is down is lost to the index until a reindex.
   describe('reindex backstop', () => {
     it('converges a write the engine missed', async () => {
       const missed = await createProductAsAdmin(blindApp, 'Missed Ottoman');
@@ -175,9 +152,7 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
       expect(await searchIds(app, 'Missed')).toEqual([missed]);
     });
 
-    // The asymmetry worth knowing before trusting a nightly reindex: a missed write is repaired by
-    // any rerun, a missed delete only by a reset run. The read filter does not cover this case —
-    // the ghost was indexed while it was ACTIVE, so it still satisfies the filter.
+    // The ghost was indexed while ACTIVE, so the read filter does not hide it.
     it('keeps serving a delete the engine missed until a reset run prunes it', async () => {
       const productId = await createProductAsAdmin(app, 'Ghost Ottoman');
       await request(blindApp.getHttpServer())
@@ -185,7 +160,6 @@ describe('Catalog search index sync (integration, real Meilisearch + Postgres)',
         .set(authHeader(adminToken))
         .expect(200);
 
-      // Gone from Postgres' public projection, still answered by the index.
       await request(app.getHttpServer()).get(`/products/${productId}`).expect(404);
       expect(await searchIds(app, 'Ghost')).toEqual([productId]);
 

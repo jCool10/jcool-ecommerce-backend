@@ -1,11 +1,10 @@
-import { context as otelContext, trace } from '@opentelemetry/api';
-import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
-import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import type { ClsService } from 'nestjs-cls';
-import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { trace } from '@opentelemetry/api';
+import { CLS_ID, ClsServiceManager } from 'nestjs-cls';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@jcool/metrics-port';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { describe, expect, it } from 'vitest';
+import { useInMemoryTracer } from '../testing/in-memory-tracer';
 import { CircuitBreakerFactory } from './circuit-breaker.factory';
 import { DownstreamUnavailableError } from './outbound-call.port';
 
@@ -13,6 +12,8 @@ import { DownstreamUnavailableError } from './outbound-call.port';
 const TIMEOUT_MS = 80;
 const RESET_MS = 100;
 const BREAKER = 'probe';
+
+const cls = ClsServiceManager.getClsService();
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,16 +28,9 @@ function build(overrides: Record<string, unknown> = {}) {
     'resilience.breaker.volumeThreshold': 2,
     ...overrides,
   };
-  const metrics = {
-    setBreakerState: vi.fn<MetricsPort['setBreakerState']>(),
-    recordBreakerTransition: vi.fn<MetricsPort['recordBreakerTransition']>(),
-    recordBreakerCall: vi.fn<MetricsPort['recordBreakerCall']>(),
-  };
-  const config = fakeConfigService(values);
+  const metrics = fakeMetricsPort();
   const logger = fakePinoLogger();
-  // The real one drops the caller out of the request store; here there is none to drop out of.
-  const cls = { exit: <T>(run: () => T): T => run() } as unknown as ClsService;
-  const factory = new CircuitBreakerFactory(config, metrics as unknown as MetricsPort, logger, cls);
+  const factory = new CircuitBreakerFactory(fakeConfigService(values), metrics, logger, cls);
   return { factory, metrics, logger };
 }
 
@@ -78,7 +72,7 @@ async function trip(call: { run<T>(task: () => Promise<T>): Promise<T> }, downst
 }
 
 describe('CircuitBreakerFactory', () => {
-  it('publishes the closed state up front, so the series exists before anything fails', () => {
+  it('publishes the closed state as soon as the breaker is created', () => {
     const { factory, metrics } = build();
     factory.create(BREAKER);
     expect(metrics.setBreakerState).toHaveBeenCalledWith(BREAKER, 'closed');
@@ -115,7 +109,7 @@ describe('CircuitBreakerFactory', () => {
     expect(metrics.recordBreakerCall).toHaveBeenCalledWith(BREAKER, 'rejected');
   });
 
-  it('lets exactly one trial call through after the reset window and closes on its success', async () => {
+  it('lets one trial call through after the reset window and closes on success', async () => {
     const { factory, metrics } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER);
@@ -167,7 +161,7 @@ describe('CircuitBreakerFactory', () => {
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
   });
 
-  it('abandons a call that outlives the timeout and counts it as a timeout, not a plain failure', async () => {
+  it('counts a call that outlives the timeout as a timeout, not a failure', async () => {
     const { factory, metrics } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER);
@@ -185,7 +179,7 @@ describe('CircuitBreakerFactory', () => {
     await sleep(TIMEOUT_MS * 3);
   });
 
-  it('leaves the circuit closed for rejections the caller does not blame on the downstream', async () => {
+  it('stays closed on rejections the caller does not blame on the downstream', async () => {
     const { factory, metrics } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER, {
@@ -202,7 +196,7 @@ describe('CircuitBreakerFactory', () => {
     await expect(call.run(() => downstream.call())).resolves.toBe('ok');
   });
 
-  it('refuses calls once shut down rather than leaking a raw breaker error', async () => {
+  it('refuses calls with DownstreamUnavailableError once shut down', async () => {
     const { factory } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER);
@@ -216,7 +210,7 @@ describe('CircuitBreakerFactory', () => {
     expect(downstream.calls).toBe(0);
   });
 
-  it('hands back the same breaker for a name, so both callers share one view of the downstream', async () => {
+  it('hands back the same breaker for the same name', async () => {
     const { factory } = build();
     const downstream = new FakeDownstream();
     const first = factory.create(BREAKER);
@@ -243,30 +237,13 @@ describe('CircuitBreakerFactory', () => {
   });
 });
 
-// A real in-memory tracer, not a mock: a refusal makes no network call, so nothing else records it.
+// A refusal makes no network call, so nothing but the breaker's own span records it.
 describe('CircuitBreakerFactory tracing', () => {
-  const exporter = new InMemorySpanExporter();
-  let provider: BasicTracerProvider;
-
-  beforeAll(() => {
-    otelContext.disable();
-    trace.disable();
-    provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-    otelContext.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-    trace.setGlobalTracerProvider(provider);
-  });
-
-  afterAll(async () => {
-    await provider.shutdown();
-    otelContext.disable();
-    trace.disable();
-  });
-
-  beforeEach(() => exporter.reset());
+  const exporter = useInMemoryTracer();
 
   const spanNamed = (name: string) => exporter.getFinishedSpans().filter((span) => span.name === name);
 
-  it('records a refused call as a span of its own, since it never reaches the network', async () => {
+  it('records a refused call as a span of its own', async () => {
     const { factory } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER);
@@ -284,7 +261,7 @@ describe('CircuitBreakerFactory tracing', () => {
     });
   });
 
-  it('marks the trial call half_open, so a trace shows which call was the probe', async () => {
+  it('marks the trial call half_open on its span', async () => {
     const { factory } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER);
@@ -301,39 +278,33 @@ describe('CircuitBreakerFactory tracing', () => {
     });
   });
 
-  it('hangs the transition off the call that caused it', async () => {
-    const { factory } = build();
-    const downstream = new FakeDownstream();
-    const call = factory.create(BREAKER);
-
-    await trip(call, downstream);
-    // Past the reset window, so the timer-driven half-open has fired too. It must not add a second
-    // event: the only span it could land on tripped the breaker a reset window ago and has ended.
-    await sleep(RESET_MS + 40);
-
-    const transitions = spanNamed(`breaker:${BREAKER}`)
-      .flatMap((span) => span.events)
-      .filter((event) => event.name === 'breaker.state_changed');
-    expect(transitions).toHaveLength(1);
-    expect(transitions[0].attributes).toMatchObject({ 'breaker.name': BREAKER, 'breaker.state': 'open' });
-  });
-
-  it('logs the timer-driven transition with no request context to misattribute it to', async () => {
+  // opossum schedules the half-open timer from inside the call that tripped the breaker, so its
+  // callback inherits that call's CLS store and its already-ended span unless it is detached.
+  it('keeps the timer-driven half-open off the call that tripped the breaker', async () => {
     const { factory, logger } = build();
     const downstream = new FakeDownstream();
     const call = factory.create(BREAKER);
-    // The pino mixin stamps requestId/traceId from whatever context the line is written in, so what
-    // a transition can see at log time is what ends up on it.
-    const contextAtLog: (string | undefined)[] = [];
+    // What the pino mixin would stamp on each transition line.
+    const seenAtLog: Array<[string | undefined, boolean]> = [];
     logger.warn.mockImplementation(() => {
-      contextAtLog.push(trace.getActiveSpan()?.spanContext().spanId);
+      seenAtLog.push([cls.getId(), trace.getActiveSpan() !== undefined]);
     });
 
-    await trip(call, downstream);
+    await cls.run(async () => {
+      cls.set(CLS_ID, 'req-1');
+      await trip(call, downstream);
+    });
     await sleep(RESET_MS + 40);
 
-    const [openLine, halfOpenLine] = contextAtLog;
-    expect(openLine).toBeDefined();
-    expect(halfOpenLine).toBeUndefined();
+    expect(seenAtLog).toEqual([
+      ['req-1', true],
+      [undefined, false],
+    ]);
+    const transitions = spanNamed(`breaker:${BREAKER}`)
+      .flatMap((span) => span.events)
+      .filter((event) => event.name === 'breaker.state_changed');
+    expect(transitions.map((event) => event.attributes)).toEqual([
+      { 'breaker.name': BREAKER, 'breaker.state': 'open' },
+    ]);
   });
 });

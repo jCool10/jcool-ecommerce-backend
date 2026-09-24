@@ -105,7 +105,7 @@ describe('Session epoch fill racing bumps (integration)', () => {
     expect(await publishedEpoch(app, user.id)).toBe(1);
   });
 
-  it('ends with Redis at the database epoch, whatever order concurrent fills and bumps land in', async () => {
+  it('ends with Redis at the database epoch whatever order fills and bumps land', async () => {
     publisher.jitterMs = JITTER_MS;
 
     for (let round = 0; round < ROUNDS; round++) {

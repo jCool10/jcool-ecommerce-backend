@@ -37,7 +37,7 @@ describe('lease expiry', () => {
     expect(await leases.store.acquire(CLAIM)).toMatchObject({ nodeId: NODE });
   });
 
-  it('records the floor on a renewal that finds the lease expired, without extending it', async () => {
+  it('records the floor on a renewal that finds the lease expired, not extending it', async () => {
     leases = await openLeaseDatabase();
     await holdAllNodesExcept(leases.pool, NODE);
     const grant = await leases.store.acquire({ ...CLAIM, quarantineMs: 0 });

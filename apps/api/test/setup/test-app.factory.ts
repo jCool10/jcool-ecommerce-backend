@@ -21,7 +21,7 @@ export interface ProviderOverride {
 }
 
 // `envOverrides` set config-backing env vars for this app only: config reads process.env when the
-// module compiles, so they are applied before compile and restored after — one app's config never
+// module compiles, so they are applied before compile and restored after. One app's config never
 // leaks into the next (e2e files share this process and run sequentially). `undefined` unsets one.
 export async function createTestApp(
   envOverrides: EnvOverrides = {},
@@ -40,7 +40,7 @@ export async function createTestApp(
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
-  // Background drivers forced off so nothing runs behind a test's back — a tick firing mid-assertion
+  // Background drivers forced off so nothing runs behind a test's back: a tick firing mid-assertion
   // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Assigned
   // unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's .env into
   // process.env, so from the second app onwards `??=` would inherit an untracked local file.
@@ -51,7 +51,7 @@ export async function createTestApp(
   process.env.RETENTION_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
   // is a plain sleep inside `app.close()`, so a developer's `SHUTDOWN_GRACE_PERIOD_MS=8000` charges
-  // every app in every file 8 seconds of doing nothing. Nothing here asserts on the window's length —
+  // every app in every file 8 seconds of doing nothing. Nothing asserts on the window's length:
   // `health-shutdown.e2e-spec.ts` reads the readiness flag, which flips before the wait.
   process.env.SHUTDOWN_GRACE_PERIOD_MS = '0';
   // Both URLs are placeholders in vitest-e2e.config.mts; only the stub's port is known this late.
@@ -59,12 +59,12 @@ export async function createTestApp(
   process.env.AUTH_JWKS_URL = userService.jwksUrl;
   process.env.USER_SERVICE_INTERNAL_URL = userService.url;
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
-  // a file that leaves jobs waiting hands them to the next file that boots a worker — which then
+  // a file that leaves jobs waiting hands them to the next file that boots a worker, which then
   // applies events its own test never published. Same value for every app in a file, because a
   // suite may drive one app's relay and read the queue through another's.
   process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
-  // live path — billable and non-deterministic.
+  // live path, billable and non-deterministic.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {
     delete process.env.STRIPE_SECRET_KEY;
   }
@@ -75,7 +75,7 @@ export async function createTestApp(
     delete process.env.MAIL_FROM;
   }
   // Same again for object storage: `.env.example` ships the local MinIO credentials, so a copied
-  // .env would point every suite's uploads at the developer's own bucket — and leave objects there.
+  // .env would point every suite's uploads at the developer's own bucket and leave objects there.
   if (!('STORAGE_ENDPOINT' in envOverrides)) {
     delete process.env.STORAGE_ENDPOINT;
     delete process.env.STORAGE_BUCKET;
@@ -142,7 +142,7 @@ export async function createTestApp(
   }
 }
 
-// Spec filenames are unique: stable within a file, distinct across files — what the isolation needs.
+// Spec filenames are unique, so the prefix is stable within a file and distinct across files.
 function queuePrefixForCurrentSpec(): string {
   const testPath = expect.getState().testPath;
   return testPath ? `bull:${basename(testPath, '.e2e-spec.ts')}` : 'bull';

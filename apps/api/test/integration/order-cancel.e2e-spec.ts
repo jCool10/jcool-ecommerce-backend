@@ -36,7 +36,7 @@ const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
 /**
  * The order half settles synchronously under a row lock; the money half rides the outbox to Payment.
- * The interesting cases are all in that gap — a buyer paying on the hosted page after pressing
+ * The interesting cases are all in that gap: a buyer paying on the hosted page after pressing
  * cancel, and a consume that closes the session and then rolls back.
  */
 describe('Order cancel (integration, real Postgres + Redis)', () => {
@@ -149,10 +149,6 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
 
       expect((await readOrder(app, orderId)).status).toBe(OrderStatus.PENDING);
     });
-
-    it('rejects an unauthenticated cancel with 401', async () => {
-      await request(server()).post(`/orders/${ABSENT_UUID}/cancel`).expect(401);
-    });
   });
 
   // The money half. Cancelling deliberately does not reach the gateway under an order row lock, so
@@ -185,12 +181,12 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       await expect(processor.process(await cancelledJob(orderId))).rejects.toThrow('gateway unreachable');
 
       expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.PENDING);
-      // The inbox claim rolled back with it — otherwise the redelivery would find it consumed.
+      // The inbox claim rolled back with it, or the redelivery would find it consumed.
       expect(await db.select().from(schema.inbox)).toHaveLength(0);
     });
 
-    // The effect commits alongside the inbox claim, so the second attempt is a no-op — and an
-    // already-closed session is NOT a refund alarm.
+    // The effect commits alongside the inbox claim, so the second attempt is a no-op, and an
+    // already-closed session is not a refund alarm.
     it('settles exactly once under redelivery, raising nothing on the second pass', async () => {
       const { orderId } = await cancelledOrderWithSession();
       const job = await cancelledJob(orderId);
@@ -202,7 +198,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       expect(refundOwed).not.toHaveBeenCalled();
     });
 
-    it('finishes the write on a redelivery whose session an earlier attempt already closed', async () => {
+    it('finishes the write on a redelivery after the session was already closed', async () => {
       const { orderId, sessionId } = await cancelledOrderWithSession();
       const job = await cancelledJob(orderId);
       // Close it out of band, then let the consume run for the first time: the same position a
@@ -219,7 +215,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
   // The race the cancel button makes routine: the buyer presses cancel with the hosted page still
   // open in another tab, and pays on it. Stock is already released; the money is not.
   describe('cancel racing a payment that has already gone through', () => {
-    it('raises the refund decision once and acknowledges the job, rather than retrying it', async () => {
+    it('raises the refund decision once and acknowledges the job', async () => {
       const order = await placeAndOpenSession(app, sku, QUANTITY);
       await cancel(order.token, order.orderId).expect(200);
       // The gateway took the money after the order died, and the webhook has not arrived yet.
@@ -235,8 +231,8 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
     });
 
     // The same money arriving by its own route: the webhook settles the payment, then finds the
-    // order already terminal — a second observation of one stranded payment, hence the source label.
-    it('raises it again, under a different source, when the webhook lands on the cancelled order', async () => {
+    // order already terminal: a second observation of one stranded payment, hence the source label.
+    it('raises it again under the webhook source when payment lands after cancel', async () => {
       const order = await placeAndOpenSession(app, sku, QUANTITY);
       await cancel(order.token, order.orderId).expect(200);
 
@@ -249,7 +245,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       // The order does not move: the terminal guard is what keeps a cancelled order cancelled.
       expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.CANCELLED);
       expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.SUCCEEDED);
-      // And the stock stays released — the buyer is owed money, not the last unit.
+      // The stock stays released: the buyer is owed money, not the last unit.
       expect((await readStock(app, sku.variantId)).quantityReserved).toBe(0);
     });
 

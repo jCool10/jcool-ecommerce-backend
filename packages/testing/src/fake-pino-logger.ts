@@ -16,7 +16,7 @@ export type FakePinoLogger = PinoLogger & {
 /**
  * A logger that records instead of writing. Every level is present, rather than the one the spec
  * happens to assert on: a partial `{ warn } as unknown as PinoLogger` answers `undefined` for the
- * level the code under test actually picks, and the cast is what hides it — the spec then passes
+ * level the code under test actually picks, and the cast is what hides it: the spec then passes
  * while nothing was logged.
  *
  * Assert on the spies you passed in, not on the returned logger: `PinoLogger` declares its levels as

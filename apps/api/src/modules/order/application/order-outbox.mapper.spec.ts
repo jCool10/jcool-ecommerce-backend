@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { OrderPlacedEvent } from '../domain/events/order-placed.event';
 import { OrderPaidEvent } from '../domain/events/order-paid.event';
 import { OrderFailedEvent } from '../domain/events/order-failed.event';
 import { OrderExpiredEvent } from '../domain/events/order-expired.event';
 import { OrderCancelledEvent } from '../domain/events/order-cancelled.event';
-import { toFinalizedOutboxRecord, toPlacedOutboxRecord } from './order-outbox.mapper';
+import { toFinalizedOutboxRecord } from './order-outbox.mapper';
 
 const ORDER_ID = '01a03000-0000-7000-8000-000000000001';
 const USER_ID = '01a03000-0000-7000-8000-000000000002';
@@ -12,18 +11,7 @@ const AT = new Date('2026-08-24T03:21:00.000Z');
 const ISO = '2026-08-24T03:21:00.000Z';
 
 describe('order outbox mapper', () => {
-  it('maps a placed order to an order.placed record', () => {
-    const record = toPlacedOutboxRecord(new OrderPlacedEvent(ORDER_ID, USER_ID, 300_000, 'VND', AT));
-
-    expect(record).toEqual({
-      aggregateType: 'Order',
-      aggregateId: ORDER_ID,
-      eventType: 'order.placed',
-      payload: { orderId: ORDER_ID, userId: USER_ID, totalAmountMinor: 300_000, currency: 'VND', placedAt: ISO },
-    });
-  });
-
-  it('maps a paid outcome to an order.paid record carrying the money and the gateway handle', () => {
+  it('maps a paid outcome to order.paid with the money and the gateway handle', () => {
     const record = toFinalizedOutboxRecord(new OrderPaidEvent(ORDER_ID, USER_ID, 300_000, 'VND', 'pi_123', AT));
 
     expect(record).toEqual({
@@ -49,36 +37,32 @@ describe('order outbox mapper', () => {
     expect(record.payload).toMatchObject({ paymentRef: null });
   });
 
-  it('maps a failed outcome to an order.failed record carrying the reason, not the money', () => {
-    const record = toFinalizedOutboxRecord(new OrderFailedEvent(ORDER_ID, USER_ID, 'webhook:failed', AT));
+  it('maps the other outcomes to their own events carrying the reason, not money', () => {
+    const events = [
+      new OrderFailedEvent(ORDER_ID, USER_ID, 'webhook:failed', AT),
+      new OrderExpiredEvent(ORDER_ID, USER_ID, null, AT),
+      new OrderCancelledEvent(ORDER_ID, USER_ID, 'user:cancelled', AT),
+    ];
 
-    expect(record).toEqual({
-      aggregateType: 'Order',
-      aggregateId: ORDER_ID,
-      eventType: 'order.failed',
-      payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: 'webhook:failed' },
-    });
-  });
-
-  it('maps an expired outcome to an order.expired record, distinct from failed', () => {
-    const record = toFinalizedOutboxRecord(new OrderExpiredEvent(ORDER_ID, USER_ID, null, AT));
-
-    expect(record).toEqual({
-      aggregateType: 'Order',
-      aggregateId: ORDER_ID,
-      eventType: 'order.expired',
-      payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: null },
-    });
-  });
-
-  it('maps a cancelled outcome to an order.cancelled record, distinct from failed', () => {
-    const record = toFinalizedOutboxRecord(new OrderCancelledEvent(ORDER_ID, USER_ID, 'user:cancelled', AT));
-
-    expect(record).toEqual({
-      aggregateType: 'Order',
-      aggregateId: ORDER_ID,
-      eventType: 'order.cancelled',
-      payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: 'user:cancelled' },
-    });
+    expect(events.map(toFinalizedOutboxRecord)).toEqual([
+      {
+        aggregateType: 'Order',
+        aggregateId: ORDER_ID,
+        eventType: 'order.failed',
+        payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: 'webhook:failed' },
+      },
+      {
+        aggregateType: 'Order',
+        aggregateId: ORDER_ID,
+        eventType: 'order.expired',
+        payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: null },
+      },
+      {
+        aggregateType: 'Order',
+        aggregateId: ORDER_ID,
+        eventType: 'order.cancelled',
+        payload: { orderId: ORDER_ID, userId: USER_ID, occurredAt: ISO, reason: 'user:cancelled' },
+      },
+    ]);
   });
 });

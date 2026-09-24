@@ -29,23 +29,17 @@ const PRICE_MINOR = 150_000;
 const CONTENDERS = 12;
 const UNITS = 4;
 
-// The end-to-end gate for order→pay: the per-behaviour suites each prove one guard, this one runs
-// the paths together and then reads the whole ledger back — money, stock, and status must agree on
-// every row, with no order left waiting.
-describe('Checkout settlement acceptance: order → pay → settle (integration, real Postgres)', () => {
+// Runs the settlement paths together, then audits the whole ledger: money, stock and status agree.
+describe('Checkout settlement acceptance (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
   let gateway: FakeSignerGatewayAdapter;
   let reconcile: ReconcileStaleOrdersUseCase;
 
   beforeAll(async () => {
-    // The payment provider is the only test double: the boundary outside the system. Signature
-    // verification, dedup, finalize, and stock resolution are all the real code under test.
     ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
       RECONCILE_ENABLED: 'false',
-      // Pinned, not inherited: the exact-UNITS assertion below holds only under a strategy that makes
-      // losers wait. Optimistic gives up after `INVENTORY_OPTIMISTIC_MAX_RETRIES` (3) CAS misses, so a
-      // contender could 409 with a unit still unsold once UNITS exceeds that budget.
+      // Optimistic gives up after a few CAS misses, so a contender could 409 with a unit unsold.
       INVENTORY_LOCK_STRATEGY: 'pessimistic',
     }));
     reconcile = app.get(ReconcileStaleOrdersUseCase);
@@ -58,8 +52,7 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
   const failed = (sessionId: string, eventId: string) =>
     signOutcome(WEBHOOK_SECRET, sessionId, { amountMinor: null, currency: null }, 'FAILED', eventId);
 
-  // `expectedOrders` is not decoration: without it an audit that found nothing to check reads exactly
-  // like an audit that found everything in order.
+  // Without `expectedOrders` an audit that checked nothing would pass.
   async function expectLedgerConsistent(sku: SellableSku, expectedOrders: number): Promise<void> {
     const audit = await auditLedgerInvariants(app, { [sku.variantId]: sku.onHand });
     expect(audit.violations).toEqual([]);
@@ -69,10 +62,9 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
 
   it('settles money, stock, and status together on the happy path', async () => {
     const sku = await seedSellableSku(app, { onHand: 5, priceMinor: PRICE_MINOR });
-    // Three units on one line: quantity, not row count, is what the ledger has to reconcile.
     const order = await placeAndOpenSession(app, sku, 3);
 
-    const res = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_m2_happy'));
+    const res = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_happy'));
 
     expect(res.status).toBe(200);
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
@@ -101,7 +93,7 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
       const pay = await openSession(app, winner.token, winner.orderId).expect(201);
       const recorded = await readPayment(app, winner.orderId);
       const charge: SessionCharge = { amountMinor: recorded.amountMinor, currency: recorded.currency };
-      await postWebhook(app, paid(pay.body.providerSessionId as string, charge, `evt_m2_race_${i}`)).expect(200);
+      await postWebhook(app, paid(pay.body.providerSessionId as string, charge, `evt_race_${i}`)).expect(200);
       expect((await readOrder(app, winner.orderId)).status).toBe('PAID');
     }
 
@@ -112,7 +104,7 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
   it('charges once when a delivery repeats and a sweep passes over the same order', async () => {
     const sku = await seedSellableSku(app, { onHand: 5, priceMinor: PRICE_MINOR });
     const order = await placeAndOpenSession(app, sku);
-    const delivery = paid(order.sessionId, order.charge, 'evt_m2_dup');
+    const delivery = paid(order.sessionId, order.charge, 'evt_dup');
     gateway.setPaymentStatus(order.sessionId, 'PAID');
 
     const first = await postWebhook(app, delivery);
@@ -145,9 +137,9 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
   it('holds the line when a failure arrives after the money did', async () => {
     const sku = await seedSellableSku(app, { onHand: 5, priceMinor: PRICE_MINOR });
     const order = await placeAndOpenSession(app, sku);
-    await postWebhook(app, paid(order.sessionId, order.charge, 'evt_m2_first')).expect(200);
+    await postWebhook(app, paid(order.sessionId, order.charge, 'evt_first')).expect(200);
 
-    const late = await postWebhook(app, failed(order.sessionId, 'evt_m2_late'));
+    const late = await postWebhook(app, failed(order.sessionId, 'evt_late'));
 
     expect(late.status).toBe(200);
     expect(late.body).toEqual({ status: 'skipped' }); // refused at the payment state machine, before finalize
@@ -160,11 +152,11 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
   it('produces one effect when a webhook and a sweep reach the same order at once', async () => {
     const sku = await seedSellableSku(app, { onHand: 5, priceMinor: PRICE_MINOR });
     const order = await placeAndOpenSession(app, sku);
-    gateway.setPaymentStatus(order.sessionId, 'PAID', 'pi_m2_race');
+    gateway.setPaymentStatus(order.sessionId, 'PAID', 'pi_race');
 
     // Whichever wins the row lock, the other must find the order already terminal and stand down.
     const [webhook] = await Promise.all([
-      postWebhook(app, paid(order.sessionId, order.charge, 'evt_m2_sweep_race')),
+      postWebhook(app, paid(order.sessionId, order.charge, 'evt_sweep_race')),
       reconcile.execute(SWEEP_ALL),
     ]);
 
@@ -174,7 +166,7 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
     await expectLedgerConsistent(sku, 1);
   });
 
-  it('leaves a mixed batch of outcomes in a consistent ledger with nothing still pending', async () => {
+  it('leaves a mixed batch of outcomes in a consistent, fully settled ledger', async () => {
     const sku = await seedSellableSku(app, { onHand: 10, priceMinor: PRICE_MINOR });
     const [byWebhookPaid, byWebhookFailed, undecided, bySweepPaid] = [
       await placeAndOpenSession(app, sku),
@@ -186,10 +178,10 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
     const abandonedToken = await buyerWithCart(app, sku.variantId);
     const abandoned = ((await checkout(app, abandonedToken).expect(201)).body as { id: string }).id;
 
-    await postWebhook(app, paid(byWebhookPaid.sessionId, byWebhookPaid.charge, 'evt_m2_mix_paid')).expect(200);
-    await postWebhook(app, failed(byWebhookFailed.sessionId, 'evt_m2_mix_failed')).expect(200);
+    await postWebhook(app, paid(byWebhookPaid.sessionId, byWebhookPaid.charge, 'evt_mix_paid')).expect(200);
+    await postWebhook(app, failed(byWebhookFailed.sessionId, 'evt_mix_failed')).expect(200);
     gateway.setPaymentStatus(undecided.sessionId, 'PENDING');
-    gateway.setPaymentStatus(bySweepPaid.sessionId, 'PAID', 'pi_m2_mix');
+    gateway.setPaymentStatus(bySweepPaid.sessionId, 'PAID', 'pi_mix');
 
     // Past TTL: a definite PAID from the gateway still settles, everything undecided expires.
     const summary = await reconcile.execute({ ...SWEEP_ALL, ttlSec: 0 });
@@ -200,7 +192,6 @@ describe('Checkout settlement acceptance: order → pay → settle (integration,
     expect((await readOrder(app, byWebhookFailed.orderId)).status).toBe('FAILED');
     expect((await readOrder(app, undecided.orderId)).status).toBe('EXPIRED');
     expect((await readOrder(app, abandoned)).status).toBe('EXPIRED');
-    // Two sales committed, three holds handed back — the shelf reconciles to the seed.
     expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: 8, quantityReserved: 0 });
     await expectLedgerConsistent(sku, 5);
   });

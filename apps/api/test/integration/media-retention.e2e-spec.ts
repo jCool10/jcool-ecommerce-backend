@@ -11,25 +11,19 @@ import {
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
+import { releaseOnceBlocked } from '../setup/fixtures/inventory.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithObjectStorage } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetDatabase } from '../setup/reset-database';
 
-// The window after which a SWEEPING claim is assumed dead — the scheduler's own per-sweep timeout,
-// since a claim older than that cannot still be in flight. One minute, so a claim stamped "now" and
-// one stamped five minutes ago land either side of it regardless of how slow the runner is.
+// A SWEEPING claim older than the per-sweep timeout is assumed dead.
 const SWEEP_TIMEOUT_MS = 60_000;
 const MINUTE_MS = 60_000;
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * MINUTE_MS);
 const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * MINUTE_MS);
 
-/**
- * Reclaiming bytes cannot be undone, so these tests are about what the sweep must NOT take: anything
- * attached, not yet expired, or being claimed by another transaction. The order the sweep works in —
- * claim, then object, then row — is what makes an interrupted pass safe, and the crash cases say why.
- */
 describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   let storage: StartedObjectStorage;
   let app: INestApplication;
@@ -51,12 +45,11 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
       .get(RetentionSweepRegistry)
       .all()
       .find((candidate) => candidate.name === 'media:assets');
-    if (!registered) throw new Error('media:assets is not registered — registration is what makes it run');
+    if (!registered) throw new Error('media:assets is not registered, so it never runs');
     sweep = registered;
   }, 180_000);
 
-  // Explicit rather than `closeAppAfterAll`: the app has to go before the bucket it still holds
-  // connections to.
+  // The app closes before the bucket it holds connections to.
   afterAll(async () => {
     await app?.close();
     await storage?.stop();
@@ -65,7 +58,6 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   beforeEach(async () => {
     await resetDatabase(pool);
     await storage.clear();
-    // Assets carry the admin who uploaded them, and truncation takes the users with it.
     uploaderId = (await createTestAdminPrincipal(app)).user.id;
   });
 
@@ -97,23 +89,19 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   const statusOf = async (id: string): Promise<string | undefined> =>
     (await db.select().from(schema.mediaAssets).where(eq(schema.mediaAssets.id, id)))[0]?.status;
 
-  it('reclaims an upload nobody ever confirmed', async () => {
-    const asset = await seedAsset({ status: 'PENDING' });
+  it('reclaims an expired upload whether or not it was confirmed', async () => {
+    const pending = await seedAsset({ status: 'PENDING' });
+    const ready = await seedAsset({ status: 'READY' });
 
-    await expect(sweep.sweep(10)).resolves.toBe(1);
+    await expect(sweep.sweep(10)).resolves.toBe(2);
 
-    expect(await statusOf(asset.id)).toBeUndefined();
-    expect(await storage.exists(asset.storageKey)).toBe(false);
+    expect(await statusOf(pending.id)).toBeUndefined();
+    expect(await statusOf(ready.id)).toBeUndefined();
+    expect(await storage.exists(pending.storageKey)).toBe(false);
+    expect(await storage.exists(ready.storageKey)).toBe(false);
   });
 
-  it('reclaims a READY asset that was uploaded and then never attached', async () => {
-    const asset = await seedAsset({ status: 'READY' });
-
-    await expect(sweep.sweep(10)).resolves.toBe(1);
-    expect(await storage.exists(asset.storageKey)).toBe(false);
-  });
-
-  it('never touches an ATTACHED asset — it has no expiry, so it cannot be selected', async () => {
+  it('never touches an ATTACHED asset', async () => {
     const asset = await seedAsset({ status: 'ATTACHED', expiresAt: null });
 
     await expect(sweep.sweep(10)).resolves.toBe(0);
@@ -129,35 +117,34 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
     expect(await storage.exists(asset.storageKey)).toBe(true);
   });
 
-  it('refuses an attach that arrives after the claim — the bytes are already committed to deletion', async () => {
+  it('refuses an attach that arrives after the claim', async () => {
     const asset = await seedAsset({ status: 'SWEEPING' });
 
     await expect(db.transaction((tx) => facade.attach(tx, asset.id))).rejects.toBeInstanceOf(
       MediaAssetUnavailableError,
     );
-    // SWEEPING is terminal: without that, a product could end up pointing at an object about to go.
     expect(await statusOf(asset.id)).toBe('SWEEPING');
   });
 
-  it('loses to an attach that took the row lock first, even though the row was eligible when the pass began', async () => {
-    // The ordering that actually costs bytes. The asset is eligible when the sweep's subquery selects
-    // it, then the UPDATE blocks on the attach's lock. Postgres rechecks the statement's own WHERE
-    // against the committed row but re-runs the subquery under the original snapshot, so a claim
-    // matching on `id` alone would win here and delete an object a product just started pointing at.
+  // The claim's subquery keeps its first snapshot, so only the recheck of its own WHERE after the
+  // lock clears keeps it off an asset the attach just committed.
+  it('loses to an attach that took the row lock first', async () => {
     const asset = await seedAsset({ status: 'READY' });
 
     let releaseAttach!: () => void;
-    const attachHolding = new Promise<void>((resolve) => (releaseAttach = resolve));
+    const attachMayCommit = new Promise<void>((resolve) => (releaseAttach = resolve));
+    let attachHasLocked!: () => void;
+    const attachLocked = new Promise<void>((resolve) => (attachHasLocked = resolve));
     const attach = db.transaction(async (tx) => {
       await facade.attach(tx, asset.id);
-      await attachHolding;
+      attachHasLocked();
+      await attachMayCommit;
     });
+    await attachLocked;
 
-    // Long enough that the sweep's UPDATE is provably waiting on the lock, not racing to it.
-    await new Promise((resolve) => setTimeout(resolve, 200));
     const claimed = sweep.sweep(10);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    releaseAttach();
+    claimed.catch(() => {});
+    await releaseOnceBlocked(pool, releaseAttach, { subject: 'the sweep claim' });
     await attach;
 
     await expect(claimed).resolves.toBe(0);
@@ -166,26 +153,24 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   });
 
   it('finishes a pass that crashed between deleting the object and deleting the row', async () => {
-    // Exactly the state a crash leaves: claimed, object already gone, row still there.
     const asset = await seedAsset({
       status: 'SWEEPING',
       updatedAt: minutesAgo(5),
       withObject: false,
     });
 
-    // Deleting an absent object is a no-op, which is what makes the retry safe.
     await expect(sweep.sweep(10)).resolves.toBe(1);
     expect(await statusOf(asset.id)).toBeUndefined();
   });
 
-  it('leaves a fresh claim alone — it may still be in flight', async () => {
+  it('leaves a fresh claim alone', async () => {
     const asset = await seedAsset({ status: 'SWEEPING', updatedAt: new Date() });
 
     await expect(sweep.sweep(10)).resolves.toBe(0);
     expect(await statusOf(asset.id)).toBe('SWEEPING');
   });
 
-  it('honours the batch size, so one pass cannot run unbounded', async () => {
+  it('honours the batch size', async () => {
     await seedAsset({ status: 'PENDING' });
     await seedAsset({ status: 'PENDING' });
     await seedAsset({ status: 'PENDING' });
@@ -195,8 +180,6 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
   });
 
   it('counts the bytes it gave back', async () => {
-    // The counter is process-wide and every earlier case in this file has already added to it, so
-    // the assertion is on the delta.
     const before = await reclaimedBytes();
     await seedAsset({ status: 'PENDING', sizeBytes: 400 });
     await sweep.sweep(10);

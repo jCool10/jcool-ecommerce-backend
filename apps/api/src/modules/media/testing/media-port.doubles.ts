@@ -3,12 +3,11 @@ import type { ObjectStoragePort } from '@shared/infrastructure/storage/object-st
 import type { MediaAssetRepositoryPort } from '../application/ports/media-asset-repository.port';
 
 /**
- * Whole-port doubles for Media's two outbound seams. `ObjectStoragePort` is shared, but its double
- * belongs next to the specs that use it — every one of them is a Media spec, and the four of them
- * had four different one-method literals cast to the port.
+ * Whole-port doubles for Media's two outbound seams. `ObjectStoragePort` is shared, but every spec
+ * that fakes it is a Media spec, so its double lives here.
  *
- * Every method is present so the spec passes a real port instead of casting a partial — a cast that
- * keeps compiling once the use case starts calling a second method, then fails at runtime.
+ * Every method is present so a spec passes a real port instead of casting a partial, a cast that
+ * keeps compiling once the use case starts calling a second method and then fails at runtime.
  */
 export function fakeMediaAssetRepository(overrides: Partial<MediaAssetRepositoryPort> = {}): MediaAssetRepositoryPort {
   return {

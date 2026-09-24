@@ -32,11 +32,7 @@ const BACKOFF_MS = '100';
 
 const messageId = (n: number) => `0198f0d8-2222-7000-8000-00000000000${n}`;
 
-/**
- * Retry counting and the terminal/transient split are BullMQ's, read back rather than reimplemented,
- * so a fake would only prove that this suite agrees with itself. Everything here runs a genuine
- * Worker against a container and asserts on where the message physically ended up.
- */
+// A real BullMQ worker; assertions read where the message ended up.
 describe('Retry, backoff and dead-letter queue (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let processor: DomainEventProcessor;
@@ -52,9 +48,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     aggregateId: '0198f0d8-3333-7000-8000-000000000001',
     eventType: 'order.placed',
     payload: { orderId: '0198f0d8-3333-7000-8000-000000000001', totalAmountMinor: 150_000 },
-    // Relative, not a literal: the replay guard reads this field to decide whether a missing inbox
-    // claim proves anything, so a fixed date would drift out of the retention window and start
-    // failing this suite on a calendar day rather than on a change.
+    // Relative: a fixed date would drift past the replay guard's inbox horizon.
     occurredAt: new Date().toISOString(),
     traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
     ...overrides,
@@ -63,8 +57,6 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   const inboxRows = () => db.select().from(schema.inbox);
   const deadLetters = () => dlq.getJobs(['waiting', 'prioritized']) as Promise<Job<DeadLetterJob>[]>;
 
-  // The replay CLI's own lookup, against the same table the worker writes its claim into: the
-  // question is whether the guard reads the row the consumer actually wrote.
   const inboxLookup = async (id: string): Promise<Date | null> => {
     const [row] = await db
       .select({ processedAt: schema.inbox.processedAt })
@@ -77,8 +69,6 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   // None of these events retries on a ladder of its own.
   const replayGuards = { inboxLookup, inboxRetentionMs: 30 * 86_400_000, jobOptionsFor: () => ({}) };
 
-  // The worker runs in this same app, so a spy on the dispatcher it resolved is the seam every
-  // failure mode below is injected through.
   const publish = (data: DomainEventJob) => queue.add(data.eventType, data, { jobId: data.outboxId });
 
   const waitForDeadLetter = async (count = 1): Promise<Job<DeadLetterJob>[]> => {
@@ -115,16 +105,24 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
 
   it('retries a transient failure to the end of the budget, then dead-letters it', async () => {
     const effect = spyOnEffect(dispatcher).mockRejectedValue(new Error('database unavailable'));
+    const original = job();
 
-    await publish(job());
+    await publish(original);
 
     const [dead] = await waitForDeadLetter();
-    // Every attempt was actually spent — a DLQ reached on the first failure would be retry that
-    // never ran, and is indistinguishable from this one by looking at the DLQ alone.
     expect(effect).toHaveBeenCalledTimes(ATTEMPTS);
-    expect(dead.data.attemptsMade).toBe(ATTEMPTS);
-    expect(dead.data.failedReason).toBe('database unavailable');
-    // Nothing applied: the claim rolled back with each failed effect.
+    expect(dead.id).toBe(original.outboxId);
+    expect(dead.data).toMatchObject({
+      outboxId: original.outboxId,
+      aggregateType: 'Order',
+      aggregateId: original.aggregateId,
+      eventType: 'order.placed',
+      payload: original.payload,
+      traceparent: original.traceparent,
+      attemptsMade: ATTEMPTS,
+      failedReason: 'database unavailable',
+    });
+    expect(dead.data.failedAt).toEqual(expect.any(String));
     expect(await inboxRows()).toHaveLength(0);
   });
 
@@ -153,8 +151,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(dead.data.attemptsMade).toBe(1);
   });
 
-  it('treats an event nothing is registered for as permanent rather than burning the budget', async () => {
-    // The real path, no spy: a producer shipping an event type ahead of its consumer.
+  it('dead-letters an unregistered event type on the first attempt', async () => {
     await publish(job({ eventType: 'payment.refunded' }));
 
     const [dead] = await waitForDeadLetter();
@@ -162,29 +159,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(dead.data.attemptsMade).toBe(1);
   });
 
-  it('carries everything needed to reconcile the message by hand', async () => {
-    spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('nope'));
-
-    const original = job();
-    await publish(original);
-
-    const [dead] = await waitForDeadLetter();
-    expect(dead.data).toMatchObject({
-      outboxId: original.outboxId,
-      aggregateType: 'Order',
-      aggregateId: original.aggregateId,
-      eventType: 'order.placed',
-      payload: original.payload,
-      // Kept so a replay reopens the trace that produced the message rather than starting a new one.
-      traceparent: original.traceparent,
-      failedReason: 'nope',
-    });
-    expect(dead.data.failedAt).toEqual(expect.any(String));
-    // Deduped on the message, so a second poisoning of the same event does not stack up copies.
-    expect(dead.id).toBe(original.outboxId);
-  });
-
-  it('applies the message on replay once the handler is fixed, and clears the dead letter', async () => {
+  it('replays a message once the handler is fixed and clears the dead letter', async () => {
     const effect = spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
     await waitForDeadLetter();
@@ -197,9 +172,8 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(await deadLetters()).toHaveLength(0);
   });
 
-  it('refuses a message the inbox says was already applied, rather than reporting a no-op as a fix', async () => {
-    // Reaches the dead-letter queue and the inbox, which is the state a crash between the effect's
-    // commit and the ack leaves behind — the case that makes replay look dangerous.
+  // Dead-lettered and claimed: what a crash between the effect's commit and the ack leaves.
+  it('refuses to replay a message the inbox says was already applied, even forced', async () => {
     spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
     await waitForDeadLetter();
@@ -209,9 +183,6 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     const effect = spyOnEffect(dispatcher);
     const summary = await replayDeadLetters(queue, dlq, { ...replayGuards, dryRun: false, force: true });
 
-    // The inbox would have collapsed the duplicate anyway, so the effect was never at risk — what is
-    // at risk is the operator, who reads "replayed 1" and stops looking for the real problem. Not
-    // even --force gets past a claim that is actually there.
     expect(summary).toMatchObject({ replayed: 0, skipped: 1 });
     expect(summary.outcomes[0].detail).toContain('already applied');
     expect(effect).not.toHaveBeenCalled();
@@ -219,14 +190,13 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(await inboxRows()).toHaveLength(1);
   });
 
-  it('refuses a replay older than the inbox horizon, where a missing claim proves nothing, until --force', async () => {
+  // Past the horizon a swept claim and a claim that never existed look the same.
+  it('refuses a replay older than the inbox horizon unless forced', async () => {
     spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
     await waitForDeadLetter();
     vi.restoreAllMocks();
 
-    // A horizon of zero puts every failure past it — the shape of a dead letter that outlived inbox
-    // retention, where a swept claim and a claim that never existed look identical.
     const aged = { ...replayGuards, inboxRetentionMs: 0, dryRun: false };
     const refused = await replayDeadLetters(queue, dlq, aged);
 
@@ -235,14 +205,13 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(await deadLetters()).toHaveLength(1);
     expect(await inboxRows()).toHaveLength(0);
 
-    // Same message, same horizon: only the operator's assertion that it was never applied changes.
     const forced = await replayDeadLetters(queue, dlq, { ...aged, force: true });
 
     expect(forced).toMatchObject({ replayed: 1, skipped: 0 });
     await vi.waitFor(async () => expect(await inboxRows()).toHaveLength(1), { timeout: 15_000, interval: 50 });
   });
 
-  it('changes nothing on a dry run, so an operator can look before replaying', async () => {
+  it('changes nothing on a dry run', async () => {
     spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('nope'));
     await publish(job());
     await waitForDeadLetter();
@@ -273,8 +242,6 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
 
     const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
-    // Presence, not value: counters accumulate across the tests in this file, so only a delta would
-    // be meaningful.
     expect(text).toContain('messaging_consume_retries_total{event_type="order.placed"}');
     expect(text).toContain('messaging_dlq_total{event_type="order.placed",reason="attempts_exhausted"}');
   });

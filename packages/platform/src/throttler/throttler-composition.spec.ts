@@ -13,7 +13,8 @@ import type { Server } from 'node:http';
 import { PinoLogger } from 'nestjs-pino';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { METRICS, type MetricsPort } from '@jcool/metrics-port';
+import { METRICS } from '@jcool/metrics-port';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { AccountAwareThrottlerGuard } from './account-aware-throttler.guard';
 import {
@@ -65,19 +66,19 @@ async function boot(overLimit = false) {
     isBlocked: overLimit,
     timeToBlockExpire: overLimit ? 60 : 0,
   });
-  const recordRateLimitRejection = vi.fn<MetricsPort['recordRateLimitRejection']>();
+  const metrics = fakeMetricsPort();
   const moduleRef = await Test.createTestingModule({
     imports: [ThrottlerModule.forRoot({ throttlers: GLOBAL_THROTTLERS, storage: { increment } })],
     controllers: [ProbeController],
     providers: [
-      { provide: METRICS, useValue: { recordRateLimitRejection } },
+      { provide: METRICS, useValue: metrics },
       { provide: PinoLogger, useFactory: () => fakePinoLogger() },
       { provide: APP_GUARD, useClass: AccountAwareThrottlerGuard },
       { provide: APP_GUARD, useClass: FakeAuthGuard },
     ],
   }).compile();
   const app = await moduleRef.createNestApplication().init();
-  return { app, increment, recordRateLimitRejection };
+  return { app, increment, metrics };
 }
 
 // `getHttpServer()` is untyped; supertest needs the concrete server.
@@ -127,6 +128,6 @@ describe('throttler composition', () => {
 
     await http(app).post('/orders').expect(429);
 
-    expect(booted.recordRateLimitRejection).toHaveBeenCalledWith(DEFAULT_THROTTLER, '/orders');
+    expect(booted.metrics.recordRateLimitRejection).toHaveBeenCalledWith(DEFAULT_THROTTLER, '/orders');
   });
 });

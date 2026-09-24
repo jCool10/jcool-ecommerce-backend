@@ -38,7 +38,7 @@ describe('the lease store going away', () => {
 
   const mintStatus = async () => (await request(app.getHttpServer()).post('/v1/ids').send({ bucket: 0 })).status;
 
-  it('mints until its own fence, refuses after, and takes a node again once the store is back', async () => {
+  it('mints until its own fence, refuses after, and recovers once the store is back', async () => {
     expect(await mintStatus()).toBe(200);
 
     const pausedAt = Date.now();

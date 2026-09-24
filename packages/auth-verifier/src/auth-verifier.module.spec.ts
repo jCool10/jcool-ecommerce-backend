@@ -83,10 +83,6 @@ describe('AuthVerifierModule', () => {
     await request(server).get('/open').expect(200);
   });
 
-  it('refuses a protected route without a token', async () => {
-    await request(server).get('/me').expect(401);
-  });
-
   it('hands the verified user to the handler, whatever the scheme case', async () => {
     const res = await request(server)
       .get('/me')

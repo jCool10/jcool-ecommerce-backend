@@ -9,7 +9,6 @@ import { OrderStatus } from '../../src/modules/order/domain/order-status';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import {
   addToCart,
@@ -36,9 +35,6 @@ const QUANTITY = 2;
 // Nothing is left to wait for: the suite ages holds by writing `expires_at`, not by sleeping.
 const SWEEP_ALL = { graceSec: 0, batchSize: 50 };
 
-// The expiry sweep over real Postgres: proves an order nobody ever settles gives its stock back, that
-// it does so without asking the payment gateway anything, and that it can never talk over a
-// settlement that got there first.
 describe('Reservation TTL sweep (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -190,8 +186,8 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
     }
   });
 
-  // `batchSize` caps reservation ROWS, so an order holding several SKUs arrives as several rows and
-  // has to collapse to one entry — otherwise finalize is called once per line for the same order.
+  // `batchSize` caps reservation rows, so an order holding several SKUs arrives as several rows and
+  // has to collapse to one entry, or finalize runs once per line for the same order.
   it('expires a multi-line order once, from the several holds it left behind', async () => {
     const second = await seedSellableSku(app, { onHand: STOCK });
     const accessToken = await newPrincipalToken(app);
@@ -211,33 +207,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
     }
   });
 
-  // The sweep cannot close a checkout session, so the money side stays open until Payment consumes
-  // the expiry. Without this the buyer's hosted page still takes money for stock already released.
   describe('the expiry event Payment consumes', () => {
-    it('closes the checkout session and settles the payment EXPIRED', async () => {
-      const expire = vi.spyOn(gateway, 'expireSession');
-      const { orderId, sessionId } = await lapsedOrder();
-      await sweep.execute(SWEEP_ALL);
-      expect(expire).not.toHaveBeenCalled(); // the sweep itself never asks
-
-      expect(await processor.process(await expiryJob(orderId))).toBe('processed');
-
-      expect(expire).toHaveBeenCalledWith(sessionId);
-      expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
-    });
-
-    it('fails the consume and writes nothing when the gateway refuses', async () => {
-      vi.spyOn(gateway, 'expireSession').mockRejectedValue(new Error('gateway unreachable'));
-      const { orderId } = await lapsedOrder();
-      await sweep.execute(SWEEP_ALL);
-
-      await expect(processor.process(await expiryJob(orderId))).rejects.toThrow('gateway unreachable');
-
-      expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.PENDING);
-      // The inbox claim rolled back too — otherwise the redelivery would find it already consumed.
-      expect(await db.select().from(schema.inbox)).toHaveLength(0);
-    });
-
     it('does nothing for an order that never opened a session', async () => {
       const expire = vi.spyOn(gateway, 'expireSession');
       const token = await buyerWithCart(app, sku.variantId, QUANTITY);

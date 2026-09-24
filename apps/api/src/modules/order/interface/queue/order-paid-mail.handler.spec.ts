@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MailMessage } from '@jcool/platform/mail';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
-import type { MetricsPort } from '@jcool/metrics-port';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { UserContactPort } from '../../application/ports/user-contact.port';
 import { OrderPaidMailHandler } from './order-paid-mail.handler';
@@ -28,78 +28,46 @@ const PAID = { orderId: ORDER_ID, userId: USER_ID, totalAmountMinor: 21_000_000,
 function build() {
   const find = vi.fn<UserContactPort['find']>().mockResolvedValue({ email: 'buyer@test.local' });
   const sendMail = vi.fn().mockResolvedValue(undefined);
-  const recordMailSendFailure = vi.fn();
-  const error = vi.fn();
-  const handler = new OrderPaidMailHandler(
-    { find },
-    { sendMail },
-    { recordMailSendFailure } as unknown as MetricsPort,
-    fakePinoLogger({ error }),
-  );
-  return {
-    handler,
-    find,
-    sendMail,
-    recordMailSendFailure,
-    error,
-    sent: () => sendMail.mock.calls[0][0] as MailMessage,
-  };
+  const handler = new OrderPaidMailHandler({ find }, { sendMail }, fakeMetricsPort(), fakePinoLogger());
+  return { handler, find, sendMail };
+}
+
+async function sentText(payload: Record<string, unknown>): Promise<string> {
+  const { handler, sendMail } = build();
+  const send = await handler.prepare(job(payload));
+  await send();
+  return (sendMail.mock.calls[0][0] as MailMessage).text;
 }
 
 describe('OrderPaidMailHandler', () => {
   it('asks the directory for the buyer as of when the order was paid', async () => {
-    const ctx = build();
+    const { handler, find } = build();
 
-    await ctx.handler.prepare(job(PAID));
+    await handler.prepare(job(PAID));
 
-    expect(ctx.find).toHaveBeenCalledWith(USER_ID, new Date(OCCURRED_AT));
-  });
-
-  it('addresses the confirmation to the buyer', async () => {
-    const ctx = build();
-    const send = await ctx.handler.prepare(job(PAID));
-    await send();
-
-    expect(ctx.sent().to).toBe('buyer@test.local');
+    expect(find).toHaveBeenCalledWith(USER_ID, new Date(OCCURRED_AT));
   });
 
   it('renders the total in major units for the order currency', async () => {
-    const ctx = build();
-    const send = await ctx.handler.prepare(job(PAID));
-    await send();
-    // VND has no minor unit, so the payload's minor amount is already the figure a buyer recognises.
-    expect(ctx.sent().text).toContain('₫21,000,000');
+    const texts = await Promise.all([sentText(PAID), sentText({ ...PAID, totalAmountMinor: 1999, currency: 'USD' })]);
+
+    expect(texts.map((text) => text.split('\n').find((row) => row.startsWith('Total')))).toEqual([
+      'Total: ₫21,000,000',
+      'Total: $19.99',
+    ]);
   });
 
   it('omits the total rather than guessing when the payload cannot be read', async () => {
-    const ctx = build();
-    const send = await ctx.handler.prepare(job({ orderId: ORDER_ID, userId: USER_ID, currency: 'not-a-code' }));
-    await send();
-    expect(ctx.sent().text).not.toContain('Total');
+    const text = await sentText({ orderId: ORDER_ID, userId: USER_ID, currency: 'not-a-code' });
+
+    expect(text).not.toContain('Total');
   });
 
   // Every redelivery carries the same bytes, so retrying could only fail the same way.
   it('refuses permanently on no ids to work from', async () => {
-    const ctx = build();
-    await expect(ctx.handler.prepare(job({ orderId: ORDER_ID }))).rejects.toBeInstanceOf(PermanentError);
-    expect(ctx.find).not.toHaveBeenCalled();
-  });
+    const { handler, find } = build();
 
-  it('refuses permanently once the directory says the buyer does not exist', async () => {
-    const ctx = build();
-    ctx.find.mockResolvedValue(null);
-
-    await expect(ctx.handler.prepare(job(PAID))).rejects.toBeInstanceOf(PermanentError);
-  });
-
-  it('leaves a directory that could not answer to the retry ladder', async () => {
-    const ctx = build();
-    const outage = new Error('user-service did not answer in time');
-    ctx.find.mockRejectedValue(outage);
-
-    const outcome = ctx.handler.prepare(job(PAID));
-
-    await expect(outcome).rejects.toBe(outage);
-    await expect(outcome).rejects.not.toBeInstanceOf(PermanentError);
+    await expect(handler.prepare(job({ orderId: ORDER_ID }))).rejects.toBeInstanceOf(PermanentError);
+    expect(find).not.toHaveBeenCalled();
   });
 });

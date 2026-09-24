@@ -16,12 +16,12 @@ function contextWithAuth(authorization?: string): ExecutionContext {
 }
 
 describe('MetricsTokenGuard', () => {
-  it('allows scraping in dev when no token is configured (local convenience)', () => {
+  it('allows scraping in dev when no token is configured', () => {
     const guard = new MetricsTokenGuard(configFor(undefined, 'development'));
     expect(guard.canActivate(contextWithAuth())).toBe(true);
   });
 
-  it('hides the endpoint in production when no token is configured (misconfiguration)', () => {
+  it('hides the endpoint in production when no token is configured', () => {
     const guard = new MetricsTokenGuard(configFor(undefined, 'production'));
     expect(() => guard.canActivate(contextWithAuth())).toThrow(NotFoundException);
   });

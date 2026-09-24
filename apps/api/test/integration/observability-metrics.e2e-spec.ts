@@ -1,68 +1,105 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
 
-// The guarded /metrics endpoint and the RED route-template label, over the real HTTP stack.
+const INFRA = resolve(__dirname, '../../../../infra');
+const PROMQL_OPERATORS = new Set(['and', 'or', 'unless', 'offset', 'bool']);
+// Scraped from Prometheus itself, Loki and the id-service, not from the api.
+const NOT_THE_API = /^(up|loki_\w+|id_clock_\w+)$/;
+
+function filesIn(dir: string, extension: string): string[] {
+  return readdirSync(dir)
+    .filter((file) => file.endsWith(extension))
+    .map((file) => readFileSync(join(dir, file), 'utf8'));
+}
+
+function ruleExpressions(): string[] {
+  const exprs: string[] = [];
+  for (const text of filesIn(join(INFRA, 'prometheus/rules'), '.yml')) {
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      const match = /^(\s*)expr:\s*(.*)$/.exec(line);
+      if (!match) return;
+      if (!/^[|>]/.test(match[2])) {
+        exprs.push(match[2]);
+        return;
+      }
+      const indent = match[1].length;
+      for (let j = i + 1; j < lines.length && (lines[j].trim() === '' || lines[j].search(/\S/) > indent); j += 1) {
+        exprs.push(lines[j]);
+      }
+    });
+  }
+  return exprs;
+}
+
+function dashboardExpressions(): string[] {
+  const exprs: string[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+    } else if (node !== null && typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        if (key === 'expr' && typeof value === 'string') exprs.push(value);
+        else walk(value);
+      }
+    }
+  };
+  for (const text of filesIn(join(INFRA, 'grafana/provisioning/dashboards'), '.json')) walk(JSON.parse(text));
+  return exprs;
+}
+
+// Skips functions (followed by a parenthesis) and recording rules (named with a colon).
+function metricNames(exprs: string[]): string[] {
+  const names = new Set<string>();
+  for (const expr of exprs) {
+    const bare = expr
+      .replace(/"[^"]*"/g, '')
+      .replace(/\{[^}]*\}/g, '')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/\b(by|without|on|ignoring)\s*\([^)]*\)/g, '');
+    for (const token of bare.match(/(?<![\w.])[a-zA-Z_:][\w:]*(?![\w:]|\s*\()/g) ?? []) {
+      if (PROMQL_OPERATORS.has(token) || token.includes(':') || NOT_THE_API.test(token)) continue;
+      names.add(token.replace(/_(bucket|count|sum)$/, ''));
+    }
+  }
+  return [...names].sort();
+}
 
 describe('Metrics endpoint (integration)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    // Set before the app builds so the ConfigModule factory picks it up.
     process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
     app = await createTestApp();
   });
 
-  // Explicit rather than `closeAppAfterAll`: the token has to be cleared too, or the next file in
-  // this worker boots with /metrics unguarded.
+  // Clears the token so the next file in this worker boots with /metrics unguarded.
   afterAll(async () => {
     delete process.env.METRICS_TOKEN;
     await app.close();
   });
 
-  it('returns 404 without the bearer token (never confirms the endpoint exists)', async () => {
+  it('answers 404 without the bearer token or with a wrong one', async () => {
     await request(app.getHttpServer()).get('/metrics').expect(404);
-  });
-
-  it('returns 404 with a wrong token', async () => {
     await request(app.getHttpServer()).get('/metrics').set('Authorization', 'Bearer wrong').expect(404);
   });
 
-  it('exposes default + RED + business metrics with the correct token', async () => {
+  it('describes every api metric the alert rules and dashboards query', async () => {
+    const referenced = metricNames([...ruleExpressions(), ...dashboardExpressions()]);
+
     const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 
-    const body = res.text;
-    // Default (saturation): event-loop lag proves collectDefaultMetrics ran.
-    expect(body).toContain('nodejs_eventloop_lag_seconds');
-    expect(body).toContain('http_request_duration_seconds');
-    expect(body).toContain('http_requests_total');
-    // HELP/TYPE are present even before the first observation, so presence is assertable.
-    expect(body).toContain('orders_created_total');
-    expect(body).toContain('order_value_minor');
-    expect(body).toContain('cart_operations_total');
-    expect(body).toContain('catalog_cache_operations_total');
-    expect(body).toContain('auth_events_total');
-    // Presence only: the gauges read the table on every scrape and this app shares its database with
-    // whatever suite ran before it, so asserting a value would fail on another file's leftovers.
-    // What the numbers mean is outbox-queue-e2e's subject, on a database it resets itself.
-    expect(body).toContain('messaging_publish_total');
-    expect(body).toContain('messaging_consume_total');
-    expect(body).toContain('outbox_backlog_pending');
-    expect(body).toContain('outbox_oldest_age_seconds');
-    // Resilience. Registered eagerly like the rest, so they describe themselves before the first
-    // rebuild, breaker trip or 429 — an alert written against them never queries a missing series.
-    expect(body).toContain('cache_rebuild_duration_seconds');
-    expect(body).toContain('circuit_breaker_state');
-    expect(body).toContain('circuit_breaker_transitions_total');
-    expect(body).toContain('circuit_breaker_calls_total');
-    expect(body).toContain('rate_limit_rejections_total');
+    const described = new Set([...res.text.matchAll(/^# HELP (\S+)/gm)].map((match) => match[1]));
+    expect(referenced).toContain('http_requests_total');
+    expect(referenced.filter((name) => !described.has(name))).toEqual([]);
   });
 
-  it('labels the RED metric with the route TEMPLATE, never the concrete id (cardinality)', async () => {
-    // A param route with a distinctive raw id: the request runs through the handler, so the
-    // interceptor records it. The label must be the template — the raw id must NOT appear.
+  it('labels the RED metric with the route template, never the concrete id', async () => {
     const rawId = 'zzz-cardinality-probe-9f1c';
     await request(app.getHttpServer()).get(`/products/${rawId}`);
 
@@ -72,9 +109,7 @@ describe('Metrics endpoint (integration)', () => {
     expect(res.text).not.toContain(rawId);
   });
 
-  it('records the real success status on the counter (200 on the products list)', async () => {
-    // Locks in that the interceptor reads the final response status on the success path
-    // (this stack sets res.statusCode before the tap fires).
+  it('records the real success status on the request counter', async () => {
     await request(app.getHttpServer()).get('/products').expect(200);
 
     const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);

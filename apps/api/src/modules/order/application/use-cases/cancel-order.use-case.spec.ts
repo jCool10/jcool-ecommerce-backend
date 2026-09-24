@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { HttpException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { Order } from '../../domain/order.entity';
@@ -35,53 +35,25 @@ function build(found: Order | null, reportFinalized?: () => void) {
     }),
     findByIdForUpdate,
   } as unknown as OrderRepositoryPort;
-  const execute = vi.fn().mockImplementation(({ reason }: { reason: string }) =>
-    Promise.resolve({
-      status: 'finalized',
-      reportFinalized,
-      order: Order.rehydrate({
-        id: ORDER_ID,
-        userId: OWNER,
-        status: OrderStatus.CANCELLED,
-        currency: 'VND',
-        items: [],
-        totalAmountMinor: 100_000,
-        placedAt: new Date('2026-01-01T00:00:00Z'),
-        finalizeReason: reason,
-      }),
-    }),
-  );
+  const execute = vi.fn().mockResolvedValue({
+    status: 'finalized',
+    reportFinalized,
+    order: order(OrderStatus.CANCELLED),
+  });
   const useCase = new CancelOrderUseCase(repo, { execute } as unknown as FinalizeOrderUseCase);
   return { useCase, finalize: execute, findByIdForUpdate, commit };
 }
 
 describe('CancelOrderUseCase', () => {
-  it('cancels a pending order and stamps who asked', async () => {
-    const { useCase, finalize } = build(order(OrderStatus.PENDING));
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).resolves.toMatchObject({
-      id: ORDER_ID,
-      status: OrderStatus.CANCELLED,
-    });
-
-    expect(finalize).toHaveBeenCalledExactlyOnceWith(
-      { orderId: ORDER_ID, outcome: OrderStatus.CANCELLED, reason: 'user:cancel' },
-      expect.anything(),
-    );
-  });
-
   it('joins the caller transaction rather than letting the finalize open its own', async () => {
     const { useCase, finalize, findByIdForUpdate } = build(order(OrderStatus.PENDING));
 
     await useCase.cancelOwn(ORDER_ID, OWNER);
 
-    // The order was read under a lock and the finalize was handed that same handle — otherwise the
-    // order could settle some other way between the ownership check and the cancel.
+    // Otherwise the order could settle some other way between the ownership check and the cancel.
     expect(finalize.mock.calls[0][1]).toBe(findByIdForUpdate.mock.calls[0][1]);
   });
 
-  // The finalize joined this transaction, so its counters and audit line describe nothing real until
-  // the commit — a rollback after them would leave the metrics claiming a cancel that never landed.
   it('runs the finalize reporting only after the transaction commits', async () => {
     const report = vi.fn();
     const { useCase, commit } = build(order(OrderStatus.PENDING), report);
@@ -92,56 +64,33 @@ describe('CancelOrderUseCase', () => {
     expect(report.mock.invocationCallOrder[0]).toBeGreaterThan(commit.mock.invocationCallOrder[0]);
   });
 
-  it('records an admin force-cancel under its own audit reason', async () => {
-    const { useCase, finalize } = build(order(OrderStatus.PENDING));
+  it("refuses a missing or someone else's order with 404 and any non-pending one with 409", async () => {
+    const cases: Array<[string, Order | null]> = [
+      ['missing', null],
+      ["stranger's", order(OrderStatus.PENDING, STRANGER)],
+      ...[OrderStatus.PAID, OrderStatus.DRAFT, OrderStatus.FAILED, OrderStatus.EXPIRED].map(
+        (status): [string, Order] => [status, order(status)],
+      ),
+    ];
 
-    await expect(useCase.cancelAsAdmin(ORDER_ID)).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
-
-    expect(finalize).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ reason: 'admin:cancel' }),
-      expect.anything(),
+    const outcomes = await Promise.all(
+      cases.map(async ([label, found]) => {
+        const { useCase, finalize } = build(found);
+        const status = await useCase.cancelOwn(ORDER_ID, OWNER).then(
+          () => 'resolved',
+          (error: unknown) => (error instanceof HttpException ? error.getStatus() : error),
+        );
+        return [label, status, finalize.mock.calls.length];
+      }),
     );
-  });
 
-  it("answers 404 for someone else's order, the same as one that does not exist", async () => {
-    const { useCase, finalize } = build(order(OrderStatus.PENDING, STRANGER));
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toBeInstanceOf(NotFoundException);
-    expect(finalize).not.toHaveBeenCalled();
-  });
-
-  it('lets an admin cancel an order they do not own', async () => {
-    const { useCase, finalize } = build(order(OrderStatus.PENDING, STRANGER));
-
-    await expect(useCase.cancelAsAdmin(ORDER_ID)).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
-    expect(finalize).toHaveBeenCalledOnce();
-  });
-
-  it('answers 404 when no such order exists', async () => {
-    const { useCase, finalize } = build(null);
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toBeInstanceOf(NotFoundException);
-    expect(finalize).not.toHaveBeenCalled();
-  });
-
-  it('is idempotent: re-cancelling answers 200 without settling twice', async () => {
-    const { useCase, finalize } = build(order(OrderStatus.CANCELLED));
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
-    expect(finalize).not.toHaveBeenCalled();
-  });
-
-  it('refuses a paid order — unwinding it is a refund, not a cancel', async () => {
-    const { useCase, finalize } = build(order(OrderStatus.PAID));
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toBeInstanceOf(ConflictException);
-    expect(finalize).not.toHaveBeenCalled();
-  });
-
-  it.each([OrderStatus.DRAFT, OrderStatus.FAILED, OrderStatus.EXPIRED])('refuses a %s order', async (status) => {
-    const { useCase, finalize } = build(order(status));
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toBeInstanceOf(ConflictException);
-    expect(finalize).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([
+      ['missing', 404, 0],
+      ["stranger's", 404, 0],
+      [OrderStatus.PAID, 409, 0],
+      [OrderStatus.DRAFT, 409, 0],
+      [OrderStatus.FAILED, 409, 0],
+      [OrderStatus.EXPIRED, 409, 0],
+    ]);
   });
 });

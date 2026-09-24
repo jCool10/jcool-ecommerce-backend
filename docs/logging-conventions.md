@@ -128,18 +128,20 @@ Enforced by `no-restricted-imports` (the `Logger` ban) and `no-console` (also of
 
 ## Testing
 
-Use `fakePinoLogger()` from `@jcool/testing/fake-pino-logger`, never a partial `{ warn: vi.fn() } as unknown as PinoLogger`: a partial stub answers `undefined` for the level the code actually picked, and the cast is what hides it — the spec then passes while nothing was logged. It also has no `setContext`, which now throws in every constructor.
+Use `fakePinoLogger()` from `@jcool/testing/fake-pino-logger`, never a partial `{ warn: vi.fn() } as unknown as PinoLogger`: a partial stub answers `undefined` for the level the code actually picked, and the cast is what hides it. It also has no `setContext`, which throws in every constructor.
+
+Assert a log line only when the line is the behaviour: an audit record, a level or count that changes on a state transition (down once, recovered once), or the only observable output of a failure path. Otherwise assert the outcome (returned value, stored state, metric) and leave the log alone; pinning every message string makes a rename a test failure without catching a bug.
+
+When a log is the behaviour, assert its **fields structurally** and its level, and pin the message only if something outside the code keys on it (an alert, a saved query):
 
 ```ts
 const warn = vi.fn();
 const useCase = new SweepUseCase(repo, fakePinoLogger({ warn }));
 // …
-expect(warn).toHaveBeenCalledWith(
+expect(warn).toHaveBeenCalledExactlyOnceWith(
   { orderId, err: expect.objectContaining({ message: 'deadlock detected' }) as unknown },
-  'expiry sweep failed for order',
+  expect.any(String),
 );
 ```
 
-Assert on the spies you passed in, not on `logger.warn` — `PinoLogger` declares its levels as methods, so `expect(logger.warn)` is an unbound method reference the lint rules reject.
-
-Assert the **static message exactly** and the **fields structurally**. `expect.stringContaining('deadlock')` against the message was how the old interpolated style was tested; it no longer proves anything, because the value it was matching has moved into `err`.
+Assert on the spies you passed in, not on `logger.warn`: `PinoLogger` declares its levels as methods, so `expect(logger.warn)` is an unbound method reference the lint rules reject.

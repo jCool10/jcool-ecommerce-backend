@@ -4,18 +4,16 @@ import { SnowflakeGenerator } from './snowflake.generator';
 import { MAX_TIMESTAMP_MS, NODE_COUNT, SEQUENCE_COUNT, decode } from '@jcool/id-codec';
 
 const BUCKET = 2731;
-// Well after EPOCH_MS (2026-01-01): the earliest instant the layout can stamp is EPOCH_MS + 1.
 const START_MS = 1_800_000_000_000;
 const FLOOR_MS = START_MS + 5_000;
 
-const ORDERING_SAMPLES = process.env.CI ? 20_000 : 100_000;
-const UNIQUENESS_SAMPLES = process.env.CI ? 50_000 : 100_000;
+const ORDERING_SAMPLES = 50_000;
 
 interface FakeClock {
   clock: IdentityClock;
   /** Both clocks move together, as on a healthy host. A negative step breaks the monotonic contract on purpose. */
   advance(ms: number): void;
-  /** Only the wall clock moves — an NTP step, or a suspended host resuming. */
+  /** Only the wall clock moves: an NTP step, or a suspended host resuming. */
   stepWallBy(ms: number): void;
   /** Moves both clocks forward on the Nth elapsed-time read, releasing a spin from inside the loop. */
   releaseAfterSpinReads(reads: number, byMs: number): void;
@@ -109,28 +107,30 @@ describe('snowflake generator', () => {
     expect(() => SnowflakeGenerator.createWithClock({ nodeId: 1.5, clock })).toThrow(RangeError);
   });
 
-  // The layout carries no random bits any more, so this is the whole of the per-node guarantee.
-  it('never repeats an id on one node, whatever the clock does', () => {
+  // The layout carries no random bits, so strictly increasing ids are the whole per-node guarantee.
+  it('keeps ids strictly increasing while the wall clock steps both ways', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 7, clock: fake.clock });
-    const seen = new Set<string>();
+    let previous = 0n;
+    let outOfOrder = 0;
     let jumpsAhead = 0;
 
-    for (let i = 0; i < UNIQUENESS_SAMPLES; i++) {
-      // Half the per-millisecond sequence per step, so a mint never has to spin against a frozen
-      // clock — that is the stall path, and it has its own test.
+    for (let i = 0; i < ORDERING_SAMPLES; i++) {
+      // Half the per-millisecond sequence per step, so a mint never spins against a frozen clock.
       if (i % (SEQUENCE_COUNT / 2) === 0) fake.advance(1);
       if (i % 991 === 0) fake.stepWallBy(-5_000);
       if (i % 1_499 === 0) fake.stepWallBy(8_000);
       const driftBefore = generator.clockDriftMs;
-      seen.add(generator.generate(BUCKET));
+      const current = BigInt(generator.generate(BUCKET));
+      if (current <= previous) outOfOrder++;
       if (generator.clockDriftMs > driftBefore) jumpsAhead++;
+      previous = current;
     }
 
-    expect(seen.size).toBe(UNIQUENESS_SAMPLES);
+    expect(outOfOrder).toBe(0);
     // More than the first mint's: the wall clock also overtook ids already minted.
     expect(jumpsAhead).toBeGreaterThan(1);
-  }, 60_000);
+  });
 
   it('runs the sequence to 31 within a millisecond, then moves to the next', () => {
     const fake = fakeClock();
@@ -149,20 +149,6 @@ describe('snowflake generator', () => {
     expect(next.tsMs).toBe(withinOneMs[0].tsMs + 1);
   });
 
-  it('keeps ids strictly increasing while the wall clock walks backwards', () => {
-    const fake = fakeClock();
-    const generator = SnowflakeGenerator.createWithClock({ nodeId: 1, clock: fake.clock });
-    let previous = 0n;
-
-    for (let i = 0; i < ORDERING_SAMPLES; i++) {
-      if (i % (SEQUENCE_COUNT / 2) === 0) fake.advance(1);
-      if (i % 517 === 0) fake.stepWallBy(-1_000);
-      const current = BigInt(generator.generate(BUCKET));
-      expect(current).toBeGreaterThan(previous);
-      previous = current;
-    }
-  }, 60_000);
-
   it('does not drop an NTP step forward when the correction comes back', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 2, clock: fake.clock });
@@ -171,10 +157,11 @@ describe('snowflake generator', () => {
     fake.stepWallBy(10_000);
     const afterJump = decode(generator.generate(BUCKET));
     fake.stepWallBy(-10_000);
+    fake.advance(1);
     const afterCorrection = decode(generator.generate(BUCKET));
 
     expect(afterJump.tsMs).toBe(START_MS + 10_000);
-    expect(afterCorrection.tsMs).toBeGreaterThanOrEqual(afterJump.tsMs);
+    expect(afterCorrection).toMatchObject({ tsMs: afterJump.tsMs + 1, sequence: 0 });
     expect(generator.clockDriftMs).toBe(10_000);
   });
 
@@ -246,7 +233,7 @@ describe('snowflake generator', () => {
     expect(decode(lastUsable.generate(BUCKET)).tsMs).toBe(MAX_TIMESTAMP_MS);
   });
 
-  it('refuses to mint rather than reuse a sequence value when real time runs on but the clock does not', () => {
+  it('refuses to mint when real time runs on but the clock does not', () => {
     const stalled = stallOnExhaustedSequence(1_000_000n);
 
     expect(stalled.error.reason).toBe('deadline');
@@ -258,7 +245,7 @@ describe('snowflake generator', () => {
 
     expect(stalled.error.reason).toBe('loop_cap');
     expect(stalled.stallCount).toBe(1);
-  }, 30_000);
+  });
 
   it('mints rather than refusing when the deadline is blown but the clock has moved on', () => {
     const fake = fakeClock();
@@ -291,7 +278,7 @@ describe('snowflake generator', () => {
 
     fake.advance(1);
     expect(decode(generator.generate(BUCKET)).tsMs).toBe(START_MS + 1);
-  }, 30_000);
+  });
 
   it('refuses to mint on a host whose clock predates the epoch', () => {
     const fake = fakeClock(1_700_000_000_000);

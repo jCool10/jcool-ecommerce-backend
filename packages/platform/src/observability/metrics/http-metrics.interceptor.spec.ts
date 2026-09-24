@@ -1,92 +1,75 @@
-import type { CallHandler, ExecutionContext } from '@nestjs/common';
-import { NotFoundException } from '@nestjs/common';
-import type { Reflector } from '@nestjs/core';
-import type { Counter, Histogram } from 'prom-client';
-import { of, throwError } from 'rxjs';
-import { describe, expect, it, vi } from 'vitest';
+import { Controller, Get, NotFoundException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host';
+import { Counter, Histogram, Registry } from 'prom-client';
+import { lastValueFrom, of, throwError, type Observable } from 'rxjs';
+import { describe, expect, it } from 'vitest';
 import { HttpMetricsInterceptor } from './http-metrics.interceptor';
+import { HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS } from './metric-definitions';
 
-function httpContext(controller: object, handler: () => void, statusCode: number): ExecutionContext {
-  const request = { method: 'GET', path: '/concrete' };
-  const response = { statusCode };
-  return {
-    getType: () => 'http',
-    switchToHttp: () => ({ getRequest: () => request, getResponse: () => response }),
-    getClass: () => controller,
-    getHandler: () => handler,
-  } as unknown as ExecutionContext;
+@Controller('products')
+class ProductsController {
+  @Get(':idOrSlug')
+  findOne(this: void): void {}
 }
 
-function reflectorFor(controller: object, controllerPath: string, handlerPath: string): Reflector {
-  return {
-    get: (_key: unknown, target: unknown): string => (target === controller ? controllerPath : handlerPath),
-  } as unknown as Reflector;
+@Controller('metrics')
+class MetricsController {
+  @Get()
+  index(this: void): void {}
 }
 
-function build(reflector: Reflector) {
-  const observe = vi.fn<(labels: Record<string, unknown>, value: number) => void>();
-  const inc = vi.fn<(labels: Record<string, unknown>) => void>();
+async function request(
+  controller: new () => object,
+  handler: () => void,
+  handle: () => Observable<unknown>,
+  statusCode = 200,
+): Promise<Registry> {
+  const registry = new Registry();
+  const labelNames = ['method', 'route', 'status_code'];
   const interceptor = new HttpMetricsInterceptor(
-    { observe } as unknown as Histogram<string>,
-    { inc } as unknown as Counter<string>,
-    reflector,
+    new Histogram({ name: HTTP_REQUEST_DURATION_SECONDS, help: 'h', labelNames, registers: [registry] }),
+    new Counter({ name: HTTP_REQUESTS_TOTAL, help: 'h', labelNames, registers: [registry] }),
+    new Reflector(),
   );
-  return { interceptor, observe, inc };
+  const context = new ExecutionContextHost(
+    [{ method: 'GET', path: '/products/abc' }, { statusCode }],
+    controller,
+    handler,
+  );
+  await lastValueFrom(interceptor.intercept(context, { handle }), { defaultValue: undefined }).catch(() => undefined);
+  return registry;
+}
+
+async function countedLabels(registry: Registry): Promise<unknown[]> {
+  const { values } = await registry.getSingleMetric(HTTP_REQUESTS_TOTAL)!.get();
+  return values.map((sample) => sample.labels);
 }
 
 describe('HttpMetricsInterceptor', () => {
-  it('records duration + count with method, route template and status on success', async () => {
-    const controller = class ProductsController {};
-    const handler = function findOne(): void {};
-    const { interceptor, observe, inc } = build(reflectorFor(controller, 'products', ':idOrSlug'));
+  // On the error path the exception filter has not yet written the status to the response.
+  it('labels the status from the response, or from the exception on error', async () => {
+    const findOne = ProductsController.prototype.findOne;
+    const outcomes = await Promise.all([
+      request(ProductsController, findOne, () => of({ id: 'abc' }), 201),
+      request(ProductsController, findOne, () => throwError(() => new NotFoundException())),
+      request(ProductsController, findOne, () => throwError(() => new Error('pool exhausted'))),
+    ]);
 
-    const next = { handle: () => of({ id: 'abc' }) } as unknown as CallHandler;
-    await new Promise<void>((resolve) => {
-      interceptor.intercept(httpContext(controller, handler, 200), next).subscribe({ complete: () => resolve() });
-    });
-
-    const labels = { method: 'GET', route: '/products/:idOrSlug', status_code: 200 };
-    expect(inc).toHaveBeenCalledWith(labels);
-    expect(observe).toHaveBeenCalledTimes(1);
-    const [observedLabels, seconds] = observe.mock.calls[0];
-    expect(observedLabels).toEqual(labels);
-    expect(typeof seconds).toBe('number');
-  });
-
-  it('derives the status from the exception on the error path (filter has not set it yet)', async () => {
-    const controller = class ProductsController {};
-    const handler = function findOne(): void {};
-    const { interceptor, inc } = build(reflectorFor(controller, 'products', ':idOrSlug'));
-
-    const next = { handle: () => throwError(() => new NotFoundException()) } as unknown as CallHandler;
-    await new Promise<void>((resolve) => {
-      interceptor.intercept(httpContext(controller, handler, 200), next).subscribe({ error: () => resolve() });
-    });
-
-    expect(inc).toHaveBeenCalledWith({ method: 'GET', route: '/products/:idOrSlug', status_code: 404 });
+    const route = { method: 'GET', route: '/products/:idOrSlug' };
+    expect(await Promise.all(outcomes.map(countedLabels))).toEqual([
+      [{ ...route, status_code: 201 }],
+      [{ ...route, status_code: 404 }],
+      [{ ...route, status_code: 500 }],
+    ]);
+    expect(await outcomes[2].metrics()).toContain(
+      `${HTTP_REQUEST_DURATION_SECONDS}_count{method="GET",route="/products/:idOrSlug",status_code="500"} 1`,
+    );
   });
 
   it('does not measure the scrape endpoint itself', async () => {
-    const controller = class MetricsController {};
-    const handler = function index(): void {};
-    const { interceptor, observe, inc } = build(reflectorFor(controller, 'metrics', ''));
+    const registry = await request(MetricsController, MetricsController.prototype.index, () => of('# metrics'));
 
-    const next = { handle: () => of('# metrics') } as unknown as CallHandler;
-    await new Promise<void>((resolve) => {
-      interceptor.intercept(httpContext(controller, handler, 200), next).subscribe({ complete: () => resolve() });
-    });
-
-    expect(observe).not.toHaveBeenCalled();
-    expect(inc).not.toHaveBeenCalled();
-  });
-
-  it('skips non-http contexts', () => {
-    const { interceptor, observe, inc } = build(reflectorFor({}, '', ''));
-    const context = { getType: () => 'rpc' } as unknown as ExecutionContext;
-    const next = { handle: () => of('x') } as unknown as CallHandler;
-
-    interceptor.intercept(context, next).subscribe();
-    expect(observe).not.toHaveBeenCalled();
-    expect(inc).not.toHaveBeenCalled();
+    expect(await countedLabels(registry)).toEqual([]);
   });
 });

@@ -1,50 +1,13 @@
 import { hashRefreshToken } from '..';
-import type {
-  ActiveSession,
-  RefreshTokenOwner,
-  RefreshTokenRepositoryPort,
-  RotateOutcome,
-  TokenDenylistPort,
-} from '../ports';
+import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
+import type { TokenDenylistPort } from '../ports';
 import { LogoutUserUseCase } from './logout-user.use-case';
 
-class MockRefreshTokenRepository implements RefreshTokenRepositoryPort {
-  revokeCalls: Array<{ userId: string; tokenHash: string }> = [];
-
-  // Retention is not this use case's concern; SweepAuthTokensService owns and tests it.
-  deleteCollectable(): Promise<number> {
-    return Promise.resolve(0);
-  }
-
-  create(): Promise<void> {
-    return Promise.reject(new Error('unused'));
-  }
-  findOwner(): Promise<RefreshTokenOwner | null> {
-    return Promise.reject(new Error('unused'));
-  }
-  rotate(): Promise<RotateOutcome> {
-    return Promise.reject(new Error('unused'));
-  }
-  revoke(userId: string, tokenHash: string): Promise<void> {
-    this.revokeCalls.push({ userId, tokenHash });
-    return Promise.resolve();
-  }
-  revokeAllForUser(): Promise<void> {
-    return Promise.reject(new Error('unused'));
-  }
-  listActiveSessions(): Promise<ActiveSession[]> {
-    return Promise.reject(new Error('unused'));
-  }
-  revokeFamily(): Promise<boolean> {
-    return Promise.reject(new Error('unused'));
-  }
-}
-
-class MockDenylist implements TokenDenylistPort {
-  denyCalls: Array<{ jti: string; expiresAt: Date }> = [];
+class RecordingDenylist implements TokenDenylistPort {
+  readonly entries: Array<{ jti: string; expiresAt: Date }> = [];
 
   denylist(jti: string, expiresAt: Date): Promise<void> {
-    this.denyCalls.push({ jti, expiresAt });
+    this.entries.push({ jti, expiresAt });
     return Promise.resolve();
   }
   isDenylisted(): Promise<boolean> {
@@ -53,34 +16,20 @@ class MockDenylist implements TokenDenylistPort {
 }
 
 describe('LogoutUserUseCase', () => {
-  const RAW = 'raw-refresh-token';
-  const EXP = 1_700_000_000; // epoch seconds
-  let repo: MockRefreshTokenRepository;
-  let denylist: MockDenylist;
-  let useCase: LogoutUserUseCase;
+  it("denylists the access token until its exp and revokes this session's refresh", async () => {
+    const refreshTokens = new FakeRefreshTokenRepository();
+    const denylist = new RecordingDenylist();
+    const exp = 1_700_000_000;
 
-  beforeEach(() => {
-    repo = new MockRefreshTokenRepository();
-    denylist = new MockDenylist();
-    useCase = new LogoutUserUseCase(repo, denylist);
-  });
+    await new LogoutUserUseCase(refreshTokens, denylist).execute({
+      userId: 'u1',
+      accessJti: 'j1',
+      accessExp: exp,
+      rawRefreshToken: 'raw-refresh-token',
+    });
 
-  it('revokes the refresh token by (userId, hash-of-presented-token) — scoped, never raw', async () => {
-    await useCase.execute({ userId: 'u1', accessJti: 'j1', accessExp: EXP, rawRefreshToken: RAW });
-
-    expect(repo.revokeCalls).toEqual([{ userId: 'u1', tokenHash: hashRefreshToken(RAW) }]);
-    expect(repo.revokeCalls[0].tokenHash).not.toBe(RAW);
-  });
-
-  it('denylists the presented access token until its exp (seconds → Date)', async () => {
-    await useCase.execute({ userId: 'u1', accessJti: 'j1', accessExp: EXP, rawRefreshToken: RAW });
-
-    expect(denylist.denyCalls).toEqual([{ jti: 'j1', expiresAt: new Date(EXP * 1000) }]);
-  });
-
-  it('resolves void (idempotent — repo/denylist no-op unknown/foreign/revoked tokens)', async () => {
-    await expect(
-      useCase.execute({ userId: 'u1', accessJti: 'j1', accessExp: EXP, rawRefreshToken: RAW }),
-    ).resolves.toBeUndefined();
+    // `exp` is epoch seconds.
+    expect(denylist.entries).toEqual([{ jti: 'j1', expiresAt: new Date(exp * 1000) }]);
+    expect(refreshTokens.revoked).toEqual([{ userId: 'u1', tokenHash: hashRefreshToken('raw-refresh-token') }]);
   });
 });

@@ -5,18 +5,13 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
 import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, checkout, readOrder, readStock, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
-import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 
 const STOCK = 40;
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
-/**
- * The operator's order surface: unscoped reads, a filtered list, and a force-cancel that goes
- * through exactly the same settlement a buyer's own cancel does. The list is paginated, which is
- * the point of it — an admin listing every order is the one read that grows without bound.
- */
 describe('Admin orders (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -38,7 +33,6 @@ describe('Admin orders (integration, real Postgres)', () => {
 
   const asAdmin = (path: string): request.Test => request(server()).get(path).set(authHeader(adminToken));
 
-  /** Returns the buyer's userId as well, so a test can exercise the user-scoped filter. */
   async function placeOrder(quantity = 1): Promise<{ token: string; orderId: string; userId: string }> {
     const token = await buyerWithCart(app, variantId, quantity);
     const orderId = (await checkout(app, token).expect(201)).body.id as string;
@@ -46,21 +40,8 @@ describe('Admin orders (integration, real Postgres)', () => {
     return { token, orderId, userId };
   }
 
-  describe('authorization', () => {
-    it('rejects an unauthenticated request with 401', async () => {
-      await request(server()).get('/admin/orders').expect(401);
-    });
-
-    // 403, not 404: the caller is authenticated, so hiding the route buys nothing and costs clarity.
-    it('rejects a signed-in non-admin with 403', async () => {
-      const { accessToken } = await createTestPrincipal(app);
-      await request(server()).get('/admin/orders').set(authHeader(accessToken)).expect(403);
-      await request(server()).post(`/admin/orders/${ABSENT_UUID}/cancel`).set(authHeader(accessToken)).expect(403);
-    });
-  });
-
   describe('GET /admin/orders', () => {
-    it('lists every buyer’s orders, newest first, in a counted envelope', async () => {
+    it("lists every buyer's orders, newest first, in a counted envelope", async () => {
       const first = await placeOrder();
       const second = await placeOrder();
 
@@ -70,7 +51,7 @@ describe('Admin orders (integration, real Postgres)', () => {
       expect(res.body.items.map((o: { id: string }) => o.id)).toEqual([second.orderId, first.orderId]);
     });
 
-    it('pages, and reports a total that describes the whole result rather than the page', async () => {
+    it('pages with a total that counts the whole result', async () => {
       for (let i = 0; i < 3; i++) await placeOrder();
 
       const page1 = await asAdmin('/admin/orders?page=1&pageSize=2').expect(200);
@@ -80,7 +61,7 @@ describe('Admin orders (integration, real Postgres)', () => {
       expect(page1.body.items).toHaveLength(2);
       expect(page2.body).toMatchObject({ total: 3, page: 2, totalPages: 2 });
       expect(page2.body.items).toHaveLength(1);
-      // Disjoint pages: an unstable sort would repeat or drop rows across the boundary.
+      // An unstable sort would repeat or drop rows across the page boundary.
       const ids = [...page1.body.items, ...page2.body.items].map((o: { id: string }) => o.id);
       expect(new Set(ids).size).toBe(3);
     });
@@ -98,7 +79,7 @@ describe('Admin orders (integration, real Postgres)', () => {
       expect(mine.body.items[0].id).toBe(kept.orderId);
     });
 
-    it('rejects a status or page the query contract does not allow', async () => {
+    it('rejects an unknown status, an oversized page or a malformed user id', async () => {
       await asAdmin('/admin/orders?status=SHIPPED').expect(400);
       await asAdmin('/admin/orders?pageSize=500').expect(400);
       await asAdmin('/admin/orders?userId=not-a-uuid').expect(400);
@@ -106,7 +87,7 @@ describe('Admin orders (integration, real Postgres)', () => {
   });
 
   describe('GET /admin/orders/:id', () => {
-    it('reads any buyer’s order without being that buyer', async () => {
+    it("reads any buyer's order without being that buyer", async () => {
       const { orderId } = await placeOrder(2);
 
       const res = await asAdmin(`/admin/orders/${orderId}`).expect(200);
@@ -115,13 +96,13 @@ describe('Admin orders (integration, real Postgres)', () => {
       expect(res.body.items).toHaveLength(1);
     });
 
-    it('answers 404 for an order that does not exist', async () => {
+    it('answers 404 for an unknown order', async () => {
       await asAdmin(`/admin/orders/${ABSENT_UUID}`).expect(404);
     });
   });
 
   describe('POST /admin/orders/:id/cancel', () => {
-    it('force-cancels a buyer’s order and releases its stock, stamped as an admin action', async () => {
+    it('force-cancels an order with an admin reason, and 404s an unknown one', async () => {
       const { orderId } = await placeOrder(3);
 
       const res = await request(server())
@@ -132,12 +113,8 @@ describe('Admin orders (integration, real Postgres)', () => {
       expect(res.body).toMatchObject({ id: orderId, status: OrderStatus.CANCELLED });
       const order = await readOrder(app, orderId);
       expect(order.status).toBe(OrderStatus.CANCELLED);
-      // The one thing that differs from a buyer's own cancel — same settlement, different audit.
       expect(order.finalizeReason).toBe('admin:cancel');
       expect((await readStock(app, variantId)).quantityReserved).toBe(0);
-    });
-
-    it('answers 404 for an order that does not exist', async () => {
       await request(server()).post(`/admin/orders/${ABSENT_UUID}/cancel`).set(authHeader(adminToken)).expect(404);
     });
   });

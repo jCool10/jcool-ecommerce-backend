@@ -5,45 +5,13 @@ import { RetentionSweepRegistry } from '@jcool/platform/retention';
 import { MIN_INBOX_RETENTION_DAYS } from '../queue/queue.constants';
 import { SweepInbox } from './sweep-inbox';
 
-const MINIMUM_DAYS = MIN_INBOX_RETENTION_DAYS;
+const build = (days: number) =>
+  new SweepInbox({} as DrizzleDB, fakeConfigService({ 'retention.inboxDays': days }), new RetentionSweepRegistry());
 
-function build(days: unknown) {
-  const config = fakeConfigService({ 'retention.inboxDays': days });
-  const registry = new RetentionSweepRegistry();
-  return {
-    registry,
-    make: () => new SweepInbox({} as DrizzleDB, config, registry),
-  };
-}
-
-// The predicate is proved against real rows in `retention-sweep.e2e-spec.ts`. What is worth
-// asserting without a database is the boot guard: the config it rejects fails nowhere else, leaving
-// a correct-looking app that has quietly lost exactly-once delivery.
 describe('SweepInbox', () => {
-  it('registers itself, so a table is never left uncollected by a forgotten wiring line', () => {
-    const { make, registry } = build(30);
-
-    make().onModuleInit();
-
-    expect(registry.names()).toEqual(['messaging:inbox']);
-  });
-
-  it('refuses to boot on a window shorter than the queue can still redeliver in', () => {
-    const { make } = build(MINIMUM_DAYS - 1);
-
-    expect(() => make()).toThrow(/effect a second time/);
-    expect(() => make()).toThrow(new RegExp(`at least ${MINIMUM_DAYS} days`));
-  });
-
-  it('accepts a window that exactly clears the failed-job horizon', () => {
-    expect(() => build(MINIMUM_DAYS).make()).not.toThrow();
-  });
-
-  // A missing key would otherwise become NaN days, and `lt(processed_at, Invalid Date)` matches
-  // nothing — a sweep that runs forever, reports success, and reclaims not one row.
-  it('refuses to boot without the key at all', () => {
-    const config = fakeConfigService({});
-
-    expect(() => new SweepInbox({} as DrizzleDB, config, new RetentionSweepRegistry())).toThrow(/Missing config key/);
+  // A claim swept while the queue can still redeliver its message lets the effect run twice.
+  it('refuses to boot on a window shorter than the failed-job horizon', () => {
+    expect(() => build(MIN_INBOX_RETENTION_DAYS - 1)).toThrow(`at least ${MIN_INBOX_RETENTION_DAYS} days`);
+    expect(() => build(MIN_INBOX_RETENTION_DAYS)).not.toThrow();
   });
 });

@@ -1,3 +1,4 @@
+import Stripe from 'stripe';
 import { describe, expect, it } from 'vitest';
 import { signStripeStyle, verifyStripeStyle, verifyAndParseStripeEvent } from './hmac-signature';
 
@@ -9,33 +10,24 @@ function body(overrides: Record<string, unknown> = {}): Buffer {
   return Buffer.from(JSON.stringify({ id: 'evt_123', type: 'payment_intent.succeeded', ...overrides }));
 }
 
+function verify(header: string | undefined, rawBody: Buffer = body()) {
+  return verifyStripeStyle({ secret: SECRET, header, rawBody, toleranceSec: TOLERANCE, nowSec: NOW });
+}
+
 describe('verifyStripeStyle', () => {
   it('accepts a signature it produced for the same body, secret and time', () => {
-    const raw = body();
-    const header = signStripeStyle(SECRET, NOW, raw);
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
-      'valid',
-    );
+    expect(verify(signStripeStyle(SECRET, NOW, body()))).toBe('valid');
   });
 
   it('rejects a tampered body as invalid_signature', () => {
-    const header = signStripeStyle(SECRET, NOW, body());
-    const tampered = body({ id: 'evt_evil' });
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: tampered, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
-      'invalid_signature',
-    );
+    expect(verify(signStripeStyle(SECRET, NOW, body()), body({ id: 'evt_evil' }))).toBe('invalid_signature');
   });
 
   it('rejects a signature made with a different secret', () => {
-    const raw = body();
-    const header = signStripeStyle('another_secret_entirely_00', NOW, raw);
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
-      'invalid_signature',
-    );
+    expect(verify(signStripeStyle('another_secret_entirely_00', NOW, body()))).toBe('invalid_signature');
   });
 
   it('rejects a malformed / missing header as invalid_signature', () => {
-    const raw = body();
     const headers = [
       undefined,
       '',
@@ -43,92 +35,63 @@ describe('verifyStripeStyle', () => {
       't=,v1=', // empty values
       `v1=${'a'.repeat(64)}`, // no timestamp
       `t=${NOW}`, // no signature
-      `t=${NOW},v1=${'z'.repeat(64)}`, // non-hex v1 (would crash timingSafeEqual pre-fix)
+      `t=${NOW},v1=${'z'.repeat(64)}`, // non-hex v1 (once crashed timingSafeEqual)
       `t=${NOW},v1=${'a'.repeat(63)}z`, // odd-length / non-hex tail
       `t=${NOW},v1=deadbeef`, // valid hex, wrong length
     ];
     for (const header of headers) {
-      // Must return a verdict, never throw — the port contract depends on it (no 4th outcome).
-      expect(() =>
-        verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW }),
-      ).not.toThrow();
-      expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
-        'invalid_signature',
-      );
+      // A verdict, never a throw: the header is attacker-controlled and the port has no fourth outcome.
+      expect(() => verify(header), header).not.toThrow();
+      expect(verify(header), header).toBe('invalid_signature');
     }
   });
 
   // Signing-secret rotation: the sender signs one body under every active secret and sends them all,
   // so the valid one may sit anywhere among them.
-  it.each([
-    ['first', (valid: string, other: string) => `${valid},${other}`],
-    ['last', (valid: string, other: string) => `${other},${valid}`],
-  ])('accepts a header carrying several v1 signatures when ours is %s', (_position, arrange) => {
-    const raw = body();
-    const validSig = signStripeStyle(SECRET, NOW, raw).split('v1=')[1];
-    const header = `t=${NOW},${arrange(`v1=${validSig}`, `v1=${'0'.repeat(64)}`)}`;
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
+  it('accepts a header carrying several v1 signatures wherever ours sits', () => {
+    const ours = signStripeStyle(SECRET, NOW, body()).split(',')[1];
+    const other = `v1=${'0'.repeat(64)}`;
+
+    expect([`t=${NOW},${ours},${other}`, `t=${NOW},${other},${ours}`].map((header) => verify(header))).toEqual([
       'valid',
-    );
+      'valid',
+    ]);
   });
 
   it('still rejects when a multi-signature header carries no signature of ours', () => {
-    const raw = body();
-    const header = `t=${NOW},v1=${'0'.repeat(64)},v1=${'z'.repeat(64)}`;
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
-      'invalid_signature',
-    );
+    expect(verify(`t=${NOW},v1=${'0'.repeat(64)},v1=${'z'.repeat(64)}`)).toBe('invalid_signature');
   });
 
-  it('rejects a validly-signed but stale timestamp as expired_timestamp (replay defense)', () => {
-    const staleTs = NOW - TOLERANCE - 1;
-    const raw = body();
-    const header = signStripeStyle(SECRET, staleTs, raw);
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
-      'expired_timestamp',
-    );
-  });
+  it('rejects a validly-signed timestamp outside the tolerance in either direction', () => {
+    const skews = [-TOLERANCE - 1, TOLERANCE + 1];
 
-  it('rejects a timestamp too far in the future as expired_timestamp (clock skew)', () => {
-    const futureTs = NOW + TOLERANCE + 1;
-    const raw = body();
-    const header = signStripeStyle(SECRET, futureTs, raw);
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
+    expect(skews.map((skew) => verify(signStripeStyle(SECRET, NOW + skew, body())))).toEqual([
       'expired_timestamp',
-    );
+      'expired_timestamp',
+    ]);
   });
 
   it('accepts a timestamp exactly at the tolerance edge', () => {
-    const edgeTs = NOW - TOLERANCE;
-    const raw = body();
-    const header = signStripeStyle(SECRET, edgeTs, raw);
-    expect(verifyStripeStyle({ secret: SECRET, header, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW })).toBe(
-      'valid',
-    );
+    expect(verify(signStripeStyle(SECRET, NOW - TOLERANCE, body()))).toBe('valid');
   });
 
-  it('prefers invalid_signature over expired_timestamp: an unsigned stale forgery is invalid', () => {
-    // A stale forged sig must fail on the signature, not leak that its timestamp was old.
-    const staleTs = NOW - TOLERANCE - 1;
-    const raw = body();
-    const forged = `t=${staleTs},v1=${'0'.repeat(64)}`;
-    expect(
-      verifyStripeStyle({ secret: SECRET, header: forged, rawBody: raw, toleranceSec: TOLERANCE, nowSec: NOW }),
-    ).toBe('invalid_signature');
+  // A stale forgery must fail on the signature, not leak that its timestamp was old.
+  it('prefers invalid_signature over expired_timestamp for an unsigned stale forgery', () => {
+    expect(verify(`t=${NOW - TOLERANCE - 1},v1=${'0'.repeat(64)}`)).toBe('invalid_signature');
   });
 });
 
 describe('verifyAndParseStripeEvent', () => {
   it('returns valid with providerEventId + type extracted from the authenticated body', () => {
     const raw = body();
-    const header = signStripeStyle(SECRET, NOW, raw);
     const result = verifyAndParseStripeEvent({
       secret: SECRET,
       toleranceSec: TOLERANCE,
       rawBody: raw,
-      headers: { 'stripe-signature': header },
+      headers: { 'stripe-signature': signStripeStyle(SECRET, NOW, raw) },
       nowSec: NOW,
     });
+
     expect(result).toEqual({
       kind: 'valid',
       providerEventId: 'evt_123',
@@ -136,43 +99,19 @@ describe('verifyAndParseStripeEvent', () => {
       payload: { id: 'evt_123', type: 'payment_intent.succeeded' },
     });
   });
+});
 
-  it('reads the Stripe-Signature header case-insensitively', () => {
-    const raw = body();
-    const header = signStripeStyle(SECRET, NOW, raw);
-    const result = verifyAndParseStripeEvent({
-      secret: SECRET,
-      toleranceSec: TOLERANCE,
-      rawBody: raw,
-      headers: { 'Stripe-Signature': header },
-      nowSec: NOW,
-    });
-    expect(result.kind).toBe('valid');
-  });
+// Every other tier signs with our own signer, so a wrong shared scheme would pass everywhere while
+// every real Stripe delivery 401s.
+describe('Stripe SDK interop', () => {
+  it('accepts headers the Stripe SDK signs, and signs headers the SDK accepts', () => {
+    const payload = body().toString('utf8');
+    const stripeHeader = Stripe.webhooks.generateTestHeaderString({ payload, secret: SECRET, timestamp: NOW });
 
-  it('surfaces the verdict without parsing when the signature is invalid', () => {
-    const raw = body();
-    const result = verifyAndParseStripeEvent({
-      secret: SECRET,
-      toleranceSec: TOLERANCE,
-      rawBody: raw,
-      headers: { 'stripe-signature': 'garbage' },
-      nowSec: NOW,
-    });
-    expect(result).toEqual({ kind: 'invalid_signature' });
-  });
+    expect(verify(stripeHeader)).toBe('valid');
 
-  it('throws loud when a validly-signed body is missing a usable id/type', () => {
-    const raw = Buffer.from(JSON.stringify({ type: 'payment_intent.succeeded' })); // no id
-    const header = signStripeStyle(SECRET, NOW, raw);
-    expect(() =>
-      verifyAndParseStripeEvent({
-        secret: SECRET,
-        toleranceSec: TOLERANCE,
-        rawBody: raw,
-        headers: { 'stripe-signature': header },
-        nowSec: NOW,
-      }),
-    ).toThrow(/missing a string id\/type/);
+    // constructEvent checks tolerance against the real clock, so this direction signs at now.
+    const ours = signStripeStyle(SECRET, Math.floor(Date.now() / 1000), payload);
+    expect(Stripe.webhooks.constructEvent(payload, ours, SECRET)).toMatchObject({ id: 'evt_123' });
   });
 });

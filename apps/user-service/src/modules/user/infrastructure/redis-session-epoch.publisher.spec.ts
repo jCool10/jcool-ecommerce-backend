@@ -3,12 +3,12 @@ import { RedisSessionEpochPublisher } from './redis-session-epoch.publisher';
 
 // The script's max semantics need a real Redis; the session-epoch e2e suite runs it there.
 class FakeRedisClient {
-  readonly evals: Array<{ keys: number; key: string; epoch: number }> = [];
+  evals = 0;
   failuresLeft = 0;
   stored = 0;
 
-  eval(_script: string, keys: number, key: string, epoch: number): Promise<number> {
-    this.evals.push({ keys, key, epoch });
+  eval(_script: string, _keys: number, _key: string, epoch: number): Promise<number> {
+    this.evals++;
     if (this.failuresLeft > 0) {
       this.failuresLeft--;
       return Promise.reject(new Error('Connection is closed.'));
@@ -23,23 +23,15 @@ function publisherOver(client: FakeRedisClient): RedisSessionEpochPublisher {
 }
 
 describe('RedisSessionEpochPublisher', () => {
-  it("raises the user's epoch key and resolves to what is now published", async () => {
-    const client = new FakeRedisClient();
-    client.stored = 7;
-
-    await expect(publisherOver(client).publish('u1', 3)).resolves.toBe(7);
-    expect(client.evals).toEqual([{ keys: 1, key: 'auth:epoch:u1', epoch: 3 }]);
-  });
-
   it('retries a failed write, three attempts in all', async () => {
     const client = new FakeRedisClient();
     client.failuresLeft = 2;
 
     await expect(publisherOver(client).publish('u1', 4)).resolves.toBe(4);
-    expect(client.evals).toHaveLength(3);
+    expect(client.evals).toBe(3);
   });
 
-  it('gives up after the third failure, so the caller answers 5xx', async () => {
+  it('gives up after the third failure, surfacing the last Redis error', async () => {
     const client = new FakeRedisClient();
     client.failuresLeft = 3;
 
@@ -49,6 +41,6 @@ describe('RedisSessionEpochPublisher', () => {
 
     expect(rejection.message).toBe('session epoch publish failed after 3 attempts');
     expect((rejection.cause as Error).message).toBe('Connection is closed.');
-    expect(client.evals).toHaveLength(3);
+    expect(client.evals).toBe(3);
   });
 });

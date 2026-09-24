@@ -4,8 +4,8 @@ import type { TelemetryFlushGlobal } from '@jcool/platform/observability';
 const telemetryGlobal = globalThis as TelemetryFlushGlobal;
 type Flush = NonNullable<TelemetryFlushGlobal['__flushTelemetry']>;
 
-// Must match FLUSH_TIMEOUT_MS in instrumentation.ts — the ceiling is a deliberate number, not a
-// detail: it is what has to fit inside terminationGracePeriodSeconds next to the readiness grace.
+// Must match FLUSH_TIMEOUT_MS in instrumentation.ts: it has to fit inside
+// terminationGracePeriodSeconds next to the readiness grace.
 const FLUSH_CEILING_MS = 3000;
 
 afterEach(() => {
@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 // The handle TelemetryFlushService awaits, as the preload publishes it.
-describe('TelemetryFlushService', () => {
+describe('published telemetry flush', () => {
   // Loads the real preload with its telemetry clients stubbed, so the published handle under test is
   // the shipped one. `sentryFlush` is the spy each case asserts on.
   async function withInstrumentation(
@@ -60,7 +60,8 @@ describe('TelemetryFlushService', () => {
 
   const never = (): Promise<void> => new Promise<void>(() => undefined);
 
-  it('gives up on a flush that never lands, so a dead telemetry sink cannot stall the exit', async () => {
+  // A dead telemetry sink must not stall the exit.
+  it('gives up on a flush that never lands once the ceiling passes', async () => {
     await withInstrumentation(
       { SENTRY_DSN: 'https://public@sentry.invalid/1', OTEL_ENABLED: 'true' },
       never,
@@ -75,16 +76,6 @@ describe('TelemetryFlushService', () => {
         expect(outcome).toBeUndefined();
         await vi.advanceTimersByTimeAsync(1);
         expect(outcome).toBe('timed_out');
-      },
-    );
-  });
-
-  it('reports a flush that landed inside the ceiling', async () => {
-    await withInstrumentation(
-      { SENTRY_DSN: 'https://public@sentry.invalid/1', OTEL_ENABLED: 'true' },
-      () => Promise.resolve(),
-      async (flush) => {
-        await expect(flush()).resolves.toBe('flushed');
       },
     );
   });

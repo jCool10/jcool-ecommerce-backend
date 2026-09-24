@@ -1,16 +1,19 @@
 import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { authHeader } from '../setup/bearer.helper';
-import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { addToCart, postWebhook } from '../setup/fixtures/order-flow.fixture';
-import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
+import {
+  placeAndOpenSession,
+  postWebhook,
+  readOrder,
+  readPayment,
+  readReservation,
+  readStock,
+  seedSellableSku,
+  type OpenOrder,
+} from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import {
   checkoutSessionCompleted,
@@ -20,13 +23,10 @@ import {
   type SignedWebhook,
 } from '../setup/sign-webhook.helper';
 
-// The secret the app boots with AND the tests sign fixtures with — the coded Stripe adapter verifies
-// offline against this, so the signatures are real HMACs over the real bodies (no network, no mock).
+// The app verifies offline against this secret, so every signature below is a real HMAC.
 const WEBHOOK_SECRET = 'whsec_e2e_test_secret_0123456789';
+const STOCK = 5;
 
-// The payment webhook over real Postgres: a valid signature settles exactly once, a forged or expired
-// one writes nothing, a duplicate event id no-ops, and an out-of-order event cannot clobber a settled
-// payment. Finalize behaviour itself is covered in payment-webhook-finalize.e2e-spec.
 describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -38,192 +38,203 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  const server = () => app.getHttpServer();
+  const openOrder = async (): Promise<OpenOrder> =>
+    placeAndOpenSession(app, await seedSellableSku(app, { onHand: STOCK }));
 
-  async function openPayment(): Promise<{
-    token: string;
-    orderId: string;
-    paymentId: string;
-    sessionId: string;
-    charge: SessionCharge;
-  }> {
-    const token = await newPrincipalToken(app);
-    const { variantId } = await createTestProduct(app, { priceMinor: 150_000 });
-    await seedStock(app, variantId, 5);
-    await addToCart(app, token, variantId, 1);
-    const order = await request(server())
-      .post('/orders')
-      .set(authHeader(token))
-      .set(idempotencyKeyHeader())
-      .expect(201);
-    const orderId = order.body.id as string;
-    const pay = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token)).expect(201);
-    const paymentId = pay.body.paymentId as string;
-    const recorded = await paymentRow(paymentId);
-    return {
-      token,
-      orderId,
-      paymentId,
-      sessionId: pay.body.providerSessionId as string,
-      // A settling event has to report the charge we actually recorded, exactly as the gateway would.
-      charge: { amountMinor: recorded.amountMinor, currency: recorded.currency },
-    };
-  }
-
-  async function webhookRows() {
-    return db.select().from(schema.webhookEvents);
-  }
-
-  async function paymentRow(paymentId: string) {
-    const [row] = await db.select().from(schema.payments).where(eq(schema.payments.id, paymentId));
-    return row;
-  }
-
-  it('accepts a valid first-delivery success: 200, one PROCESSED event, payment SUCCEEDED, intent captured', async () => {
-    const { paymentId, sessionId, charge } = await openPayment();
-    const signed = signWebhook({
+  const paid = (sessionId: string, charge: SessionCharge, eventId: string, paymentIntent = 'pi_e2e'): SignedWebhook =>
+    signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_ok_1', paymentIntent: 'pi_e2e_123' }),
+      event: checkoutSessionCompleted(sessionId, charge, { eventId, paymentIntent }),
     });
+  const expired = (sessionId: string, eventId: string): SignedWebhook =>
+    signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionExpired(sessionId, { eventId }) });
 
-    const res = await postWebhook(app, signed);
+  const webhookRows = () => db.select().from(schema.webhookEvents);
+
+  async function expectSettledPaid({ orderId, variantId }: OpenOrder): Promise<void> {
+    expect((await readOrder(app, orderId)).status).toBe('PAID');
+    expect((await readReservation(app, orderId, variantId)).status).toBe('COMMITTED');
+    expect(await readStock(app, variantId)).toMatchObject({ quantityOnHand: STOCK - 1, quantityReserved: 0 });
+  }
+
+  async function expectUntouched({ orderId, variantId }: OpenOrder): Promise<void> {
+    expect((await readOrder(app, orderId)).status).toBe('PENDING');
+    expect((await readReservation(app, orderId, variantId)).status).toBe('HELD');
+    expect(await readStock(app, variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 1 });
+  }
+
+  it('settles a paid delivery: payment, order and stock move together', async () => {
+    const order = await openOrder();
+
+    const res = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_ok_1', 'pi_e2e_123'));
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'processed' });
-
-    const events = await webhookRows();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ providerEventId: 'evt_ok_1', status: 'PROCESSED' });
-    expect(events[0].processedAt).not.toBeNull();
-
-    expect(await paymentRow(paymentId)).toMatchObject({ status: 'SUCCEEDED', providerIntentId: 'pi_e2e_123' });
+    const [event] = await webhookRows();
+    expect(event).toMatchObject({ providerEventId: 'evt_ok_1', status: 'PROCESSED' });
+    expect(event.processedAt).not.toBeNull();
+    expect(await readPayment(app, order.orderId)).toMatchObject({
+      status: 'SUCCEEDED',
+      providerIntentId: 'pi_e2e_123',
+    });
+    expect((await readOrder(app, order.orderId)).paymentRef).toBe('pi_e2e_123');
+    await expectSettledPaid(order);
   });
 
-  it('rejects an invalid signature with 401, writes no event, leaves the payment PENDING', async () => {
-    const { paymentId, sessionId, charge } = await openPayment();
-    const signed = signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionCompleted(sessionId, charge) });
-    // Mutate one byte AFTER signing — the HMAC no longer covers the bytes we send (raw-body sensitivity).
-    const tampered: SignedWebhook = { ...signed, rawBody: `${signed.rawBody} ` };
+  it('rejects a body changed after signing with 401 and writes nothing', async () => {
+    const order = await openOrder();
+    const signed = paid(order.sessionId, order.charge, 'evt_tampered');
 
-    const res = await postWebhook(app, tampered);
+    const res = await postWebhook(app, { ...signed, rawBody: `${signed.rawBody} ` });
 
     expect(res.status).toBe(401);
     expect(await webhookRows()).toHaveLength(0);
-    expect((await paymentRow(paymentId)).status).toBe('PENDING');
+    await expectUntouched(order);
   });
 
-  it('rejects a signature outside the tolerance window with 401 (replay defense), writes nothing', async () => {
-    const { paymentId, sessionId, charge } = await openPayment();
-    const oneHourAgo = Math.floor(Date.now() / 1000) - 3600;
+  it('rejects a signature outside the tolerance window with 401', async () => {
+    const order = await openOrder();
     const signed = signWebhook({
       secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, charge),
-      timestampSec: oneHourAgo,
+      event: checkoutSessionCompleted(order.sessionId, order.charge),
+      timestampSec: Math.floor(Date.now() / 1000) - 3600,
     });
 
     const res = await postWebhook(app, signed);
 
     expect(res.status).toBe(401);
     expect(await webhookRows()).toHaveLength(0);
-    expect((await paymentRow(paymentId)).status).toBe('PENDING');
+    await expectUntouched(order);
   });
 
-  it('is exactly-once for a duplicate event id: both 2xx, one event row, payment SUCCEEDED once', async () => {
-    const { paymentId, sessionId, charge } = await openPayment();
-    const signed = signWebhook({
-      secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_dup_1', paymentIntent: 'pi_dup' }),
-    });
+  it('settles a redelivered event id once', async () => {
+    const order = await openOrder();
+    const signed = paid(order.sessionId, order.charge, 'evt_dup_1');
 
     const first = await postWebhook(app, signed);
-    const second = await postWebhook(app, signed); // byte-identical redelivery
+    const second = await postWebhook(app, signed);
 
-    expect(first.status).toBe(200);
-    expect(first.body).toEqual({ status: 'processed' });
-    expect(second.status).toBe(200);
-    expect(second.body).toEqual({ status: 'duplicate' });
-
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect([first.body, second.body]).toEqual([{ status: 'processed' }, { status: 'duplicate' }]);
     expect(await webhookRows()).toHaveLength(1);
-    expect((await paymentRow(paymentId)).status).toBe('SUCCEEDED');
+    await expectSettledPaid(order);
   });
 
-  it('is exactly-once under CONCURRENT redelivery: one winner + one no-op, one row, applied once', async () => {
-    const { paymentId, sessionId, charge } = await openPayment();
-    const signed = signWebhook({
-      secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_race_1', paymentIntent: 'pi_race' }),
-    });
+  // The loser blocks on the winner's uncommitted insert behind UNIQUE(provider, event_id), then no-ops.
+  it('settles two concurrent deliveries of one event once', async () => {
+    const order = await openOrder();
+    const signed = paid(order.sessionId, order.charge, 'evt_race_1');
 
-    // Fire both byte-identical deliveries at once: the reason insert+apply live in ONE tx behind the
-    // UNIQUE(provider, event_id) index. The loser blocks on the winner's uncommitted insert, then
-    // sees the committed row and no-ops — exactly one apply, no double-charge.
     const results = await Promise.all([postWebhook(app, signed), postWebhook(app, signed)]);
 
-    for (const r of results) expect(r.status).toBe(200);
+    expect(results.map((r) => r.status)).toEqual([200, 200]);
     expect(results.map((r) => r.body.status).sort()).toEqual(['duplicate', 'processed']);
     expect(await webhookRows()).toHaveLength(1);
-    expect((await paymentRow(paymentId)).status).toBe('SUCCEEDED');
+    await expectSettledPaid(order);
   });
 
-  it('skips an out-of-order failure after success without downgrading the payment (200 skipped, event SKIPPED)', async () => {
-    const { paymentId, sessionId, charge } = await openPayment();
-    await postWebhook(
-      app,
-      signWebhook({
-        secret: WEBHOOK_SECRET,
-        event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_win', paymentIntent: 'pi_win' }),
-      }),
-    ).then((r) => expect(r.status).toBe(200));
+  it('keeps a paid order when a failure arrives after it', async () => {
+    const order = await openOrder();
+    await postWebhook(app, paid(order.sessionId, order.charge, 'evt_win', 'pi_win')).expect(200);
 
-    const late = await postWebhook(
-      app,
-      signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionExpired(sessionId, { eventId: 'evt_late_fail' }) }),
-    );
+    const late = await postWebhook(app, expired(order.sessionId, 'evt_late_fail'));
 
     expect(late.status).toBe(200);
-    // The gateway only needs a 2xx; the internal skip reason is not leaked over HTTP. Below proves it
-    // was the CONFLICT guard, not a lookup miss: the payment for this same session is still SUCCEEDED
-    // with its intent intact (so the late event DID resolve the payment) and its own row is SKIPPED.
     expect(late.body).toEqual({ status: 'skipped' });
-    expect(await paymentRow(paymentId)).toMatchObject({ status: 'SUCCEEDED', providerIntentId: 'pi_win' });
-
+    expect(await readPayment(app, order.orderId)).toMatchObject({ status: 'SUCCEEDED', providerIntentId: 'pi_win' });
     const [lateRow] = await db
       .select()
       .from(schema.webhookEvents)
       .where(eq(schema.webhookEvents.providerEventId, 'evt_late_fail'));
     expect(lateRow.status).toBe('SKIPPED');
+    await expectSettledPaid(order);
   });
 
-  it('logs but skips a success for a session with no local payment (reconciliation seam)', async () => {
-    const signed = signWebhook({
-      secret: WEBHOOK_SECRET,
-      // No local payment for this handle, so the charge is never compared — the lookup misses first.
-      event: checkoutSessionCompleted(
-        'cs_test_orphan_session',
-        { amountMinor: 150_000, currency: 'VND' },
-        { eventId: 'evt_orphan' },
-      ),
-    });
+  it('keeps a failed order when a payment arrives after it', async () => {
+    const order = await openOrder();
+    await postWebhook(app, expired(order.sessionId, 'evt_fail_first')).expect(200);
 
-    const res = await postWebhook(app, signed);
+    const late = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_paid_late'));
+
+    expect(late.status).toBe(200);
+    expect(late.body).toEqual({ status: 'skipped' });
+    expect((await readOrder(app, order.orderId)).status).toBe('FAILED');
+    expect((await readReservation(app, order.orderId, order.variantId)).status).toBe('RELEASED');
+    expect(await readStock(app, order.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
+  });
+
+  it('fails the order and releases the hold on an expired session', async () => {
+    const order = await openOrder();
+
+    const res = await postWebhook(app, expired(order.sessionId, 'evt_fail_1'));
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'skipped' }); // reason not leaked over HTTP; asserted at the DB below
-    const [row] = await webhookRows();
-    expect(row).toMatchObject({ providerEventId: 'evt_orphan', status: 'SKIPPED' });
+    expect(res.body).toEqual({ status: 'processed' });
+    expect((await readOrder(app, order.orderId)).status).toBe('FAILED');
+    expect((await readReservation(app, order.orderId, order.variantId)).status).toBe('RELEASED');
+    expect((await readStock(app, order.variantId)).quantityReserved).toBe(0);
   });
 
-  it('finalizes the Order to PAID after a success webhook (payment settle drives order finalize)', async () => {
-    const { token, orderId, sessionId, charge } = await openPayment();
-    await postWebhook(
-      app,
-      signWebhook({
-        secret: WEBHOOK_SECRET,
-        event: checkoutSessionCompleted(sessionId, charge, { eventId: 'evt_final' }),
-      }),
-    ).then((r) => expect(r.status).toBe(200));
+  // Stripe's async payment methods complete the session while it is still unpaid.
+  it('does not settle a completed session whose payment has not cleared', async () => {
+    const order = await openOrder();
 
-    const order = await request(server()).get(`/orders/${orderId}`).set(authHeader(token)).expect(200);
-    expect(order.body.status).toBe('PAID');
+    const res = await postWebhook(
+      app,
+      paid(order.sessionId, { ...order.charge, paymentStatus: 'unpaid' }, 'evt_unpaid'),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'skipped' });
+    await expectUntouched(order);
+  });
+
+  it('refuses a success reporting an amount that was never charged', async () => {
+    const order = await openOrder();
+
+    const res = await postWebhook(app, paid(order.sessionId, { ...order.charge, amountMinor: 1 }, 'evt_wrong_amount'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'skipped' });
+    await expectUntouched(order);
+  });
+
+  // Stripe reports real async clearance as checkout.session.async_payment_succeeded, which
+  // payment-webhook-contract shows is not applied. This only proves a skipped event id blocks nothing.
+  it('settles a paid completion that follows a skipped unpaid one', async () => {
+    const order = await openOrder();
+    await postWebhook(app, paid(order.sessionId, { ...order.charge, paymentStatus: 'unpaid' }, 'evt_unpaid')).expect(
+      200,
+    );
+
+    const res = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_paid'));
+
+    expect(res.body).toEqual({ status: 'processed' });
+    await expectSettledPaid(order);
+  });
+
+  it('skips a delivery for a session with no local payment', async () => {
+    const order = await openOrder();
+
+    const res = await postWebhook(app, paid('cs_orphan_session', { amountMinor: 1, currency: 'VND' }, 'evt_orphan'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'skipped' });
+    expect(await webhookRows()).toMatchObject([{ providerEventId: 'evt_orphan', status: 'SKIPPED' }]);
+    await expectUntouched(order);
+  });
+
+  it('ignores an event type it does not act on', async () => {
+    const order = await openOrder();
+    const refund = signWebhook({
+      secret: WEBHOOK_SECRET,
+      event: { id: 'evt_refund', type: 'charge.refunded', data: { object: { id: order.sessionId } } },
+    });
+
+    const res = await postWebhook(app, refund);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ignored' });
+    await expectUntouched(order);
   });
 });

@@ -10,15 +10,10 @@ function failedProperties(raw: Record<string, unknown>): string[] {
 }
 
 describe('AttachProductImageDto', () => {
-  it('accepts the highest display slot', () => {
-    expect(failedProperties({ assetId: ASSET_ID, position: 10_000 })).toEqual([]);
-  });
-
-  // The next attach without a position derives `max(position) + 1`, so the accepted ceiling has to
-  // stay far enough below int4 that deriving from it cannot overflow the column.
-  it('rejects a slot above the display ceiling, well before int4 could overflow', () => {
-    for (const position of [10_001, 2_147_483_647, 3_000_000_000]) {
-      expect(failedProperties({ assetId: ASSET_ID, position })).toEqual(['position']);
-    }
+  it('caps the display slot at 10000', () => {
+    expect([10_000, 10_001].map((position) => failedProperties({ assetId: ASSET_ID, position }))).toEqual([
+      [],
+      ['position'],
+    ]);
   });
 });

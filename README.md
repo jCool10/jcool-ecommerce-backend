@@ -1,6 +1,6 @@
 # JCool E-commerce Backend
 
-Single-store e-commerce backend built as a **NestJS modular monolith** — seven bounded contexts, Clean Architecture layering enforced by a build gate, and a deliberate focus on the parts of commerce that are hard: **never oversell, never double-charge, never lose an event**.
+Single-store e-commerce backend built as a **NestJS modular monolith** — six bounded contexts plus an extracted identity service, Clean Architecture layering enforced by a build gate, and a deliberate focus on the parts of commerce that are hard: **never oversell, never double-charge, never lose an event**.
 
 <p>
   <a href="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml/badge.svg"></a>
@@ -18,8 +18,8 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — seven
 
 | | |
 | --- | --- |
-| **Scale** | 7 bounded contexts · 566 TypeScript files · 17 tables · 22 committed migrations · 53 HTTP routes |
-| **Tests** | 1,131 unit tests (160 files, hermetic) + 73 integration suites on real Postgres, Redis, MinIO, Meilisearch and SMTP via Testcontainers, run four workers wide |
+| **Scale** | api: 6 bounded contexts · 437 TypeScript files · 17 tables · 24 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
+| **Tests** | The claims above are pinned on real Postgres, Redis, MinIO, Meilisearch and SMTP (Testcontainers), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
@@ -115,6 +115,7 @@ client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ user-service   /aut
                               gateway :8080 ─▶ api            every other route but /internal/*
                               gateway :4000 ─▶ id-service ×3 ─▶ id-postgres   private network only
                 user-service ─▶ gateway :4000
+      api, user-service, id-service ─▶ loki ◀── grafana (public, login only) ──▶ prometheus ─▶ api /metrics
 ```
 
 The api verifies the user-service's ES256 tokens against its JWKS and reads session epochs from the
@@ -176,20 +177,21 @@ apps/id-service/             # POST /v1/ids; node lease (own Postgres), N replic
 apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e tests
 apps/gateway/                # Caddyfile: public site routing /auth to the user-service, private LB over the id-service replicas
 packages/
-├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, Entity, DomainError, Result)
+├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, ValueObject, DomainError, Result)
 ├── id-codec/                # @jcool/id-codec — 63-bit snowflake layout, HMAC email buckets
 ├── id-generator/            # @jcool/id-generator — monotonic snowflake generator, node lease, node ids
+├── auth-verifier/           # @jcool/auth-verifier — the access-token check every service runs: ES256, then denylist and session epoch
 ├── metrics-port/            # @jcool/metrics-port — the metrics seam domain and application code depend on
 ├── platform/                # @jcool/platform — Nest infrastructure: env fragments, pg + Drizzle, Redis, observability,
 │                            #   health, throttler, rbac, mail, resilience, retention; one subpath export each
 └── testing/                 # @jcool/testing — test doubles, source-only, dev dependency only
 test/load/  k6/              # k6 mixes
-infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector
+infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana
 .railway/railway.ts          # Railway deploy config (infrastructure as code)
 turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflows/
 ```
 
-Packages compile to CommonJS `dist/` with `tsc` and are consumed the way production consumes them, tests included. Every Turborepo task depends on `^build`, so the packages are built first, in dependency order: `kernel` and `metrics-port`, then `id-codec`, then `id-generator`, then `platform`, then the api. `@jcool/testing` is never built. Scripts forwarded straight to the api (`start:dev`, `test:watch`, `db:*`, the CLIs) skip Turborepo and read the last build, so run `pnpm build` after changing a package. Nest, nestjs-pino, prom-client, ioredis and drizzle-orm are peer dependencies of `platform`. The lockfile resolves each to a single install shared by the app and the package, and `apps/api/src/platform-peer-dependencies.spec.ts` fails once the two manifests drift apart.
+Packages compile to CommonJS `dist/` with `tsc` and are consumed the way production consumes them, tests included. Every Turborepo task depends on `^build`, so the packages are built first, in dependency order: `kernel` and `metrics-port`, then `id-codec`, then `id-generator`, then `platform`, then `auth-verifier`, then the apps. `@jcool/testing` is never built. Scripts forwarded straight to the api (`start:dev`, `test:watch`, `db:*`, the CLIs) skip Turborepo and read the last build, so run `pnpm build` after changing a package. Nest, nestjs-pino, prom-client, ioredis and drizzle-orm are peer dependencies of `platform`. The lockfile resolves each to a single install shared by the app and the package, and `apps/api/src/platform-peer-dependencies.spec.ts` fails once the two manifests drift apart.
 
 ---
 
@@ -205,7 +207,7 @@ The parts worth reading the code for. Each row names the file to open.
 | **Checkout atomicity** | One transaction inserts the placed order and its price-snapshot lines, takes the stock hold, appends the `order.placed` outbox row, and flips the idempotency key to `COMPLETED`. A stock shortfall rolls back all four — no order, no event, no key blocking the retry | `modules/order/application/use-cases/checkout-order.use-case.ts` |
 | **Exactly-once settlement** | Every path that settles an order (webhook, queue consumer, reconcile sweep, buyer cancel, admin cancel) funnels through one `FinalizeOrderUseCase`: `SELECT … FOR UPDATE` on the order row plus a terminal-status guard. No distributed lock. It can **join** a caller's transaction so a consumer's inbox claim and the settlement commit together | `modules/order/application/use-cases/finalize-order.use-case.ts` |
 | **Duplicate checkout requests** | Two layers: a per-`(scope, key)` idempotency entry gate that replays the first response body and status, and a `UNIQUE (user_id, idempotency_key)` index on `orders` as the backstop. A key reused with a different request body is `422`, not a silent replay | `modules/order/application/ports/idempotency-store.port.ts` |
-| **Refresh-token theft** | Rotation runs in one `FOR UPDATE` transaction. Presenting a token that was already replaced or revoked revokes the **entire family**, not just that token — and revocation is checked before expiry, so a retired token still reads as reuse rather than as an expiry | `modules/user/infrastructure/drizzle-refresh-token.repository.ts` |
+| **Refresh-token theft** | Rotation runs in one `FOR UPDATE` transaction. Presenting a token that was already replaced or revoked revokes the **entire family**, not just that token — and revocation is checked before expiry, so a retired token still reads as reuse rather than as an expiry | `apps/user-service/src/modules/user/infrastructure/drizzle-refresh-token.repository.ts` |
 
 ### Distributed systems
 
@@ -302,7 +304,7 @@ Environment is validated **once at startup** and the process refuses to boot on 
 | `USER_SERVICE_INTERNAL_URL`, `INTERNAL_API_TOKEN` | Its internal API: session epochs on a Redis miss, and the buyer's address for `order.paid`. Token min 32 chars |
 | `STRIPE_SUCCESS_URL` | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
 
-Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`. The auth-side variables (`IDENTITY_BUCKET_KEY`, `CSRF_SECRET`, `JWT_ES256_*`, `ARGON2_*`, the token TTLs) belong to the user-service — see its [README](./apps/user-service/README.md).
+Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `LOKI_URL`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`. The auth-side variables (`IDENTITY_BUCKET_KEY`, `CSRF_SECRET`, `JWT_ES256_*`, `ARGON2_*`, the token TTLs) belong to the user-service — see its [README](./apps/user-service/README.md).
 
 `MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it because it ships `migrations/` without a `src/` tree.
 
@@ -396,19 +398,21 @@ A rejected `complete` leaves the asset `PENDING` on purpose — the sweep alread
 Two tiers, kept separate on purpose.
 
 ```bash
-pnpm test           # 1,131 unit tests, 160 files — hermetic, no Docker
-pnpm test:cov       # same, with the coverage floor CI enforces
-pnpm test:e2e       # 73 integration suites — requires Docker
+pnpm test           # 671 unit tests, 177 files across every workspace; hermetic, no Docker
+pnpm test:cov       # same, with the coverage floors CI enforces
+pnpm test:e2e       # 91 integration suites (api 60, user-service 24, id-service 7); requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
 
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated ids are stable within a run.
-- **Integration** (`apps/api/test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
+- **Integration** (`apps/*/test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
 
 Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
-The coverage floor is **glob-scoped**, not global: `statements 84 / branches 79 / functions 85 / lines 85` on `src/**/{domain,application}/**` only. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested — and the usual fix for that is to lower the floor until it means nothing. The numbers are the measured values minus two points, not a round 80.
+The apps' coverage floors are **glob-scoped**, not global: the api's is `statements 82 / branches 80 / functions 79 / lines 82` on `src/**/{domain,application}/**` only, and the user-service uses the same glob. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested, and the usual fix for that is either to lower the floor until it means nothing or to keep unit tests that repeat an e2e test only to hold the number. The numbers are the measured values minus two points, not a round 80. Packages keep global floors.
+
+A unit test that repeats what an integration suite already proves on real infrastructure is deleted rather than kept for coverage. What stays at the unit tier is what the integration tier cannot reach: exhaustive state-machine matrices, clock and lease edge cases, the throttler composition, breaker timing, and races staged with deferred promises.
 
 `pnpm turbo run test:system --concurrency=1` adds a third tier for `id-service` and `gateway`: it builds the real images and runs them on a Docker network. It checks three replicas minting 100k ids behind the gateway with no id or `(ts, node, seq)` repeated, and a caller that never sees an error while a replica is killed, frozen with `SIGSTOP`, or all three are replaced. For the api behind the gateway, it checks that each route returns the same status and headers as calling the api directly. It also checks that the throttle keys on the address the edge reported, that no spelling of `/internal` gets through, and that no token or credential reaches the access log.
 
@@ -456,7 +460,7 @@ Those `429`s are also where the `TRUST_PROXY` gap in [Known limits](#known-limit
 
 **The ceiling here is not attributed.** It could be the single Railway container, the platform edge, the client, or the WAN path, and a single-client run from one continent away cannot tell them apart. Calling ~81 req/s "the application's capacity" would be dishonest. The experiments that *can* attribute a bottleneck run against the local stack, where Prometheus is scrapable and the `route:http_request_duration_seconds:p99` recording rules are authoritative — see [`test/load/`](./test/load) and `load:breakpoint` / `load:cache-stampede` / `load:sku-contention`.
 
-> `/metrics` answers `404` on the deployment (no `METRICS_TOKEN` is configured), so no server-side latency, cache-hit or pool figures were available to corroborate these client-side numbers.
+> At the time of this run `/metrics` answered `404` on the deployment (no `METRICS_TOKEN` was configured), so no server-side latency, cache-hit or pool figures were available to corroborate these client-side numbers. Prometheus on Railway now scrapes it with the api's token.
 
 ---
 
@@ -464,12 +468,16 @@ Those `429`s are also where the `TRUST_PROXY` gap in [Known limits](#known-limit
 
 Three pillars plus error tracking, wired **around** the Clean Architecture core — `domain` and `application` import none of it, and `arch:check` fails the build if they start to.
 
-- **Logs** — structured JSON via `nestjs-pino`. Every line of a request carries the same `requestId` (`nestjs-cls` + `AsyncLocalStorage`), echoed as `x-request-id`, so a support ticket quoting a header reaches the exact lines that served it. Email is deliberately *not* in the shared redaction list — the auth audit trail is supposed to record it, and the Sentry sink strips it separately.
+- **Logs** — structured JSON via `nestjs-pino`. Every line of a request carries the same `requestId` (`nestjs-cls` + `AsyncLocalStorage`), echoed as `x-request-id`, so a support ticket quoting a header reaches the exact lines that served it. Always to stdout; with `LOKI_URL` set, every line is also pushed to Loki through a pino worker, so a slow or dead Loki never blocks a request ([logging conventions](./docs/logging-conventions.md#where-the-lines-go)). Email is deliberately *not* in the shared redaction list — the auth audit trail is supposed to record it, and the Sentry sink strips it separately.
 - **Metrics** — `GET /metrics`, token-guarded. Default process metrics, RED HTTP metrics with `route` as a path template rather than a raw id (cardinality is a cost that only shows up later, in a Prometheus that has stopped being queryable), and business counters. Metric emission can never throw into a business flow: a telemetry failure must not become an order failure.
 - **Traces** — OpenTelemetry, off by default. The SDK loads via `node --import ./dist/instrumentation.js` *before* Nest boots, so auto-instrumentation patches `http`/`express`/`pg`/`ioredis` before those modules are required.
 - **Errors** — Sentry, off unless `SENTRY_DSN` is set; it reuses the app's own OTel SDK (`skipOpenTelemetrySetup`) rather than starting a second one, which would duplicate every span.
 
-Alerting ships as code: three Prometheus rule files (multi-window burn-rate SLOs, resilience, identity clock) with matching `promtool` unit tests that pin both **firing and clearing** behaviour, run in CI. The local stack is profile-gated and binds to loopback only:
+Alerting ships as code: four Prometheus rule files (multi-window burn-rate SLOs, resilience, identity clock, log pipeline) with matching `promtool` unit tests that pin both **firing and clearing** behaviour, run in CI.
+
+**On Railway**, `.railway/railway.ts` deploys Prometheus, Loki and Grafana next to the services. Prometheus scrapes the api's `/metrics` and Loki's own push metrics; the api, user-service and id-service push their logs to Loki, whose chunks live in a Railway bucket with a 30-day retention. Grafana is the only public part of the stack and requires a login. No trace backend runs there, so Grafana links a `traceId` to that trace's log lines across services instead ([RUNBOOK → Logs in Loki](./RUNBOOK.md#logs-in-loki)).
+
+The local stack is profile-gated and binds to loopback only:
 
 ```bash
 docker compose --profile observability up -d   # Collector + Prometheus + Grafana + Jaeger
@@ -507,7 +515,7 @@ Stated plainly, because a reviewer will find them anyway.
 - **32 ids per node-millisecond, and 30 leasable nodes, are real ceilings.** They are what 63 bits leave after 41 for the timestamp and 12 for the bucket. A single replica saturates at 32,000 ids/s and a request may ask for at most 32, one node-millisecond, so it busy-waits into the next millisecond at most once, for up to about 1 ms with the event loop blocked; across nodes, the fleet tops out near a million a second. The node pool is the tighter one. A rolling deploy holds two nodes per replica plus quarantine, so more than ~12 id-service replicas needs bits taken from `seq` or `ts` first. A replica that exits without releasing (a crash, an OOM kill, `SIGKILL`) keeps its node for up to TTL + quarantine, about 310 s by default; with 3 replicas holding nodes, about 27 such exits inside that window exhaust the pool. Railway restarts a crashing replica at most 5 times, so one bad deploy locks at most 18. Taking bits from `seq` or `ts` is a layout change: a data migration that rewrites every stored id and the pinned version, shipped with a `LAYOUT_VERSION` bump. The pin refuses a database whose recorded version differs from the build's, and the codec spec pins the layout beside `LAYOUT_VERSION`, so a layout change fails CI until that expectation is rewritten, and the failure message asks for the bump.
 - **The IP-keyed throttle tiers are only as good as `req.ip`, and until the public domain moves onto the gateway they count connections.** Directly behind Railway's edge, no `TRUST_PROXY` value names the client, so the api believes no forwarding header and `req.ip` is the edge's address, which changes per connection. The `default` tier (100/60 s app-wide) and the IP half of the auth tiers then count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./packages/platform/src/throttler). The fix is the gateway: it takes the client from the edge's `X-Real-IP` and hands the api a single entry, and the system tests prove the throttle then keys on the client ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)). Production now refuses to boot with `TRUST_PROXY` unset, so the setting can no longer be forgotten silently.
 - **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2` rather than reinterpret an existing path.
-- **The observability stack is local-only.** No collector is deployed — a hosted one is an operational commitment this project does not need to make its point.
+- **Traces are local-only.** Metrics and logs are deployed (Prometheus, Loki, Grafana on Railway), but no trace collector is — a hosted one is an operational commitment this project does not need to make its point. In production a `traceId` only joins log lines.
 
 ---
 

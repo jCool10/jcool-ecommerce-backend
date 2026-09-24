@@ -4,7 +4,6 @@ import type { LeaseGrant, LeaseStore } from './lease-store.port';
 import { NodeLease, type NodeLeaseOptions } from './node-lease';
 import type { IdentityClock } from './snowflake.generator';
 
-// Well after EPOCH_MS (2026-01-01): the earliest instant the layout can stamp is EPOCH_MS + 1.
 const START_MS = 1_800_000_000_000;
 const TTL_MS = 300_000;
 const FENCE_MARGIN_MS = 15_000;
@@ -150,7 +149,7 @@ describe('NodeLease', () => {
     expect(decode(lease.generate(BUCKET))).toMatchObject({ nodeId: 7, bucket: BUCKET });
   });
 
-  it('keeps minting across a successful renew, past where the first grant would have fenced', async () => {
+  it('keeps minting past the first fence deadline after a successful renew', async () => {
     const { lease, store, fake } = await heldLease();
     fake.advance(TTL_MS - FENCE_MARGIN_MS - 1);
 
@@ -161,7 +160,7 @@ describe('NodeLease', () => {
     expect(store.renewals).toHaveLength(1);
   });
 
-  it('reports the last minted timestamp on renew, so the next holder starts above it', async () => {
+  it('reports the last minted timestamp on renew', async () => {
     const { lease, store, fake } = await heldLease();
     fake.advance(1_000);
     const { tsMs } = decode(lease.generate(BUCKET));
@@ -189,13 +188,16 @@ describe('NodeLease', () => {
     const { lease, store } = await heldLease();
     store.renewResult = false;
 
+    expect(lease.generator?.nodeId).toBe(7);
+
     await expect(lease.renew()).resolves.toBe('lost');
 
     expectRefused(lease, 'lost');
     expect(lease.nodeId).toBeUndefined();
+    expect(lease.generator).toBeNull();
   });
 
-  it('acquires a fresh node after losing one, starting above everything it already minted', async () => {
+  it('after a loss, mints on a fresh node above everything it minted before', async () => {
     const { lease, store, fake } = await heldLease(7);
     fake.advance(5);
     const before = decode(lease.generate(BUCKET));
@@ -325,25 +327,28 @@ describe('NodeLease', () => {
     expectRefused(lease, 'released');
   });
 
-  it('refuses to acquire once draining has begun', async () => {
-    const lease = leaseWith(new FakeLeaseStore().grant(7), fakeClock());
-    lease.drain();
+  it('refuses to acquire while holding or draining, and to renew while idle', async () => {
+    const { lease: holding } = await heldLease();
+    const draining = leaseWith(new FakeLeaseStore().grant(7), fakeClock());
+    draining.drain();
+    const idle = leaseWith(new FakeLeaseStore(), fakeClock());
 
-    await expect(lease.acquire()).rejects.toThrow(/draining/);
+    await expect(holding.acquire()).rejects.toThrow(/held/);
+    await expect(draining.acquire()).rejects.toThrow(/draining/);
+    await expect(idle.renew()).rejects.toThrow(/idle/);
   });
 
-  it('releases with no floor when nothing was minted, leaving the recorded one alone', async () => {
+  it('releases without a floor when nothing was minted, and skips the store when idle', async () => {
     const { lease, store } = await heldLease();
+    const idleStore = new FakeLeaseStore();
+    const idle = leaseWith(idleStore, fakeClock());
 
     await lease.release();
+    await idle.release();
 
     expect(store.releases).toEqual([{ nodeId: 7, holder: HOLDER, generation: 1, lastMs: null }]);
-  });
-
-  it('refuses a second acquire while a node is held', async () => {
-    const { lease } = await heldLease();
-
-    await expect(lease.acquire()).rejects.toThrow(/held/);
+    expect(idleStore.releases).toEqual([]);
+    expect(idle.state).toBe('released');
   });
 
   // Two acquires in flight would each claim a node, and the one overwritten would sit leased to
@@ -369,30 +374,6 @@ describe('NodeLease', () => {
     await lease.acquire();
 
     expect(Math.abs(decode(lease.generate(BUCKET)).tsMs - Date.now())).toBeLessThan(1_000);
-  });
-
-  it('releases without touching the store when nothing is held', async () => {
-    const store = new FakeLeaseStore();
-    const lease = leaseWith(store, fakeClock());
-
-    await lease.release();
-
-    expect(store.releases).toEqual([]);
-    expect(lease.state).toBe('released');
-  });
-
-  it('refuses to renew a lease it does not hold', async () => {
-    await expect(leaseWith(new FakeLeaseStore(), fakeClock()).renew()).rejects.toThrow(/idle/);
-  });
-
-  it('exposes the generator it mints with, and drops it once the node is gone', async () => {
-    const { lease, store } = await heldLease();
-    expect(lease.generator?.nodeId).toBe(7);
-
-    store.renewResult = false;
-    await lease.renew();
-
-    expect(lease.generator).toBeNull();
   });
 
   it('rejects options that leave no window to mint in', () => {

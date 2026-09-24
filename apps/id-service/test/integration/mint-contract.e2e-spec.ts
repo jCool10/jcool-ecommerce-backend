@@ -33,17 +33,22 @@ describe('POST /v1/ids', () => {
     return (caller === undefined ? req : req.set('x-caller', caller)).send(body);
   };
 
-  it.each([
-    ['a missing bucket', { count: 1 }],
-    ['a negative bucket', { bucket: -1 }],
-    ['a bucket past 4095', { bucket: 4096 }],
-    ['a fractional bucket', { bucket: 1.5 }],
-    ['a bucket sent as a string', { bucket: '1' }],
-    ['a count of 0', { bucket: 1, count: 0 }],
-    ['a count past the per-request cap', { bucket: 1, count: MAX_IDS_PER_REQUEST + 1 }],
-    ['an unknown field', { bucket: 1, email: 'someone@example.com' }],
-  ])('rejects %s with 400', async (_, body) => {
-    await mint(body).expect(400);
+  it('rejects every malformed request body with 400', async () => {
+    const malformed: [string, object][] = [
+      ['a missing bucket', { count: 1 }],
+      ['a negative bucket', { bucket: -1 }],
+      ['a bucket past 4095', { bucket: 4096 }],
+      ['a fractional bucket', { bucket: 1.5 }],
+      ['a bucket sent as a string', { bucket: '1' }],
+      ['a count of 0', { bucket: 1, count: 0 }],
+      ['a count past the per-request cap', { bucket: 1, count: MAX_IDS_PER_REQUEST + 1 }],
+      ['an unknown field', { bucket: 1, email: 'someone@example.com' }],
+    ];
+
+    const statuses: Record<string, number> = {};
+    for (const [label, body] of malformed) statuses[label] = (await mint(body)).status;
+
+    expect(statuses).toEqual(Object.fromEntries(malformed.map(([label]) => [label, 400])));
   });
 
   it('mints one id by default', async () => {

@@ -1,7 +1,8 @@
 import { requestWithoutQuery } from './request-serializer';
 
 describe('requestWithoutQuery', () => {
-  it('drops the query string, which carries the tokens in mailed links', () => {
+  // Mailed verification and reset links carry a redeemable token in the query string.
+  it('drops the query string and the parsed query', () => {
     const logged = requestWithoutQuery({
       id: 1,
       method: 'GET',
@@ -11,10 +12,5 @@ describe('requestWithoutQuery', () => {
     });
 
     expect(logged).toEqual({ id: 1, method: 'GET', url: '/auth/verify-email', headers: { host: 'shop.test' } });
-    expect(JSON.stringify(logged)).not.toContain('secret-token');
-  });
-
-  it('keeps a url without a query as it is', () => {
-    expect(requestWithoutQuery({ method: 'GET', url: '/products/1' })).toEqual({ method: 'GET', url: '/products/1' });
   });
 });

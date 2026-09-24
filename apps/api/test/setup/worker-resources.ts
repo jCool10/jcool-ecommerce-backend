@@ -12,7 +12,7 @@ import { workerCount } from './worker-count';
  * Each worker therefore gets its own database, cloned from a migrated template
  * (`CREATE DATABASE ... TEMPLATE`, ~96ms, done once per worker in globalSetup) and its own Redis
  * logical db index. Both are derived from `VITEST_POOL_ID`, so spec files stay unaware of the
- * scoping — `createTestApp` resolves the URLs for them.
+ * scoping: `createTestApp` resolves the URLs for them.
  *
  * Containers stay shared: a per-worker Postgres costs ~1.9s to boot plus ~1.0s to migrate, 30x the
  * template clone, for identical isolation.
@@ -26,7 +26,7 @@ const MAX_REDIS_DB_INDEX = 15;
 
 /**
  * How many worker databases globalSetup pre-creates, and the cap `vitest-e2e.config.mts` sets on the
- * pool. Re-exported from `worker-count.ts` so both callers resolve the same function — the config
+ * pool. Re-exported from `worker-count.ts` so both callers resolve the same function; the config
  * cannot import this module (it calls `inject()` and asserts the budget at import).
  */
 export { workerCount, MAX_REDIS_DB_INDEX };

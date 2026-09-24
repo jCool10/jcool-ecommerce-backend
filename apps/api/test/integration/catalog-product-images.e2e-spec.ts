@@ -15,11 +15,8 @@ import { resetDatabase } from '../setup/reset-database';
 
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
-/**
- * Catalog stores asset ids and nothing else — the URL is resolved on the way out, after the cache,
- * which is what lets a short-lived signed URL be served from a long-lived cached product. An asset
- * may be attached exactly once, and only from READY.
- */
+// Catalog stores asset ids; the URL is resolved after the cache, so a cached product can carry a
+// short-lived signed URL.
 describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
   let storage: StartedObjectStorage;
   let app: INestApplication;
@@ -33,15 +30,12 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     ({ app, pool, db } = await createTestAppWithObjectStorage(storage));
   }, 180_000);
 
-  // Explicit rather than `closeAppAfterAll`: the app has to go before the bucket it still holds
-  // connections to.
+  // The app closes before the bucket it holds connections to.
   afterAll(async () => {
     await app?.close();
     await storage?.stop();
   });
 
-  // Explicit rather than `resetDatabaseBeforeEach`: the bucket and the cache generation both have to
-  // follow the truncate, or a test reads the previous test's objects or its cached product rows.
   beforeEach(async () => {
     await resetDatabase(pool);
     await storage.clear();
@@ -52,7 +46,6 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
 
   const server = () => app.getHttpServer();
 
-  /** An asset in whatever state the test needs, with its object actually in the bucket. */
   async function seedAsset(status: 'PENDING' | 'READY' | 'ATTACHED' = 'READY'): Promise<string> {
     const uploader = (await createTestAdminPrincipal(app)).user.id;
     const [row] = await db
@@ -87,21 +80,13 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     const created = await attach(assetId).expect(201);
     expect(created.body.assetId).toBe(assetId);
     expect(created.body.position).toBe(0);
-    expect(await assetStatus(assetId)).toBe('ATTACHED');
+    const [asset] = await db.select().from(schema.mediaAssets).where(eq(schema.mediaAssets.id, assetId));
+    expect(asset).toMatchObject({ status: 'ATTACHED', expiresAt: null });
 
     const res = await detail().expect(200);
     expect(res.body.images).toHaveLength(1);
     expect(res.body.images[0].assetId).toBe(assetId);
-    // A URL, resolved now — the id is what was stored.
     expect(res.body.images[0].url).toContain(storage.bucket);
-  });
-
-  it('clears the expiry on attach, so the sweep can never take an image off a live product', async () => {
-    const assetId = await seedAsset();
-    await attach(assetId).expect(201);
-
-    const [row] = await db.select().from(schema.mediaAssets).where(eq(schema.mediaAssets.id, assetId));
-    expect(row.expiresAt).toBeNull();
   });
 
   it('refuses an asset whose upload was never confirmed', async () => {
@@ -110,28 +95,19 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     await attach(assetId).expect(409);
 
     expect(await assetStatus(assetId)).toBe('PENDING');
+    expect(await db.select().from(schema.productImages)).toEqual([]);
     expect((await detail().expect(200)).body.images).toEqual([]);
   });
 
-  it('refuses an asset that is already attached somewhere', async () => {
-    const assetId = await seedAsset('ATTACHED');
+  it('refuses an asset already attached, here or on another product', async () => {
+    const elsewhere = await seedAsset('ATTACHED');
+    const here = await seedAsset();
+    await attach(here).expect(201);
 
-    await attach(assetId).expect(409);
-  });
+    await attach(elsewhere).expect(409);
+    await attach(here).expect(409);
 
-  it('rolls the link row back when the claim fails — no half-attached image', async () => {
-    const assetId = await seedAsset('PENDING');
-
-    await attach(assetId).expect(409);
-
-    expect(await db.select().from(schema.productImages)).toEqual([]);
-  });
-
-  it('refuses the same asset twice on one product', async () => {
-    const assetId = await seedAsset();
-    await attach(assetId).expect(201);
-
-    await attach(assetId).expect(409);
+    expect(await db.select().from(schema.productImages)).toHaveLength(1);
   });
 
   it('404s an attach to a product that does not exist', async () => {
@@ -165,7 +141,6 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
       .expect(204);
 
     expect(await assetStatus(assetId)).toBe('DETACHED');
-    // The bytes stay until a sweep takes them — detaching is not a delete.
     const [row] = await db.select().from(schema.mediaAssets).where(eq(schema.mediaAssets.id, assetId));
     expect(row.expiresAt).not.toBeNull();
     expect(await storage.exists(row.storageKey)).toBe(true);
@@ -195,7 +170,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     expect(publicImages).toHaveLength(2);
   });
 
-  it('refuses a partial order rather than half-applying it', async () => {
+  it('refuses a reorder that leaves an image out', async () => {
     const first = (await attach(await seedAsset()).expect(201)).body.id as string;
     await attach(await seedAsset()).expect(201);
 
@@ -216,8 +191,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
       .expect(409);
   });
 
-  it('invalidates the cached product, so an attach is visible on the next read', async () => {
-    // Warm the cache with the image-less product first — the whole point of the generation bump.
+  it('shows an attach on the next read of a cached product', async () => {
     expect((await detail().expect(200)).body.images).toEqual([]);
 
     const assetId = await seedAsset();
@@ -227,13 +201,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     expect(res.body.images.map((image: { assetId: string }) => image.assetId)).toEqual([assetId]);
   });
 
-  it('lists a product with no images as an empty array, not a missing field', async () => {
-    const res = await detail().expect(200);
-
-    expect(res.body.images).toEqual([]);
-  });
-
-  it('carries images through the list endpoint too', async () => {
+  it('carries images through the list endpoint', async () => {
     const assetId = await seedAsset();
     await attach(assetId).expect(201);
 

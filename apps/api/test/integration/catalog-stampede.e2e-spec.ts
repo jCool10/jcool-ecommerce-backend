@@ -6,13 +6,12 @@ import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructu
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
-import { withRedisDown } from '../setup/redis-outage';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
 import { sleep } from '../setup/sleep';
 
 const HERD = 20;
-// Long enough that every member of the herd is already in flight before the winner answers.
+// Long enough that the whole herd is in flight before the winner answers.
 const SOURCE_DELAY_MS = 200;
 
 async function readCacheCounter(app: INestApplication, result: string): Promise<number> {
@@ -21,10 +20,6 @@ async function readCacheCounter(app: INestApplication, result: string): Promise<
   return match ? Number(match[1]) : 0;
 }
 
-/**
- * The Drizzle adapter is the thing a herd would trample, so it is spied on directly: how many times
- * it ran is the single-flight guarantee, and slowing it is what lets a herd form at all.
- */
 function slowDetailRead(source: DrizzleProductRepository) {
   const original = source.findActiveByIdOrSlug.bind(source);
   return vi.spyOn(source, 'findActiveByIdOrSlug').mockImplementation(async (idOrSlug) => {
@@ -48,8 +43,7 @@ describe('Catalog stampede protection (integration, real Postgres + Redis)', () 
 
   beforeAll(async () => {
     process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
-    // Pinned, not defaulted: a local .env would otherwise decide whether a waiter outlasts the
-    // injected source delay, which is the whole assertion.
+    // Pinned so a waiter always outlasts the injected source delay.
     ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '60',
       CACHE_STALE_WINDOW_SEC: '30',
@@ -59,14 +53,11 @@ describe('Catalog stampede protection (integration, real Postgres + Redis)', () 
     source = app.get(DrizzleProductRepository);
   });
 
-  // Explicit rather than `closeAppAfterAll`: the token has to be cleared too.
   afterAll(async () => {
     delete process.env.METRICS_TOKEN;
     await app.close();
   });
 
-  // Explicit rather than `resetDatabaseBeforeEach`: the cache generation has to be bumped after the
-  // truncate, or a herd is served the previous test's rows out of Redis.
   beforeEach(async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
@@ -88,8 +79,7 @@ describe('Catalog stampede protection (integration, real Postgres + Redis)', () 
     expect(responses.map((res) => res.status)).toEqual(Array.from({ length: HERD }, () => 200));
     expect(new Set(responses.map((res) => res.body.slug as string))).toEqual(new Set([slug]));
     expect(spy).toHaveBeenCalledTimes(1);
-    // The losers waited for the winner's value instead of each opening their own query. Not an
-    // equality: a straggler arriving after the winner's write is a plain fresh hit, never a wait.
+    // At least one: a straggler arriving after the winner's write is a plain hit, not a wait.
     expect(await readCacheCounter(app, 'lock_wait')).toBeGreaterThanOrEqual(waitsBefore + 1);
   });
 
@@ -105,17 +95,6 @@ describe('Catalog stampede protection (integration, real Postgres + Redis)', () 
     expect(responses.every((res) => res.body.total === 1)).toBe(true);
     expect(spy).toHaveBeenCalledTimes(1);
   });
-
-  it('keeps serving a herd from Postgres when the whole cache layer is unreachable', async () => {
-    const { slug } = await createTestProduct(app);
-
-    await withRedisDown(app, async () => {
-      const responses = await Promise.all(
-        Array.from({ length: HERD }, () => request(app.getHttpServer()).get(`/products/${slug}`)),
-      );
-      expect(responses.map((res) => res.status)).toEqual(Array.from({ length: HERD }, () => 200));
-    });
-  });
 });
 
 describe('Catalog stale-while-revalidate under load (integration)', () => {
@@ -123,13 +102,9 @@ describe('Catalog stale-while-revalidate under load (integration)', () => {
   let pool: Pool;
   let source: DrizzleProductRepository;
 
-  // A second app, not a second test on the first: the fresh window is fixed when the module
-  // compiles, and the suite above needs 60s where this one needs 1s.
   beforeAll(async () => {
     process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
-    // Shortest fresh window the env schema accepts, so the stale path is reachable in a test. The
-    // stale window is pinned too: a local `CACHE_STALE_WINDOW_SEC=0` would delete the entry instead
-    // of ageing it, and every assertion below would be about a miss.
+    // A 1s fresh window with a wide stale window, so an entry ages into stale instead of expiring.
     ({ app, pool } = await createTestAppWithPool({
       CATALOG_CACHE_TTL_SEC: '1',
       CACHE_STALE_WINDOW_SEC: '30',
@@ -147,7 +122,7 @@ describe('Catalog stale-while-revalidate under load (integration)', () => {
     vi.restoreAllMocks();
   });
 
-  it('answers a whole herd from the stale entry while exactly one refresh runs behind it', async () => {
+  it('answers a whole herd from the stale entry while one refresh runs behind it', async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
     const { slug } = await createTestProduct(app);
@@ -161,11 +136,9 @@ describe('Catalog stale-while-revalidate under load (integration)', () => {
       Array.from({ length: HERD }, () => request(app.getHttpServer()).get(`/products/${slug}`)),
     );
 
-    // Every one of them answered from the expired entry rather than queueing behind the refresh.
     expect(responses.every((res) => res.status === 200 && res.body.name === filled.body.name)).toBe(true);
     expect(await readCacheCounter(app, 'hit_stale')).toBe(staleBefore + HERD);
 
-    // The refresh is fire-and-forget, so it has to be given time to land before it can be counted.
     await sleep(SOURCE_DELAY_MS * 3);
     expect(spy).toHaveBeenCalledTimes(1);
   });

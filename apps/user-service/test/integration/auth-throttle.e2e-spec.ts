@@ -26,7 +26,7 @@ describe('Auth rate limiting (integration, real Redis)', () => {
 
   resetDatabaseBeforeEach(() => pool);
 
-  it('locks a brute-forced account after repeated failures (429) without locking a different account on the same IP', async () => {
+  it('locks a brute-forced account without locking another on the same IP', async () => {
     const stamp = Date.now();
     const victim = `victim-${stamp}@throttle.local`;
     const bystander = `bystander-${stamp}@throttle.local`;

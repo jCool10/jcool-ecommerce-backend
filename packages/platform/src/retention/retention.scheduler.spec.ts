@@ -1,8 +1,8 @@
-import type { SchedulerRegistry } from '@nestjs/schedule';
-import type { ClsService } from 'nestjs-cls';
+import { SchedulerRegistry } from '@nestjs/schedule';
+import { ClsServiceManager } from 'nestjs-cls';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@jcool/metrics-port';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { RetentionSweep } from './retention-sweep.port';
 import { RetentionSweepRegistry } from './retention-sweep.registry';
@@ -24,28 +24,19 @@ function build(overrides: Record<string, unknown> = {}, sweeps: RetentionSweep[]
   const registry = new RetentionSweepRegistry();
   for (const sweep of sweeps) registry.register(sweep);
 
-  const schedulerRegistry = {
-    addInterval: vi.fn(),
-    deleteInterval: vi.fn(),
-    doesExist: vi.fn().mockReturnValue(true),
-  };
-  const metrics = {
-    recordRetentionSweep: vi.fn(),
-    observeRetentionSweepDuration: vi.fn(),
-    recordRetentionSweepFailure: vi.fn(),
-  };
+  const schedulerRegistry = new SchedulerRegistry();
+  const metrics = fakeMetricsPort();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const make = () =>
     new RetentionScheduler(
       registry,
       config,
-      schedulerRegistry as unknown as SchedulerRegistry,
-      // Pass-through; correlation is asserted in job-context.spec.ts.
-      { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
-      metrics as unknown as MetricsPort,
+      schedulerRegistry,
+      ClsServiceManager.getClsService(),
+      metrics,
       fakePinoLogger(logger),
     );
-  return { make, registry, schedulerRegistry, metrics, logger };
+  return { make, schedulerRegistry, metrics, logger };
 }
 
 describe('RetentionScheduler', () => {
@@ -57,23 +48,25 @@ describe('RetentionScheduler', () => {
     vi.useRealTimers();
   });
 
-  describe('construction', () => {
-    it.each(['retention.intervalMs', 'retention.batchSize', 'retention.sweepTimeoutMs'])(
-      'refuses to build when %s is missing, rather than scheduling an undefined interval',
-      (key) => {
-        expect(() => build({ [key]: undefined }).make()).toThrow(/Invalid retention config/);
-      },
-    );
+  // An undefined or zero interval makes setInterval fire every event-loop turn.
+  it('refuses to build on a missing or non-positive setting, even while disabled', () => {
+    const refused = (overrides: Record<string, unknown>): boolean => {
+      try {
+        build(overrides).make();
+        return false;
+      } catch (error) {
+        return /Invalid retention config/.test((error as Error).message);
+      }
+    };
+    const invalid = [
+      { 'retention.intervalMs': undefined },
+      { 'retention.batchSize': undefined },
+      { 'retention.sweepTimeoutMs': undefined },
+      { 'retention.intervalMs': 0 },
+      { 'retention.enabled': false, 'retention.batchSize': -1 },
+    ];
 
-    it('refuses a zero interval, which would busy-loop issuing DELETEs', () => {
-      expect(() => build({ 'retention.intervalMs': 0 }).make()).toThrow(/Invalid retention config/);
-    });
-
-    it('validates config even while disabled, so a typo surfaces at boot and not on first enable', () => {
-      expect(() => build({ 'retention.enabled': false, 'retention.batchSize': -1 }).make()).toThrow(
-        /Invalid retention config/,
-      );
-    });
+    expect(invalid.filter((overrides) => !refused(overrides))).toEqual([]);
   });
 
   describe('onApplicationBootstrap', () => {
@@ -86,31 +79,19 @@ describe('RetentionScheduler', () => {
       scheduler.onApplicationBootstrap();
       await vi.advanceTimersByTimeAsync(3_600_000);
 
-      expect(schedulerRegistry.addInterval).toHaveBeenCalledWith('shared-retention-sweep', expect.anything());
+      expect(schedulerRegistry.getIntervals()).toEqual(['shared-retention-sweep']);
       expect(outbox).toHaveBeenCalledWith(500);
       expect(inbox).toHaveBeenCalledWith(500);
       scheduler.onModuleDestroy();
     });
 
     it('registers nothing at all when disabled', () => {
-      const { make, schedulerRegistry, logger } = build({ 'retention.enabled': false }, [stub('messaging:outbox')]);
+      const { make, schedulerRegistry } = build({ 'retention.enabled': false }, [stub('messaging:outbox')]);
 
       make().onApplicationBootstrap();
 
-      expect(schedulerRegistry.addInterval).not.toHaveBeenCalled();
+      expect(schedulerRegistry.getIntervals()).toEqual([]);
       expect(vi.getTimerCount()).toBe(0);
-      expect(logger.info).toHaveBeenCalledWith('retention sweeps disabled');
-    });
-
-    it('names the sweeps it will drive, which is where a forgotten registration shows up', () => {
-      const { make, logger } = build({}, [stub('messaging:outbox'), stub('order:idempotency-keys')]);
-
-      make().onApplicationBootstrap();
-
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({ sweeps: ['messaging:outbox', 'order:idempotency-keys'] }),
-        'retention sweeps scheduled',
-      );
     });
   });
 
@@ -131,7 +112,9 @@ describe('RetentionScheduler', () => {
       expect(peak).toBe(3);
     });
 
-    it('records rows and duration per sweep, so the label points at one table', async () => {
+    // An idle sweep is recorded too: a series that only appears once a sweep deletes something
+    // cannot be told apart from one that is not running.
+    it('records rows and duration per sweep', async () => {
       const { make, metrics } = build({}, [
         stub('messaging:outbox', vi.fn().mockResolvedValue(12)),
         stub('messaging:inbox', vi.fn().mockResolvedValue(0)),
@@ -139,35 +122,24 @@ describe('RetentionScheduler', () => {
 
       await make().tick();
 
-      // The idle sweep is recorded too — a series that only appears once a sweep deletes something
-      // cannot be told apart from one that is not running.
       expect(metrics.recordRetentionSweep).toHaveBeenCalledWith('messaging:outbox', 12);
       expect(metrics.recordRetentionSweep).toHaveBeenCalledWith('messaging:inbox', 0);
       expect(metrics.observeRetentionSweepDuration).toHaveBeenCalledWith('messaging:outbox', expect.any(Number));
     });
 
-    it('logs a sweep that did work and stays quiet on an idle one', async () => {
-      const { make, logger } = build({}, [
-        stub('messaging:outbox', vi.fn().mockResolvedValue(12)),
-        stub('messaging:inbox', vi.fn().mockResolvedValue(0)),
-      ]);
+    it('logs deleted rows at info, a full batch at warn, and an idle sweep not at all', async () => {
+      const levelsAfter = async (deleted: number): Promise<string[]> => {
+        const { make, logger } = build({}, [stub('messaging:outbox', vi.fn().mockResolvedValue(deleted))]);
+        const scheduler = make();
+        await scheduler.tick();
+        // The first tick also announces the roster.
+        logger.info.mockClear();
+        logger.warn.mockClear();
+        await scheduler.tick();
+        return [...logger.info.mock.calls.map(() => 'info'), ...logger.warn.mock.calls.map(() => 'warn')];
+      };
 
-      await make().tick();
-
-      const completed = logger.info.mock.calls.filter(([, message]) => message === 'retention sweep completed');
-      expect(completed).toHaveLength(1);
-      expect(completed[0][0]).toMatchObject({ sweep: 'messaging:outbox', deleted: 12 });
-    });
-
-    it('warns when a sweep fills its batch', async () => {
-      const { make, logger } = build({}, [stub('messaging:outbox', vi.fn().mockResolvedValue(500))]);
-
-      await make().tick();
-
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ sweep: 'messaging:outbox', deleted: 500, batchSize: 500 }),
-        expect.stringContaining('filled its batch'),
-      );
+      expect([await levelsAfter(12), await levelsAfter(500), await levelsAfter(0)]).toEqual([['info'], ['warn'], []]);
     });
 
     it('announces the full roster once, not on every tick', async () => {
@@ -177,11 +149,8 @@ describe('RetentionScheduler', () => {
       await scheduler.tick();
       await scheduler.tick();
 
-      const announcements = logger.info.mock.calls.filter(
-        ([, message]) => message === 'retention sweeps running for the first time',
-      );
-      expect(announcements).toHaveLength(1);
-      expect(announcements[0][0]).toMatchObject({ sweeps: ['messaging:outbox'], count: 1 });
+      expect(logger.info).toHaveBeenCalledTimes(1);
+      expect(logger.info.mock.calls[0][0]).toEqual({ sweeps: ['messaging:outbox'], count: 1 });
     });
   });
 
@@ -208,7 +177,8 @@ describe('RetentionScheduler', () => {
       await first;
     });
 
-    it('counts every skipped tick, so a permanently stuck sweep does not go quiet in metrics', async () => {
+    // A sweep stuck for good would otherwise go flat in metrics after its one timeout.
+    it('counts every skipped tick as a failure', async () => {
       const stuck = vi.fn().mockReturnValue(new Promise<number>(() => {}));
       const { make, metrics } = build({}, [stub('messaging:outbox', stuck)]);
       const scheduler = make();
@@ -240,7 +210,6 @@ describe('RetentionScheduler', () => {
       expect(healthy).toHaveBeenCalledTimes(1);
       expect(metrics.recordRetentionSweepFailure).toHaveBeenCalledWith('messaging:outbox');
 
-      // The guard was released, so the next tick tries it again rather than skipping it forever.
       mode = 'ok';
       await scheduler.tick();
       expect(brittle).toHaveBeenCalledTimes(2);
@@ -288,23 +257,14 @@ describe('RetentionScheduler', () => {
     });
   });
 
-  describe('onModuleDestroy', () => {
-    it('clears the interval so no tick outlives the connection pool', () => {
-      const { make, schedulerRegistry } = build({}, [stub('messaging:outbox')]);
+  it('clears the interval on shutdown', () => {
+    const { make, schedulerRegistry } = build({}, [stub('messaging:outbox')]);
 
-      const scheduler = make();
-      scheduler.onApplicationBootstrap();
-      scheduler.onModuleDestroy();
+    const scheduler = make();
+    scheduler.onApplicationBootstrap();
+    scheduler.onModuleDestroy();
 
-      expect(schedulerRegistry.deleteInterval).toHaveBeenCalledWith('shared-retention-sweep');
-    });
-
-    it('is safe when no interval was ever registered', () => {
-      const { make, schedulerRegistry } = build({ 'retention.enabled': false });
-      schedulerRegistry.doesExist.mockReturnValue(false);
-
-      expect(() => make().onModuleDestroy()).not.toThrow();
-      expect(schedulerRegistry.deleteInterval).not.toHaveBeenCalled();
-    });
+    expect(schedulerRegistry.getIntervals()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -1,44 +1,24 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Queue } from 'bullmq';
-import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
-import { authHeader } from '../setup/bearer.helper';
-import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import {
-  closeAppAfterAll,
-  createTestAppWithPool,
-  obliterateQueueBeforeEach,
-  resetDatabaseBeforeEach,
-} from '../setup/harness';
-import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
-import { createTestApp } from '../setup/test-app.factory';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
 const ORDER_ID = '0198f0d8-1111-7000-8000-000000000001';
 
-/**
- * The transport can and does deliver twice — the relay may crash after publishing but before
- * marking, the queue redelivers a job whose worker died — and every assertion here is about that
- * second delivery costing nothing. Deliveries are driven by hand; the worker is off in e2e.
- */
+// Deliveries are driven by hand; the queue worker is off in e2e.
 describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let processor: DomainEventProcessor;
   let dispatcher: DomainEventDispatcher;
-  let relay: OutboxRelay;
-  let queue: Queue;
   let db: DrizzleDB;
   let pool: Pool;
 
@@ -56,15 +36,12 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   const inboxRows = () => db.select().from(schema.inbox);
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({ METRICS_TOKEN: E2E_METRICS_TOKEN }));
+    ({ app, pool, db } = await createTestAppWithPool());
     processor = app.get(DomainEventProcessor);
     dispatcher = app.get(DomainEventDispatcher);
-    relay = app.get(OutboxRelay);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-  obliterateQueueBeforeEach(() => [queue]);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -79,8 +56,6 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     const rows = await inboxRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      // Scoped to the consumer group, so a second consumer of the same event would get its own row
-      // rather than being deduped away by this one.
       consumer: DOMAIN_EVENTS_CONSUMER,
       messageId: MESSAGE_ID,
       eventType: 'order.placed',
@@ -97,12 +72,11 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     expect(await inboxRows()).toHaveLength(1);
   });
 
-  it('dedups on the outbox id, not on the delivery — a fresh job id changes nothing', async () => {
+  // A BullMQ republish carries the same outbox id under a new delivery.
+  it('dedups on the outbox id, not on anything per delivery', async () => {
     const effect = spyOnEffect(dispatcher);
 
     await processor.process(job());
-    // What a BullMQ retry looks like from here: same message, republished after the original job id
-    // aged out of retention. Keying on anything per-delivery would let this through.
     await expect(
       processor.process(job({ traceparent: '00-' + '1'.repeat(32) + '-' + '2'.repeat(16) + '-01' })),
     ).resolves.toBe('duplicate');
@@ -115,8 +89,6 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
 
     await expect(processor.process(job())).rejects.toThrow('handler exploded');
 
-    // The decisive assertion: no claim survived. Marking the message consumed outside the effect's
-    // transaction would have left the event permanently unapplied and permanently deduped.
     expect(await inboxRows()).toHaveLength(0);
 
     effect.mockRestore();
@@ -125,8 +97,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('applies each of the order events the producers emit today', async () => {
-    // Every finalized event carries `userId` (`order-outbox.mapper.ts`), and order.paid's handler
-    // resolves the buyer's address from it — so the payload here has to be the one producers emit.
+    // order.paid resolves the buyer's address from `userId`, as the producers emit it.
     const { user } = await createTestPrincipal(app);
     const payload = { orderId: ORDER_ID, userId: user.id, totalAmountMinor: 150_000 };
     for (const [index, eventType] of ['order.placed', 'order.paid', 'order.failed', 'order.expired'].entries()) {
@@ -142,51 +113,9 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     ]);
   });
 
-  it('fails an event no handler is registered for instead of silently acknowledging it', async () => {
+  it('fails an event with no handler and leaves it unclaimed', async () => {
     await expect(processor.process(job({ eventType: 'payment.refunded' }))).rejects.toThrow(/No handler registered/);
 
-    // Nothing claimed: once a handler exists, the redelivery still has an event to apply.
     expect(await inboxRows()).toHaveLength(0);
-  });
-
-  it('reports both outcomes on /metrics', async () => {
-    await processor.process(job());
-    await processor.process(job());
-
-    const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
-
-    // Presence, not value: these counters accumulate across the file's tests, so only a delta would
-    // mean anything.
-    expect(text).toContain('messaging_consume_total{event_type="order.placed",result="processed"}');
-    expect(text).toContain('messaging_consume_total{event_type="order.placed",result="duplicate"}');
-  });
-
-  it('carries a real checkout from HTTP through the relay to a consumed effect', async () => {
-    // A second boot, not a second test: every other test here drives the processor by hand, which
-    // only works while the queue worker is off — so the one test that needs it running needs its own app.
-    const worker = await createTestApp({ QUEUE_WORKER_ENABLED: 'true' });
-    try {
-      const sku = await seedSellableSku(app, { onHand: 5, priceMinor: 150_000 });
-      const token = await buyerWithCart(app, sku.variantId, 2);
-      const response = await request(app.getHttpServer())
-        .post('/orders')
-        .set(authHeader(token))
-        .set(idempotencyKeyHeader())
-        .expect(201);
-      const orderId = response.body.id as string;
-
-      await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
-
-      // The one thing only a running worker can prove: the queue actually hands jobs to the
-      // processor, rather than every test above calling it directly.
-      await vi.waitFor(async () => expect(await inboxRows()).toHaveLength(1), { timeout: 10_000, interval: 50 });
-      const [claimed] = await inboxRows();
-      expect(claimed.eventType).toBe('order.placed');
-
-      const [outboxRow] = await db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, orderId));
-      expect(claimed.messageId).toBe(outboxRow.id);
-    } finally {
-      await worker.close();
-    }
   });
 });

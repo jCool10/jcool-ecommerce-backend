@@ -43,17 +43,12 @@ describe('User id columns (integration, real Postgres)', () => {
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  describe.each(COLUMNS)('$column', ({ constraint, insert }) => {
-    it('refuses a value one below the lowest routable id', async () => {
-      await expect(insert(pool, (MIN_ROUTABLE_ID - 1n).toString())).rejects.toMatchObject({
-        code: '23514',
-        constraint,
-      });
+  it.each(COLUMNS)('$column accepts the lowest routable id and refuses one below', async ({ constraint, insert }) => {
+    await expect(insert(pool, (MIN_ROUTABLE_ID - 1n).toString())).rejects.toMatchObject({
+      code: '23514',
+      constraint,
     });
-
-    it('accepts the lowest routable id and a minted one', async () => {
-      await expect(insert(pool, MIN_ROUTABLE_ID.toString())).resolves.toMatchObject({ rowCount: 1 });
-      await expect(insert(pool, mintTestUserId('owner@test.local'))).resolves.toMatchObject({ rowCount: 1 });
-    });
+    await expect(insert(pool, MIN_ROUTABLE_ID.toString())).resolves.toMatchObject({ rowCount: 1 });
+    await expect(insert(pool, mintTestUserId('owner@test.local'))).resolves.toMatchObject({ rowCount: 1 });
   });
 });

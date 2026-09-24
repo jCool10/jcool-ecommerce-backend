@@ -4,7 +4,7 @@ const MAIL_IMAGE = 'axllent/mailpit:v1.31.1';
 const SMTP_PORT = 1025;
 const API_PORT = 8025;
 
-// A port nothing listens on, so the connection is refused immediately — the same trick the search
+// A port nothing listens on, so the connection is refused immediately. The same trick the search
 // suites use, and safer than stopping the container under requests still in flight.
 export const UNREACHABLE_SMTP_URL = 'smtp://127.0.0.1:1';
 
@@ -32,7 +32,7 @@ export async function startMailServer(): Promise<StartedMailServer> {
   const container: StartedTestContainer = await new GenericContainer(MAIL_IMAGE)
     .withExposedPorts(SMTP_PORT, API_PORT)
     // Both ports, not just the HTTP probe: `/readyz` is served by the web server, so it answers
-    // while the SMTP listener is still binding — and the first send would be the one that waits.
+    // while the SMTP listener is still binding, and the first send would be the one that waits.
     .withWaitStrategy(Wait.forAll([Wait.forListeningPorts(), Wait.forHttp('/readyz', API_PORT)]))
     .start();
 

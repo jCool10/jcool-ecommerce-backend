@@ -48,9 +48,13 @@ describe('The api without its own auth (integration)', () => {
     expect((await cart(await hs256(randomBytes(32).toString('hex')))).status).toBe(401);
   });
 
-  it.each(AUTH_ROUTES)('serves no %s %s', async (method, path) => {
-    const res = await request(app.getHttpServer())[method](path).send({});
+  it('serves none of the auth routes it used to own', async () => {
+    const answers: string[] = [];
+    for (const [method, path] of AUTH_ROUTES) {
+      const res = await request(app.getHttpServer())[method](path).send({});
+      answers.push(`${method} ${path} ${res.status}`);
+    }
 
-    expect(res.status).toBe(404);
+    expect(answers).toEqual(AUTH_ROUTES.map(([method, path]) => `${method} ${path} 404`));
   });
 });

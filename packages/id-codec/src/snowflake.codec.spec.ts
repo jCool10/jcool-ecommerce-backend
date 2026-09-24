@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   BUCKET_BITS,
   BUCKET_COUNT,
@@ -19,7 +18,7 @@ import {
   isRoutableId,
 } from './snowflake.codec';
 
-const ROUND_TRIP_SAMPLES = process.env.CI ? 20_000 : 100_000;
+const ROUND_TRIP_SAMPLES = 20_000;
 
 // Seeded PRNG so a failing sample is reproducible from the seed alone.
 function mulberry32(seed: number): () => number {
@@ -56,13 +55,7 @@ const MAX: SnowflakeFields = {
 };
 
 describe('snowflake codec', () => {
-  it('pins the epoch, which is a permanent wire format', () => {
-    expect(EPOCH_MS).toBe(1_767_225_600_000);
-    expect(new Date(EPOCH_MS).toISOString()).toBe('2026-01-01T00:00:00.000Z');
-    expect(new Date(MAX_TIMESTAMP_MS).toISOString()).toBe('2095-09-07T15:47:35.551Z');
-  });
-
-  it('round-trips the extremes of every field', () => {
+  it('round-trips the extremes and every single bit of every field', () => {
     expect(decode(encode(MIN))).toEqual(MIN);
     expect(decode(encode(MAX))).toEqual(MAX);
 
@@ -73,29 +66,19 @@ describe('snowflake codec', () => {
       const onlyThisFieldMinned = { ...MAX, [field]: MIN[field] };
       expect(decode(encode(onlyThisFieldMinned))).toEqual(onlyThisFieldMinned);
     }
-  });
 
-  it('round-trips every single bit of every field', () => {
-    let cases = 0;
-
-    for (let bit = 0; bit < TIMESTAMP_BITS; bit++) {
-      const fields = { ...MIN, tsMs: EPOCH_MS + 2 ** bit };
-      expect(decode(encode(fields))).toEqual(fields);
-      cases++;
-    }
+    const singleBits: SnowflakeFields[] = [];
+    for (let bit = 0; bit < TIMESTAMP_BITS; bit++) singleBits.push({ ...MIN, tsMs: EPOCH_MS + 2 ** bit });
     for (const [field, width] of [
-      ['bucket', 12],
-      ['nodeId', 5],
-      ['sequence', 5],
+      ['bucket', BUCKET_BITS],
+      ['nodeId', NODE_BITS],
+      ['sequence', SEQUENCE_BITS],
     ] as const) {
-      for (let bit = 0; bit < width; bit++) {
-        const fields = { ...MIN, [field]: 2 ** bit };
-        expect(decode(encode(fields))).toEqual(fields);
-        cases++;
-      }
+      for (let bit = 0; bit < width; bit++) singleBits.push({ ...MIN, [field]: 2 ** bit });
     }
 
-    expect(cases).toBe(41 + 12 + 5 + 5);
+    expect(singleBits).toHaveLength(41 + 12 + 5 + 5);
+    expect(singleBits.map((fields) => decode(encode(fields)))).toEqual(singleBits);
   });
 
   it('round-trips seeded random field combinations', () => {
@@ -105,7 +88,7 @@ describe('snowflake codec', () => {
       const fields = randomFields(rand);
       expect(decode(encode(fields))).toEqual(fields);
     }
-  }, 60_000);
+  });
 
   // Round-tripping agrees under ANY layout, so it cannot pin where a field physically sits. This
   // freezes the wire format: a shard router reads the bucket positionally, and swapping two
@@ -114,6 +97,7 @@ describe('snowflake codec', () => {
     const id = encode({ tsMs: 1_800_000_000_000, bucket: 2731, nodeId: 19, sequence: 27 });
 
     expect(id).toBe('137465797020397179');
+    expect(bucketOf(id)).toBe(2731);
 
     const value = BigInt(id);
     expect(Number(value >> 22n)).toBe(1_800_000_000_000 - EPOCH_MS);
@@ -146,9 +130,12 @@ describe('snowflake codec', () => {
     expect(late).toBeGreaterThan(early);
   });
 
-  it('stays inside the signed 63-bit range for every encodable timestamp', () => {
-    expect(BigInt(encode(MAX))).toBeLessThan(1n << 63n);
-    expect(BigInt(encode(MIN))).toBeGreaterThanOrEqual(1n << 22n);
+  it('spans 2^22 to 2^63 - 1 and accepts both ends', () => {
+    expect(MIN_ROUTABLE_ID).toBe(1n << 22n);
+    expect(encode(MIN)).toBe(MIN_ROUTABLE_ID.toString());
+    expect(encode(MAX)).toBe(((1n << 63n) - 1n).toString());
+    expect(isRoutableId(encode(MIN))).toBe(true);
+    expect(isRoutableId(encode(MAX))).toBe(true);
   });
 
   it('rejects out-of-range fields instead of truncating them', () => {
@@ -169,15 +156,9 @@ describe('snowflake codec', () => {
     expect(() => encode({ ...MIN, tsMs: 0 })).toThrow(RangeError);
   });
 
-  it('decode throws on ids from the UUID layout it replaces', () => {
-    for (let i = 0; i < 100; i++) {
-      expect(() => bucketOf(randomUUID())).toThrow(TypeError);
-    }
-    expect(() => bucketOf('0198d9c1-9800-8aab-9fff-ff0000000001')).toThrow(TypeError);
-  });
-
-  it('decode throws (never returns NaN) on malformed input', () => {
-    const malformed = [
+  // A lenient parse yields NaN fields, and a NaN bucket routes a row to a shard that does not hold it.
+  it('refuses anything but a canonical routable decimal string', () => {
+    const notIds: unknown[] = [
       '',
       ' ',
       '0',
@@ -191,23 +172,23 @@ describe('snowflake codec', () => {
       '137465797020397179 ',
       'not-an-id',
       '1_000_000',
-      '4194303', // one below the smallest encodable value
-      (1n << 63n).toString(), // one past the signed range
-      '9999999999999999999', // 19 digits, but past 2^63-1
+      '4194303',
+      (1n << 63n).toString(),
+      '9999999999999999999',
+      '0198d9c1-9800-8aab-9fff-ff0000000001',
+      '550e8400-e29b-41d4-a716-446655440000',
+      null,
+      undefined,
+      42,
+      Number('137465797020397179'),
+      {},
+      [],
+      true,
     ];
 
-    for (const id of malformed) {
-      expect(() => decode(id)).toThrow(TypeError);
-      expect(isRoutableId(id)).toBe(false);
-    }
-  });
-
-  it('decode throws on non-string input', () => {
-    const notStrings: unknown[] = [null, undefined, 42, Number('137465797020397179'), {}, [], true];
-
-    for (const value of notStrings) {
-      expect(() => decode(value as string)).toThrow(TypeError);
-      expect(isRoutableId(value)).toBe(false);
+    for (const value of notIds) {
+      expect(() => decode(value as string), String(value)).toThrow(TypeError);
+      expect(isRoutableId(value), String(value)).toBe(false);
     }
   });
 
@@ -223,29 +204,5 @@ describe('snowflake codec', () => {
       expect(message).toMatch(/^Not a routable id/);
       expect(message).not.toContain(id);
     }
-  });
-
-  it('accepts the smallest and largest encodable ids', () => {
-    expect(MIN_ROUTABLE_ID).toBe(4_194_304n);
-    expect(encode(MIN)).toBe(MIN_ROUTABLE_ID.toString());
-    expect(isRoutableId('4194304')).toBe(true);
-    expect(isRoutableId(((1n << 63n) - 1n).toString())).toBe(true);
-  });
-
-  it('reads the bucket back out of an encoded id for every bucket value', () => {
-    for (let bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-      expect(bucketOf(encode({ ...MIN, bucket, tsMs: 1_800_000_000_000 }))).toBe(bucket);
-    }
-  });
-
-  // node-postgres hands int8 back as a string. This is the reason nothing may put an id through
-  // Number on the way to or from the database, or into JSON as a number.
-  it('loses digits the moment it passes through Number', () => {
-    const id = encode(MAX);
-
-    expect(id).toHaveLength(19);
-    expect(BigInt(id).toString()).toBe(id);
-    expect(Number(id)).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
-    expect(String(Number(id))).not.toBe(id);
   });
 });

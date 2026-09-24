@@ -23,7 +23,7 @@ describe('Register email uniqueness under concurrency (integration)', () => {
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  it('resolves N concurrent identical-email signups to exactly one 201, the rest 409, and one DB row', async () => {
+  it('resolves concurrent same-email signups to one 201, the rest 409, one row', async () => {
     const email = 'race@test.local';
     const attempts = 8;
 

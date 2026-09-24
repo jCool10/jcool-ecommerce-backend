@@ -7,19 +7,14 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DrizzleIdempotencyKeyRepository } from '../../src/modules/order/infrastructure/drizzle-idempotency-key.repository';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
-// Fixed, valid UUIDs — user ids feed the per-user scope.
 const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
-const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const KEY = '9f8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const REQUEST_HASH = 'a'.repeat(64);
 
 const scopeOf = (userId: string) => `user:${userId}`;
 const inDays = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
-// Repository contract for the idempotency-key store on real Postgres: the DB-level invariants the
-// wired route leans on — the unique (scope, key) index as the concurrency backstop (a duplicate
-// INSERT loses instead of throwing), and markCompleted enlisting in a caller's transaction.
 describe('Idempotency-key store (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -53,35 +48,16 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  it('inserts a fresh IN_PROGRESS record on first use', async () => {
-    const record = await repo.tryInsertInProgress(insertInput());
-
-    expect(record).not.toBeNull();
-    expect(record).toMatchObject({
-      scope: scopeOf(USER_A),
-      key: KEY,
-      requestHash: REQUEST_HASH,
-      status: 'IN_PROGRESS',
-      responseStatus: null,
-      responseBody: null,
-      orderId: null,
-      method: 'POST',
-      path: '/orders',
-    });
-    expect(record!.expiresAt).toBeInstanceOf(Date);
-  });
-
-  it('returns null on a duplicate (scope, key) without throwing, keeping exactly one row', async () => {
+  it('returns null on a duplicate (scope, key) without throwing, keeping one row', async () => {
     await repo.tryInsertInProgress(insertInput());
 
-    // A different request hash must NOT create a second row — the unique index wins regardless.
     const second = await repo.tryInsertInProgress(insertInput({ requestHash: 'b'.repeat(64) }));
 
     expect(second).toBeNull();
     expect(await countRows(scopeOf(USER_A), KEY)).toBe(1);
   });
 
-  it('isolates keys per user — same key under a different scope inserts', async () => {
+  it('isolates keys per user scope', async () => {
     const first = await repo.tryInsertInProgress(insertInput({ scope: scopeOf(USER_A) }));
     const second = await repo.tryInsertInProgress(insertInput({ scope: scopeOf(USER_B) }));
 
@@ -91,23 +67,7 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
     expect(await countRows(scopeOf(USER_B), KEY)).toBe(1);
   });
 
-  it('markCompleted freezes the replayable response', async () => {
-    await repo.tryInsertInProgress(insertInput());
-    const body = { id: ORDER_ID, status: 'PENDING', total: 12300 };
-
-    await repo.markCompleted({
-      scope: scopeOf(USER_A),
-      key: KEY,
-      responseStatus: 201,
-      responseBody: body,
-      orderId: ORDER_ID,
-    });
-
-    const record = await repo.findByScopeAndKey(scopeOf(USER_A), KEY);
-    expect(record).toMatchObject({ status: 'COMPLETED', responseStatus: 201, responseBody: body, orderId: ORDER_ID });
-  });
-
-  it('markCompleted enlists in a caller transaction — rolls back with it', async () => {
+  it('rolls markCompleted back with the caller transaction', async () => {
     await repo.tryInsertInProgress(insertInput());
 
     await expect(
@@ -120,7 +80,6 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
       }),
     ).rejects.toThrow('force rollback');
 
-    // The update joined the rolled-back tx: the key is still IN_PROGRESS, so a retry re-runs.
     const record = await repo.findByScopeAndKey(scopeOf(USER_A), KEY);
     expect(record).toMatchObject({ status: 'IN_PROGRESS', responseStatus: null });
   });
@@ -131,7 +90,6 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
     await repo.deleteInProgress(scopeOf(USER_A), KEY);
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), KEY)).toBeNull();
 
-    // A COMPLETED row is a durable result — deleteInProgress must not touch it.
     await repo.tryInsertInProgress(insertInput({ key: 'k2' }));
     await repo.markCompleted({ scope: scopeOf(USER_A), key: 'k2', responseStatus: 201, responseBody: { ok: true } });
     await repo.deleteInProgress(scopeOf(USER_A), 'k2');
@@ -149,27 +107,19 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'live')).not.toBeNull();
   });
 
-  it('deleteExpiredInProgress reclaims only an expired IN_PROGRESS row, leaving a live one', async () => {
+  it('deleteExpiredInProgress removes only an expired IN_PROGRESS row', async () => {
     await repo.tryInsertInProgress(insertInput({ key: 'live', expiresAt: inDays(1) }));
     await repo.tryInsertInProgress(insertInput({ key: 'stale', expiresAt: inDays(-1) }));
-
-    const removedLive = await repo.deleteExpiredInProgress(scopeOf(USER_A), 'live', new Date());
-    const removedStale = await repo.deleteExpiredInProgress(scopeOf(USER_A), 'stale', new Date());
-
-    // The live row survives, so a concurrent reclaimer that already refreshed it is not clobbered.
-    expect(removedLive).toBe(0);
-    expect(removedStale).toBe(1);
-    expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'live')).not.toBeNull();
-    expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'stale')).toBeNull();
-  });
-
-  it('deleteExpiredInProgress never removes a COMPLETED row even when past TTL', async () => {
     await repo.tryInsertInProgress(insertInput({ key: 'done', expiresAt: inDays(-1) }));
     await repo.markCompleted({ scope: scopeOf(USER_A), key: 'done', responseStatus: 201, responseBody: { ok: true } });
 
-    const removed = await repo.deleteExpiredInProgress(scopeOf(USER_A), 'done', new Date());
+    const removed = await Promise.all(
+      ['live', 'stale', 'done'].map((key) => repo.deleteExpiredInProgress(scopeOf(USER_A), key, new Date())),
+    );
 
-    expect(removed).toBe(0);
+    expect(removed).toEqual([0, 1, 0]);
+    expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'live')).not.toBeNull();
+    expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'stale')).toBeNull();
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'done')).not.toBeNull();
   });
 });

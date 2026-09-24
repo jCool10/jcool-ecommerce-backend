@@ -15,39 +15,58 @@ const BASE = {
   INTERNAL_API_TOKEN: 't'.repeat(32),
 };
 
+/** The validation message, or null when the environment is accepted. */
+function refusal(env: Record<string, unknown>): string | null {
+  try {
+    validate(env);
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
 describe('validate', () => {
-  it('accepts the minimal set', () => {
-    expect(() => validate(BASE)).not.toThrow();
+  it('accepts the minimal set and names each required variable that is missing', () => {
+    const required = [
+      'CSRF_SECRET',
+      'INTERNAL_API_TOKEN',
+      'ID_SERVICE_URL',
+      'JWT_ISSUER',
+      'JWT_AUDIENCE',
+      'IDENTITY_BUCKET_KEY',
+    ];
+
+    expect(refusal(BASE)).toBeNull();
+    expect(required.filter((name) => refusal({ ...BASE, [name]: undefined })?.includes(name))).toEqual(required);
   });
 
-  it.each(['CSRF_SECRET', 'INTERNAL_API_TOKEN', 'ID_SERVICE_URL', 'JWT_ISSUER', 'JWT_AUDIENCE', 'IDENTITY_BUCKET_KEY'])(
-    'requires %s',
-    (name) => {
-      expect(() => validate({ ...BASE, [name]: undefined })).toThrow(name);
-    },
-  );
+  // configuration.ts compares against the literal 'true', so '0' or '1' would be silently misread.
+  it("accepts only 'true' or 'false' for the boolean switches", () => {
+    const flags = ['AUTH_REQUIRE_VERIFIED_EMAIL', 'IDENTITY_PIN_BOOTSTRAP', 'SESSION_EPOCH_RECONCILE_ENABLED'];
 
-  it.each(['AUTH_REQUIRE_VERIFIED_EMAIL', 'IDENTITY_PIN_BOOTSTRAP', 'SESSION_EPOCH_RECONCILE_ENABLED'])(
-    'accepts only true or false for %s',
-    (name) => {
-      expect(() => validate({ ...BASE, [name]: '0' })).toThrow(name);
-      expect(() => validate({ ...BASE, [name]: 'false' })).not.toThrow();
-    },
-  );
-
-  it.each(['gateway:4000', 'ftp://gateway:4000'])('rejects %s as ID_SERVICE_URL', (url) => {
-    expect(() => validate({ ...BASE, ID_SERVICE_URL: url })).toThrow('ID_SERVICE_URL');
+    expect(flags.filter((name) => refusal({ ...BASE, [name]: '0' })?.includes(name))).toEqual(flags);
+    expect(flags.map((name) => refusal({ ...BASE, [name]: 'false' }))).toEqual([null, null, null]);
   });
 
-  it('accepts an internal host without a TLD as ID_SERVICE_URL', () => {
-    expect(() => validate({ ...BASE, ID_SERVICE_URL: 'http://127.0.0.1:4000' })).not.toThrow();
-    expect(() => validate({ ...BASE, ID_SERVICE_URL: 'http://gateway.railway.internal:4000' })).not.toThrow();
+  it('requires an http(s) ID_SERVICE_URL but no public TLD', () => {
+    const urls = [
+      'gateway:4000',
+      'ftp://gateway:4000',
+      'http://127.0.0.1:4000',
+      'http://gateway.railway.internal:4000',
+    ];
+
+    const answers = urls.map(
+      (url) => refusal({ ...BASE, ID_SERVICE_URL: url })?.includes('ID_SERVICE_URL') ?? 'accepted',
+    );
+
+    expect(answers).toEqual([true, true, 'accepted', 'accepted']);
   });
 
   it('requires TRUST_PROXY and APP_PUBLIC_URL in production', () => {
-    expect(() => validate({ ...BASE, NODE_ENV: 'production' })).toThrow('TRUST_PROXY, APP_PUBLIC_URL');
-    expect(() =>
-      validate({ ...BASE, NODE_ENV: 'production', TRUST_PROXY: 'fd12::/16', APP_PUBLIC_URL: 'https://shop.test' }),
-    ).not.toThrow();
+    expect(refusal({ ...BASE, NODE_ENV: 'production' })).toContain('TRUST_PROXY, APP_PUBLIC_URL');
+    expect(
+      refusal({ ...BASE, NODE_ENV: 'production', TRUST_PROXY: 'fd12::/16', APP_PUBLIC_URL: 'https://shop.test' }),
+    ).toBeNull();
   });
 });

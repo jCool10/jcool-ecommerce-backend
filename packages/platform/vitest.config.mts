@@ -13,10 +13,10 @@ export default defineConfig({
       provider: 'v8',
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.spec.ts', 'src/**/*.module.ts'],
-      // Measured minus two, unit tier only: controllers, health indicators and Redis wiring are
-      // exercised by the api's e2e suite.
-      thresholds: { statements: 73, branches: 61, functions: 72, lines: 75 },
+      exclude: ['src/**/*.spec.ts', 'src/**/*.module.ts', 'src/testing/**'],
+      // Measured minus two on the unit tier alone; controllers, config factories and Redis wiring
+      // are left to the apps' e2e suites.
+      thresholds: { statements: 81, branches: 67, functions: 79, lines: 83 },
     },
   },
   plugins: [

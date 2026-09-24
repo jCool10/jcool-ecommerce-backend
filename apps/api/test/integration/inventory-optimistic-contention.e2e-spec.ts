@@ -15,8 +15,8 @@ import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from
 
 // The two optimistic branches a single-thread test can't reach: they only fire when a CAS actually
 // loses a version race, which `forceCasMiss` below makes deterministic. Stock is seeded well above
-// demand so a miss can never be mistaken for out-of-stock; the shortfall branch (real out-of-stock
-// → no retry) is the single-thread case in inventory-optimistic-reserve.e2e-spec.ts.
+// demand so a miss can never be mistaken for out-of-stock; the shortfall branch (real out-of-stock,
+// no retry) is the single-thread case in inventory-reserve.e2e-spec.ts.
 const SKU = '33333333-3333-4333-8333-333333333333';
 const ORDER_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ORDER_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -27,7 +27,7 @@ interface Contenders {
   repo: StockRepositoryPort;
 }
 
-// A is idle-in-transaction, not "active", so a single active Lock-waiter is B — parked on A's row
+// A is idle-in-transaction, not "active", so a single active Lock-waiter is B, parked on A's row
 // lock, which means B has already read the stale version. That happens-before replaces a timing
 // guess: A only commits once B is provably committed to the stale version.
 
@@ -113,12 +113,12 @@ describe('Inventory optimistic reserve under version contention (integration, re
     closeAppAfterAll(() => app);
     resetDatabaseBeforeEach(() => pool);
 
-    it('a losing CAS with no retries fails as ReservationConflictError, not InsufficientStock', async () => {
+    it('fails a lost CAS with no retries as a conflict, not a shortfall', async () => {
       await seedStock(app, SKU, 10); // ample stock: the failure must be contention, not a shortfall
 
       const result = await forceCasMiss({ db, pool, repo }, { variantId: SKU, quantity: 1 });
 
-      // Distinct from a real shortfall — the boundary can answer 409 "retry" vs a hard sold-out.
+      // Distinct from a real shortfall, so the boundary can answer 409 "retry" rather than sold out.
       expect(result.status).toBe('rejected');
       const reason = result.status === 'rejected' ? result.reason : undefined;
       expect(reason).toBeInstanceOf(ReservationConflictError);

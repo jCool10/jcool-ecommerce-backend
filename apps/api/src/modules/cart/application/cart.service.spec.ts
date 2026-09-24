@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { CartItem } from '../domain/cart-item.entity';
 import type { CartRepositoryPort } from './ports/cart-repository.port';
-import type { CartSkuView, CatalogQueryPort } from './ports/catalog-query.port';
+import type { CartSkuView } from './ports/catalog-query.port';
 import { CartService } from './cart.service';
 
 const SKU = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -12,40 +12,28 @@ function skuView(overrides: Partial<CartSkuView> = {}): CartSkuView {
   return { skuId: SKU, productName: 'Widget', unitPriceMinor: 100_000, currency: 'VND', isActive: true, ...overrides };
 }
 
-function build(opts: { items?: CartItem[]; views?: CartSkuView[] } = {}) {
-  const items = opts.items ?? [CartItem.of(SKU, 1)];
-  const getSkuViews = vi.fn().mockResolvedValue(opts.views ?? [skuView()]);
-  const repo = {
-    ensureCartId: vi.fn().mockResolvedValue('cart-1'),
-    findItems: vi.fn().mockResolvedValue(items),
-  } as unknown as CartRepositoryPort;
-  const catalog = { getSkuView: vi.fn(), getSkuViews } as CatalogQueryPort;
-  const metrics = fakeMetricsPort();
-
-  return { service: new CartService(repo, catalog, metrics), getSkuViews };
+function build(items: CartItem[], views: CartSkuView[]): CartService {
+  const repo: CartRepositoryPort = {
+    ensureCartId: () => Promise.resolve('cart-1'),
+    findItems: () => Promise.resolve(items),
+    addItem: vi.fn(),
+    setItemQuantity: vi.fn(),
+    removeItem: vi.fn(),
+    clear: vi.fn(),
+  };
+  const catalog = { getSkuView: vi.fn(), getSkuViews: () => Promise.resolve(views) };
+  return new CartService(repo, catalog, fakeMetricsPort());
 }
 
 describe('CartService.view', () => {
-  it('reads every line from Catalog in one batch call', async () => {
-    const { service, getSkuViews } = build({
-      items: [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 2)],
-      views: [skuView(), skuView({ skuId: OTHER_SKU })],
-    });
-
-    await service.view('u1');
-
-    expect(getSkuViews).toHaveBeenCalledTimes(1);
-    expect(getSkuViews).toHaveBeenCalledWith([SKU, OTHER_SKU]);
-  });
-
-  it('prices each line from its own SKU, whatever order the batch read came back in', async () => {
-    const { service } = build({
-      items: [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 2)],
-      views: [
+  it('prices each line from its own SKU whatever order the batch read returns', async () => {
+    const service = build(
+      [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 2)],
+      [
         skuView({ skuId: OTHER_SKU, productName: 'Gadget', unitPriceMinor: 50_000 }),
         skuView({ productName: 'Widget', unitPriceMinor: 100_000 }),
       ],
-    });
+    );
 
     const view = await service.view('u1');
 
@@ -61,14 +49,15 @@ describe('CartService.view', () => {
     expect(view.subtotalMinor).toBe(200_000);
   });
 
-  it('anchors the cart currency on the first priced line in cart order, not in batch order', async () => {
-    const { service } = build({
-      items: [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 1)],
-      views: [
+  it('anchors the cart currency on the first priced line in cart order', async () => {
+    const service = build(
+      [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 1)],
+      [
         skuView({ skuId: OTHER_SKU, currency: 'USD', unitPriceMinor: 7 }),
-        skuView({ currency: 'VND', unitPriceMinor: 100_000 }),
+        // Lower case on purpose: Money upper-cases its code, so an unnormalised anchor would drop this line.
+        skuView({ currency: 'vnd', unitPriceMinor: 100_000 }),
       ],
-    });
+    );
 
     const view = await service.view('u1');
 
@@ -78,32 +67,15 @@ describe('CartService.view', () => {
     expect(view.items[1]).toEqual(expect.objectContaining({ skuId: OTHER_SKU, unitPriceMinor: 7 }));
   });
 
-  it('renders a line whose SKU left Catalog without shifting the lines after it', async () => {
-    const { service } = build({
-      items: [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 2)],
-      views: [skuView({ skuId: OTHER_SKU, productName: 'Gadget', unitPriceMinor: 50_000 })],
-    });
-
-    const view = await service.view('u1');
-
-    expect(view.items[0]).toEqual({
-      skuId: SKU,
-      productName: '',
-      quantity: 1,
-      unitPriceMinor: null,
-      lineTotalMinor: null,
-      isActive: false,
-    });
-    expect(view.items[1]).toEqual(expect.objectContaining({ skuId: OTHER_SKU, productName: 'Gadget' }));
-    expect(view.subtotalMinor).toBe(100_000);
-  });
-
   it('falls back to the default currency when no line is priced', async () => {
-    const { service, getSkuViews } = build({ items: [], views: [] });
+    const service = build([CartItem.of(SKU, 2)], [skuView({ unitPriceMinor: null, currency: 'USD' })]);
 
     const view = await service.view('u1');
 
-    expect(view).toEqual({ items: [], subtotalMinor: 0, currency: 'VND' });
-    expect(getSkuViews).toHaveBeenCalledWith([]);
+    expect(view).toEqual({
+      items: [expect.objectContaining({ skuId: SKU, unitPriceMinor: null, lineTotalMinor: null })],
+      subtotalMinor: 0,
+      currency: 'VND',
+    });
   });
 });

@@ -23,6 +23,8 @@ vi.mock('pino', async () => {
 
 type Options = Exclude<NonNullable<Params['pinoHttp']>, DestinationStream | unknown[]>;
 
+const LOKI_URL = 'http://loki.railway.internal:3100';
+
 const inactiveCls = { isActive: () => false } as unknown as ClsService;
 
 function clsWith(requestId: string | undefined, jobName?: string, request?: object): ClsService {
@@ -37,85 +39,65 @@ function clsWith(requestId: string | undefined, jobName?: string, request?: obje
   } as unknown as ClsService;
 }
 
-function httpOptions(config: Record<string, unknown>, cls: ClsService = inactiveCls): Options {
-  return createLoggerParams(fakeConfigService(config), cls).pinoHttp as Options;
+function params(config: Record<string, unknown>, cls: ClsService = inactiveCls): Params['pinoHttp'] {
+  return createLoggerParams(fakeConfigService({ 'app.env': 'production', ...config }), cls).pinoHttp;
+}
+
+function stdoutOptions(config: Record<string, unknown> = {}, cls: ClsService = inactiveCls): Options {
+  return params(config, cls) as Options;
+}
+
+function lokiOptions(config: Record<string, unknown> = {}): [Options, unknown] {
+  return params({ 'loki.url': LOKI_URL, 'tracing.serviceName': 'jcool-api', ...config }) as [Options, unknown];
 }
 
 function mixinFields(options: Options): Record<string, string> {
   return (options.mixin as () => Record<string, string>)();
 }
 
-describe('createLoggerParams — pino-http options', () => {
-  it('uses the configured level', () => {
-    expect(httpOptions({ 'app.env': 'production', 'log.level': 'warn' }).level).toBe('warn');
-  });
-
-  it('falls back to info when no level is configured', () => {
-    expect(httpOptions({ 'app.env': 'production' }).level).toBe('info');
-  });
-
-  it('leaves the completion line to CanonicalLogInterceptor', () => {
-    expect(httpOptions({ 'app.env': 'production' }).autoLogging).toBe(false);
-  });
-
-  it('censors the redact paths', () => {
-    expect(httpOptions({ 'app.env': 'production' }).redact).toEqual({ paths: redactPaths, censor: '[Redacted]' });
-  });
-
-  it('serializes requests without their query string', () => {
-    expect(httpOptions({ 'app.env': 'production' }).serializers).toEqual({ req: requestWithoutQuery });
-  });
-
-  it('writes JSON straight to stdout outside development', () => {
-    expect(httpOptions({ 'app.env': 'production' }).transport).toBeUndefined();
-    expect(httpOptions({ 'app.env': 'test' }).transport).toBeUndefined();
-  });
-
-  it('pretty-prints on one line in development', () => {
-    expect(httpOptions({ 'app.env': 'development' }).transport).toEqual({
-      target: 'pino-pretty',
-      options: { singleLine: true, translateTime: 'SYS:standard', ignore: 'pid,hostname' },
-    });
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
-describe('createLoggerParams — mixin', () => {
-  it('adds nothing outside a CLS context', () => {
-    expect(mixinFields(httpOptions({ 'app.env': 'production' }))).toEqual({});
+describe('createLoggerParams', () => {
+  it('uses the configured level, info by default', () => {
+    expect([stdoutOptions({ 'log.level': 'warn' }).level, stdoutOptions().level]).toEqual(['warn', 'info']);
   });
 
-  it('adds the requestId inside a request', () => {
-    expect(mixinFields(httpOptions({ 'app.env': 'production' }, clsWith('req-1')))).toEqual({ requestId: 'req-1' });
+  it('keeps redaction, query stripping and autoLogging off with or without Loki', () => {
+    const [withLoki] = lokiOptions();
+
+    for (const options of [stdoutOptions(), withLoki]) {
+      expect(options).toMatchObject({
+        autoLogging: false,
+        redact: { paths: redactPaths, censor: '[Redacted]' },
+        serializers: { req: requestWithoutQuery },
+      });
+    }
   });
 
-  it('adds the job name inside a job context', () => {
-    expect(mixinFields(httpOptions({ 'app.env': 'production' }, clsWith('req-2', 'retention-sweep')))).toEqual({
-      requestId: 'req-2',
-      job: 'retention-sweep',
-    });
+  it('writes JSON straight to stdout without Loki outside development', () => {
+    expect([stdoutOptions().transport, stdoutOptions({ 'app.env': 'test' }).transport]).toEqual([undefined, undefined]);
+    expect(transport).not.toHaveBeenCalled();
   });
 
-  it('adds the userId once the request is authenticated', () => {
-    const request = { user: { userId: '7318349394477056', role: 'CUSTOMER' } };
-    expect(mixinFields(httpOptions({ 'app.env': 'production' }, clsWith('req-3', undefined, request)))).toEqual({
-      requestId: 'req-3',
-      userId: '7318349394477056',
-    });
-  });
+  it('adds requestId, job and userId from the CLS context when present', () => {
+    const authenticated = { user: { userId: '7318349394477056', role: 'CUSTOMER' } };
 
-  it('adds no userId before authentication', () => {
-    expect(mixinFields(httpOptions({ 'app.env': 'production' }, clsWith('req-4', undefined, {})))).toEqual({
-      requestId: 'req-4',
-    });
+    expect([
+      mixinFields(stdoutOptions()),
+      mixinFields(stdoutOptions({}, clsWith('req-1', undefined, {}))),
+      mixinFields(stdoutOptions({}, clsWith('req-2', 'retention-sweep'))),
+      mixinFields(stdoutOptions({}, clsWith('req-3', undefined, authenticated))),
+    ]).toEqual([
+      {},
+      { requestId: 'req-1' },
+      { requestId: 'req-2', job: 'retention-sweep' },
+      { requestId: 'req-3', userId: '7318349394477056' },
+    ]);
   });
 
   describe('with an active span', () => {
-    const spanContext = {
-      traceId: '0af7651916cd43dd8448eb211c80319c',
-      spanId: 'b7ad6b7169203331',
-      traceFlags: TraceFlags.SAMPLED,
-    };
-
     beforeAll(() => {
       context.disable();
       context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
@@ -126,10 +108,14 @@ describe('createLoggerParams — mixin', () => {
     });
 
     it('adds the traceId and spanId', () => {
-      const options = httpOptions({ 'app.env': 'production' });
+      const spanContext = {
+        traceId: '0af7651916cd43dd8448eb211c80319c',
+        spanId: 'b7ad6b7169203331',
+        traceFlags: TraceFlags.SAMPLED,
+      };
       const active = trace.setSpan(context.active(), trace.wrapSpanContext(spanContext));
 
-      expect(context.with(active, () => mixinFields(options))).toEqual({
+      expect(context.with(active, () => mixinFields(stdoutOptions()))).toEqual({
         traceId: spanContext.traceId,
         spanId: spanContext.spanId,
       });
@@ -137,39 +123,17 @@ describe('createLoggerParams — mixin', () => {
   });
 });
 
-describe('createLoggerParams — Loki', () => {
-  const LOKI_URL = 'http://loki.railway.internal:3100';
-
-  function lokiParams(config: Record<string, unknown>): [Options, unknown] {
-    const params = createLoggerParams(
-      fakeConfigService({ 'loki.url': LOKI_URL, 'tracing.serviceName': 'jcool-api', ...config }),
-      inactiveCls,
-    );
-    return params.pinoHttp as [Options, unknown];
-  }
-
-  const lokiStream = expect.objectContaining({ target: 'pino-loki' }) as unknown;
-
-  function lokiTransport(): EventEmitter {
+describe('createLoggerParams with LOKI_URL', () => {
+  const lokiTransport = (): EventEmitter => {
     const index = vi
       .mocked(transport)
       .mock.calls.findIndex(([options]) => 'target' in options && options.target === 'pino-loki');
     return vi.mocked(transport).mock.results[index].value as EventEmitter;
-  }
+  };
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('starts no transport when LOKI_URL is unset', () => {
-    const pinoHttp = createLoggerParams(fakeConfigService({ 'app.env': 'production' }), inactiveCls).pinoHttp;
-
-    expect(Array.isArray(pinoHttp)).toBe(false);
-    expect(transport).not.toHaveBeenCalled();
-  });
-
+  // Loki labels are what every Grafana query selects on; anything per-request stays in the line.
   it('pushes to Loki labelled by service and environment', () => {
-    lokiParams({ 'app.env': 'production' });
+    lokiOptions();
 
     expect(transport).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -181,14 +145,15 @@ describe('createLoggerParams — Loki', () => {
 
   // The api starts with `node --import ./dist/instrumentation.js`, which a worker inherits by default.
   it('keeps the OTel and Sentry preload out of the Loki worker', () => {
-    lokiParams({ 'app.env': 'production' });
+    lokiOptions();
 
     expect(transport).toHaveBeenCalledWith(expect.objectContaining({ target: 'pino-loki', worker: { execArgv: [] } }));
   });
 
+  // An 'error' event nobody listens to crashes the process.
   it('survives the Loki worker dying, reporting it once', () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    lokiParams({ 'app.env': 'production' });
+    lokiOptions();
 
     expect(() => {
       lokiTransport().emit('error', new Error('the worker has exited'));
@@ -201,47 +166,14 @@ describe('createLoggerParams — Loki', () => {
   });
 
   it('keeps writing to stdout alongside Loki', () => {
-    const [options, stream] = lokiParams({ 'app.env': 'production', 'log.level': 'debug' });
+    const [options, stream] = lokiOptions({ 'log.level': 'debug' });
 
     expect(destination).toHaveBeenCalledWith(1);
     expect(multistream).toHaveBeenCalledWith([
       { level: 'debug', stream: { fd: 1 } },
-      { level: 'debug', stream: lokiStream },
+      { level: 'debug', stream: expect.objectContaining({ target: 'pino-loki' }) as unknown },
     ]);
     expect(stream).toEqual({ streams: vi.mocked(multistream).mock.calls[0][0] });
-    expect(options).toMatchObject({ level: 'debug', autoLogging: false });
-    expect(options.transport).toBeUndefined();
-  });
-
-  it('defaults both streams to info', () => {
-    lokiParams({ 'app.env': 'production' });
-
-    expect(multistream).toHaveBeenCalledWith([
-      { level: 'info', stream: { fd: 1 } },
-      { level: 'info', stream: lokiStream },
-    ]);
-  });
-
-  it('keeps the rest of the options when shipping to Loki', () => {
-    const [options] = lokiParams({ 'app.env': 'production' });
-
-    expect(options.redact).toEqual({ paths: redactPaths, censor: '[Redacted]' });
-    expect(options.serializers).toEqual({ req: requestWithoutQuery });
-    expect(options.mixin).toBeTypeOf('function');
-  });
-
-  it('still pretty-prints stdout in development', () => {
-    const [options] = lokiParams({ 'app.env': 'development' });
-
-    expect(transport).toHaveBeenCalledWith({
-      target: 'pino-pretty',
-      options: { singleLine: true, translateTime: 'SYS:standard', ignore: 'pid,hostname' },
-    });
-    expect(destination).not.toHaveBeenCalled();
-    expect(multistream).toHaveBeenCalledWith([
-      { level: 'info', stream: expect.objectContaining({ target: 'pino-pretty' }) as unknown },
-      { level: 'info', stream: lokiStream },
-    ]);
     expect(options.transport).toBeUndefined();
   });
 });

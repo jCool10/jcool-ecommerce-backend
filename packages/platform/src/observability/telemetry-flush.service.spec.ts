@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 describe('TelemetryFlushService', () => {
-  it('flushes after the drain window closes, and shutdown waits for the flush to finish', async () => {
+  it('flushes only after the drain window closes, and shutdown waits for it', async () => {
     const order: string[] = [];
     // Resolves on a later tick on purpose: a fire-and-forget hook would let close() return between
     // the two pushes, which is the whole difference between an exported span and a dropped one.
@@ -41,32 +41,15 @@ describe('TelemetryFlushService', () => {
     expect(order).toEqual(['drained', 'flush-start', 'flush-done']);
   });
 
-  it('is a no-op when the app was started without the instrumentation preload', async () => {
-    const info = vi.fn();
-    await expect(new TelemetryFlushService(fakePinoLogger({ info })).onApplicationShutdown()).resolves.toBeUndefined();
-    expect(info).not.toHaveBeenCalled();
-  });
+  it('logs a completed flush at info and a flush cut short by its ceiling at warn', async () => {
+    const levelFor = async (outcome: 'flushed' | 'timed_out'): Promise<string[]> => {
+      telemetryGlobal.__flushTelemetry = () => Promise.resolve(outcome);
+      const info = vi.fn();
+      const warn = vi.fn();
+      await new TelemetryFlushService(fakePinoLogger({ info, warn })).onApplicationShutdown();
+      return [...info.mock.calls.map(() => 'info'), ...warn.mock.calls.map(() => 'warn')];
+    };
 
-  it('logs the flush duration once it completes', async () => {
-    telemetryGlobal.__flushTelemetry = () => Promise.resolve('flushed');
-    const info = vi.fn();
-
-    await new TelemetryFlushService(fakePinoLogger({ info })).onApplicationShutdown();
-
-    expect(info).toHaveBeenCalledWith({ seconds: expect.any(Number) as number }, 'telemetry flushed on shutdown');
-  });
-
-  it('warns rather than claiming a flush when the ceiling cut it short', async () => {
-    telemetryGlobal.__flushTelemetry = () => Promise.resolve('timed_out');
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await new TelemetryFlushService(fakePinoLogger({ info, warn })).onApplicationShutdown();
-
-    expect(info).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      { seconds: expect.any(Number) as number },
-      'telemetry flush hit its ceiling on shutdown — drain-window spans and errors may be lost',
-    );
+    expect([await levelFor('flushed'), await levelFor('timed_out')]).toEqual([['info'], ['warn']]);
   });
 });

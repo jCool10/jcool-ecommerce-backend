@@ -2,19 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { callerLabel } from './caller-label';
 
 describe('callerLabel', () => {
-  it.each(['api', 'user-service', 'a', `a${'b'.repeat(31)}`])('keeps a well-formed service name: %s', (caller) => {
-    expect(callerLabel(caller)).toBe(caller);
+  it('keeps a well-formed service name', () => {
+    const names = ['api', 'user-service', 'a', `a${'b'.repeat(31)}`];
+
+    expect(names.map(callerLabel)).toEqual(names);
   });
 
-  it.each([
-    ['absent', undefined],
-    ['empty', ''],
-    ['uppercase', 'API'],
-    ['leading digit', '1api'],
-    ['too long', `a${'b'.repeat(32)}`],
-    ['free text', 'api; drop table'],
-    ['repeated header', ['api', 'api']],
-  ])('buckets anything else as unknown: %s', (_, caller) => {
-    expect(callerLabel(caller)).toBe('unknown');
+  it('buckets anything else as unknown', () => {
+    const headers = [undefined, '', 'API', '1api', `a${'b'.repeat(32)}`, 'api; drop table', ['api', 'api']];
+
+    expect(headers.map(callerLabel)).toEqual(headers.map(() => 'unknown'));
   });
 });

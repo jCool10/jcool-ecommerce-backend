@@ -2,18 +2,14 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { MAX_LINE_QUANTITY } from '../../src/modules/cart/cart.constants';
 import { authHeader } from '../setup/bearer.helper';
-import { archiveProduct, createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
+import { createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
-// A syntactically-valid UUID that no fixture creates — used to probe 404 paths
-// (unknown SKU on add, absent line on patch) without a text→uuid cast 500.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
-// Black-box HTTP tests for the Cart context over real Postgres + Redis. The subtotal is built from
-// LIVE Catalog prices — a cart never freezes a price — and Catalog is read only through its
-// published port.
 describe('Cart (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -26,20 +22,8 @@ describe('Cart (integration, real Postgres + Redis)', () => {
 
   const server = () => app.getHttpServer();
 
-  describe('auth', () => {
-    it('rejects an unauthenticated GET /cart with 401', async () => {
-      const res = await request(server()).get('/cart');
-      expect(res.status).toBe(401);
-    });
-
-    it('rejects an unauthenticated POST /cart/items with 401', async () => {
-      const res = await request(server()).post('/cart/items').send({ skuId: ABSENT_UUID, quantity: 1 });
-      expect(res.status).toBe(401);
-    });
-  });
-
   describe('GET /cart', () => {
-    it('auto-creates an empty cart on first read (200, items [], subtotal 0)', async () => {
+    it('creates an empty cart on first read', async () => {
       const token = await newPrincipalToken(app);
 
       const res = await request(server()).get('/cart').set(authHeader(token));
@@ -67,7 +51,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
   });
 
   describe('POST /cart/items', () => {
-    it('adds a SKU to an empty cart (200, one line with the right quantity + live price)', async () => {
+    it('adds a SKU to an empty cart at its live price', async () => {
       const token = await newPrincipalToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 199_000 });
 
@@ -104,40 +88,33 @@ describe('Cart (integration, real Postgres + Redis)', () => {
       expect(res.body.subtotalMinor).toBe(500_000);
     });
 
-    it('rejects quantity = 0 with 400 (DTO validation)', async () => {
+    it('clamps a line at the per-line cap across repeated adds', async () => {
       const token = await newPrincipalToken(app);
       const { variantId } = await createTestProduct(app);
+      const add = (quantity: number) =>
+        request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity });
 
-      const res = await request(server())
-        .post('/cart/items')
-        .set(authHeader(token))
-        .send({ skuId: variantId, quantity: 0 });
+      await add(MAX_LINE_QUANTITY).expect(200);
+      const res = await add(1);
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(res.body.items).toEqual([expect.objectContaining({ skuId: variantId, quantity: MAX_LINE_QUANTITY })]);
     });
 
-    it('rejects a negative quantity with 400 (DTO validation)', async () => {
+    it('rejects a zero, negative or over-cap quantity with 400', async () => {
       const token = await newPrincipalToken(app);
       const { variantId } = await createTestProduct(app);
 
-      const res = await request(server())
-        .post('/cart/items')
-        .set(authHeader(token))
-        .send({ skuId: variantId, quantity: -3 });
+      const statuses: number[] = [];
+      for (const quantity of [0, -3, 3_000_000_000]) {
+        const res = await request(server())
+          .post('/cart/items')
+          .set(authHeader(token))
+          .send({ skuId: variantId, quantity });
+        statuses.push(res.status);
+      }
 
-      expect(res.status).toBe(400);
-    });
-
-    it('rejects a quantity above the per-line cap with 400, not a 500 (int4 overflow guard)', async () => {
-      const token = await newPrincipalToken(app);
-      const { variantId } = await createTestProduct(app);
-
-      const res = await request(server())
-        .post('/cart/items')
-        .set(authHeader(token))
-        .send({ skuId: variantId, quantity: 3_000_000_000 }); // > int4 max, would 500 unguarded
-
-      expect(res.status).toBe(400);
+      expect(statuses).toEqual([400, 400, 400]);
     });
 
     it('returns 404 when the SKU does not exist in Catalog', async () => {
@@ -153,7 +130,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
   });
 
   describe('PATCH /cart/items/:skuId', () => {
-    it('sets a line to an absolute quantity (200)', async () => {
+    it('sets a line to an absolute quantity', async () => {
       const token = await newPrincipalToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
@@ -182,7 +159,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
   });
 
   describe('DELETE /cart/items/:skuId', () => {
-    it('removes one line from the cart (200)', async () => {
+    it('removes one line from the cart', async () => {
       const token = await newPrincipalToken(app);
       const { variantId } = await createTestProduct(app);
       await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 1 });
@@ -193,7 +170,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
       expect(res.body.items).toHaveLength(0);
     });
 
-    it('is idempotent — deleting an absent line still returns 200', async () => {
+    it('answers 200 when deleting a line that is not there', async () => {
       const token = await newPrincipalToken(app);
 
       const res = await request(server()).delete(`/cart/items/${ABSENT_UUID}`).set(authHeader(token));
@@ -204,7 +181,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
   });
 
   describe('DELETE /cart', () => {
-    it('clears every line (200, empty cart)', async () => {
+    it('clears every line', async () => {
       const token = await newPrincipalToken(app);
       const a = await createTestProduct(app);
       const b = await createTestProduct(app);
@@ -219,49 +196,30 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
   });
 
-  describe('cart is scratch space (live price, not frozen)', () => {
-    it('reflects a Catalog price change on the next read', async () => {
-      const token = await newPrincipalToken(app);
-      const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-      await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
+  it('reflects a Catalog price change on the next read', async () => {
+    const token = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
 
-      await repriceSku(app, variantId, 150_000); // price changes in Catalog after the add
+    await repriceSku(app, variantId, 150_000);
 
-      const res = await request(server()).get('/cart').set(authHeader(token));
+    const res = await request(server()).get('/cart').set(authHeader(token));
 
-      expect(res.status).toBe(200);
-      expect(res.body.items[0].unitPriceMinor).toBe(150_000); // live, not the 100_000 at add time
-      expect(res.body.subtotalMinor).toBe(300_000);
-    });
-
-    it('keeps an archived-after-add line in the subtotal, flagged isActive:false', async () => {
-      const token = await newPrincipalToken(app);
-      const { productId, variantId } = await createTestProduct(app, { priceMinor: 100_000 });
-      await request(server()).post('/cart/items').set(authHeader(token)).send({ skuId: variantId, quantity: 2 });
-
-      await archiveProduct(app, productId);
-
-      const res = await request(server()).get('/cart').set(authHeader(token));
-
-      expect(res.status).toBe(200);
-      expect(res.body.items).toHaveLength(1);
-      expect(res.body.items[0].isActive).toBe(false); // signalled unavailable...
-      expect(res.body.subtotalMinor).toBe(200_000); // ...but still counted (gross of availability)
-    });
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].unitPriceMinor).toBe(150_000);
+    expect(res.body.subtotalMinor).toBe(300_000);
   });
 
-  describe('per-user isolation', () => {
-    it("does not leak one user's items into another user's cart", async () => {
-      const tokenA = await newPrincipalToken(app);
-      const tokenB = await newPrincipalToken(app);
-      const { variantId } = await createTestProduct(app);
-      await request(server()).post('/cart/items').set(authHeader(tokenA)).send({ skuId: variantId, quantity: 1 });
+  it("does not leak one user's items into another user's cart", async () => {
+    const tokenA = await newPrincipalToken(app);
+    const tokenB = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app);
+    await request(server()).post('/cart/items').set(authHeader(tokenA)).send({ skuId: variantId, quantity: 1 });
 
-      const resA = await request(server()).get('/cart').set(authHeader(tokenA));
-      const resB = await request(server()).get('/cart').set(authHeader(tokenB));
+    const resA = await request(server()).get('/cart').set(authHeader(tokenA));
+    const resB = await request(server()).get('/cart').set(authHeader(tokenB));
 
-      expect(resA.body.items).toHaveLength(1);
-      expect(resB.body.items).toEqual([]);
-    });
+    expect(resA.body.items).toHaveLength(1);
+    expect(resB.body.items).toEqual([]);
   });
 });

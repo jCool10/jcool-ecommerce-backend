@@ -11,8 +11,8 @@ import { createTestApp, type EnvOverrides, type ProviderOverride } from './test-
 
 /**
  * Thin wrappers over `createTestApp`, which stays the single owner of the env hygiene every e2e app
- * depends on (`test-app.factory.ts`). Nothing here changes how an app is built — these only stop 51
- * spec files from repeating the same three container lookups and the same two teardown hooks.
+ * depends on (`test-app.factory.ts`). Nothing here changes how an app is built; these only save spec
+ * files from repeating the same container lookups and teardown hooks.
  */
 
 export interface TestAppResources {
@@ -48,7 +48,7 @@ export async function createTestAppWithFakeGateway(
   const gateway = new FakeSignerGatewayAdapter(webhookSecret);
   // Secret after the spread, not before: it IS the wiring this wrapper exists to guarantee, so a
   // caller passing `PAYMENT_WEBHOOK_SECRET` in `envOverrides` would otherwise get a gateway signing
-  // with one value and an app verifying with another — every webhook failing on signature.
+  // with one value and an app verifying with another, failing every webhook on signature.
   const resources = await createTestAppWithPool({ ...envOverrides, PAYMENT_WEBHOOK_SECRET: webhookSecret }, [
     { provide: PAYMENT_GATEWAY, useValue: gateway },
     ...providerOverrides,
@@ -81,7 +81,7 @@ export async function createTestAppWithObjectStorage(
 }
 
 /**
- * Hooks are collected when the describe body runs, never later — registering one from inside
+ * Hooks are collected when the describe body runs, never later: registering one from inside
  * `beforeAll` is silently dropped by Vitest. So these take an accessor: the app does not exist yet
  * at registration time, only by the time the hook fires.
  */
@@ -95,7 +95,7 @@ export function closeAppAfterAll(getApp: () => INestApplication | undefined): vo
 
 /**
  * Truncates this worker's database before every test. Call it before any other `beforeEach` that
- * seeds — hooks fire in registration order, and seeded rows must survive the truncate.
+ * seeds: hooks fire in registration order, and seeded rows must survive the truncate.
  *
  * A file whose reset is sequenced against a cache bump or a queue obliterate keeps its own explicit
  * `beforeEach` instead: the order there is the point, and burying it in an option hides it.

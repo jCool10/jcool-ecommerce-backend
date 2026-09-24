@@ -39,7 +39,7 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
     delete process.env.METRICS_TOKEN;
   });
 
-  // Checkout with an empty cart, which the limiter counts like any other attempt — it runs on the
+  // Checkout with an empty cart, which the limiter counts like any other attempt: it runs on the
   // way in, long before the cart is read.
   function postOrder(token: string): request.Test {
     return request(app.getHttpServer()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).send();
@@ -54,7 +54,7 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
     return line ? Number(line[1]) : 0;
   }
 
-  it('caps one account at the checkout endpoint without touching another account on the same IP', async () => {
+  it('caps one account at checkout without touching another on the same IP', async () => {
     const alice = await createTestPrincipal(app);
     const bob = await createTestPrincipal(app);
     const rejectionsBefore = await readRejections('user', '/orders');
@@ -76,7 +76,7 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
   });
 
   // Every consumed cancellation ends in an outbound call to close the checkout session. The limiter
-  // runs before the handler, so a non-existent id still costs a slot — hence no real orders here.
+  // runs before the handler, so a non-existent id still costs a slot and no real order is needed.
   it('caps one account at the cancel endpoint', async () => {
     const dave = await createTestPrincipal(app);
     const cancel = (): request.Test =>

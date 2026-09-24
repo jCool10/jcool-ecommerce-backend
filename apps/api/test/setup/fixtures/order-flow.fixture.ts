@@ -28,7 +28,7 @@ export interface OpenOrder {
   sessionId: string;
   variantId: string;
   quantity: number;
-  /** The charge recorded on the payment — a settling webhook must report exactly this. */
+  /** The charge recorded on the payment, which a settling webhook must report exactly. */
   charge: SessionCharge;
 }
 
@@ -91,7 +91,7 @@ export function signOutcome(
   charge: SessionCharge,
   outcome: WebhookOutcome,
   eventId: string,
-  paymentIntent = 'pi_m2',
+  paymentIntent = 'pi_e2e',
 ): SignedWebhook {
   const event =
     outcome === 'PAID'
@@ -146,7 +146,7 @@ export async function reservationsFor(app: INestApplication, orderId: string, va
     .where(variantId === undefined ? byOrder : and(byOrder, eq(schema.reservations.variantId, variantId)));
 }
 
-/** Ages a hold past its expiry — the one thing a test cannot wait for. */
+/** Ages a hold past its expiry, the one thing a test cannot wait for. */
 export async function lapseReservation(app: INestApplication, orderId: string, minutesAgo = 30): Promise<void> {
   const db = app.get<DrizzleDB>(DRIZZLE);
   await db
@@ -190,7 +190,7 @@ export async function auditLedgerInvariants(
     const succeeded = linked.filter((p) => p.status === 'SUCCEEDED');
 
     if (succeeded.length > 1) {
-      violations.push(`order ${order.id}: ${succeeded.length} SUCCEEDED payments — double charge`);
+      violations.push(`order ${order.id}: ${succeeded.length} SUCCEEDED payments: double charge`);
     }
     for (const payment of linked) {
       if (payment.amountMinor !== order.totalAmount) {
@@ -220,12 +220,12 @@ export async function auditLedgerInvariants(
         if (wrong.length > 0)
           violations.push(`${order.status} order ${order.id} still holds stock: ${statuses(wrong)}`);
         if (succeeded.length > 0) {
-          violations.push(`${order.status} order ${order.id} carries a SUCCEEDED payment — money without an order`);
+          violations.push(`${order.status} order ${order.id} carries a SUCCEEDED payment: money without an order`);
         }
         break;
       }
       default:
-        // DRAFT, or anything a later state machine adds: unclassified, so unaudited — not benign.
+        // DRAFT, or anything a later state machine adds: unclassified, so unaudited, not benign.
         violations.push(`order ${order.id} sits in ${order.status}, which this audit does not know how to check`);
     }
   }
@@ -240,7 +240,7 @@ export async function auditLedgerInvariants(
     // constraint fails the suite instead of silently widening what can commit.
     if (row.quantityReserved > row.quantityOnHand) {
       violations.push(
-        `sku ${row.variantId}: oversold — reserved ${row.quantityReserved} > on-hand ${row.quantityOnHand}`,
+        `sku ${row.variantId}: oversold, reserved ${row.quantityReserved} > on-hand ${row.quantityOnHand}`,
       );
     }
     if (row.quantityReserved !== held) {

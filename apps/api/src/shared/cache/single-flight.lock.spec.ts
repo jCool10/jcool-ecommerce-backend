@@ -1,77 +1,34 @@
-import type { Redis } from 'ioredis';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RedisService } from '@jcool/platform/redis';
+import { describe, expect, it, vi } from 'vitest';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { redisServiceWith } from '@shared/testing/redis-service.double';
 import { SingleFlightLock } from './single-flight.lock';
 
 const DOWN = new Error("Stream isn't writeable and enableOfflineQueue options is false");
 
 function build() {
   const client = { set: vi.fn(), eval: vi.fn(), exists: vi.fn() };
-  const lock = new SingleFlightLock(
-    { getClient: () => client as unknown as Redis } as unknown as RedisService,
-    fakePinoLogger(),
-  );
-  return { lock, client };
+  return { lock: new SingleFlightLock(redisServiceWith(client), fakePinoLogger()), client };
 }
 
 describe('SingleFlightLock', () => {
-  let ctx: ReturnType<typeof build>;
+  // Waiting on a holder that cannot exist is wasted latency.
+  it('tells a lock someone holds from an outage', async () => {
+    const { lock, client } = build();
+    client.set.mockResolvedValueOnce(null).mockRejectedValueOnce(DOWN);
 
-  beforeEach(() => {
-    ctx = build();
+    expect([await lock.acquire('k:lock', 5000), await lock.acquire('k:lock', 5000)]).toEqual([
+      { status: 'held' },
+      { status: 'error' },
+    ]);
   });
 
-  describe('acquire', () => {
-    it('takes the lock with a lease and a token, atomically', async () => {
-      ctx.client.set.mockResolvedValue('OK');
+  // A waiter must not be pinned by a lock it cannot see, and the lease expires on its own.
+  it('fails open while Redis is unreachable', async () => {
+    const { lock, client } = build();
+    client.exists.mockRejectedValue(DOWN);
+    client.eval.mockRejectedValue(DOWN);
 
-      const attempt = await ctx.lock.acquire('k:lock', 5000);
-
-      expect(attempt.status).toBe('acquired');
-      expect(ctx.client.set).toHaveBeenCalledWith(
-        'k:lock',
-        attempt.status === 'acquired' ? attempt.token : '',
-        'PX',
-        5000,
-        'NX',
-      );
-    });
-
-    it('reports the lock as held when someone else has it', async () => {
-      ctx.client.set.mockResolvedValue(null);
-      await expect(ctx.lock.acquire('k:lock', 5000)).resolves.toEqual({ status: 'held' });
-    });
-
-    it('reports an outage separately from a held lock — waiting for a holder that cannot exist is wasted latency', async () => {
-      ctx.client.set.mockRejectedValue(DOWN);
-      await expect(ctx.lock.acquire('k:lock', 5000)).resolves.toEqual({ status: 'error' });
-    });
-
-    it('hands every acquire its own token', async () => {
-      ctx.client.set.mockResolvedValue('OK');
-      const first = await ctx.lock.acquire('k:lock', 5000);
-      const second = await ctx.lock.acquire('k:lock', 5000);
-      expect(first).not.toEqual(second);
-    });
-  });
-
-  describe('isHeld', () => {
-    it('reports a live lock, so a waiter knows a rebuild is still running', async () => {
-      ctx.client.exists.mockResolvedValue(1);
-      await expect(ctx.lock.isHeld('k:lock')).resolves.toBe(true);
-    });
-
-    it('answers false when Redis is unreachable — a waiter must not be pinned by a lock it cannot see', async () => {
-      ctx.client.exists.mockRejectedValue(DOWN);
-      await expect(ctx.lock.isHeld('k:lock')).resolves.toBe(false);
-    });
-  });
-
-  describe('release', () => {
-    it('swallows a failed release — the lease expires on its own', async () => {
-      ctx.client.eval.mockRejectedValue(DOWN);
-      await expect(ctx.lock.release('k:lock', 'token-1')).resolves.toBeUndefined();
-    });
+    await expect(lock.isHeld('k:lock')).resolves.toBe(false);
+    await expect(lock.release('k:lock', 'token-1')).resolves.toBeUndefined();
   });
 });

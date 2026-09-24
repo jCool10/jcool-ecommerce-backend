@@ -8,12 +8,10 @@ function failedProperties(raw: Record<string, unknown>): string[] {
 }
 
 describe('SetPriceDto', () => {
-  it('accepts a price at the int4 ceiling the column can still store', () => {
-    expect(failedProperties({ amountMinor: 2_147_483_647, currency: 'VND' })).toEqual([]);
-  });
-
-  // Without the cap this reaches Postgres as a 22003 the filter masks into a 500.
-  it('rejects an amount the int4 price column cannot hold', () => {
-    expect(failedProperties({ amountMinor: 3_000_000_000 })).toEqual(['amountMinor']);
+  it('accepts an amount up to the int4 ceiling and refuses one beyond it', () => {
+    expect([2_147_483_647, 2_147_483_648].map((amountMinor) => failedProperties({ amountMinor }))).toEqual([
+      [],
+      ['amountMinor'],
+    ]);
   });
 });

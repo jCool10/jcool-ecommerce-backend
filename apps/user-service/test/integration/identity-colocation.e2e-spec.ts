@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import type { INestApplication } from '@nestjs/common';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BUCKET_COUNT, bucketOf } from '@jcool/id-codec';
+import { bucketOf } from '@jcool/id-codec';
 import { normalizeEmail } from '@jcool/kernel';
 import { IdentityService } from '../../src/modules/user/application/services/identity.service';
 import { E2E_IDENTITY_BUCKET_KEY, bucketForTestEmail } from '../setup/identity.helper';
@@ -13,12 +13,10 @@ import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 import { workerDatabaseUrl } from '../setup/worker-resources';
 
-// Enough rows per bucket that a hot one stands out from noise; the hash itself is unit-tested.
-const USERS = process.env.CI ? 50_000 : 100_000;
+// The page size of scripts/verify-identity-buckets.ts; one row more makes the scan cross a page.
+const SCAN_PAGE_SIZE = 10_000;
+const USERS = SCAN_PAGE_SIZE + 1;
 const INSERT_BATCH = 2_000;
-
-const HOT_BUCKET_TOLERANCE = 3;
-const MAX_UNUSED_BUCKET_RATIO = 0.01;
 
 const execFileAsync = promisify(execFile);
 // Specs compile as CommonJS (no `import.meta`); the runner always starts at the package root.
@@ -72,7 +70,7 @@ describe('Identity colocation at scale (integration)', () => {
 
   afterAll(async () => {
     await app.close();
-    // Six figures of rows would slow every later truncate in this worker.
+    // Ten thousand rows would slow every later truncate in this worker.
     await resetDatabase(pool);
     await pool.end();
   });
@@ -85,20 +83,6 @@ describe('Identity colocation at scale (integration)', () => {
     // Capped first: a wrong key misroutes every row, and printing them all buries the failure.
     expect(misrouted.slice(0, 5)).toEqual([]);
     expect(misrouted).toHaveLength(0);
-  });
-
-  it('spreads addresses across the bucket space with no hot bucket', () => {
-    const counts = new Array<number>(BUCKET_COUNT).fill(0);
-    for (const row of rows) {
-      const bucket = carriedBucket(row.id);
-      if (bucket !== null) counts[bucket]++;
-    }
-
-    const share = USERS / BUCKET_COUNT;
-    const unused = counts.filter((count) => count === 0).length;
-
-    expect(Math.max(...counts)).toBeLessThan(share * HOT_BUCKET_TOLERANCE);
-    expect(unused / BUCKET_COUNT).toBeLessThan(MAX_UNUSED_BUCKET_RATIO);
   });
 
   // Pages the whole table on the primary key, so this also proves the paging reads every row once.

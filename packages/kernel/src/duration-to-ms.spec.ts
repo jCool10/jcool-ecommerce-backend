@@ -1,20 +1,27 @@
 import { durationToMs } from './duration-to-ms';
 
 describe('durationToMs', () => {
-  it.each([
-    ['15m', 900_000],
-    ['7d', 604_800_000],
-    ['3600s', 3_600_000],
-    ['500ms', 500],
-    ['1h', 3_600_000],
-    ['900', 900], // bare number = milliseconds
-    [' 15m ', 900_000], // trims surrounding whitespace
-    ['15M', 900_000], // unit is case-insensitive
-  ])('parses %s -> %d ms', (input: string, expected: number) => {
-    expect(durationToMs(input)).toBe(expected);
+  it('parses a number with an optional, case-insensitive unit', () => {
+    const expected: Record<string, number> = {
+      '15m': 900_000,
+      '7d': 604_800_000,
+      '3600s': 3_600_000,
+      '500ms': 500,
+      '1h': 3_600_000,
+      ' 15m ': 900_000,
+      '15M': 900_000,
+      // No unit means milliseconds.
+      '900': 900,
+    };
+
+    const parsed = Object.fromEntries(Object.keys(expected).map((input) => [input, durationToMs(input)]));
+
+    expect(parsed).toEqual(expected);
   });
 
-  it.each(['', 'abc', '15x', 'm', '1.5h', '-5m'])('throws on invalid duration %p', (input: string) => {
-    expect(() => durationToMs(input)).toThrow(/Invalid duration/);
+  it('throws on anything else', () => {
+    for (const input of ['', 'abc', '15x', 'm', '1.5h', '-5m']) {
+      expect(() => durationToMs(input), input).toThrow(/Invalid duration/);
+    }
   });
 });

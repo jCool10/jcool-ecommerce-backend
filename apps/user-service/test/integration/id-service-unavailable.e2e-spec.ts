@@ -2,8 +2,6 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ID_GENERATOR } from '../../src/modules/user/application/ports/id-generator.port';
-import { IdServiceHttpAdapter } from '../../src/modules/user/infrastructure/id-service.http-adapter';
 import { loginAs, sessionFrom, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
@@ -39,10 +37,6 @@ describe('Id service unavailable (integration)', () => {
         [userId],
       )
     ).rows;
-
-  it('runs on the shipped id-service adapter', () => {
-    expect(app.get(ID_GENERATOR)).toBeInstanceOf(IdServiceHttpAdapter);
-  });
 
   it('answers register with 503 and writes no user', async () => {
     const email = 'no-ids@test.local';

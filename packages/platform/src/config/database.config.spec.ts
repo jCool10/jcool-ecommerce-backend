@@ -1,20 +1,27 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { databaseConfig } from './database.config';
 
-describe('databaseConfig — query timeout', () => {
-  const saved = process.env.DB_QUERY_TIMEOUT_MS;
+const KEYS = ['DB_POOL_CONNECTION_TIMEOUT_MS', 'DB_QUERY_TIMEOUT_MS'] as const;
+
+describe('databaseConfig', () => {
+  const saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
 
   afterEach(() => {
-    if (saved === undefined) delete process.env.DB_QUERY_TIMEOUT_MS;
-    else process.env.DB_QUERY_TIMEOUT_MS = saved;
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
   });
 
-  // pg reads 0 as "no timeout", so leaving it unset keeps every existing pool exactly as it was.
-  it.each([undefined, '', '  '])('stays off when the env is %j', (raw) => {
-    if (raw === undefined) delete process.env.DB_QUERY_TIMEOUT_MS;
-    else process.env.DB_QUERY_TIMEOUT_MS = raw;
+  // A blank value read as 0 would give pg a connection timeout of "wait forever".
+  it('keeps the default connection timeout when the env is unset or blank', () => {
+    const connectionTimeoutFor = (raw: string | undefined): number => {
+      if (raw === undefined) delete process.env.DB_POOL_CONNECTION_TIMEOUT_MS;
+      else process.env.DB_POOL_CONNECTION_TIMEOUT_MS = raw;
+      return databaseConfig().database.connectionTimeoutMs;
+    };
 
-    expect(databaseConfig().database.queryTimeoutMs).toBe(0);
+    expect([undefined, '', '  '].map(connectionTimeoutFor)).toEqual([5000, 5000, 5000]);
   });
 
   it('honors an override', () => {

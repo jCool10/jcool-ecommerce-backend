@@ -1,98 +1,63 @@
-import type { Redis } from 'ioredis';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RedisService } from '@jcool/platform/redis';
+import { describe, expect, it, vi } from 'vitest';
+import { redisServiceWith } from '@shared/testing/redis-service.double';
 import { CacheService } from './cache.service';
 
 const DOWN = new Error("Stream isn't writeable and enableOfflineQueue options is false");
 
 function build() {
   const client = { get: vi.fn(), set: vi.fn(), incr: vi.fn() };
-  const cache = new CacheService(
-    { getClient: () => client as unknown as Redis } as unknown as RedisService,
-    fakePinoLogger(),
-  );
-  return { cache, client };
+  return { cache: new CacheService(redisServiceWith(client), fakePinoLogger()), client };
 }
 
 describe('CacheService', () => {
-  let ctx: ReturnType<typeof build>;
+  it('tells a miss from an outage', async () => {
+    const { cache, client } = build();
+    client.get.mockResolvedValueOnce(null).mockRejectedValueOnce(DOWN);
 
-  beforeEach(() => {
-    ctx = build();
+    expect([await cache.read('k'), await cache.read('k')]).toEqual([{ status: 'miss' }, { status: 'error' }]);
   });
 
-  describe('read', () => {
-    it('parses a stored value', async () => {
-      ctx.client.get.mockResolvedValue('{"a":1}');
-      await expect(ctx.cache.read('k')).resolves.toEqual({ status: 'hit', value: { a: 1 } });
-    });
+  it('reads an unparseable payload as a miss', async () => {
+    const { cache, client } = build();
+    client.get.mockResolvedValue('{not json');
 
-    it('reports a miss for an unset key', async () => {
-      ctx.client.get.mockResolvedValue(null);
-      await expect(ctx.cache.read('k')).resolves.toEqual({ status: 'miss' });
-    });
-
-    it('reports an error instead of throwing when Redis is down', async () => {
-      ctx.client.get.mockRejectedValue(DOWN);
-      await expect(ctx.cache.read('k')).resolves.toEqual({ status: 'error' });
-    });
-
-    it('reports an unparseable payload as a miss, not an outage', async () => {
-      ctx.client.get.mockResolvedValue('{not json');
-      await expect(ctx.cache.read('k')).resolves.toEqual({ status: 'miss' });
-    });
+    await expect(cache.read('k')).resolves.toEqual({ status: 'miss' });
   });
 
-  describe('write', () => {
-    it('writes JSON under an expiry', async () => {
-      await expect(ctx.cache.write('k', { a: 1 }, 60)).resolves.toBe(true);
-      expect(ctx.client.set).toHaveBeenCalledWith('k', '{"a":1}', 'EX', 60);
-    });
+  // The shared instance runs `noeviction`: full, it refuses writes and keeps answering reads.
+  it('reports a write that could not land as failed instead of throwing', async () => {
+    const { cache, client } = build();
+    client.set
+      .mockRejectedValueOnce(DOWN)
+      .mockRejectedValueOnce(new Error("OOM command not allowed when used memory > 'maxmemory'."));
 
-    it('reports a failed write instead of throwing — caching is never load-bearing', async () => {
-      ctx.client.set.mockRejectedValue(DOWN);
-      await expect(ctx.cache.write('k', { a: 1 }, 60)).resolves.toBe(false);
-    });
-
-    // The shared instance runs `noeviction`: full, it refuses writes and keeps answering reads.
-    it('reports a write a full Redis refuses as a failed write', async () => {
-      ctx.client.set.mockRejectedValue(new Error("OOM command not allowed when used memory > 'maxmemory'."));
-      await expect(ctx.cache.writeMs('k', { a: 1 }, 60_000)).resolves.toBe(false);
-    });
+    expect([
+      await cache.write('k', { a: 1 }, 60),
+      await cache.writeMs('k', { a: 1 }, 60_000),
+      await cache.write('k', { total: 1n }, 60),
+    ]).toEqual([false, false, false]);
   });
 
-  describe('readCounter', () => {
-    it('reads the current value', async () => {
-      ctx.client.get.mockResolvedValue('7');
-      await expect(ctx.cache.readCounter('k')).resolves.toBe(7);
-    });
+  // NaN would poison every key built from the generation.
+  it('reads an unset or corrupt counter as generation 0', async () => {
+    const { cache, client } = build();
+    client.get.mockResolvedValueOnce(null).mockResolvedValueOnce('corrupted');
 
-    it('reports 0 for an unset counter — a real generation, not an outage', async () => {
-      ctx.client.get.mockResolvedValue(null);
-      await expect(ctx.cache.readCounter('k')).resolves.toBe(0);
-    });
-
-    it('reports 0 for a non-integer value rather than poisoning keys with NaN', async () => {
-      ctx.client.get.mockResolvedValue('corrupted');
-      await expect(ctx.cache.readCounter('k')).resolves.toBe(0);
-    });
-
-    it('reports null when Redis is down, so callers can tell an outage from generation 0', async () => {
-      ctx.client.get.mockRejectedValue(DOWN);
-      await expect(ctx.cache.readCounter('k')).resolves.toBeNull();
-    });
+    expect([await cache.readCounter('k'), await cache.readCounter('k')]).toEqual([0, 0]);
   });
 
-  describe('bumpCounter', () => {
-    it('increments', async () => {
-      await ctx.cache.bumpCounter('k');
-      expect(ctx.client.incr).toHaveBeenCalledWith('k');
-    });
+  it('reads a counter as null while Redis is down', async () => {
+    const { cache, client } = build();
+    client.get.mockRejectedValue(DOWN);
 
-    it('swallows a failed increment', async () => {
-      ctx.client.incr.mockRejectedValue(DOWN);
-      await expect(ctx.cache.bumpCounter('k')).resolves.toBeUndefined();
-    });
+    await expect(cache.readCounter('k')).resolves.toBeNull();
+  });
+
+  it('swallows a failed increment', async () => {
+    const { cache, client } = build();
+    client.incr.mockRejectedValue(DOWN);
+
+    await expect(cache.bumpCounter('k')).resolves.toBeUndefined();
   });
 });

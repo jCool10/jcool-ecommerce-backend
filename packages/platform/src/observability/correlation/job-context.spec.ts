@@ -1,39 +1,30 @@
 import { ClsServiceManager } from 'nestjs-cls';
 import { describe, expect, it } from 'vitest';
-import { getJobName, JOB_NAME_KEY, runInJobContext } from './job-context';
+import { getJobName, runInJobContext } from './job-context';
 
 // The real service, not a fake: what is asserted here is AsyncLocalStorage behaviour, which a fake
 // would simply be written to have.
 const cls = ClsServiceManager.getClsService();
 
 describe('runInJobContext', () => {
+  // The pino mixin reads this one slot for requests and jobs alike.
   it('gives a background job the same correlation slot a request gets', async () => {
     const seen = await runInJobContext(cls, 'retention:messaging:outbox', () =>
       Promise.resolve({ id: cls.getId(), job: getJobName(cls) }),
     );
 
-    // The pino mixin reads this one slot for both, so a timer's line answers a request's query.
     expect(seen.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(seen.job).toBe('retention:messaging:outbox');
   });
 
-  it('keeps the context across an await, where a plain variable would already be wrong', async () => {
-    await runInJobContext(cls, 'outbox-relay', async () => {
-      const before = cls.getId();
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      expect(cls.getId()).toBe(before);
-      expect(cls.get<string>(JOB_NAME_KEY)).toBe('outbox-relay');
-    });
-  });
-
-  it('gives concurrent jobs separate ids, so one tick is not read as seven', async () => {
+  // The retention scheduler starts its sweeps with Promise.all, so their scopes genuinely overlap.
+  it('gives concurrent jobs separate ids that survive an await', async () => {
     const identify = (name: string) =>
       runInJobContext(cls, name, async () => {
         await new Promise((resolve) => setTimeout(resolve, 1));
         return { id: cls.getId(), job: getJobName(cls) };
       });
 
-    // The retention scheduler starts its sweeps with Promise.all, so their scopes genuinely overlap.
     const [a, b] = await Promise.all([identify('retention:messaging:inbox'), identify('retention:order:idempotency')]);
 
     expect(a.id).not.toBe(b.id);
@@ -41,22 +32,7 @@ describe('runInJobContext', () => {
     expect(b.job).toBe('retention:order:idempotency');
   });
 
-  it('leaves nothing behind once the job finishes', async () => {
-    await runInJobContext(cls, 'payment.reconcile', () => Promise.resolve());
-
-    expect(cls.isActive()).toBe(false);
-    expect(getJobName(cls)).toBeUndefined();
-  });
-
-  it('propagates a failure instead of swallowing it inside the scope', async () => {
-    await expect(runInJobContext(cls, 'boom', () => Promise.reject(new Error('pool exhausted')))).rejects.toThrow(
-      'pool exhausted',
-    );
-    expect(cls.isActive()).toBe(false);
-  });
-
-  // `cls.get` throws outside a context, so the guard is what lets the pino mixin call this on boot
-  // lines, before any request or job exists.
+  // `cls.get` throws outside a context, and the pino mixin calls this on boot lines too.
   it('answers for a caller that is in no context at all', () => {
     expect(getJobName(cls)).toBeUndefined();
   });

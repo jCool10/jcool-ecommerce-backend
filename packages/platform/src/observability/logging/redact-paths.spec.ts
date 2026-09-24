@@ -20,13 +20,13 @@ function serialize(payload: Record<string, unknown>): string {
 describe('redactPaths', () => {
   // `*.password` matches one level only, so a nested credential slips through unless the explicit
   // path is listed.
-  it('redacts a nested req.body.user.password (2 levels deep)', () => {
+  it('redacts a password nested two levels deep in req.body', () => {
     const line = serialize({ req: { body: { user: { password: 'super-secret' } } } });
     expect(line).toContain('[Redacted]');
     expect(line).not.toContain('super-secret');
   });
 
-  it('redacts transport credentials (authorization, cookie) and flat password fields', () => {
+  it('redacts the authorization and cookie headers and flat password fields', () => {
     const line = serialize({
       req: { headers: { authorization: 'Bearer abc.def', cookie: 'sid=xyz' } },
       user: { password: 'pw' },

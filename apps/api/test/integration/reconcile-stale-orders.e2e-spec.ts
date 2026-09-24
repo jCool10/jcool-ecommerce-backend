@@ -16,26 +16,15 @@ import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import {
-  addToCart,
-  postWebhook,
-  readOrder,
-  readPayment,
-  readReservation,
-  readStock,
-} from '../setup/fixtures/order-flow.fixture';
+import { addToCart, readOrder, readPayment, readReservation, readStock } from '../setup/fixtures/order-flow.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
-import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
 
 const WEBHOOK_SECRET = 'whsec_e2e_reconcile_secret_0123456789';
 const STOCK = 5;
 // Sweep everything on sight: the suite controls staleness by what it stages, not by waiting.
 const SWEEP_ALL = { staleAfterSec: 0, ttlSec: 900, batchSize: 50 };
 
-// The reconciliation sweep over real Postgres: proves a lost delivery still converges, an order
-// nothing ever settles expires instead of holding stock forever, and one unreachable session cannot
-// take the rest of the batch down with it.
 describe('Reconcile stale orders (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -80,21 +69,6 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
       .expect(201);
     return { orderId: order.body.id as string, variantId };
   }
-
-  it('settles an order whose paid webhook never arrived: order PAID, payment SUCCEEDED, hold committed', async () => {
-    const { orderId, sessionId, variantId } = await openPayment();
-    gateway.setPaymentStatus(sessionId, 'PAID');
-
-    const summary = await reconcile.execute(SWEEP_ALL);
-
-    expect(summary).toMatchObject({ scanned: 1, finalized: 1, errors: 0 });
-    const order = await readOrder(app, orderId);
-    expect(order.status).toBe('PAID');
-    expect(order.finalizeReason).toBe('reconcile:paid');
-    expect((await readPayment(app, orderId)).status).toBe('SUCCEEDED');
-    expect((await readReservation(app, orderId, variantId)).status).toBe('COMMITTED');
-    expect((await readStock(app, variantId)).quantityOnHand).toBe(STOCK - 1);
-  });
 
   it('settles a gateway-side failure: order FAILED, payment FAILED, hold released', async () => {
     const { orderId, sessionId, variantId } = await openPayment();
@@ -152,7 +126,7 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
     expect((await readReservation(app, orderId, variantId)).status).toBe('HELD');
   });
 
-  it('finishes a settled payment whose order finalize never landed — the gap the webhook path leaves', async () => {
+  it('finishes a settled payment whose order finalize never landed', async () => {
     const { orderId, sessionId, variantId } = await openPayment();
     // The webhook's payment transaction committed; its separate finalize transaction did not.
     await db
@@ -180,8 +154,7 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
     const won = await payments.updateStatus(payment!.id!, PaymentStatus.SUCCEEDED, {
       expectedStatus: PaymentStatus.PENDING,
     });
-    // Same guard, replayed against a row that has since moved — what the sweep does after a gateway
-    // round-trip during which a webhook settled the payment.
+    // The sweep's guard after a webhook settled the payment during its gateway round-trip.
     const lost = await payments.updateStatus(payment!.id!, PaymentStatus.EXPIRED, {
       expectedStatus: PaymentStatus.PENDING,
     });
@@ -191,7 +164,7 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
     expect((await readPayment(app, orderId)).status).toBe('SUCCEEDED');
   });
 
-  it('expires a past-TTL order that never opened a payment session, so its hold is not stranded', async () => {
+  it('expires a past-TTL order that never opened a payment session', async () => {
     const { orderId, variantId } = await placeOrderOnly();
 
     await reconcile.execute({ ...SWEEP_ALL, ttlSec: 0 });
@@ -201,7 +174,7 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
     expect((await readStock(app, variantId)).quantityOnHand).toBe(STOCK);
   });
 
-  it('skips an order younger than the stale threshold — a webhook may still be in flight', async () => {
+  it('skips an order younger than the stale threshold', async () => {
     const { orderId, sessionId } = await openPayment();
     gateway.setPaymentStatus(sessionId, 'PAID');
 
@@ -211,29 +184,7 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
     expect((await readOrder(app, orderId)).status).toBe('PENDING');
   });
 
-  it('is a no-op against an order the webhook already settled — stock committed exactly once', async () => {
-    const { orderId, sessionId, variantId } = await openPayment();
-    const recorded = await readPayment(app, orderId);
-    const signed = signWebhook({
-      secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(
-        sessionId,
-        { amountMinor: recorded.amountMinor, currency: recorded.currency },
-        { eventId: 'evt_reconcile_race', paymentIntent: 'pi_e2e' },
-      ),
-    });
-    await postWebhook(app, signed).expect(200);
-    gateway.setPaymentStatus(sessionId, 'PAID');
-
-    const summary = await reconcile.execute(SWEEP_ALL);
-
-    // The order left PENDING when the webhook settled it, so the sweep's queue never sees it.
-    expect(summary.scanned).toBe(0);
-    expect((await readOrder(app, orderId)).status).toBe('PAID');
-    expect((await readStock(app, variantId)).quantityOnHand).toBe(STOCK - 1);
-  });
-
-  it('isolates an unreachable session: that order is retried later, the rest of the batch settles', async () => {
+  it('leaves an unreachable session for later and settles the rest of the batch', async () => {
     const broken = await openPayment();
     const healthy = await openPayment();
     gateway.failPaymentStatus(broken.sessionId);

@@ -16,9 +16,7 @@ import { createTestApp } from '../setup/test-app.factory';
 const MAIL_FROM = 'no-reply@jcool.test';
 const MESSAGE_ID = '0198f0d8-4444-7000-8000-000000000001';
 const ORDER_ID = '0198f0d8-5555-7000-8000-000000000001';
-// Above the shipped 10s, below the 25s ceiling: on a cold runner the first connection through a
-// freshly started container can outlast it, and abandoning that send would fail the delivery this
-// suite is about.
+// Above the shipped 10s: a cold container's first SMTP connection can outlast it.
 const MAIL_TIMEOUT_MS = '20000';
 // Past the directory's grace window, where an unknown user reads as gone rather than not yet copied.
 const LONG_AGO = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -34,11 +32,7 @@ const paidJob = (userId: string, overrides: Partial<DomainEventJob> = {}): Domai
   ...overrides,
 });
 
-/**
- * The buyer's confirmation: an effect that leaves the database, driven by an event that arrives
- * at-least-once. Deliveries are made by hand — the worker is off in e2e — so each one is a
- * deliberate step rather than something a background tick did between assertions.
- */
+// Deliveries are driven by hand; the queue worker is off in e2e.
 describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)', () => {
   let mail: StartedMailServer;
   let app: INestApplication;
@@ -59,8 +53,7 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
     processor = app.get(DomainEventProcessor);
   }, 180_000);
 
-  // Explicit rather than `closeAppAfterAll`: the app has to go before the mail server it still holds
-  // an SMTP connection to.
+  // The app closes before the mail server it holds a connection to.
   afterAll(async () => {
     await app?.close();
     await mail?.stop();
@@ -71,26 +64,16 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
     await mail.clear();
   });
 
-  it('confirms a paid order to the address the event only names by id', async () => {
+  it('confirms a paid order once, however often the message is redelivered', async () => {
     const { user } = await createTestPrincipal(app);
 
     await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
-
     const [delivered] = await mail.waitForMail(user.email);
-    expect(delivered.Subject).toBe('Your order is confirmed');
-    expect(await mail.body(delivered.ID)).toContain(ORDER_ID);
-  });
-
-  it('sends nothing a second time when the message is redelivered', async () => {
-    const { user } = await createTestPrincipal(app);
-
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
-    await mail.waitForMail(user.email);
-    // A fresh job id for the same message, which is what a BullMQ retry looks like from here.
     await expect(processor.process(paidJob(user.id))).resolves.toBe('duplicate');
 
-    // No polling needed: process() awaits the post-commit effect, so a second send would already
-    // have happened by now. The claim is what stops it — the duplicate never reaches a handler.
+    expect(delivered.Subject).toBe('Your order is confirmed');
+    expect(await mail.body(delivered.ID)).toContain(ORDER_ID);
+    // process() awaits the post-commit effect, so a second send would already be here.
     expect(await mail.messages()).toHaveLength(1);
     expect(await inboxRows()).toHaveLength(1);
   });
@@ -100,17 +83,12 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
       processor.process(paidJob(mintTestUserId('gone@test.local'), { occurredAt: LONG_AGO })),
     ).rejects.toThrow(/no longer exists/);
 
-    // The claim rolled back with the failed handler, so nothing is deduped away on a redelivery.
     expect(await inboxRows()).toHaveLength(0);
   });
 
-  // The at-most-once half of the design: the message is applied, the mail is lost, and the loss is
-  // a metric rather than a retry — because the redelivery a retry would trigger can only find its
-  // own claim and do nothing.
+  // A retry would only find its own claim, so a lost mail is counted instead of retried.
   it('keeps a message applied when the mail cannot be delivered, and does not retry it', async () => {
     const { user } = await createTestPrincipal(app);
-    // A second boot, not a second test: `SMTP_URL` is read once when the module compiles, so "the
-    // mail server is unreachable" is only expressible as an app that was built that way.
     const broken = await createTestApp({
       SMTP_URL: UNREACHABLE_SMTP_URL,
       MAIL_FROM,
@@ -119,14 +97,11 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
     try {
       await expect(broken.get(DomainEventProcessor).process(paidJob(user.id))).resolves.toBe('processed');
 
-      // `resolves.toBe('processed')` above is the whole proof: the dead-letter queue is written by
-      // the worker's 'failed' listener, and a consume that never fails never reaches it.
       expect(await inboxRows()).toHaveLength(1);
       expect(await mail.messages()).toHaveLength(0);
 
       const { text } = await request(broken.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
       expect(text).toMatch(/mail_send_failures_total\{kind="order_paid"\} [1-9]/);
-      // Applied, not failed: a failed consume here would mean the queue still owes a redelivery.
       expect(text).toContain('messaging_consume_total{event_type="order.paid",result="processed"}');
     } finally {
       await broken.close();

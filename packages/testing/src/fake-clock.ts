@@ -6,7 +6,7 @@ import { afterEach, beforeEach, vi } from 'vitest';
  *
  * Call it from the describe body, never from inside another hook: Vitest collects hooks while the
  * body is evaluated and silently drops one registered later. Restoring real timers afterwards is the
- * point of pairing them here — a file that leaks fake timers hangs the next file in the same worker.
+ * point of pairing them here: a file that leaks fake timers hangs the next file in the same worker.
  */
 export function useFakeClock(now: Date): void {
   beforeEach(() => {

@@ -38,7 +38,7 @@ const SWEEP_ALL = { graceSec: 0, batchSize: 50 };
 
 /**
  * Each case leaves the database in the state one interruption produces, then runs what a restarted
- * service does unattended and reads the WHOLE ledger back — asserting one order's row would pass on
+ * service does unattended and reads the whole ledger back, since one order's row would pass on
  * a state that leaked stock elsewhere. A real SIGKILL mid-transaction is not reproducible in a test,
  * so the interruption is injected at the boundary it would land on.
  */
@@ -124,7 +124,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     });
   }
 
-  /** The state the interruption above must leave — asserted wherever it sets a case up. */
+  /** The state the interruption above must leave, asserted wherever it sets a case up. */
   async function expectFinalizeWasLost(orderId: string): Promise<void> {
     expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.SUCCEEDED);
     expect((await readOrder(app, orderId)).status).toBe(OrderStatus.PENDING);
@@ -187,8 +187,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     await db.update(schema.outbox).set({ publishedAt: null });
     await expect(relay.runOnce(50)).resolves.toMatchObject({ published: published.length, failed: 0 });
 
-    // Re-adding under the row id is what keeps a republish from becoming a second job — the cheap
-    // half of the defence, and the only one that acts before the effect is ever attempted.
+    // Re-adding under the row id keeps a republish from becoming a second job, before any effect runs.
     expect(await queuedJobs()).toHaveLength(published.length);
     expect(await deliverAll()).toEqual(Array(published.length).fill('processed'));
     // The durable half: the same envelope delivered again is claimed by nobody and does nothing.
@@ -211,7 +210,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     const [expiry] = (await queuedJobs()).filter((job) => job.eventType === 'order.expired');
     expect(expiry).toBeDefined();
 
-    // The delivery commits, then the worker dies before the ack — so the queue hands the same job
+    // The delivery commits, then the worker dies before the ack, so the queue hands the same job
     // back. This is the one order event carrying an effect outside the emitting transaction, which
     // makes it the only one a redelivery could actually apply twice.
     await expect(processor.process(expiry)).resolves.toBe('processed');
@@ -257,7 +256,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     expect((await readOrder(app, paid.orderId)).status).toBe(OrderStatus.PAID);
     expect((await readOrder(app, failed.orderId)).status).toBe(OrderStatus.FAILED);
     expect((await readOrder(app, abandoned.orderId)).status).toBe(OrderStatus.EXPIRED);
-    // One order sold, two gave their units back — and the two that did not sell left nothing held.
+    // One order sold, and the two that did not gave their units back with nothing left held.
     expect(await readStock(app, sku.variantId)).toMatchObject({
       quantityOnHand: STOCK - QUANTITY,
       quantityReserved: 0,

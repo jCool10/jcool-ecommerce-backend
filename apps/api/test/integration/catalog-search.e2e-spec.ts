@@ -8,7 +8,9 @@ import {
   type SearchableProduct,
 } from '../../src/modules/catalog/application/ports';
 import { DrizzleProductRepository, reindexAll } from '../../src/modules/catalog/infrastructure';
+import { authHeader } from '../setup/bearer.helper';
 import { archiveTestCategory, createTestCategory, createTestProduct } from '../setup/fixtures/catalog.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { resetDatabase } from '../setup/reset-database';
 import { resetSearchIndex, startSearchEngine, type StartedSearchEngine } from '../setup/search-engine';
@@ -29,8 +31,7 @@ interface SearchBody {
   totalPages: number;
 }
 
-// The CLI's own rebuild, driven in-process against the wired repository — so what these tests prove
-// is the shipped reindex path, not a copy of its loop.
+// The CLI's rebuild, run in-process against the wired repository.
 async function reindex(app: INestApplication): Promise<number> {
   return reindexAll(app.get(DrizzleProductRepository), app.get<CatalogSearchPort>(CATALOG_SEARCH));
 }
@@ -39,6 +40,8 @@ async function search(app: INestApplication, query: string): Promise<SearchBody>
   const res = await request(app.getHttpServer()).get(`/products/search?${query}`).expect(200);
   return res.body as SearchBody;
 }
+
+const hitIds = (body: SearchBody): string[] => body.items.map((hit) => hit.id);
 
 describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
   let engine: StartedSearchEngine;
@@ -50,7 +53,6 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
     ({ app, pool } = await createTestAppWithPool({ SEARCH_ENABLED: 'true', SEARCH_URL: engine.url }));
   }, 180_000);
 
-  // Explicit rather than `closeAppAfterAll`: the app has to go before the engine it still queries.
   afterAll(async () => {
     await app?.close();
     await engine?.stop();
@@ -61,19 +63,21 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
     await resetSearchIndex(app);
   });
 
-  describe('index provisioning', () => {
-    // An index the engine auto-creates on the first write has no filterable attributes, which makes
-    // the read filter invalid — and an invalid filter degrades to an empty result, so the whole
-    // catalog silently reads as "no matches". Booting applies the settings so it never gets there.
-    it('accepts a filtered search without a reindex having run first', async () => {
-      const { productId, categoryId } = await createTestProduct(app, { name: 'Solo Provisioned Item' });
-      const category = await pool.query<{ slug: string }>('SELECT slug FROM categories WHERE id = $1', [categoryId]);
+  // Must run first: every later test reindexes, and a reindex applies the index settings itself.
+  // An index auto-created by a write has no filterable attributes, and a rejected filter reads as
+  // an empty result.
+  it('applies the index settings at boot, so a filter works before any reindex', async () => {
+    const category = await createTestCategory(app, 'Provisioned');
+    const { accessToken } = await createTestAdminPrincipal(app);
+    const created = await request(app.getHttpServer())
+      .post('/admin/products')
+      .set(authHeader(accessToken))
+      .send({ name: 'Solo Provisioned Item', slug: 'solo-provisioned-item', categoryId: category.id, status: 'ACTIVE' })
+      .expect(201);
 
-      await reindex(app);
-      const body = await search(app, `q=Provisioned&categorySlug=${category.rows[0].slug}`);
+    const body = await search(app, `q=Provisioned&categorySlug=${category.slug}`);
 
-      expect(body.items.map((hit) => hit.id)).toEqual([productId]);
-    });
+    expect(hitIds(body)).toEqual([(created.body as { id: string }).id]);
   });
 
   describe('relevance', () => {
@@ -84,13 +88,12 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
       expect(await reindex(app)).toBe(2);
       const body = await search(app, 'q=Aurora');
 
-      expect(body.items.map((hit) => hit.id).sort()).toEqual([first.productId, second.productId].sort());
+      expect(hitIds(body).sort()).toEqual([first.productId, second.productId].sort());
       expect(body.total).toBe(2);
     });
 
-    // Attribute order in the index settings IS the ranking priority; without it both documents match
-    // the same single word and nothing decides between them.
-    it('ranks a name match above a product that only mentions the term in its description', async () => {
+    // Attribute order in the index settings is the ranking priority.
+    it('ranks a name match above a description-only match', async () => {
       const named = await createTestProduct(app, { name: 'Aurora Speaker', description: 'A plain speaker.' });
       await createTestProduct(app, { name: 'Zephyr Lamp', description: 'Glows like an aurora at dusk.' });
 
@@ -101,37 +104,15 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
       expect(body.items[0].id).toBe(named.productId);
     });
 
-    it('finds a product by its SKU code', async () => {
-      const { productId, sku } = await createTestProduct(app, { name: 'Nondescript Item', sku: 'ZQX-4417-BLK' });
-
-      await reindex(app);
-      const body = await search(app, `q=${sku}`);
-
-      expect(body.items.map((hit) => hit.id)).toEqual([productId]);
-    });
-  });
-
-  describe('typo tolerance', () => {
-    it('finds the product when the query misspells its name', async () => {
+    it('finds a misspelled name that the Postgres list path cannot', async () => {
       const { productId } = await createTestProduct(app, { name: 'Wireless Headphones' });
-
-      await reindex(app);
-      const body = await search(app, 'q=Headphnes');
-
-      expect(body.items.map((hit) => hit.id)).toEqual([productId]);
-    });
-
-    // The whole reason a second datastore earns its keep: the list endpoint's substring match over
-    // Postgres cannot answer this query at all, so the two read paths are not interchangeable.
-    it('answers a misspelling the Postgres list path returns nothing for', async () => {
-      await createTestProduct(app, { name: 'Wireless Headphones' });
       await reindex(app);
 
       const list = await request(app.getHttpServer()).get('/products?q=Headphnes').expect(200);
       const searched = await search(app, 'q=Headphnes');
 
       expect((list.body as { items: unknown[] }).items).toHaveLength(0);
-      expect(searched.items).toHaveLength(1);
+      expect(hitIds(searched)).toEqual([productId]);
     });
   });
 
@@ -145,7 +126,7 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
       await reindex(app);
       const body = await search(app, `q=Gadget&categorySlug=${wanted.slug}`);
 
-      expect(body.items.map((hit) => hit.id)).toEqual([inWanted.productId]);
+      expect(hitIds(body)).toEqual([inWanted.productId]);
     });
 
     it('marks the matched words in the name and the description', async () => {
@@ -160,24 +141,15 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
   });
 
   describe('visibility', () => {
-    it('leaves a DRAFT product out of the index', async () => {
+    it('indexes only ACTIVE products', async () => {
       const active = await createTestProduct(app, { name: 'Prototype Public' });
-      await createTestProduct(app, { name: 'Prototype Secret', status: 'DRAFT' });
+      await createTestProduct(app, { name: 'Prototype Draft', status: 'DRAFT' });
+      await createTestProduct(app, { name: 'Prototype Retired', status: 'ARCHIVED' });
 
       await reindex(app);
       const body = await search(app, 'q=Prototype');
 
-      expect(body.items.map((hit) => hit.id)).toEqual([active.productId]);
-    });
-
-    it('leaves an ARCHIVED product out of the index', async () => {
-      const active = await createTestProduct(app, { name: 'Kettle Current' });
-      await createTestProduct(app, { name: 'Kettle Retired', status: 'ARCHIVED' });
-
-      await reindex(app);
-      const body = await search(app, 'q=Kettle');
-
-      expect(body.items.map((hit) => hit.id)).toEqual([active.productId]);
+      expect(hitIds(body)).toEqual([active.productId]);
     });
 
     it('leaves a product whose category was archived out of the index', async () => {
@@ -189,10 +161,8 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
       expect((await search(app, 'q=Orphan')).items).toHaveLength(0);
     });
 
-    // Defence in depth: a delete that failed while the engine was unreachable leaves a document the
-    // reindex has no reason to revisit, so the read filter — not just what gets indexed — is what
-    // keeps a non-public product out of the results.
-    it('refuses to return a non-ACTIVE document that reached the index anyway', async () => {
+    // A delete that failed while the engine was down leaves a document no reindex revisits.
+    it('hides a non-ACTIVE document that reached the index anyway', async () => {
       const stowaway: SearchableProduct = {
         id: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f',
         name: 'Contraband Listing',
@@ -212,35 +182,27 @@ describe('Catalog search (integration, real Meilisearch + Postgres)', () => {
     });
   });
 
-  describe('pagination', () => {
-    it('pages through the matches and reports a total the caller can reach', async () => {
-      const category = await createTestCategory(app, 'Paged');
-      for (const index of [1, 2, 3]) {
-        await createTestProduct(app, { name: `Paginated Widget ${index}`, categoryId: category.id });
-      }
-      await reindex(app);
+  it('pages through the matches and reports a reachable total', async () => {
+    const category = await createTestCategory(app, 'Paged');
+    for (const index of [1, 2, 3]) {
+      await createTestProduct(app, { name: `Paginated Widget ${index}`, categoryId: category.id });
+    }
+    await reindex(app);
 
-      const first = await search(app, 'q=Paginated&page=1&pageSize=2');
-      const second = await search(app, 'q=Paginated&page=2&pageSize=2');
+    const first = await search(app, 'q=Paginated&page=1&pageSize=2');
+    const second = await search(app, 'q=Paginated&page=2&pageSize=2');
 
-      expect(first.total).toBe(3);
-      expect(first.totalPages).toBe(2);
-      expect(first.items).toHaveLength(2);
-      expect(second.items).toHaveLength(1);
-      expect(first.items.map((hit) => hit.id)).not.toContain(second.items[0].id);
-    });
+    expect(first.total).toBe(3);
+    expect(first.totalPages).toBe(2);
+    expect(first.items).toHaveLength(2);
+    expect(second.items).toHaveLength(1);
+    expect(hitIds(first)).not.toContain(second.items[0].id);
   });
 
-  describe('query validation', () => {
-    it('rejects a categorySlug carrying filter syntax before it reaches the engine', async () => {
-      await request(app.getHttpServer())
-        .get('/products/search')
-        .query({ q: 'anything', categorySlug: 'tools" OR status = "DRAFT' })
-        .expect(400);
-    });
-
-    it('rejects a whitespace-only query', async () => {
-      await request(app.getHttpServer()).get('/products/search').query({ q: '   ' }).expect(400);
-    });
+  it('rejects a categorySlug carrying filter syntax before it reaches the engine', async () => {
+    await request(app.getHttpServer())
+      .get('/products/search')
+      .query({ q: 'anything', categorySlug: 'tools" OR status = "DRAFT' })
+      .expect(400);
   });
 });

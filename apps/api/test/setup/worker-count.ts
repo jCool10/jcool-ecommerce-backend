@@ -3,7 +3,7 @@
  * answer and must not drift: `test/vitest-e2e.config.mts` caps the worker pool with it, and
  * `test/setup/worker-resources.ts` pre-creates exactly that many databases and Redis indices.
  *
- * Kept free of side effects and of any `vitest` import on purpose — the config is loaded before a
+ * Kept free of side effects and of any `vitest` import on purpose: the config is loaded before a
  * worker exists, so it cannot import `worker-resources.ts` (that module calls `inject()` and asserts
  * the budget at import time).
  */
@@ -12,7 +12,7 @@ const DEFAULT_WORKERS = 4;
 
 /**
  * Rejects a malformed `E2E_WORKERS` instead of coercing it. `Number('abc')` is `NaN`, and Vitest
- * treats `maxWorkers: NaN` as "unset" and silently spawns one worker per CPU — every worker above
+ * treats `maxWorkers: NaN` as "unset" and silently spawns one worker per CPU. Every worker above
  * the pre-created range then dies on a database that was never cloned, pointing at a config drift
  * that does not exist.
  */

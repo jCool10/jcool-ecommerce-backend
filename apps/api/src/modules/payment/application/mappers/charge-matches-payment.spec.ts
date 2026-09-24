@@ -17,19 +17,21 @@ function payment(): Payment {
 }
 
 describe('chargeMatchesPayment', () => {
-  // Providers report ISO-4217 lowercase and the payment row stores it upper, so the everyday match
-  // is the case-folded one; without folding, every real settlement would be refused.
+  // Providers report ISO-4217 lowercase and the payment row stores it upper; without folding, every
+  // real settlement would be refused.
   it('matches the provider lowercase form of the recorded currency', () => {
     expect(chargeMatchesPayment(payment(), { amountMinor: 150_000, currency: 'vnd' })).toBe(true);
   });
 
-  it.each([
-    ['a different amount', { amountMinor: 149_000, currency: 'vnd' }],
-    ['a different currency', { amountMinor: 150_000, currency: 'usd' }],
-    ['a missing currency', { amountMinor: 150_000 }],
-    ['a missing amount', { currency: 'vnd' }],
-    ['nothing at all', {}],
-  ])('refuses %s', (_case, charge) => {
-    expect(chargeMatchesPayment(payment(), charge)).toBe(false);
+  it('refuses a charge whose amount or currency differs or is missing', () => {
+    const charges = [
+      { amountMinor: 149_000, currency: 'vnd' },
+      { amountMinor: 150_000, currency: 'usd' },
+      { amountMinor: 150_000 },
+      { currency: 'vnd' },
+      {},
+    ];
+
+    expect(charges.map((charge) => chargeMatchesPayment(payment(), charge))).toEqual(charges.map(() => false));
   });
 });

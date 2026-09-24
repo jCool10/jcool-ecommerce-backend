@@ -25,24 +25,17 @@ const IDLE: ReconcileSummary = {
 };
 
 function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockResolvedValue(IDLE)) {
-  const values = { ...CONFIG, ...overrides };
-  const config = fakeConfigService(values);
-  const registry = {
-    addInterval: vi.fn(),
-    deleteInterval: vi.fn(),
-    doesExist: vi.fn().mockReturnValue(true),
-  };
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const registry = { addInterval: vi.fn(), deleteInterval: vi.fn(), doesExist: vi.fn().mockReturnValue(true) };
+  const error = vi.fn();
   const make = () =>
     new ReconciliationScheduler(
       { execute } as unknown as ReconcileStaleOrdersUseCase,
-      config,
+      fakeConfigService({ ...CONFIG, ...overrides }),
       registry as unknown as SchedulerRegistry,
-      // Pass-through: correlation is asserted in job-context.spec.ts.
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
-      fakePinoLogger(logger),
+      fakePinoLogger({ error }),
     );
-  return { make, registry, logger, execute };
+  return { make, registry, error, execute };
 }
 
 describe('ReconciliationScheduler', () => {
@@ -54,136 +47,64 @@ describe('ReconciliationScheduler', () => {
     vi.useRealTimers();
   });
 
-  describe('construction', () => {
-    it.each(['reconcile.intervalMs', 'reconcile.batchSize', 'reconcile.staleAfterSec'])(
-      'refuses to build when %s is missing, rather than scheduling an undefined interval',
-      (key) => {
-        expect(() => build({ [key]: undefined }).make()).toThrow(/Invalid reconciliation config/);
-      },
-    );
+  // An undefined interval fires every event-loop turn, a busy loop against the gateway.
+  it('refuses to build on a missing or out-of-range setting, even while disabled', () => {
+    const invalid: Array<Record<string, unknown>> = [
+      { 'reconcile.intervalMs': undefined },
+      { 'reconcile.batchSize': undefined },
+      { 'reconcile.staleAfterSec': undefined },
+      { 'reconcile.intervalMs': 0 },
+      { 'reconcile.enabled': false, 'reconcile.batchSize': -1 },
+    ];
 
-    it('refuses a zero interval, which would busy-loop against the gateway', () => {
-      expect(() => build({ 'reconcile.intervalMs': 0 }).make()).toThrow(/Invalid reconciliation config/);
-    });
-
-    it('validates config even while disabled, so a typo surfaces at boot and not on first enable', () => {
-      expect(() => build({ 'reconcile.enabled': false, 'reconcile.batchSize': -1 }).make()).toThrow(
-        /Invalid reconciliation config/,
-      );
-    });
+    for (const overrides of invalid) {
+      expect(() => build(overrides).make(), JSON.stringify(overrides)).toThrow(/Invalid reconciliation config/);
+    }
   });
 
-  describe('onModuleInit', () => {
-    it('registers a timer at the configured period', () => {
-      const { make, registry } = build();
+  it('registers one timer that drives a sweep once the period elapses', async () => {
+    const { make, registry, execute } = build();
 
-      const scheduler = make();
-      scheduler.onModuleInit();
+    make().onModuleInit();
+    await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(registry.addInterval).toHaveBeenCalledWith('payment-reconcile-stale-orders', expect.anything());
-      expect(vi.getTimerCount()).toBe(1);
-      scheduler.onModuleDestroy();
-    });
-
-    it('drives a sweep once the period elapses', async () => {
-      const { make, execute } = build();
-
-      const scheduler = make();
-      scheduler.onModuleInit();
-      await vi.advanceTimersByTimeAsync(60_000);
-
-      expect(execute).toHaveBeenCalledWith({ staleAfterSec: 120, ttlSec: 900, batchSize: 50 });
-      scheduler.onModuleDestroy();
-    });
-
-    it('registers nothing at all when disabled', () => {
-      const { make, registry, logger } = build({ 'reconcile.enabled': false });
-
-      make().onModuleInit();
-
-      expect(registry.addInterval).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-      expect(logger.info).toHaveBeenCalledWith('reconciliation sweep disabled');
-    });
+    expect(registry.addInterval).toHaveBeenCalledWith('payment-reconcile-stale-orders', expect.anything());
+    expect(vi.getTimerCount()).toBe(1);
+    expect(execute).toHaveBeenCalledWith({ staleAfterSec: 120, ttlSec: 900, batchSize: 50 });
   });
 
-  describe('onModuleDestroy', () => {
-    it('clears the interval so no tick outlives the connection pool', () => {
-      const { make, registry } = build();
+  it('registers nothing at all when disabled', () => {
+    const { make, registry } = build({ 'reconcile.enabled': false });
 
-      const scheduler = make();
-      scheduler.onModuleInit();
-      scheduler.onModuleDestroy();
+    make().onModuleInit();
 
-      expect(registry.deleteInterval).toHaveBeenCalledWith('payment-reconcile-stale-orders');
-    });
-
-    it('is safe when no interval was ever registered', () => {
-      const { make, registry } = build({ 'reconcile.enabled': false });
-      registry.doesExist.mockReturnValue(false);
-
-      make().onModuleDestroy();
-
-      expect(registry.deleteInterval).not.toHaveBeenCalled();
-    });
+    expect(registry.addInterval).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  describe('tick', () => {
-    it('skips a tick while the previous sweep is still working', async () => {
-      let release: () => void = () => {};
-      const execute = vi.fn(() => new Promise<ReconcileSummary>((resolve) => (release = () => resolve(IDLE))));
-      const { make, logger } = build({}, execute);
+  it('skips a tick while the previous sweep is still working', async () => {
+    let release: () => void = () => {};
+    const execute = vi.fn(() => new Promise<ReconcileSummary>((resolve) => (release = () => resolve(IDLE))));
+    const scheduler = build({}, execute).make();
 
-      const scheduler = make();
-      const first = scheduler.tick();
-      await scheduler.tick();
+    const first = scheduler.tick();
+    await scheduler.tick();
 
-      expect(execute).toHaveBeenCalledOnce();
-      expect(logger.warn).toHaveBeenCalledWith('previous reconciliation sweep still running — tick skipped');
-      release();
-      await first;
-    });
+    expect(execute).toHaveBeenCalledOnce();
+    release();
+    await first;
+  });
 
-    it('resumes after the previous sweep finishes', async () => {
-      const { make, execute } = build();
+  // An unhandled rejection inside a timer callback takes the process down with it.
+  it('swallows a sweep failure and frees the guard for the next tick', async () => {
+    const execute = vi.fn().mockRejectedValue(new Error('orders query failed'));
+    const { make, error } = build({}, execute);
+    const scheduler = make();
 
-      const scheduler = make();
-      await scheduler.tick();
-      await scheduler.tick();
+    await expect(scheduler.tick()).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledOnce();
 
-      expect(execute).toHaveBeenCalledTimes(2);
-    });
-
-    it('swallows a sweep failure — an unhandled rejection in a timer would kill the process', async () => {
-      const execute = vi.fn().mockRejectedValue(new Error('orders query failed'));
-      const { make, logger } = build({}, execute);
-
-      const scheduler = make();
-      await expect(scheduler.tick()).resolves.toBeUndefined();
-      expect(logger.error).toHaveBeenCalledWith(
-        { err: expect.objectContaining({ message: 'orders query failed' }) as unknown },
-        'reconciliation sweep failed',
-      );
-
-      // The guard is released, so the failure costs one tick and not the whole schedule.
-      await scheduler.tick();
-      expect(execute).toHaveBeenCalledTimes(2);
-    });
-
-    it('stays quiet on an idle sweep and logs one line when it touched something', async () => {
-      const execute = vi.fn().mockResolvedValue(IDLE);
-      const { make, logger } = build({}, execute);
-      const scheduler = make();
-
-      await scheduler.tick();
-      expect(logger.info).not.toHaveBeenCalled();
-
-      execute.mockResolvedValue({ ...IDLE, scanned: 1, finalized: 1 });
-      await scheduler.tick();
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({ scanned: 1, finalized: 1 }),
-        'reconciliation sweep completed',
-      );
-    });
+    await scheduler.tick();
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 });

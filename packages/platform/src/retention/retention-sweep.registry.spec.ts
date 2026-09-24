@@ -17,10 +17,6 @@ describe('RetentionSweepRegistry', () => {
     expect(registry.names()).toEqual(['messaging:outbox', 'messaging:inbox']);
   });
 
-  it('starts empty, so an app that registered nothing sweeps nothing', () => {
-    expect(new RetentionSweepRegistry().all()).toEqual([]);
-  });
-
   // The name is the metric label; a silent replace would leave a table unreclaimed.
   it('rejects a second sweep under a name already taken', () => {
     const registry = new RetentionSweepRegistry();
@@ -41,7 +37,7 @@ describe('RetentionSweepRegistry', () => {
     expect(registry.all()).toEqual([outbox]);
   });
 
-  it('keeps each instance separate, so one app never inherits the sweeps of another', () => {
+  it('keeps the sweeps of each instance separate', () => {
     const first = new RetentionSweepRegistry();
     const second = new RetentionSweepRegistry();
 

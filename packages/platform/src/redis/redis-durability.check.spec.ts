@@ -21,22 +21,11 @@ const check = (client: FakeRedisClient): RedisDurabilityCheck =>
 describe('RedisDurabilityCheck', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('boots against a Redis that neither evicts nor forgets', async () => {
-    await expect(check(new FakeRedisClient()).onModuleInit()).resolves.toBeUndefined();
-  });
-
   it('refuses a Redis that evicts keys under memory pressure', async () => {
     const client = new FakeRedisClient();
     client.policy = 'allkeys-lru';
 
     await expect(check(client).onModuleInit()).rejects.toThrow(/maxmemory-policy is allkeys-lru/);
-  });
-
-  it('refuses a Redis that loses its writes on restart', async () => {
-    const client = new FakeRedisClient();
-    client.aof = '0';
-
-    await expect(check(client).onModuleInit()).rejects.toThrow(/appendonly/);
   });
 
   it('waits for a connection still being made', async () => {

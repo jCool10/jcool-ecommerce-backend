@@ -1,35 +1,19 @@
-import { context, trace } from '@opentelemetry/api';
-import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
-import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { withSpan } from './tracer';
+import { INVALID_SPAN_CONTEXT, context, trace } from '@opentelemetry/api';
+import { describe, expect, it } from 'vitest';
+import { useInMemoryTracer } from '../../testing/in-memory-tracer';
 import { getActiveTraceId } from './trace-context';
-
-let provider: BasicTracerProvider;
-
-beforeAll(() => {
-  context.disable();
-  trace.disable();
-  provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(new InMemorySpanExporter())] });
-  context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-  trace.setGlobalTracerProvider(provider);
-});
-
-afterAll(async () => {
-  await provider.shutdown();
-  context.disable();
-  trace.disable();
-});
+import { withSpan } from './tracer';
 
 describe('getActiveTraceId', () => {
-  it('returns the active span traceId (the log↔trace join key)', async () => {
-    await withSpan('active', (span) => {
-      expect(getActiveTraceId()).toBe(span.spanContext().traceId);
-      return Promise.resolve();
-    });
-  });
+  useInMemoryTracer();
 
-  it('returns undefined when no span is active (tracing off)', () => {
-    expect(getActiveTraceId()).toBeUndefined();
+  it('gives the active span traceId, and nothing without a valid span', async () => {
+    const invalid = trace.setSpan(context.active(), trace.wrapSpanContext(INVALID_SPAN_CONTEXT));
+    const [seen, expected] = await withSpan('active', (span) =>
+      Promise.resolve([getActiveTraceId(), span.spanContext().traceId]),
+    );
+
+    expect(seen).toBe(expected);
+    expect([getActiveTraceId(), context.with(invalid, getActiveTraceId)]).toEqual([undefined, undefined]);
   });
 });

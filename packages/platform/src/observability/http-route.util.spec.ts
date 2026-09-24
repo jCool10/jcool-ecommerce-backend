@@ -1,49 +1,31 @@
-import type { ExecutionContext } from '@nestjs/common';
-import type { Reflector } from '@nestjs/core';
+import { Controller, Get } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host';
 import { describe, expect, it } from 'vitest';
 import { resolveRouteTemplate } from './http-route.util';
 
-function reflectorFor(controller: object, controllerPath: string, handlerPath: string): Reflector {
-  return {
-    get: (_key: unknown, target: unknown): string => (target === controller ? controllerPath : handlerPath),
-  } as unknown as Reflector;
+@Controller('products')
+class ProductsController {
+  @Get(':idOrSlug')
+  findOne(this: void): void {}
+
+  @Get()
+  list(this: void): void {}
 }
 
-function contextFor(controller: object, handler: () => void): ExecutionContext {
-  return {
-    getClass: () => controller,
-    getHandler: () => handler,
-  } as unknown as ExecutionContext;
+class UnroutedController {
+  handle(this: void): void {}
 }
 
 describe('resolveRouteTemplate', () => {
-  const controller = class ProductsController {};
-  const handler = function findOne(): void {};
+  it('joins controller and handler paths, falling back to the concrete path', () => {
+    const route = (controller: new () => object, handler: () => void, path: string): string =>
+      resolveRouteTemplate(new Reflector(), new ExecutionContextHost([], controller, handler), path);
 
-  it('joins controller + handler paths into a template, keeping the param placeholder', () => {
-    const route = resolveRouteTemplate(
-      reflectorFor(controller, 'products', ':idOrSlug'),
-      contextFor(controller, handler),
-      '/products/abc-123',
-    );
-    expect(route).toBe('/products/:idOrSlug');
-  });
-
-  it('collapses an empty handler path (index route) without a trailing slash', () => {
-    const route = resolveRouteTemplate(
-      reflectorFor(controller, 'products', ''),
-      contextFor(controller, handler),
-      '/products',
-    );
-    expect(route).toBe('/products');
-  });
-
-  it('falls back to the concrete path when no template metadata exists', () => {
-    const route = resolveRouteTemplate(
-      reflectorFor(controller, '', ''),
-      contextFor(controller, handler),
-      '/some/raw/path',
-    );
-    expect(route).toBe('/some/raw/path');
+    expect([
+      route(ProductsController, ProductsController.prototype.findOne, '/products/abc-123'),
+      route(ProductsController, ProductsController.prototype.list, '/products'),
+      route(UnroutedController, UnroutedController.prototype.handle, '/some/raw/path'),
+    ]).toEqual(['/products/:idOrSlug', '/products', '/some/raw/path']);
   });
 });

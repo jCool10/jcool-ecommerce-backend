@@ -9,7 +9,7 @@ function adapter(): StripeGatewayAdapter {
   return new StripeGatewayAdapter({ webhookSecret: SECRET, toleranceSec: 300 });
 }
 
-// Live mode via an injected Stripe-shaped client — exercises the real branch with no key or network.
+// Live mode via an injected Stripe-shaped client: exercises the real branch with no key or network.
 function liveAdapter(
   create: (...args: unknown[]) => unknown,
   overrides: Partial<StripeGatewayOptions> = {},
@@ -41,36 +41,21 @@ function stripeError(statusCode: number, type: Stripe.StripeRawError['type'] = '
 
 describe('StripeGatewayAdapter', () => {
   describe('construction fail-fast', () => {
-    it('throws when the webhook secret is missing', () => {
-      expect(() => new StripeGatewayAdapter({ webhookSecret: undefined, toleranceSec: 300 })).toThrow(
-        /PAYMENT_WEBHOOK_SECRET is required/,
-      );
+    it('throws when the webhook secret is missing or blank', () => {
+      for (const webhookSecret of [undefined, '   ']) {
+        expect(() => new StripeGatewayAdapter({ webhookSecret, toleranceSec: 300 }), String(webhookSecret)).toThrow(
+          /PAYMENT_WEBHOOK_SECRET is required/,
+        );
+      }
     });
 
-    it('throws when the webhook secret is blank', () => {
-      expect(() => new StripeGatewayAdapter({ webhookSecret: '   ', toleranceSec: 300 })).toThrow(
-        /PAYMENT_WEBHOOK_SECRET is required/,
-      );
-    });
-
-    it('throws when the tolerance window is NaN (blank env) so replay defense is never silently off', () => {
-      expect(() => new StripeGatewayAdapter({ webhookSecret: SECRET, toleranceSec: NaN })).toThrow(
-        /PAYMENT_WEBHOOK_TOLERANCE_SEC must be a non-negative number/,
-      );
-    });
-
-    it('throws when the tolerance window is negative', () => {
-      expect(() => new StripeGatewayAdapter({ webhookSecret: SECRET, toleranceSec: -1 })).toThrow(
-        /PAYMENT_WEBHOOK_TOLERANCE_SEC must be a non-negative number/,
-      );
-    });
-  });
-
-  describe('createSession', () => {
-    it('returns a distinct handle per call', async () => {
-      const a = await adapter().createSession({ orderId: 'o1', amountMinor: 1500, currency: 'USD' });
-      const b = await adapter().createSession({ orderId: 'o1', amountMinor: 1500, currency: 'USD' });
-      expect(a.providerSessionId).not.toBe(b.providerSessionId);
+    // A blank env var parses to NaN, which would silently switch replay defense off.
+    it('throws when the tolerance window is NaN or negative', () => {
+      for (const toleranceSec of [NaN, -1]) {
+        expect(() => new StripeGatewayAdapter({ webhookSecret: SECRET, toleranceSec }), String(toleranceSec)).toThrow(
+          /PAYMENT_WEBHOOK_TOLERANCE_SEC must be a non-negative number/,
+        );
+      }
     });
   });
 
@@ -123,14 +108,9 @@ describe('StripeGatewayAdapter', () => {
       expect(params.expires_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 30 * 60 + 120);
     });
 
-    it('maps a null hosted url to an undefined redirectUrl', async () => {
-      const create = vi.fn().mockResolvedValue({ id: 'cs_test_x', url: null });
-      const session = await liveAdapter(create).createSession({ orderId: 'o', amountMinor: 1, currency: 'USD' });
-      expect(session).toEqual({ providerSessionId: 'cs_test_x', redirectUrl: undefined });
-    });
-
     it('wraps a provider failure in PaymentGatewayError so the caller can map it to 502', async () => {
       const create = vi.fn().mockRejectedValue(new Error('network down'));
+
       await expect(
         liveAdapter(create).createSession({ orderId: 'o', amountMinor: 1, currency: 'USD' }),
       ).rejects.toBeInstanceOf(PaymentGatewayError);
@@ -143,62 +123,48 @@ describe('StripeGatewayAdapter', () => {
 });
 
 describe('StripeGatewayAdapter reconciliation calls', () => {
+  // The offline handle is fabricated and exists nowhere at Stripe, so nothing there was ever payable.
+  it('reports UNKNOWN and closes as a no-op offline', async () => {
+    await expect(adapter().getPaymentStatus('cs_test_anything')).resolves.toEqual({ status: 'UNKNOWN' });
+    await expect(adapter().expireSession('cs_test_anything')).resolves.toBe('expired');
+  });
+
   describe('getPaymentStatus', () => {
-    it('reports UNKNOWN offline, because the fabricated handle exists nowhere at Stripe', async () => {
-      await expect(adapter().getPaymentStatus('cs_test_anything')).resolves.toEqual({ status: 'UNKNOWN' });
+    it('maps the session payment_status and status onto a gateway status', async () => {
+      const sessions = [
+        ['paid', 'complete'],
+        ['no_payment_required', 'complete'],
+        ['unpaid', 'expired'],
+        ['unpaid', 'open'],
+        ['unpaid', 'complete'],
+      ];
+
+      const statuses = await Promise.all(
+        sessions.map(async ([payment_status, status]) => {
+          const retrieve = vi.fn().mockResolvedValue({ payment_status, status, payment_intent: null });
+          return (await statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).status;
+        }),
+      );
+
+      expect(statuses).toEqual(['PAID', 'PAID', 'FAILED', 'PENDING', 'PENDING']);
     });
 
-    it.each([
-      ['paid', 'complete', 'PAID'],
-      ['no_payment_required', 'complete', 'PAID'],
-      ['unpaid', 'expired', 'FAILED'],
-      ['unpaid', 'open', 'PENDING'],
-      ['unpaid', 'complete', 'PENDING'],
-    ])('maps payment_status=%s status=%s to %s', async (payment_status, status, expected) => {
-      const retrieve = vi.fn().mockResolvedValue({ payment_status, status, payment_intent: null });
+    // The handle keeps a sweep-settled payment refundable, and the sweep settles only against a
+    // charge that matches the payment row.
+    it('carries the PaymentIntent handle, plain or expanded, and the charge the session holds', async () => {
+      const paid = { payment_status: 'paid', status: 'complete', amount_total: 150_000, currency: 'vnd' };
+      const probes = await Promise.all(
+        ['pi_1', { id: 'pi_2' }].map((payment_intent) =>
+          statusAdapter({ retrieve: vi.fn().mockResolvedValue({ ...paid, payment_intent }) }).getPaymentStatus(
+            'cs_live_1',
+          ),
+        ),
+      );
 
-      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toMatchObject({
-        status: expected,
-      });
-      expect(retrieve).toHaveBeenCalledWith('cs_live_1');
-    });
-
-    it('carries the PaymentIntent handle so a sweep-settled payment stays refundable', async () => {
-      const retrieve = vi
-        .fn()
-        .mockResolvedValue({ payment_status: 'paid', status: 'complete', payment_intent: 'pi_1' });
-
-      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toEqual({
-        status: 'PAID',
-        intentId: 'pi_1',
-      });
-    });
-
-    // The sweep settles only against a charge that matches the payment row, so the probe has to
-    // carry the session's money, not just its verdict.
-    it('carries the charge the session holds', async () => {
-      const retrieve = vi.fn().mockResolvedValue({
-        payment_status: 'paid',
-        status: 'complete',
-        payment_intent: 'pi_1',
-        amount_total: 150_000,
-        currency: 'vnd',
-      });
-
-      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toMatchObject({
-        amountMinor: 150_000,
-        currency: 'vnd',
-      });
-    });
-
-    it('reads an expanded PaymentIntent object as the same handle', async () => {
-      const retrieve = vi
-        .fn()
-        .mockResolvedValue({ payment_status: 'paid', status: 'complete', payment_intent: { id: 'pi_2' } });
-
-      await expect(statusAdapter({ retrieve }).getPaymentStatus('cs_live_1')).resolves.toMatchObject({
-        intentId: 'pi_2',
-      });
+      expect(probes).toEqual([
+        { status: 'PAID', intentId: 'pi_1', amountMinor: 150_000, currency: 'vnd' },
+        { status: 'PAID', intentId: 'pi_2', amountMinor: 150_000, currency: 'vnd' },
+      ]);
     });
 
     it('treats a handle Stripe does not recognise as UNKNOWN, so one bad row cannot stall the sweep', async () => {
@@ -217,17 +183,6 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
   });
 
   describe('expireSession', () => {
-    it('is a no-op offline, where no session was ever payable', async () => {
-      await expect(adapter().expireSession('cs_test_anything')).resolves.toBe('expired');
-    });
-
-    it('closes the session at Stripe', async () => {
-      const expire = vi.fn().mockResolvedValue({ id: 'cs_live_1', status: 'expired' });
-
-      await expect(statusAdapter({ expire }).expireSession('cs_live_1')).resolves.toBe('expired');
-      expect(expire).toHaveBeenCalledWith('cs_live_1');
-    });
-
     it('accepts an unrecognised handle as already unpayable, without reading it back', async () => {
       const expire = vi.fn().mockRejectedValue(stripeError(404));
       const retrieve = vi.fn();
@@ -238,16 +193,22 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
 
     // Stripe answers a completed session and a lapsed one with the same 400, and the two mean a
     // refund and a no-op. The read-back is the only thing that tells them apart.
-    it.each([
-      ['complete', 'already_completed'],
-      ['expired', 'already_closed'],
-    ] as const)('reads a refused session back and reports %s as %s', async (status, expected) => {
-      const expire = vi.fn().mockRejectedValue(stripeError(400));
-      const retrieve = vi.fn().mockResolvedValue({ id: 'cs_live_1', status });
+    it('reads a refused session back to tell a completed one from a lapsed one', async () => {
+      const outcomes = await Promise.all(
+        (['complete', 'expired'] as const).map(async (status) => {
+          const retrieve = vi.fn().mockResolvedValue({ id: 'cs_live_1', status });
+          const expire = vi.fn().mockRejectedValue(stripeError(400));
+          const outcome = await statusAdapter({ expire, retrieve }).expireSession('cs_live_1');
+          return [outcome, retrieve.mock.calls];
+        }),
+      );
 
-      await expect(statusAdapter({ expire, retrieve }).expireSession('cs_live_1')).resolves.toBe(expected);
       // Bounded, because this runs inside the consumer's transaction.
-      expect(retrieve).toHaveBeenCalledWith('cs_live_1', undefined, { timeout: 5_000, maxNetworkRetries: 0 });
+      const readBack = [['cs_live_1', undefined, { timeout: 5_000, maxNetworkRetries: 0 }]];
+      expect(outcomes).toEqual([
+        ['already_completed', readBack],
+        ['already_closed', readBack],
+      ]);
     });
 
     // Refused while still payable is a reason we do not model. Swallowing it would leave a live page

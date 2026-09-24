@@ -2,13 +2,13 @@ import type { INestApplication } from '@nestjs/common';
 import { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { bucketForEmail, identityKeyFingerprint } from '@jcool/id-codec';
+import { BUCKET_COUNT, LAYOUT_VERSION, bucketForEmail, identityKeyFingerprint } from '@jcool/id-codec';
 import { normalizeEmail } from '@jcool/kernel';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { resetDatabaseBeforeEach } from '../setup/harness';
-import { E2E_IDENTITY_BUCKET_KEY, WRONG_IDENTITY_BUCKET_KEY } from '../setup/identity.helper';
+import { E2E_IDENTITY_BUCKET_KEY, WRONG_IDENTITY_BUCKET_KEY, bucketForTestEmail } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { createTestApp } from '../setup/test-app.factory';
+import { createTestApp, inProcessIdGenerator } from '../setup/test-app.factory';
 import { workerDatabaseUrl } from '../setup/worker-resources';
 
 // Each boot is the subject: the guard runs at startup, so every case needs its own key and database.
@@ -31,7 +31,7 @@ describe('Identity bucket key boot guards (integration)', () => {
         return email;
       }
     }
-    throw new Error('No test address routes differently under the two keys — are they the same key?');
+    throw new Error('No test address routes differently under the two keys; are they the same key?');
   }
 
   beforeAll(() => {
@@ -98,6 +98,23 @@ describe('Identity bucket key boot guards (integration)', () => {
     } finally {
       await pool.query(`ALTER TABLE identity_key_pin_unreachable RENAME TO identity_key_pin`);
     }
+  });
+
+  // A build whose layout moved the bucket field reads every stored id as some other bucket, which the
+  // canary alone would blame on the key.
+  it('refuses a populated database pinned under another layout with the layout error', async () => {
+    const email = 'boot-order-layout@test.local';
+    const [elsewhere] = await inProcessIdGenerator.mint((bucketForTestEmail(email) + 1) % BUCKET_COUNT);
+    await pool.query(`INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'not-a-real-hash')`, [
+      elsewhere,
+      email,
+    ]);
+    await pool.query(`INSERT INTO identity_key_pin (id, fingerprint, layout_version) VALUES (1, $1, $2)`, [
+      identityKeyFingerprint(E2E_IDENTITY_BUCKET_KEY),
+      LAYOUT_VERSION + 1,
+    ]);
+
+    await expect(boot()).rejects.toThrow(/id layout does not match the one this database was built with/);
   });
 
   it('holds the pin to a single row', async () => {

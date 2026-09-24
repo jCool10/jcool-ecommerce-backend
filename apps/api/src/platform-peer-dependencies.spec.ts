@@ -14,7 +14,9 @@ const fromApi = createRequire(join(apiRoot, 'package.json'));
 const fromPlatform = createRequire(join(platformRoot, 'package.json'));
 
 describe('@jcool/platform peer dependencies', () => {
-  it.each(Object.keys(peerDependencies))('%s resolves to the install the api loads', (name) => {
-    expect(fromPlatform.resolve(name)).toBe(fromApi.resolve(name));
+  it('resolves every peer to the install the api loads', () => {
+    const split = Object.keys(peerDependencies).filter((name) => fromPlatform.resolve(name) !== fromApi.resolve(name));
+
+    expect(split).toEqual([]);
   });
 });

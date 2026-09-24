@@ -31,7 +31,7 @@ export interface TestPrincipal {
 
 /**
  * A caller as the api sees one after the cutover: an ES256 token, an epoch in Redis, and an entry in
- * the user directory — and no row in this database. All three in one call, or a suite that reaches
+ * the user directory, and no row in this database. All three in one call, or a suite that reaches
  * `order.paid` dead-letters its confirmation on a user the directory has never heard of.
  */
 export async function createTestPrincipal(

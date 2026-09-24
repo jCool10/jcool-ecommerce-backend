@@ -4,7 +4,6 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { AuthTokensService } from '../../src/modules/user/application/services/auth-tokens.service';
 import { authHeader } from '../setup/auth.helper';
-import { createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { inProcessIdGenerator } from '../setup/test-app.factory';
 
@@ -24,12 +23,6 @@ describe('Access token subject (integration)', () => {
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-
-  it('accepts a token for a user it holds', async () => {
-    const { accessToken } = await createTestUser(app);
-
-    expect((await me(accessToken)).status).toBe(200);
-  });
 
   it('refuses a correctly signed token whose subject is a UUID', async () => {
     expect((await me(await tokenFor(PRE_SNOWFLAKE_USER_ID))).status).toBe(401);

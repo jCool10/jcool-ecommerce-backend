@@ -24,29 +24,35 @@ describe('Es256SigningKeys', () => {
     }
   });
 
-  it('reads PEMs whose newlines arrive escaped, as a one-line env var carries them', () => {
+  // A one-line env var carries the PEM with its newlines escaped.
+  it('reads PEMs whose newlines arrive escaped', () => {
     const escaped = pem().replace(/\n/g, '\\n');
 
     expect(Es256SigningKeys.parse(`k1:${escaped}`, 'k1').activeKid).toBe('k1');
   });
 
-  it.each([
-    ['an empty list', '', 'k1', /no keys/],
-    ['an active kid that is not configured', `k1:${pem()}`, 'k2', /k2/],
-    ['a kid used twice', `k1:${pem()},k1:${pem()}`, 'k1', /twice/],
-    ['an entry without a kid', pem(), 'k1', /kid:pem/],
-    ['a key off P-256', `k1:${pem('P-384')}`, 'k1', /P-256/],
-    ['a key that is not a key', 'k1:not-a-pem', 'k1', /k1/],
-  ])('refuses %s', (_case, spec, activeKid, message) => {
-    expect(() => Es256SigningKeys.parse(spec, activeKid)).toThrow(message);
-  });
+  it('refuses a key list it cannot sign with, naming what is wrong', () => {
+    const cases: Record<string, [spec: string, activeKid: string, reason: RegExp]> = {
+      'an empty list': ['', 'k1', /no keys/],
+      'an active kid that is not configured': [`k1:${pem()}`, 'k2', /k2/],
+      'a kid used twice': [`k1:${pem()},k1:${pem()}`, 'k1', /twice/],
+      'an entry without a kid': [pem(), 'k1', /kid:pem/],
+      'a key off P-256': [`k1:${pem('P-384')}`, 'k1', /P-256/],
+      'a key that is not a key': ['k1:not-a-pem', 'k1', /k1/],
+    };
+    const refusal = (spec: string, activeKid: string): string => {
+      try {
+        Es256SigningKeys.parse(spec, activeKid);
+        return 'accepted';
+      } catch (error) {
+        return (error as Error).message;
+      }
+    };
 
-  it('refuses an RSA key', () => {
-    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 })
-      .privateKey.export({ format: 'pem', type: 'pkcs8' })
-      .toString();
-
-    expect(() => Es256SigningKeys.parse(`k1:${rsa}`, 'k1')).toThrow(/P-256/);
+    const entries = Object.entries(cases);
+    expect(Object.fromEntries(entries.map(([name, [spec, kid]]) => [name, refusal(spec, kid)]))).toEqual(
+      Object.fromEntries(entries.map(([name, [, , reason]]) => [name, expect.stringMatching(reason) as unknown])),
+    );
   });
 });
 
@@ -55,7 +61,7 @@ describe('Es256AccessTokenSigner', () => {
   const keys = Es256SigningKeys.parse(`old:${pem()},new:${pem()}`, 'new');
   const signer = new Es256AccessTokenSigner(keys, options);
 
-  it('signs under the active kid, pinned to issuer and audience, for exactly its lifetime', async () => {
+  it('signs under the active kid for its issuer, audience and exact lifetime', async () => {
     const token = await signer.sign(CLAIMS);
 
     expect(decodeProtectedHeader(token)).toEqual({ alg: 'ES256', kid: 'new', typ: 'JWT' });

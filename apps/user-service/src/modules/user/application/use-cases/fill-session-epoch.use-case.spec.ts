@@ -1,22 +1,22 @@
-import type { SessionEpochPort, SessionEpochPublisherPort } from '../ports';
+import { FakeSessionEpoch, FakeSessionEpochPublisher } from '../../testing/session-epoch.double';
 import { FillSessionEpochUseCase } from './fill-session-epoch.use-case';
 
-function epochs(current: number | null): SessionEpochPort {
-  return { current: () => Promise.resolve(current), bump: () => Promise.reject(new Error('unused')) };
-}
-
 describe('FillSessionEpochUseCase', () => {
+  // A fill racing a bump must not lower what the bump already published.
   it('publishes the stored epoch and answers with what is now published', async () => {
-    const publish = vi.fn<SessionEpochPublisherPort['publish']>().mockResolvedValue(6);
+    const epochs = new FakeSessionEpoch();
+    epochs.epochs.set('fresh', 4);
+    epochs.epochs.set('ahead', 4);
+    const publisher = new FakeSessionEpochPublisher();
+    publisher.published.set('ahead', 6);
+    const useCase = new FillSessionEpochUseCase(epochs, publisher);
 
-    await expect(new FillSessionEpochUseCase(epochs(4), { publish }).execute('u1')).resolves.toBe(6);
-    expect(publish).toHaveBeenCalledExactlyOnceWith('u1', 4);
-  });
-
-  it('answers null for an unknown user and publishes nothing', async () => {
-    const publish = vi.fn<SessionEpochPublisherPort['publish']>();
-
-    await expect(new FillSessionEpochUseCase(epochs(null), { publish }).execute('ghost')).resolves.toBeNull();
-    expect(publish).not.toHaveBeenCalled();
+    expect([await useCase.execute('fresh'), await useCase.execute('ahead')]).toEqual([4, 6]);
+    expect(publisher.published).toEqual(
+      new Map([
+        ['ahead', 6],
+        ['fresh', 4],
+      ]),
+    );
   });
 });

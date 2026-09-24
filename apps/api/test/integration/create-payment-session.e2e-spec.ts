@@ -3,20 +3,22 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import {
+  DuplicateActivePaymentError,
+  PAYMENT_REPOSITORY,
+  type PaymentRepositoryPort,
+} from '../../src/modules/payment/application/ports/payment-repository.port';
+import { Payment } from '../../src/modules/payment/domain/payment.entity';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';
-import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { addToCart } from '../setup/fixtures/order-flow.fixture';
+import { buyerWithCart, checkout, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
 const ABSENT_ORDER_UUID = '00000000-0000-4000-8000-000000000000';
+const CONCURRENT_PAYS = 8;
 
-// POST /orders/:id/pay over real Postgres: session creation snapshots the order total into a single
-// PENDING Payment. This is the "never double-charge" entry point, before any webhook lands.
 describe('Create payment session (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -28,94 +30,87 @@ describe('Create payment session (integration, real Postgres)', () => {
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  const server = () => app.getHttpServer();
+  const pay = (orderId: string, token: string) =>
+    request(app.getHttpServer()).post(`/orders/${orderId}/pay`).set(authHeader(token));
 
-  async function createPendingOrder(
-    token: string,
-    priceMinor = 150_000,
-    qty = 1,
-  ): Promise<{ orderId: string; totalMinor: number }> {
-    const { variantId } = await createTestProduct(app, { priceMinor });
-    await seedStock(app, variantId, qty + 5);
-    await addToCart(app, token, variantId, qty);
-    const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(201);
-    return { orderId: res.body.id as string, totalMinor: res.body.totalAmountMinor as number };
+  async function pendingOrder(quantity = 1): Promise<{ token: string; orderId: string; totalMinor: number }> {
+    const sku = await seedSellableSku(app, { onHand: quantity + 5, priceMinor: 199_000 });
+    const token = await buyerWithCart(app, sku.variantId, quantity);
+    const res = await checkout(app, token).expect(201);
+    return { token, orderId: res.body.id as string, totalMinor: res.body.totalAmountMinor as number };
   }
 
-  async function paymentsForOrder(orderId: string) {
-    return db.select().from(schema.payments).where(eq(schema.payments.orderId, orderId));
-  }
+  const paymentsFor = (orderId: string) =>
+    db.select().from(schema.payments).where(eq(schema.payments.orderId, orderId));
 
-  it('opens a session for a PENDING order (201, one PENDING payment, amount snapshotted from order total)', async () => {
-    const token = await newPrincipalToken(app);
-    const { orderId, totalMinor } = await createPendingOrder(token, 199_000, 2);
+  it('opens one PENDING payment for the order total', async () => {
+    const { token, orderId, totalMinor } = await pendingOrder(2);
 
-    const res = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token));
+    const res = await pay(orderId, token).expect(201);
 
-    expect(res.status).toBe(201);
     expect(res.body.paymentId).toEqual(expect.any(String));
     expect(res.body.providerSessionId).toMatch(/^cs_test_/);
     expect(res.body.redirectUrl).toMatch(/^https:\/\/checkout\.stripe\.test\//);
-
-    const rows = await paymentsForOrder(orderId);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      status: 'PENDING',
-      provider: 'stripe',
-      amountMinor: totalMinor,
-      currency: 'VND',
-      providerSessionId: res.body.providerSessionId,
-      providerIntentId: null,
-    });
+    expect(await paymentsFor(orderId)).toEqual([
+      expect.objectContaining({
+        status: 'PENDING',
+        provider: 'stripe',
+        amountMinor: totalMinor,
+        currency: 'VND',
+        providerSessionId: res.body.providerSessionId,
+        providerIntentId: null,
+      }),
+    ]);
   });
 
-  it('rejects an unauthenticated pay with 401 and persists nothing', async () => {
-    const token = await newPrincipalToken(app);
-    const { orderId } = await createPendingOrder(token);
+  it("answers 404 for another buyer's order and for an unknown id", async () => {
+    const { orderId } = await pendingOrder();
+    const stranger = await newPrincipalToken(app);
 
-    const res = await request(server()).post(`/orders/${orderId}/pay`);
+    await pay(orderId, stranger).expect(404);
+    await pay(ABSENT_ORDER_UUID, stranger).expect(404);
 
-    expect(res.status).toBe(401);
-    expect(await paymentsForOrder(orderId)).toHaveLength(0);
+    expect(await paymentsFor(orderId)).toHaveLength(0);
   });
 
-  it("returns 404 when paying another user's order (never leaks the order id) and persists nothing", async () => {
-    const owner = await newPrincipalToken(app);
-    const other = await newPrincipalToken(app);
-    const { orderId } = await createPendingOrder(owner);
+  it('refuses a second session while one is active', async () => {
+    const { token, orderId } = await pendingOrder();
+    await pay(orderId, token).expect(201);
 
-    const res = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(other));
+    await pay(orderId, token).expect(409);
 
-    expect(res.status).toBe(404);
-    expect(await paymentsForOrder(orderId)).toHaveLength(0);
+    expect(await paymentsFor(orderId)).toHaveLength(1);
   });
 
-  it('returns 404 for an unknown order id', async () => {
-    const token = await newPrincipalToken(app);
-    const res = await request(server()).post(`/orders/${ABSENT_ORDER_UUID}/pay`).set(authHeader(token));
-    expect(res.status).toBe(404);
+  // Concurrent requests all pass the read-side check; only the partial unique index can stop them.
+  it('lets exactly one of several concurrent pays open a session', async () => {
+    const { token, orderId } = await pendingOrder();
+
+    const results = await Promise.all(Array.from({ length: CONCURRENT_PAYS }, () => pay(orderId, token)));
+
+    const statuses = results.map((res) => res.status).sort();
+    expect(statuses).toEqual([201, ...Array<number>(CONCURRENT_PAYS - 1).fill(409)]);
+    expect(await paymentsFor(orderId)).toHaveLength(1);
   });
 
-  it('rejects a second session while one is active (409, still exactly one payment)', async () => {
-    const token = await newPrincipalToken(app);
-    const { orderId } = await createPendingOrder(token);
+  it('reports a second active payment for one order as a duplicate at the unique index', async () => {
+    const { orderId, totalMinor } = await pendingOrder();
+    const payments = app.get<PaymentRepositoryPort>(PAYMENT_REPOSITORY);
+    const session = (providerSessionId: string) =>
+      Payment.create({ orderId, provider: 'stripe', providerSessionId, amountMinor: totalMinor, currency: 'VND' });
+    await payments.create(session('cs_test_first'));
 
-    await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token)).expect(201);
-    const second = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token));
+    await expect(payments.create(session('cs_test_second'))).rejects.toBeInstanceOf(DuplicateActivePaymentError);
 
-    expect(second.status).toBe(409);
-    expect(await paymentsForOrder(orderId)).toHaveLength(1);
+    expect(await paymentsFor(orderId)).toEqual([expect.objectContaining({ providerSessionId: 'cs_test_first' })]);
   });
 
-  it('rejects paying a non-PENDING order (409, no payment)', async () => {
-    const token = await newPrincipalToken(app);
-    const { orderId } = await createPendingOrder(token);
-    // Moved out of PENDING by a direct write rather than through finalize; pay must still refuse.
+  it('refuses to pay an order that is no longer PENDING', async () => {
+    const { token, orderId } = await pendingOrder();
     await db.update(schema.orders).set({ status: 'CANCELLED' }).where(eq(schema.orders.id, orderId));
 
-    const res = await request(server()).post(`/orders/${orderId}/pay`).set(authHeader(token));
+    await pay(orderId, token).expect(409);
 
-    expect(res.status).toBe(409);
-    expect(await paymentsForOrder(orderId)).toHaveLength(0);
+    expect(await paymentsFor(orderId)).toHaveLength(0);
   });
 });

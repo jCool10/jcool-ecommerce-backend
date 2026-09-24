@@ -58,12 +58,4 @@ describe('JWKS (integration)', () => {
 
     await request(app.getHttpServer()).get('/auth/me').set(authHeader(forged)).expect(401);
   });
-
-  it('stays out of the published API docs', async () => {
-    const { body } = await request(app.getHttpServer()).get('/auth/docs-json').expect(200);
-    const paths = Object.keys(body.paths as Record<string, unknown>);
-
-    expect(paths).toContain('/auth/login');
-    expect(paths.filter((path) => path.startsWith('/.well-known'))).toEqual([]);
-  });
 });

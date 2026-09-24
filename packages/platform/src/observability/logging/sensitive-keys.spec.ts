@@ -1,26 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { SENSITIVE_KEYS, isSensitiveKey } from './sensitive-keys';
+import { isSensitiveKey } from './sensitive-keys';
 
 describe('isSensitiveKey', () => {
-  it('matches the canonical keys case-insensitively', () => {
-    expect(isSensitiveKey('password')).toBe(true);
-    expect(isSensitiveKey('Authorization')).toBe(true);
-    expect(isSensitiveKey('REFRESHTOKEN')).toBe(true);
-    expect(isSensitiveKey('Set-Cookie')).toBe(true);
+  // verifyUrl and resetUrl carry a redeemable token under a key that is not named token.
+  it('matches credentials and mail links case-insensitively', () => {
+    const keys = ['password', 'Authorization', 'REFRESHTOKEN', 'Set-Cookie', 'verifyUrl', 'resetUrl'];
+
+    expect(keys.filter((key) => !isSensitiveKey(key))).toEqual([]);
   });
 
-  it('covers the mail links, which carry a redeemable token under a key that is not named token', () => {
-    expect(isSensitiveKey('verifyUrl')).toBe(true);
-    expect(isSensitiveKey('resetUrl')).toBe(true);
-  });
-
-  it('leaves non-sensitive keys alone', () => {
-    expect(isSensitiveKey('email')).toBe(false);
-    expect(isSensitiveKey('orderId')).toBe(false);
-    expect(isSensitiveKey('name')).toBe(false);
-  });
-
-  it('keeps email out of the shared list — audit logs deliberately retain it', () => {
-    expect(SENSITIVE_KEYS).not.toContain('email');
+  // The auth audit trail records email in logs; the Sentry sink strips it separately.
+  it('leaves email and identifiers alone', () => {
+    expect(['email', 'orderId', 'name'].filter(isSensitiveKey)).toEqual([]);
   });
 });

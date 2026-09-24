@@ -1,240 +1,107 @@
-import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import type { Counter, Gauge, Histogram } from 'prom-client';
+import { Test } from '@nestjs/testing';
+import { PinoLogger } from 'nestjs-pino';
+import { Registry, register, type Counter } from 'prom-client';
 import { describe, expect, it, vi } from 'vitest';
+import type { BreakerState } from '@jcool/metrics-port';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { BusinessMetrics } from './business.metrics';
+import { BUSINESS_METRIC_PROVIDERS, CIRCUIT_BREAKER_STATE, ORDERS_CREATED_TOTAL } from './metric-definitions';
 
-function build() {
-  const ordersInc = vi.fn();
-  const valueObserve = vi.fn();
-  const cartInc = vi.fn();
-  const authInc = vi.fn();
-  const cacheInc = vi.fn();
-  const publishInc = vi.fn();
-  const consumeInc = vi.fn();
-  const retryInc = vi.fn();
-  const dlqInc = vi.fn();
-  const sagaStepInc = vi.fn();
-  const compensationInc = vi.fn();
-  const reservationExpiryInc = vi.fn();
-  const refundOwedInc = vi.fn();
-  const mailFailureInc = vi.fn();
-  const retentionRowsInc = vi.fn();
-  const retentionDurationObserve = vi.fn();
-  const retentionFailureInc = vi.fn();
-  const mediaBytesInc = vi.fn();
-  const rebuildObserve = vi.fn();
-  const breakerStateSet = vi.fn();
-  const breakerTransitionInc = vi.fn();
-  const breakerCallInc = vi.fn();
-  const rateLimitInc = vi.fn();
-  const epochLookupInc = vi.fn();
-  const warn = vi.fn<(obj: Record<string, unknown>, msg?: string) => void>();
-  const logger = fakePinoLogger({ warn });
-  const metrics = new BusinessMetrics(
-    { inc: ordersInc } as unknown as Counter<string>,
-    { observe: valueObserve } as unknown as Histogram<string>,
-    { inc: cartInc } as unknown as Counter<string>,
-    { inc: authInc } as unknown as Counter<string>,
-    { inc: cacheInc } as unknown as Counter<string>,
-    { inc: publishInc } as unknown as Counter<string>,
-    { inc: consumeInc } as unknown as Counter<string>,
-    { inc: retryInc } as unknown as Counter<string>,
-    { inc: dlqInc } as unknown as Counter<string>,
-    { inc: sagaStepInc } as unknown as Counter<string>,
-    { inc: compensationInc } as unknown as Counter<string>,
-    { inc: reservationExpiryInc } as unknown as Counter<string>,
-    { inc: refundOwedInc } as unknown as Counter<string>,
-    { inc: mailFailureInc } as unknown as Counter<string>,
-    { inc: retentionRowsInc } as unknown as Counter<string>,
-    { observe: retentionDurationObserve } as unknown as Histogram<string>,
-    { inc: retentionFailureInc } as unknown as Counter<string>,
-    { inc: mediaBytesInc } as unknown as Counter<string>,
-    { observe: rebuildObserve } as unknown as Histogram<string>,
-    { set: breakerStateSet } as unknown as Gauge<string>,
-    { inc: breakerTransitionInc } as unknown as Counter<string>,
-    { inc: breakerCallInc } as unknown as Counter<string>,
-    { inc: rateLimitInc } as unknown as Counter<string>,
-    { inc: epochLookupInc } as unknown as Counter<string>,
-    logger,
-  );
-  return {
-    metrics,
-    ordersInc,
-    valueObserve,
-    cartInc,
-    authInc,
-    cacheInc,
-    publishInc,
-    consumeInc,
-    retryInc,
-    dlqInc,
-    sagaStepInc,
-    compensationInc,
-    reservationExpiryInc,
-    refundOwedInc,
-    mailFailureInc,
-    retentionRowsInc,
-    retentionDurationObserve,
-    retentionFailureInc,
-    mediaBytesInc,
-    rebuildObserve,
-    breakerStateSet,
-    breakerTransitionInc,
-    breakerCallInc,
-    rateLimitInc,
-    epochLookupInc,
-    warn,
-  };
+async function build() {
+  const warn = vi.fn();
+  const moduleRef = await Test.createTestingModule({
+    providers: [
+      ...BUSINESS_METRIC_PROVIDERS,
+      BusinessMetrics,
+      { provide: PinoLogger, useValue: fakePinoLogger({ warn }) },
+    ],
+  }).compile();
+  // The providers always create into prom-client's global registry; move them into one this test owns.
+  const registry = new Registry();
+  for (const { name } of register.getMetricsAsArray()) registry.registerMetric(register.getSingleMetric(name)!);
+  register.clear();
+  return { metrics: moduleRef.get(BusinessMetrics), registry, warn };
 }
 
 describe('BusinessMetrics', () => {
-  it('counts a placed order by its status label', () => {
-    const { metrics, ordersInc } = build();
+  // prom-client throws on a label its definition does not declare, and `safely()` turns that into a
+  // warn, so drift between a call site and metric-definitions.ts would otherwise lose the series.
+  it('records every series under the labels its definition declares', async () => {
+    const { metrics, registry, warn } = await build();
+
     metrics.recordOrderCreated('PENDING');
-    expect(ordersInc).toHaveBeenCalledWith({ status: 'PENDING' });
-  });
-
-  it('observes the order value in minor units', () => {
-    const { metrics, valueObserve } = build();
     metrics.observeOrderValue(125_000);
-    expect(valueObserve).toHaveBeenCalledWith(125_000);
-  });
-
-  it('counts a cart operation by op', () => {
-    const { metrics, cartInc } = build();
     metrics.recordCartOperation('add');
-    expect(cartInc).toHaveBeenCalledWith({ op: 'add' });
-  });
-
-  it('counts an auth event by event + outcome', () => {
-    const { metrics, authInc } = build();
     metrics.recordAuthEvent('login.failed', 'failure');
-    expect(authInc).toHaveBeenCalledWith({ event: 'login.failed', outcome: 'failure' });
-  });
-
-  it('counts a catalog cache lookup by result', () => {
-    const { metrics, cacheInc } = build();
     metrics.recordCatalogCacheOperation('hit_fresh');
-    expect(cacheInc).toHaveBeenCalledWith({ result: 'hit_fresh' });
-  });
-
-  it('counts a published event by type and result', () => {
-    const { metrics, publishInc } = build();
     metrics.recordEventPublished('order.placed', 'refused');
-    expect(publishInc).toHaveBeenCalledWith({ event_type: 'order.placed', result: 'refused' });
-  });
-
-  it('counts a consumed event by type and result', () => {
-    const { metrics, consumeInc } = build();
     metrics.recordEventConsumed('order.placed', 'duplicate');
-    expect(consumeInc).toHaveBeenCalledWith({ event_type: 'order.placed', result: 'duplicate' });
-  });
-
-  it('counts a retry by type only — the reason belongs to the dead letter, not to every attempt', () => {
-    const { metrics, retryInc } = build();
     metrics.recordConsumeRetry('order.paid');
-    expect(retryInc).toHaveBeenCalledWith({ event_type: 'order.paid' });
-  });
-
-  it('counts a dead letter by type and reason', () => {
-    const { metrics, dlqInc } = build();
     metrics.recordDeadLetter('order.paid', 'permanent');
-    expect(dlqInc).toHaveBeenCalledWith({ event_type: 'order.paid', reason: 'permanent' });
-  });
-
-  it('counts a saga step by step and outcome', () => {
-    const { metrics, sagaStepInc } = build();
     metrics.recordSagaStep('payment_session', 'failed');
-    expect(sagaStepInc).toHaveBeenCalledWith({ step: 'payment_session', outcome: 'failed' });
-  });
-
-  it('counts a compensation by trigger', () => {
-    const { metrics, compensationInc } = build();
     metrics.recordCompensation('ttl_expired');
-    expect(compensationInc).toHaveBeenCalledWith({ trigger: 'ttl_expired' });
-  });
-
-  it('counts a reservation expiry with no labels at all', () => {
-    const { metrics, reservationExpiryInc } = build();
     metrics.recordReservationExpiry();
-    expect(reservationExpiryInc).toHaveBeenCalledWith();
-  });
-
-  // Labelled by source because one stranded payment is normally seen by two of them, so an alert on
-  // the unlabelled total would read a single refund as two.
-  it.each(['expire_session', 'webhook_direct', 'settlement_event'] as const)(
-    'counts a refund owed observed by %s',
-    (source) => {
-      const { metrics, refundOwedInc } = build();
-      metrics.recordRefundOwed(source);
-      expect(refundOwedInc).toHaveBeenCalledWith({ source });
-    },
-  );
-
-  it('counts an undelivered message by kind', () => {
-    const { metrics, mailFailureInc } = build();
+    metrics.recordRefundOwed('webhook_direct');
     metrics.recordMailSendFailure('order_paid');
-    expect(mailFailureInc).toHaveBeenCalledWith({ kind: 'order_paid' });
-  });
-
-  it('counts bytes the media sweep gave back', () => {
-    const { metrics, mediaBytesInc } = build();
+    metrics.recordRetentionSweep('messaging:outbox', 0);
+    metrics.observeRetentionSweepDuration('messaging:outbox', 0.2);
+    metrics.recordRetentionSweepFailure('messaging:outbox');
     metrics.recordMediaBytesReclaimed(2048);
-    expect(mediaBytesInc).toHaveBeenCalledWith(2048);
-  });
-
-  // An asset whose size was never recorded reports 0, and incrementing a counter by 0 says nothing.
-  it('ignores a zero-byte reclaim', () => {
-    const { metrics, mediaBytesInc } = build();
-    metrics.recordMediaBytesReclaimed(0);
-    expect(mediaBytesInc).not.toHaveBeenCalled();
-  });
-
-  it('observes a cache rebuild in seconds', () => {
-    const { metrics, rebuildObserve } = build();
     metrics.observeCacheRebuild(0.042);
-    expect(rebuildObserve).toHaveBeenCalledWith(0.042);
-  });
-
-  it('maps breaker states onto an ordered gauge so an alert can fire on a threshold', () => {
-    const { metrics, breakerStateSet } = build();
-    metrics.setBreakerState('payment_gateway', 'closed');
-    metrics.setBreakerState('payment_gateway', 'half_open');
     metrics.setBreakerState('payment_gateway', 'open');
-    expect(breakerStateSet.mock.calls).toEqual([
-      [{ breaker: 'payment_gateway' }, 0],
-      [{ breaker: 'payment_gateway' }, 1],
-      [{ breaker: 'payment_gateway' }, 2],
-    ]);
-  });
-
-  it('counts a breaker transition by the state entered', () => {
-    const { metrics, breakerTransitionInc } = build();
     metrics.recordBreakerTransition('payment_gateway', 'open');
-    expect(breakerTransitionInc).toHaveBeenCalledWith({ breaker: 'payment_gateway', to: 'open' });
-  });
-
-  it('counts a breaker call by breaker and result', () => {
-    const { metrics, breakerCallInc } = build();
     metrics.recordBreakerCall('payment_gateway', 'rejected');
-    expect(breakerCallInc).toHaveBeenCalledWith({ breaker: 'payment_gateway', result: 'rejected' });
-  });
-
-  it('counts a rate-limit rejection by tier and route template', () => {
-    const { metrics, rateLimitInc } = build();
     metrics.recordRateLimitRejection('account', '/auth/login');
-    expect(rateLimitInc).toHaveBeenCalledWith({ tier: 'account', route: '/auth/login' });
+    metrics.recordSessionEpochLookup('miss');
+
+    const exposition = await registry.metrics();
+    const expected = [
+      'orders_created_total{status="PENDING"} 1',
+      'order_value_minor_sum 125000',
+      'cart_operations_total{op="add"} 1',
+      'auth_events_total{event="login.failed",outcome="failure"} 1',
+      'catalog_cache_operations_total{result="hit_fresh"} 1',
+      'messaging_publish_total{event_type="order.placed",result="refused"} 1',
+      'messaging_consume_total{event_type="order.placed",result="duplicate"} 1',
+      'messaging_consume_retries_total{event_type="order.paid"} 1',
+      'messaging_dlq_total{event_type="order.paid",reason="permanent"} 1',
+      'saga_step_total{step="payment_session",outcome="failed"} 1',
+      'saga_compensation_total{trigger="ttl_expired"} 1',
+      'reservation_expiry_total 1',
+      'payment_refund_owed_total{source="webhook_direct"} 1',
+      'mail_send_failures_total{kind="order_paid"} 1',
+      // Recorded at zero so an idle sweep still has a series to alert on.
+      'retention_rows_deleted_total{sweep="messaging:outbox"} 0',
+      'retention_sweep_duration_seconds_count{sweep="messaging:outbox"} 1',
+      'retention_sweep_failures_total{sweep="messaging:outbox"} 1',
+      'media_bytes_reclaimed_total 2048',
+      'cache_rebuild_duration_seconds_count 1',
+      'circuit_breaker_state{breaker="payment_gateway"} 2',
+      'circuit_breaker_transitions_total{breaker="payment_gateway",to="open"} 1',
+      'circuit_breaker_calls_total{breaker="payment_gateway",result="rejected"} 1',
+      'rate_limit_rejections_total{tier="account",route="/auth/login"} 1',
+      'session_epoch_lookups_total{result="miss"} 1',
+    ];
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(expected.filter((line) => !exposition.includes(line))).toEqual([]);
   });
 
-  it.each(['hit', 'miss'] as const)('counts a session-epoch lookup that was a %s', (result) => {
-    const { metrics, epochLookupInc } = build();
-    metrics.recordSessionEpochLookup(result);
-    expect(epochLookupInc).toHaveBeenCalledWith({ result });
+  // resilience.yml fires on `circuit_breaker_state >= 1` and `>= 2`.
+  it('orders breaker states on the gauge as closed 0, half_open 1, open 2', async () => {
+    const { metrics, registry } = await build();
+    const gauge = registry.getSingleMetric(CIRCUIT_BREAKER_STATE)!;
+    const valueAfter = async (state: BreakerState): Promise<number> => {
+      metrics.setBreakerState('payment_gateway', state);
+      return (await gauge.get()).values[0].value;
+    };
+
+    expect([await valueAfter('closed'), await valueAfter('half_open'), await valueAfter('open')]).toEqual([0, 1, 2]);
   });
 
-  it('swallows a metric error and logs it — telemetry never breaks the business flow', () => {
-    const { metrics, ordersInc, warn } = build();
-    ordersInc.mockImplementation(() => {
+  it('never throws into the caller when recording fails', async () => {
+    const { metrics, registry, warn } = await build();
+    vi.spyOn(registry.getSingleMetric(ORDERS_CREATED_TOTAL) as Counter, 'inc').mockImplementation(() => {
       throw new Error('registry exploded');
     });
 

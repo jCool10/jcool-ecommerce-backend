@@ -5,9 +5,7 @@ import { ShutdownService } from '@jcool/platform/health';
 import { closeAppAfterAll } from '../setup/harness';
 import { createTestApp } from '../setup/test-app.factory';
 
-// Redis connects lazily (enableOfflineQueue:false), so the very first readiness probe can race
-// the socket becoming writable — which is correct readiness behaviour (503 until deps are up).
-// Wait for steady state the way an orchestrator would before asserting the healthy baseline.
+// Redis connects lazily, so the first readiness probe can answer 503 before the socket is up.
 async function waitForReady(app: INestApplication, attempts = 50): Promise<void> {
   for (let i = 0; i < attempts; i += 1) {
     const res = await request(app.getHttpServer()).get('/health/ready');
@@ -17,10 +15,7 @@ async function waitForReady(app: INestApplication, attempts = 50): Promise<void>
   throw new Error('app did not reach readiness within the warm-up window');
 }
 
-// Proves the shutdown-aware readiness wiring end-to-end: /health/ready flips to 503 once the
-// process begins draining, while /health/live stays 200 (a draining process is still alive). Uses
-// the real Nest lifecycle hook rather than an OS signal, so the assertion is deterministic.
-describe('Health — shutdown-aware readiness (real Postgres + Redis)', () => {
+describe('Health shutdown-aware readiness (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
@@ -29,28 +24,17 @@ describe('Health — shutdown-aware readiness (real Postgres + Redis)', () => {
   });
   closeAppAfterAll(() => app);
 
-  it('GET /health/ready → 200 while serving normally', async () => {
-    const res = await request(app.getHttpServer()).get('/health/ready');
-    expect(res.status).toBe(200);
-    expect(res.body.status).toBe('ok');
-  });
+  it('turns readiness to 503 once draining while liveness stays 200', async () => {
+    const before = await request(app.getHttpServer()).get('/health/ready');
+    expect(before.status).toBe(200);
+    expect(before.body.status).toBe('ok');
 
-  it('GET /health/live → 200 (no dependency checked)', async () => {
-    const res = await request(app.getHttpServer()).get('/health/live');
-    expect(res.status).toBe(200);
-  });
-
-  // Ordered last: begins draining THIS app instance (one-way flag), so it must not precede the
-  // healthy-state assertions above.
-  it('once draining, GET /health/ready → 503 (shutdown gate) while /health/live stays 200', async () => {
     await app.get(ShutdownService).beforeApplicationShutdown('SIGTERM');
 
     const ready = await request(app.getHttpServer()).get('/health/ready');
     expect(ready.status).toBe(503);
     expect(ready.body.status).toBe('error');
     expect(ready.body.details.shutdown.status).toBe('down');
-
-    const live = await request(app.getHttpServer()).get('/health/live');
-    expect(live.status).toBe(200);
+    await request(app.getHttpServer()).get('/health/live').expect(200);
   });
 });

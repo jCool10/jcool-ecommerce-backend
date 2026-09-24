@@ -25,9 +25,8 @@ const WEBHOOK_SECRET = 'whsec_e2e_outbox_secret_0123456789';
 const STOCK = 5;
 const PRICE = 150_000;
 
-// The transactional outbox over real Postgres: an event is written by the SAME transaction as the
-// business change it describes, so the two can never disagree. Nothing publishes yet — these tests
-// assert the write side only (`published_at` stays NULL, which is the relay's work queue).
+// An event is written by the same transaction as the business change it describes, so the two can
+// never disagree. These tests assert the write side only: `published_at` stays NULL for the relay.
 describe('Transactional outbox append (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -70,8 +69,8 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
       currency: 'VND',
       placedAt: expect.any(String),
     });
-    // Tracing is off in e2e, so there is no active span to capture — the column stays null rather
-    // than holding a malformed header. Trace continuity is asserted where the relay consumes it.
+    // Tracing is off in e2e, so there is no span to capture and the column stays null rather than
+    // holding a malformed header.
     expect(rows[0].traceparent).toBeNull();
   });
 
@@ -90,7 +89,7 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
     expect(await readOutbox(orderId)).toHaveLength(1);
   });
 
-  it('rolls the appended row back when the caller’s transaction fails after the append', async () => {
+  it("rolls the appended row back when the caller's transaction fails after it", async () => {
     // The REAL writer, in a transaction that succeeds through the append and then fails. This is the
     // only test that can catch `append` opening a transaction of its own: such a writer would commit
     // this row independently, and the outbox would carry an event for work that never happened.
@@ -105,8 +104,7 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
     await expect(
       db.transaction(async (tx) => {
         await writer.append(tx, record);
-        // The insert really landed inside this transaction before it is undone — otherwise the
-        // assertion below would pass for the trivial reason that nothing was ever written.
+        // Proves the insert landed, so the rollback assertion cannot pass on an empty write.
         expect(await tx.select().from(schema.outbox)).toHaveLength(1);
         throw new Error('caller failed after append');
       }),
@@ -115,7 +113,7 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
     expect(await db.select().from(schema.outbox)).toHaveLength(0);
   });
 
-  it('appends order.paid in the finalize transaction, once, however often the webhook is delivered', async () => {
+  it('appends order.paid once in the finalize transaction, however often delivered', async () => {
     const sku = await seedSellableSku(app, { onHand: STOCK, priceMinor: PRICE });
     const open = await placeAndOpenSession(app, sku);
     const signed = signOutcome(WEBHOOK_SECRET, open.sessionId, open.charge, 'PAID', 'evt_outbox_paid');
@@ -136,9 +134,8 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   });
 });
 
-// The other direction: a writer that FAILS must take the whole checkout down with it, so an event
-// the system could not record is never silently skipped in favour of a placed order. The writer is
-// stubbed here, so this says nothing about the real one opening its own transaction — proved above.
+// A writer that fails must take the whole checkout down with it, so an event the system could not
+// record is never skipped in favour of a placed order.
 describe('Outbox append failure rolls back the checkout (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;

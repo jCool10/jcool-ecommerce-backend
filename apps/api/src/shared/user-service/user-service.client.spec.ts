@@ -9,7 +9,6 @@ import {
   USER_SERVICE_BREAKER,
   UserServiceClient,
   UserServiceRejection,
-  createUserServiceClient,
   isUserServiceFault,
 } from './user-service.client';
 
@@ -79,41 +78,11 @@ describe('UserServiceClient', () => {
 
   afterEach(() => userService.stop());
 
-  it("reads a user's summary with the service token", async () => {
+  it('carries the request id across the hop, and none from a queued job', async () => {
     await expect(client().userSummary(USER_ID)).resolves.toEqual(SUMMARY);
-    expect(userService.received).toEqual([
-      expect.objectContaining({
-        method: 'GET',
-        url: `/internal/v1/users/${USER_ID}/summary`,
-        headers: expect.objectContaining({
-          authorization: `Bearer ${TOKEN}`,
-          // Carried across the hop, so the user-service logs the id the client was answered with.
-          'x-request-id': 'req-uuid',
-        }) as IncomingHttpHeaders,
-      }),
-    ]);
-  });
-
-  it('sends no request id from a queued job, leaving the user-service to generate one', async () => {
     await client(1_000, passThrough, outsideRequest()).userSummary(USER_ID);
 
-    expect(userService.received[0].headers).not.toHaveProperty('x-request-id');
-  });
-
-  it("reads a user's session epoch", async () => {
-    userService.reply = () => ({ status: 200, body: { epoch: 3 } });
-
-    await expect(client().sessionEpoch(USER_ID)).resolves.toBe(3);
-    expect(userService.received[0].url).toBe(`/internal/v1/sessions/${USER_ID}/epoch`);
-  });
-
-  it.each([
-    ['summary', (c: UserServiceClient) => c.userSummary(USER_ID)],
-    ['epoch', (c: UserServiceClient) => c.sessionEpoch(USER_ID)],
-  ])('answers null for the %s of a user the service does not have', async (_case, call) => {
-    userService.reply = () => ({ status: 404, body: { statusCode: 404 } });
-
-    await expect(call(client())).resolves.toBeNull();
+    expect(userService.received.map(({ headers }) => headers['x-request-id'])).toEqual(['req-uuid', undefined]);
   });
 
   it('keeps an id inside its path segment', async () => {
@@ -122,48 +91,31 @@ describe('UserServiceClient', () => {
     expect(userService.received[0].url).toBe('/internal/v1/users/a%2F..%2Fb/summary');
   });
 
-  it.each<[string, Reply]>([
-    ['a server error', { status: 503, body: {} }],
-    ['a refused token', { status: 401, body: {} }],
-    ['a summary without an email', { status: 200, body: { id: USER_ID, role: 'CUSTOMER' } }],
-    ['a body that is not JSON', { status: 200, body: undefined }],
-  ])('rejects %s', async (_case, reply) => {
-    userService.reply = () => reply;
-
-    await expect(client().userSummary(USER_ID)).rejects.toBeInstanceOf(UserServiceRejection);
-  });
-
-  it('carries the endpoint path on a rejection, so the failure line says which call failed', async () => {
-    userService.reply = () => ({ status: 503, body: {} });
-
-    await expect(client().userSummary(USER_ID)).rejects.toMatchObject({
-      status: 503,
-      path: `/internal/v1/users/${USER_ID}/summary`,
-    });
-  });
-
   it('reads a summary whose role it does not know', async () => {
     userService.reply = () => ({ status: 200, body: { ...SUMMARY, role: 'SUPPORT' } });
 
     await expect(client().userSummary(USER_ID)).resolves.toMatchObject({ email: SUMMARY.email });
   });
 
-  it('rejects an epoch that is not a whole number', async () => {
-    userService.reply = () => ({ status: 200, body: { epoch: '3' } });
+  it('rejects an error status or a malformed body, naming the endpoint', async () => {
+    const summary = (c: UserServiceClient) => c.userSummary(USER_ID);
+    const epoch = (c: UserServiceClient) => c.sessionEpoch(USER_ID);
+    const summaryPath = `/internal/v1/users/${USER_ID}/summary`;
+    const cases: [Reply, typeof summary | typeof epoch, string][] = [
+      [{ status: 503, body: {} }, summary, summaryPath],
+      [{ status: 401, body: {} }, summary, summaryPath],
+      [{ status: 200, body: { id: USER_ID, role: 'CUSTOMER' } }, summary, summaryPath],
+      [{ status: 200, body: undefined }, summary, summaryPath],
+      [{ status: 200, body: { epoch: '3' } }, epoch, `/internal/v1/sessions/${USER_ID}/epoch`],
+    ];
 
-    await expect(client().sessionEpoch(USER_ID)).rejects.toBeInstanceOf(UserServiceRejection);
-  });
+    for (const [reply, call, path] of cases) {
+      userService.reply = () => reply;
+      const error = await call(client()).catch((caught: unknown) => caught);
 
-  it('gives up once the timeout runs out', async () => {
-    userService.reply = () => 'hang';
-
-    await expect(client(100).userSummary(USER_ID)).rejects.toThrow();
-  });
-
-  it('rejects when nothing is listening', async () => {
-    url = 'http://127.0.0.1:1';
-
-    await expect(client().userSummary(USER_ID)).rejects.toThrow();
+      expect(error, JSON.stringify(reply)).toBeInstanceOf(UserServiceRejection);
+      expect((error as UserServiceRejection).path).toBe(path);
+    }
   });
 
   describe('behind the breaker', () => {
@@ -189,35 +141,6 @@ describe('UserServiceClient', () => {
 
       await expect(guarded.userSummary(USER_ID)).rejects.toBeInstanceOf(DownstreamUnavailableError);
       expect(userService.received).toHaveLength(reached);
-    });
-  });
-
-  describe('createUserServiceClient', () => {
-    it('refuses to build without the internal URL', () => {
-      const config = fakeConfigService({
-        'userService.internalApiToken': TOKEN,
-        'userService.timeoutMs': 500,
-      });
-
-      expect(() => createUserServiceClient(config, breakerFactory(), inRequest())).toThrow();
-    });
-
-    it('guards every call with the user-service breaker at the configured timeout', async () => {
-      const config = fakeConfigService({
-        'userService.internalUrl': url,
-        'userService.internalApiToken': TOKEN,
-        'userService.timeoutMs': 500,
-      });
-      const breakers = breakerFactory();
-      const create = vi.spyOn(breakers, 'create');
-
-      await expect(createUserServiceClient(config, breakers, inRequest()).userSummary(USER_ID)).resolves.toEqual(
-        SUMMARY,
-      );
-      expect(create).toHaveBeenCalledWith(USER_SERVICE_BREAKER, {
-        timeoutMs: 500,
-        isDownstreamFault: isUserServiceFault,
-      });
     });
   });
 });

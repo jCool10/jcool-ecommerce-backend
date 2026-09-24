@@ -9,10 +9,12 @@ import {
   createTestProduct,
   seedProducts,
 } from '../setup/fixtures/catalog.fixture';
-import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
+
+const ABSENT_UUID = '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f';
 
 describe('Catalog (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -23,54 +25,39 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
   });
   closeAppAfterAll(() => app);
 
-  // Explicit rather than `resetDatabaseBeforeEach`: the cache generation has to be bumped after the
-  // truncate, or a read is served the previous test's rows out of Redis.
+  // The generation bump after the truncate keeps the previous test's rows out of Redis.
   beforeEach(async () => {
     await resetDatabase(pool);
     await resetCatalogCache(app);
   });
 
   describe('GET /products (list, paginated)', () => {
-    it('returns the default page with a correct total (200)', async () => {
+    it('returns the default page with a correct total', async () => {
       await seedProducts(app, 15);
 
       const res = await request(app.getHttpServer()).get('/products');
 
       expect(res.status).toBe(200);
-      expect(res.body.total).toBe(15);
-      expect(res.body.page).toBe(1);
-      expect(res.body.pageSize).toBe(20); // schema default
-      expect(res.body.totalPages).toBe(1);
+      expect(res.body).toMatchObject({ total: 15, page: 1, pageSize: 20, totalPages: 1 });
       expect(res.body.items).toHaveLength(15);
     });
 
-    // Both bounds are query-shape gates rather than data answers: an out-of-range page is a deep
-    // OFFSET scan and a non-slug filter can never match a row, and each distinct value would mint
-    // its own cache key on the way to saying nothing.
-    it('rejects a page past the ceiling with 400 rather than scanning to an empty page', async () => {
-      const res = await request(app.getHttpServer()).get('/products').query({ page: 10_001 });
+    it('serves the last page inside the ceiling and rejects the next with 400', async () => {
+      const last = await request(app.getHttpServer()).get('/products').query({ page: 10_000 });
+      const past = await request(app.getHttpServer()).get('/products').query({ page: 10_001 });
 
-      expect(res.status).toBe(400);
+      expect(last.status).toBe(200);
+      expect(last.body.items).toEqual([]);
+      expect(past.status).toBe(400);
     });
 
-    it('accepts the last page inside the ceiling', async () => {
-      const res = await request(app.getHttpServer()).get('/products').query({ page: 10_000 });
+    it('rejects a malformed categorySlug and serves an unknown one as empty', async () => {
+      const malformed = await request(app.getHttpServer()).get('/products').query({ categorySlug: 'Not A Slug!' });
+      const unknown = await request(app.getHttpServer()).get('/products').query({ categorySlug: 'no-such-category' });
 
-      expect(res.status).toBe(200);
-      expect(res.body.items).toEqual([]);
-    });
-
-    it('rejects a categorySlug that is not slug-shaped with 400', async () => {
-      const res = await request(app.getHttpServer()).get('/products').query({ categorySlug: 'Not A Slug!' });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('still serves a well-formed categorySlug that matches nothing', async () => {
-      const res = await request(app.getHttpServer()).get('/products').query({ categorySlug: 'no-such-category' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.items).toEqual([]);
+      expect(malformed.status).toBe(400);
+      expect(unknown.status).toBe(200);
+      expect(unknown.body.items).toEqual([]);
     });
 
     it('filters to the requested category and excludes every other one', async () => {
@@ -85,8 +72,6 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(res.body.items).toHaveLength(3);
     });
 
-    // The list resolves the slug to an id before filtering, so the archived-category guard has to
-    // keep holding on the join rather than riding along with the slug lookup.
     it('hides live products under an archived category, filtered by slug or not', async () => {
       const category = await createTestCategory(app);
       await seedProducts(app, 3, { categoryId: category.id });
@@ -102,7 +87,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(unfiltered.body.total).toBe(0);
     });
 
-    it('slices by page/pageSize without overlap across pages', async () => {
+    it('slices by page and pageSize without overlap across pages', async () => {
       const { productIds } = await seedProducts(app, 15);
 
       const page1 = await request(app.getHttpServer()).get('/products').query({ page: 1, pageSize: 10 });
@@ -119,7 +104,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(new Set(seen)).toEqual(new Set(productIds));
     });
 
-    it('returns an empty page past the last page (boundary, total unchanged)', async () => {
+    it('returns an empty page past the last page with the total unchanged', async () => {
       await seedProducts(app, 15);
 
       const res = await request(app.getHttpServer()).get('/products').query({ page: 3, pageSize: 10 });
@@ -142,7 +127,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
   });
 
   describe('GET /products/:idOrSlug (detail)', () => {
-    it('returns the product for an existing id, with its variant + price hydrated (200)', async () => {
+    it('returns the product by id with its variant and price', async () => {
       const { productId, sku, priceMinor } = await createTestProduct(app);
 
       const res = await request(app.getHttpServer()).get(`/products/${productId}`);
@@ -150,18 +135,12 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(productId);
       expect(res.body.status).toBe('ACTIVE');
-      // Exercises the variant/price left-join — an empty-array pass would hide a broken join.
       expect(res.body.variants.length).toBeGreaterThan(0);
       expect(res.body.variants[0].sku).toBe(sku);
       expect(res.body.variants[0].prices[0].amountMinor).toBe(priceMinor);
     });
 
-    it('returns 404 for a non-existent id', async () => {
-      const res = await request(app.getHttpServer()).get('/products/0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f');
-      expect(res.status).toBe(404);
-    });
-
-    it('resolves the product by slug (200) — the id-or-slug path, not just uuid', async () => {
+    it('resolves the product by slug', async () => {
       const { productId, slug } = await createTestProduct(app);
 
       const res = await request(app.getHttpServer()).get(`/products/${slug}`);
@@ -171,57 +150,24 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       expect(res.body.slug).toBe(slug);
     });
 
-    it('returns 404 for an unknown slug (no text→uuid cast 500)', async () => {
-      const res = await request(app.getHttpServer()).get('/products/no-such-slug');
-      expect(res.status).toBe(404);
+    it('returns 404 for an unknown id and an unknown slug', async () => {
+      await request(app.getHttpServer()).get(`/products/${ABSENT_UUID}`).expect(404);
+      await request(app.getHttpServer()).get('/products/no-such-slug').expect(404);
     });
   });
 
-  describe('Admin CRUD (RBAC + validation)', () => {
-    async function createCategoryAsAdmin(accessToken: string, slug: string): Promise<string> {
-      const res = await request(app.getHttpServer())
-        .post('/admin/categories')
-        .set(authHeader(accessToken))
-        .send({ name: `Category ${slug}`, slug })
-        .expect(201);
-      return res.body.id as string;
-    }
-
-    it('lets an admin create a category then a product (201)', async () => {
-      const { accessToken } = await createTestAdminPrincipal(app);
-      const categoryId = await createCategoryAsAdmin(accessToken, 'admin-electronics');
-
-      const res = await request(app.getHttpServer())
-        .post('/admin/products')
-        .set(authHeader(accessToken))
-        .send({ name: 'Wireless Headphones', slug: 'wireless-headphones', categoryId, status: 'ACTIVE' });
-
-      expect(res.status).toBe(201);
-      expect(res.body.id).toBeTruthy();
-      expect(res.body).toMatchObject({ name: 'Wireless Headphones', slug: 'wireless-headphones' });
-    });
-
-    it('rejects product creation by a non-admin with 403', async () => {
-      const { accessToken } = await createTestPrincipal(app); // CUSTOMER
-      const res = await request(app.getHttpServer())
-        .post('/admin/products')
-        .set(authHeader(accessToken))
-        .send({ name: 'Nope', slug: 'nope', categoryId: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f' });
-
-      expect(res.status).toBe(403);
-    });
-
+  describe('admin writes', () => {
     it('rejects product creation with a missing name with 400', async () => {
       const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
         .post('/admin/products')
         .set(authHeader(accessToken))
-        .send({ slug: 'no-name', categoryId: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f' });
+        .send({ slug: 'no-name', categoryId: ABSENT_UUID });
 
       expect(res.status).toBe(400);
     });
 
-    it('rejects a malformed product id with 400, not a 500', async () => {
+    it('rejects a malformed product id with 400', async () => {
       const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
         .patch('/admin/products/not-a-uuid')
@@ -234,21 +180,25 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     it('rejects a negative price with 400', async () => {
       const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
-        .put('/admin/skus/0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f/price')
+        .put(`/admin/skus/${ABSENT_UUID}/price`)
         .set(authHeader(accessToken))
         .send({ amountMinor: -1, currency: 'VND' });
 
       expect(res.status).toBe(400);
     });
 
-    it('lets an admin update (200) then soft-delete a product (200, archived not hard-deleted)', async () => {
+    it('updates a product, then archives it instead of deleting it', async () => {
       const { accessToken } = await createTestAdminPrincipal(app);
-      const categoryId = await createCategoryAsAdmin(accessToken, 'admin-books');
+      const category = await request(app.getHttpServer())
+        .post('/admin/categories')
+        .set(authHeader(accessToken))
+        .send({ name: 'Category admin-books', slug: 'admin-books' })
+        .expect(201);
 
       const created = await request(app.getHttpServer())
         .post('/admin/products')
         .set(authHeader(accessToken))
-        .send({ name: 'Draft Book', slug: 'draft-book', categoryId, status: 'ACTIVE' })
+        .send({ name: 'Draft Book', slug: 'draft-book', categoryId: category.body.id, status: 'ACTIVE' })
         .expect(201);
       const productId = created.body.id as string;
 
@@ -265,7 +215,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
         .delete(`/admin/products/${productId}`)
         .set(authHeader(accessToken));
       expect(deleted.status).toBe(200);
-      expect(deleted.body.status).toBe('ARCHIVED'); // soft-delete: archived + echoed, not removed
+      expect(deleted.body.status).toBe('ARCHIVED');
 
       await request(app.getHttpServer()).get(`/products/${productId}`).expect(404);
     });

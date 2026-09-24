@@ -41,7 +41,7 @@ const seedRow = (index: number, overrides: Record<string, unknown> = {}) => ({
  * dead-letter). This one is about the telemetry that has to be true at each hop, and one trace id
  * from the producer through Redis to the effect.
  */
-describe('Outbox → queue → consumer, end to end (integration, real Postgres + Redis)', () => {
+describe('Outbox to queue to consumer, end to end (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let relay: OutboxRelay;
   let processor: DomainEventProcessor;
@@ -134,8 +134,7 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
       const text = await scrape();
 
       // The decisive assertion is the 200 inside scrape(): a scrape awaits every collect(), so a
-      // rejection here would take the WHOLE endpoint down — every unrelated series would go dark at
-      // exactly the moment the database is unreachable.
+      // rejection here would take the whole endpoint dark at the moment the database is unreachable.
       expect(text).toContain('http_requests_total');
       // The last reading stands rather than dropping to a zero that would read as "nothing pending".
       expect(gauge(text, 'outbox_backlog_pending')).toBe(1);
@@ -161,7 +160,7 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
       const text = await scrape();
       const [beforeRefused, beforePublished] = [counter(text, REFUSED), counter(text, PUBLISHED)];
       // A healthy sibling in the batch, so the relay reads this as the row being rejected rather
-      // than the queue being down — the same split the retry budget is charged on.
+      // than the queue being down, the same split the retry budget is charged on.
       vi.spyOn(queue, 'add').mockRejectedValueOnce(new Error('queue rejected the payload'));
 
       await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 1 });
@@ -186,8 +185,7 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
   });
 
   it('carries a checkout from HTTP to a consumed effect, and the gauges follow it', async () => {
-    // A second boot, not a second test: every other test here drives the processor by hand, which
-    // only works while the queue worker is off — so the one test that needs it running needs its own app.
+    // Its own app: every other test here drives the processor by hand, which needs the worker off.
     const consumer = await createTestApp({ QUEUE_WORKER_ENABLED: 'true' });
     try {
       const sku = await seedSellableSku(app, { onHand: 5, priceMinor: 150_000 });
@@ -207,8 +205,7 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
 
       const [claimed] = await inboxRows();
       const [event] = await db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, orderId));
-      // One id from the write to the claim: the outbox row is the message, and the inbox dedups on
-      // it — which is what makes the whole at-least-once transport safe.
+      // One id from the write to the claim: the outbox row is the message the inbox dedups on.
       expect(claimed.messageId).toBe(event.id);
       expect(claimed.eventType).toBe('order.placed');
       expect(event.publishedAt).not.toBeNull();
@@ -219,8 +216,8 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
     }
   });
 
-  // Everything else runs with no tracing SDK — production's own default. These register one so the
-  // spans are real and the assertions cannot pass vacuously.
+  // Everything else runs with no tracing SDK, production's default. These register one so the spans
+  // are real and the assertions cannot pass vacuously.
   describe('trace continuity', () => {
     const contextManager = new AsyncLocalStorageContextManager();
     const exporter = new InMemorySpanExporter();
@@ -247,9 +244,8 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
 
     it('runs one trace from the producing transaction through Redis to the effect', async () => {
       let producerTraceId = '';
-      // Stands in for the HTTP request: in production the http.server span comes from
-      // auto-instrumentation, which is preloaded via `node --import` and therefore absent here. What
-      // is under test is the hop auto-instrumentation cannot make — an async one through Redis.
+      // Stands in for the HTTP request span, which auto-instrumentation adds in production. Under
+      // test is the hop it cannot make: an async one through Redis.
       await withSpan('order.place', async (span) => {
         producerTraceId = span.spanContext().traceId;
         await db.transaction((tx) =>
@@ -273,8 +269,7 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
       expect(delivered.traceparent).toContain(producerTraceId);
 
       // Driven through the processor rather than a Worker so the assertion lands on a finished
-      // span: a Worker would consume this on its own timeline. The queue hop is still real — this
-      // envelope came back out of Redis.
+      // span: a Worker would consume this on its own timeline. The envelope still came out of Redis.
       await expect(processor.process(delivered)).resolves.toBe('processed');
 
       const spans = exporter.getFinishedSpans();
@@ -291,9 +286,8 @@ describe('Outbox → queue → consumer, end to end (integration, real Postgres 
       await relay.runOnce(10);
 
       const [publish] = exporter.getFinishedSpans().filter((span) => span.name === 'outbox.publish');
-      // An event written before tracing was on, or by a background job, is not an error — it simply
-      // roots its own trace instead of dropping the span. No parent is what makes it a root; a
-      // well-formed trace id would be true of any span at all.
+      // An event written with no trace roots its own rather than dropping the span. The missing
+      // parent is what makes it a root; a well-formed trace id would be true of any span.
       expect(publish.parentSpanContext).toBeUndefined();
       expect(publish.spanContext().traceId).toMatch(/^[0-9a-f]{32}$/);
     });

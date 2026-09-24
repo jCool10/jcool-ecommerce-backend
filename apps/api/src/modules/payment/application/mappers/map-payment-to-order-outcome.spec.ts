@@ -3,16 +3,10 @@ import { PaymentStatus } from '../../domain/payment-status';
 import { mapPaymentToOrderOutcome } from './map-payment-to-order-outcome';
 
 describe('mapPaymentToOrderOutcome', () => {
-  it('drives a paid order from a succeeded payment', () => {
-    expect(mapPaymentToOrderOutcome(PaymentStatus.SUCCEEDED)).toBe('PAID');
-  });
+  // Order EXPIRED belongs to the reservation sweep; an expired session arrives here as FAILED.
+  it('finalizes an order only from a succeeded or failed payment, never to EXPIRED', () => {
+    const statuses = [PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.PENDING, PaymentStatus.EXPIRED];
 
-  it('drives a failed order from a failed payment', () => {
-    expect(mapPaymentToOrderOutcome(PaymentStatus.FAILED)).toBe('FAILED');
-  });
-
-  it('returns null for non-terminal or non-webhook statuses (nothing to finalize)', () => {
-    expect(mapPaymentToOrderOutcome(PaymentStatus.PENDING)).toBeNull();
-    expect(mapPaymentToOrderOutcome(PaymentStatus.EXPIRED)).toBeNull();
+    expect(statuses.map(mapPaymentToOrderOutcome)).toEqual(['PAID', 'FAILED', null, null]);
   });
 });

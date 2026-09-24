@@ -17,11 +17,8 @@ import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 // A syntactically-valid UUID no fixture creates, so probing it exercises "absent" and not a cast error.
 const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 
-/**
- * Cart and Order price a whole cart through Catalog's published port in ONE read. Neither claim is
- * visible from a response body alone: that the read really collapses to a single query, and that
- * every per-line semantic survives the fold — including the ones that used to ride on array position.
- */
+// Cart and Order price a whole cart through Catalog's published port in one read. The response body
+// alone cannot show that the read is one query, or that per-line semantics survive the fold.
 describe('Batch SKU view (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -48,8 +45,8 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
   }
 
   // Drops the SKU out of Catalog entirely. `cart_items` has no FK to `product_variants` (the
-  // boundary is application-level), so the cart line outlives its own SKU — the case a real purge
-  // produces, and the one a positional batch result would silently mis-align.
+  // boundary is application-level), so the cart line outlives its own SKU, as after a real purge.
+  // A positional batch result would silently mis-align it.
   async function deleteSku(variantId: string): Promise<void> {
     await unprice(variantId);
     await db.delete(schema.productVariants).where(eq(schema.productVariants.id, variantId));

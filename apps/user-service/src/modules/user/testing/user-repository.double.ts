@@ -1,25 +1,42 @@
-import type { User } from '../domain/entities/user.entity';
-import type { UserRepositoryPort } from '../application/ports';
+import { User } from '../domain/entities/user.entity';
+import type { CreateUserInput, UserRepositoryPort } from '../application/ports';
 
-/**
- * The one user-repository double that was written twice, byte for byte: a lookup by email that
- * records the address it was asked for.
- *
- * The other four hand-rolled repositories in this context stay where they are — each records a
- * different call (the password it stored, the id it verified, the input it created), and merging
- * them into one configurable class would hide the thing each spec is actually asserting on.
- */
-/**
- * Not `implements Partial<UserRepositoryPort>`: `Partial` makes every member optional, so it accepts
- * a class that implements nothing and would keep compiling through a rename of `findByEmail`. This
- * pins the one method's signature to the port instead, which is the only part callers rely on.
- */
-export class EmailLookupUserRepository {
+/** Holds at most one user and records what each call was asked; `log` orders calls across fakes. */
+export class FakeUserRepository implements UserRepositoryPort {
   user: User | null = null;
+  /** `create` answers null, as the unique email index does for a taken address. */
+  emailTaken = false;
   lastFindEmail?: string;
+  created?: CreateUserInput;
+  readonly verified: string[] = [];
+  readonly passwordUpdates: Array<{ userId: string; passwordHash: string }> = [];
 
-  findByEmail(email: string): ReturnType<UserRepositoryPort['findByEmail']> {
+  constructor(readonly log: string[] = []) {}
+
+  findByEmail(email: string): Promise<User | null> {
     this.lastFindEmail = email;
     return Promise.resolve(this.user);
+  }
+
+  findById(id: string): Promise<User | null> {
+    return Promise.resolve(this.user?.id === id ? this.user : null);
+  }
+
+  create(input: CreateUserInput): Promise<User | null> {
+    if (this.emailTaken) return Promise.resolve(null);
+    this.created = input;
+    this.user = new User('new-id', input.email, input.passwordHash, input.role ?? 'CUSTOMER', new Date(), new Date());
+    return Promise.resolve(this.user);
+  }
+
+  markEmailVerified(userId: string): Promise<void> {
+    this.verified.push(userId);
+    return Promise.resolve();
+  }
+
+  updatePassword(userId: string, passwordHash: string): Promise<void> {
+    this.log.push('updatePassword');
+    this.passwordUpdates.push({ userId, passwordHash });
+    return Promise.resolve();
   }
 }

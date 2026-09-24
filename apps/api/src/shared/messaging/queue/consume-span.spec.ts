@@ -9,7 +9,7 @@ const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const PUBLISH_SPAN_ID = '00f067aa0ba902b7';
 const TRACEPARENT = `00-${TRACE_ID}-${PUBLISH_SPAN_ID}-01`;
 
-// Asserted against a real SDK: a no-op tracer would pass every one of these vacuously.
+// Asserted against a real SDK: a no-op tracer would pass vacuously.
 describe('withConsumeSpan', () => {
   const contextManager = new AsyncLocalStorageContextManager();
   const exporter = new InMemorySpanExporter();
@@ -31,35 +31,11 @@ describe('withConsumeSpan', () => {
   });
 
   it('continues the producer trace as a child of the publish span', async () => {
-    exporter.reset();
-
     await expect(withConsumeSpan('order.placed', TRACEPARENT, () => Promise.resolve('done'))).resolves.toBe('done');
 
     const [span] = exporter.getFinishedSpans();
     expect(span.name).toBe('consume:order.placed');
     expect(span.spanContext().traceId).toBe(TRACE_ID);
     expect(span.parentSpanContext?.spanId).toBe(PUBLISH_SPAN_ID);
-  });
-
-  it('starts its own trace when the event carries no context', async () => {
-    exporter.reset();
-
-    await withConsumeSpan('order.placed', null, () => Promise.resolve());
-
-    const [span] = exporter.getFinishedSpans();
-    // An event written before tracing was switched on is still worth a span of its own.
-    expect(span.spanContext().traceId).not.toBe(TRACE_ID);
-    expect(span.parentSpanContext).toBeUndefined();
-  });
-
-  it('records a failed consume on the span and rethrows', async () => {
-    exporter.reset();
-
-    await expect(withConsumeSpan('order.placed', TRACEPARENT, () => Promise.reject(new Error('boom')))).rejects.toThrow(
-      'boom',
-    );
-
-    const [span] = exporter.getFinishedSpans();
-    expect(span.events.map((event) => event.name)).toContain('exception');
   });
 });

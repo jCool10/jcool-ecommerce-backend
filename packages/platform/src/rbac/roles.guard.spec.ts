@@ -1,69 +1,71 @@
-import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
-import type { Reflector } from '@nestjs/core';
+import { ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host';
+import { describe, expect, it } from 'vitest';
 import { Role } from './role.enum';
+import { Roles } from './roles.decorator';
 import { RolesGuard } from './roles.guard';
 
-// The guard reads only a minimal `{ role }` shape, so the test user is that shape rather than a full
-// AuthenticatedUser — the extra fields would assert nothing.
+@Roles(Role.Admin)
+class AdminController {
+  list(this: void): void {}
+
+  @Roles(Role.Customer)
+  mine(this: void): void {}
+
+  @Roles(Role.Admin, Role.Customer)
+  either(this: void): void {}
+}
+
+class OpenController {
+  handle(this: void): void {}
+
+  @Roles()
+  emptyList(this: void): void {}
+}
+
+type User = { role: Role } | undefined;
+
+function canActivate(controller: new () => object, handler: () => void, user: User): boolean {
+  return new RolesGuard(new Reflector()).canActivate(new ExecutionContextHost([{ user }], controller, handler));
+}
+
+function refusal(controller: new () => object, handler: () => void, user: User): ForbiddenException {
+  try {
+    canActivate(controller, handler, user);
+  } catch (error) {
+    if (error instanceof ForbiddenException) return error;
+    throw error;
+  }
+  throw new Error('expected the guard to refuse');
+}
+
+const admin = { role: Role.Admin };
+const customer = { role: Role.Customer };
+
 describe('RolesGuard', () => {
-  const ADMIN = { role: Role.Admin };
-  const CUSTOMER = { role: Role.Customer };
-
-  function makeContext(user: { role: Role } | undefined): ExecutionContext {
-    return {
-      getHandler: () => undefined,
-      getClass: () => undefined,
-      switchToHttp: () => ({ getRequest: () => ({ user }) }),
-    } as unknown as ExecutionContext;
-  }
-
-  function guardRequiring(required: Role[] | undefined): RolesGuard {
-    const reflector = { getAllAndOverride: () => required } as unknown as Reflector;
-    return new RolesGuard(reflector);
-  }
-
-  it('allows a route whose @Roles list is empty', () => {
-    expect(guardRequiring([]).canActivate(makeContext(CUSTOMER))).toBe(true);
+  it('allows a listed role, with a method list overriding the class list', () => {
+    expect([
+      canActivate(AdminController, AdminController.prototype.list, admin),
+      canActivate(AdminController, AdminController.prototype.mine, customer),
+      canActivate(AdminController, AdminController.prototype.either, customer),
+      canActivate(OpenController, OpenController.prototype.handle, undefined),
+      canActivate(OpenController, OpenController.prototype.emptyList, customer),
+    ]).toEqual([true, true, true, true, true]);
+    expect(() => canActivate(AdminController, AdminController.prototype.mine, admin)).toThrow(ForbiddenException);
   });
 
-  it('allows when the user holds the single required role', () => {
-    expect(guardRequiring([Role.Admin]).canActivate(makeContext(ADMIN))).toBe(true);
+  it('refuses a request with no user when a role is required', () => {
+    const error = refusal(AdminController, AdminController.prototype.list, undefined);
+
+    expect((error.cause as Error).message).toBe('required role ADMIN, held none');
   });
 
-  it('allows when the user matches one of several allowed roles', () => {
-    expect(guardRequiring([Role.Admin, Role.Customer]).canActivate(makeContext(CUSTOMER))).toBe(true);
-  });
+  // The cause goes to the rejection log line; the client sees only the generic body.
+  it('refuses a role that is not listed, naming both roles only in the cause', () => {
+    const error = refusal(AdminController, AdminController.prototype.list, customer);
 
-  it('denies 403 (fail-safe) when @Roles is present but no user is attached', () => {
-    expect(() => guardRequiring([Role.Admin]).canActivate(makeContext(undefined))).toThrow(ForbiddenException);
-  });
-
-  function caught(fn: () => unknown): unknown {
-    try {
-      fn();
-      return undefined;
-    } catch (error) {
-      return error;
-    }
-  }
-
-  it('carries which role was required vs held in `cause`, for the rejection log line only', () => {
-    const error = caught(() => guardRequiring([Role.Admin]).canActivate(makeContext(CUSTOMER)));
-
-    expect(error).toBeInstanceOf(ForbiddenException);
-    const forbidden = error as ForbiddenException;
-    expect((forbidden.cause as Error).message).toBe('required role ADMIN, held CUSTOMER');
-    // Response body unchanged: message and the Nest-default `error` description still read 'Forbidden'.
-    expect(forbidden.getResponse()).toEqual({
-      statusCode: 403,
-      message: 'Insufficient permissions',
-      error: 'Forbidden',
-    });
-  });
-
-  it('names "none" in `cause` when no user is attached', () => {
-    const error = caught(() => guardRequiring([Role.Admin]).canActivate(makeContext(undefined)));
-
-    expect(((error as ForbiddenException).cause as Error).message).toBe('required role ADMIN, held none');
+    expect((error.cause as Error).message).toBe('required role ADMIN, held CUSTOMER');
+    expect(error.getResponse()).toEqual({ statusCode: 403, message: 'Insufficient permissions', error: 'Forbidden' });
   });
 });

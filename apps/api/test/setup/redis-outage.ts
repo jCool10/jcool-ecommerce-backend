@@ -11,7 +11,7 @@ export async function withRedisDown(app: INestApplication, run: () => Promise<vo
   return withClientDown(app.get(RedisService).getClient(), run);
 }
 
-/** For a client the app holds under a different token — the queue keeps its own. */
+/** For a client the app holds under a different token; the queue keeps its own. */
 export async function withClientDown(client: Redis, run: () => Promise<void>): Promise<void> {
   client.disconnect();
   try {

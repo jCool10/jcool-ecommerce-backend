@@ -19,16 +19,9 @@ import { createTestApp } from '../setup/test-app.factory';
 
 const STOCK = 50;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-// The pod is gone, so nothing it was holding gets a chance to run: half a second of tolerance is for
-// the round-trip, not for anything the process might still do.
 const CLOCK_TOLERANCE_MS = 5_000;
 
-/**
- * A pod that is SIGKILLed — OOM, an evicted node, a failed liveness probe — runs no cleanup at all.
- * The distinction that matters here is between the row a crash leaves behind and the row the reclaim
- * tests hand-write: those backdate `expires_at` to reach the reclaim branch, so they never see the
- * lease a crash actually writes.
- */
+// A SIGKILLed pod runs no cleanup, so it leaves the lease the interceptor wrote, not a backdated one.
 describe('Idempotency after a crash mid-checkout (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -69,58 +62,39 @@ describe('Idempotency after a crash mid-checkout (integration, real Postgres)', 
     return (res.body as { items: { id: string }[] }).items;
   };
 
-  /**
-   * The crash, at the only point where it does damage: the IN_PROGRESS row is committed and the
-   * handler is under way. The process dies, so BOTH the handler and the interceptor's `catchError`
-   * cleanup stop existing — mocking only the first would leave the row cleaned up, which is the
-   * ordinary failure this is NOT about.
-   */
+  // The handler and the interceptor's cleanup both die with the process.
   async function crashMidCheckout(token: string, key: string): Promise<void> {
     vi.spyOn(checkout, 'execute').mockRejectedValue(new Error('SIGKILL: pod evicted'));
-    const remove = vi.spyOn(store, 'deleteInProgress').mockResolvedValue(undefined);
+    vi.spyOn(store, 'deleteInProgress').mockResolvedValue(undefined);
 
     await postOrder(token, key).expect(500);
 
-    expect(remove).toHaveBeenCalled(); // the cleanup a live process would have run...
-    vi.restoreAllMocks(); // ...and did not, because there was no process left to run it.
+    vi.restoreAllMocks();
   }
 
-  // CHARACTERIZATION — pins today's behaviour, which is NOT the intended one.
-  //
-  // Intended invariant: a key whose owner died is reclaimable within a window a client could
-  //   plausibly wait out, and a client told to wait is told how long.
-  // Violated at: src/modules/order/interface/idempotency.interceptor.ts:25 — `IDEMPOTENCY_TTL_MS` is
-  //   a hardcoded 24h serving two different jobs at once: the replay window for a COMPLETED key
-  //   (where 24h is the point) and the abandonment lease for an IN_PROGRESS one (where it is the
-  //   whole outage). The 409 raised at :89 carries no `Retry-After` and no machine-readable reason,
-  //   so a client cannot tell "your sibling request is running, retry in a moment" from "this key is
-  //   dead for a day"; its only recovery is to mint a new key, which the idempotency contract exists
-  //   to make unnecessary.
-  // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — IDEM-1.
+  // Known defect. Intended: a key whose owner died is reclaimable within a window a client can wait
+  // out, and the 409 says how long. Actual: IdempotencyInterceptor leases IN_PROGRESS for the 24h
+  // IDEMPOTENCY_TTL_MS replay window, and its 409 carries no Retry-After or reason code.
   it('wedges a key for a full day when the pod dies mid-checkout, and never says so', async () => {
     const token = await buyerWithCart(app, sku.variantId, 1);
     const key = randomUUID();
 
     await crashMidCheckout(token, key);
 
-    // The lease a crash actually writes: a full day, not the minutes an in-flight sibling needs.
     const wedged = await keyRow(key);
     expect(wedged.status).toBe('IN_PROGRESS');
     expect(wedged.expiresAt.getTime() - Date.now()).toBeGreaterThan(ONE_DAY_MS - CLOCK_TOLERANCE_MS);
 
-    // The client's honest retry, with the same key and the same body, as the contract invites.
     const retry = await postOrder(token, key).expect(409);
     expect(retry.body.message).toBe('A request with this Idempotency-Key is already in progress');
-    // Nothing tells the caller this is a day and not a moment.
     expect(retry.headers['retry-after']).toBeUndefined();
     expect(retry.body).not.toHaveProperty('code');
 
-    // Retrying does not renew the lease either, so waiting and retrying is the same 409 all day.
+    // A retry does not renew the lease.
     expect((await keyRow(key)).expiresAt.getTime()).toBe(wedged.expiresAt.getTime());
     expect(await ordersOf(token)).toHaveLength(0);
 
-    // The only recovery: abandon the key. The cart is untouched, so a new key still buys the order —
-    // which is what makes this a client-visible contract gap rather than lost money.
+    // The cart is untouched, so a new key still buys the order.
     const fresh = await postOrder(token, randomUUID()).expect(201);
     expect(fresh.body.id).toBeDefined();
     expect(await ordersOf(token)).toHaveLength(1);

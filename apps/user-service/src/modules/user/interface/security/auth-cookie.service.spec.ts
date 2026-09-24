@@ -1,71 +1,52 @@
-import type { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Response } from 'express';
 import { describe, expect, it } from 'vitest';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { AUTH_COOKIE_PATH, CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from './auth-cookie.constants';
 import { AuthCookieService } from './auth-cookie.service';
-import type { CsrfTokenService } from './csrf-token.service';
+import { CsrfTokenService } from './csrf-token.service';
 
-interface CookieCall {
-  name: string;
-  value: string;
-  options: CookieOptions;
-}
+const config = fakeConfigService({
+  'app.cookieSecure': true,
+  'auth.refreshTokenTtl': '7d',
+  'auth.csrfSecret': 'test-csrf-secret-not-a-real-secret-0000000',
+});
+const csrf = new CsrfTokenService(config);
 
-function config(cookieSecure: boolean, refreshTtl = '7d'): ConfigService {
-  return fakeConfigService({ 'app.cookieSecure': cookieSecure, 'auth.refreshTokenTtl': refreshTtl });
-}
-
-const csrf = { issue: () => 'issued-csrf-token' } as unknown as CsrfTokenService;
-
-function responseSpy() {
-  const set: CookieCall[] = [];
+function recordingResponse() {
+  const set = new Map<string, { value: string; options: CookieOptions }>();
   const cleared: Array<{ name: string; options: CookieOptions }> = [];
   const res = {
-    cookie: (name: string, value: string, options: CookieOptions) => set.push({ name, value, options }),
+    cookie: (name: string, value: string, options: CookieOptions) => set.set(name, { value, options }),
     clearCookie: (name: string, options: CookieOptions) => cleared.push({ name, options }),
   } as unknown as Response;
   return { res, set, cleared };
 }
 
 describe('AuthCookieService', () => {
-  it('sets the refresh cookie httpOnly + SameSite=Strict, scoped to /auth, with the refresh TTL', () => {
-    const { res, set } = responseSpy();
-    new AuthCookieService(config(true), csrf).setSession(res, 'the-refresh-token');
+  it('sets an httpOnly refresh cookie and a readable, valid CSRF cookie on /auth', () => {
+    const { res, set } = recordingResponse();
 
-    const refresh = set.find((c) => c.name === REFRESH_TOKEN_COOKIE);
-    expect(refresh?.value).toBe('the-refresh-token');
-    expect(refresh?.options).toMatchObject({
-      httpOnly: true,
-      secure: true,
-      sameSite: 'strict',
-      path: AUTH_COOKIE_PATH,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+    new AuthCookieService(config, csrf).setSession(res, 'the-refresh-token');
+
+    const shared = { secure: true, sameSite: 'strict', path: AUTH_COOKIE_PATH, maxAge: 7 * 24 * 60 * 60 * 1000 };
+    expect(set.get(REFRESH_TOKEN_COOKIE)).toEqual({
+      value: 'the-refresh-token',
+      options: { ...shared, httpOnly: true },
     });
+    expect(set.get(CSRF_TOKEN_COOKIE)?.options).toEqual({ ...shared, httpOnly: false });
+    const csrfToken = set.get(CSRF_TOKEN_COOKIE)?.value;
+    expect(csrf.verify(csrfToken, csrfToken)).toBe(true);
   });
 
-  it('sets the CSRF cookie readable (not httpOnly) so the client can echo it', () => {
-    const { res, set } = responseSpy();
-    new AuthCookieService(config(true), csrf).setSession(res, 'r');
+  // A browser keeps a cookie cleared under a different path.
+  it('clears both cookies on the path they were set on', () => {
+    const { res, cleared } = recordingResponse();
 
-    const csrfCookie = set.find((c) => c.name === CSRF_TOKEN_COOKIE);
-    expect(csrfCookie?.value).toBe('issued-csrf-token');
-    expect(csrfCookie?.options.httpOnly).toBe(false);
-    expect(csrfCookie?.options.sameSite).toBe('strict');
-  });
+    new AuthCookieService(config, csrf).clear(res);
 
-  it('leaves cookies non-Secure when configured off (http dev/e2e)', () => {
-    const { res, set } = responseSpy();
-    new AuthCookieService(config(false), csrf).setSession(res, 'r');
-
-    expect(set.every((c) => c.options.secure === false)).toBe(true);
-  });
-
-  it('clears both cookies on the same /auth path', () => {
-    const { res, cleared } = responseSpy();
-    new AuthCookieService(config(true), csrf).clear(res);
-
-    expect(cleared.map((c) => c.name).sort()).toEqual([CSRF_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE]);
-    expect(cleared.every((c) => c.options.path === AUTH_COOKIE_PATH)).toBe(true);
+    expect(Object.fromEntries(cleared.map((c) => [c.name, c.options.path]))).toEqual({
+      [REFRESH_TOKEN_COOKIE]: AUTH_COOKIE_PATH,
+      [CSRF_TOKEN_COOKIE]: AUTH_COOKIE_PATH,
+    });
   });
 });

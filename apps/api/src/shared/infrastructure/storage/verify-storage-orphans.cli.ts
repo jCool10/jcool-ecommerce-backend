@@ -31,15 +31,13 @@ import { Pool } from 'pg';
 import { eq, inArray, isNull } from 'drizzle-orm';
 import configuration from '@shared/config/configuration';
 import { mediaAssets, productImages } from '@shared/infrastructure/database/schema';
+import { recheckCandidates } from './verify-storage-orphans.recheck';
 
 const DEFAULT_PREFIX = 'media/';
 const DEFAULT_LIMIT = 10_000;
 // HEAD is one round trip per row; a handful in flight keeps a large catalog from taking minutes
 // without turning the check itself into a load test.
 const HEAD_CONCURRENCY = 8;
-// Caps one re-check statement: it binds a parameter per candidate, and a bucket listing can hand
-// over more candidates than Postgres accepts in a single statement.
-const RECHECK_CHUNK = 1000;
 
 function argValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -92,21 +90,13 @@ async function main(): Promise<void> {
       continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (continuationToken && scanned < limit);
 
-    if (orphanObjects.length > 0) {
-      // The row snapshot predates the listing, and an upload inserts its row before it PUTs, so a key
-      // that appeared mid-scan is absent from `knownKeys` while being a healthy PENDING asset. Re-read
-      // just the candidates before calling any of them an orphan.
-      const nowKnown = new Set<string>();
-      for (let offset = 0; offset < orphanObjects.length; offset += RECHECK_CHUNK) {
-        const chunk = orphanObjects.slice(offset, offset + RECHECK_CHUNK);
-        const rechecked = await db
-          .select({ storageKey: mediaAssets.storageKey })
-          .from(mediaAssets)
-          .where(inArray(mediaAssets.storageKey, chunk));
-        for (const row of rechecked) nowKnown.add(row.storageKey);
-      }
-      orphanObjects = orphanObjects.filter((key) => !nowKnown.has(key));
-    }
+    orphanObjects = await recheckCandidates(orphanObjects, async (chunk) => {
+      const rechecked = await db
+        .select({ storageKey: mediaAssets.storageKey })
+        .from(mediaAssets)
+        .where(inArray(mediaAssets.storageKey, chunk));
+      return rechecked.map((row) => row.storageKey);
+    });
 
     // Database → bucket, for the state where a missing object is user-visible. A PENDING row with
     // no object is the normal case (the upload was never made), not a discrepancy.

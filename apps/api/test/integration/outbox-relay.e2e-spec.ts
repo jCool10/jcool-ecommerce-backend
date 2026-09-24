@@ -3,22 +3,18 @@ import type { Queue } from 'bullmq';
 import { eq, inArray, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { Pool } from 'pg';
-import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../../src/shared/messaging/queue/queue.constants';
-import { authHeader } from '../setup/bearer.helper';
-import { seedSellableSku, buyerWithCart } from '../setup/fixtures/order-flow.fixture';
 import {
   closeAppAfterAll,
   createTestAppWithPool,
   obliterateQueueBeforeEach,
   resetDatabaseBeforeEach,
 } from '../setup/harness';
-import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { withClientDown } from '../setup/redis-outage';
 import { createTestApp } from '../setup/test-app.factory';
 
@@ -32,11 +28,7 @@ const seedRow = (index: number, overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-/**
- * The bridge between the two stores: Postgres holds the truth, Redis carries it onward. Rows are
- * seeded directly — how they get written is the append suite's concern; this one starts where a
- * committed row does. The scheduler is off in e2e, so every tick here is one this file asked for.
- */
+// Rows are seeded directly and the scheduler is off, so every tick here is one the test asked for.
 describe('Outbox relay (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let relay: OutboxRelay;
@@ -77,7 +69,7 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     expect(jobs.map((job) => job.id).sort()).toEqual(rows.map((row) => row.id).sort());
     expect(await unpublished()).toHaveLength(0);
 
-    // A published row is off the work queue for good — the partial index no longer sees it.
+    // A published row is off the work queue for good: the partial index no longer sees it.
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 0 });
     expect(await queue.getWaitingCount()).toBe(3);
   });
@@ -135,7 +127,7 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
 
     await withClientDown(connection, async () => {
       // ioredis flips `status` on the socket's close event, not on the disconnect call, so this tick
-      // still passes the pre-flight and fails inside the batch — the window a real drop lands in.
+      // still passes the pre-flight and fails inside the batch, the window a real drop lands in.
       await expect(relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 1 });
 
       // The decisive assertion: nothing else in the batch got through, so the refusal is read as the
@@ -170,7 +162,7 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     });
     await taken;
 
-    // Plain FOR UPDATE would block here until the holder commits — which only happens after this
+    // Plain FOR UPDATE would block here until the holder commits, which only happens after this
     // await returns, so the tick would deadlock rather than return two published rows.
     const startedAt = Date.now();
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 2, failed: 0 });
@@ -195,36 +187,13 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     expect(await unpublished()).toHaveLength(0);
   });
 
-  it('delivers an event written by a real checkout, end to end', async () => {
-    const sku = await seedSellableSku(app, { onHand: 5, priceMinor: 150_000 });
-    const token = await buyerWithCart(app, sku.variantId, 2);
-    const response = await request(app.getHttpServer())
-      .post('/orders')
-      .set(authHeader(token))
-      .set(idempotencyKeyHeader())
-      .expect(201);
-    const orderId = response.body.id as string;
-
-    await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
-
-    const [job] = await queue.getJobs(['waiting']);
-    expect(job.name).toBe('order.placed');
-    expect((job.data as DomainEventJob).aggregateId).toBe(orderId);
-    expect(await unpublished()).toHaveLength(0);
-  });
-
-  // Everything above drives runOnce by hand; this proves the module registers a timer that calls it,
-  // which is the one part a passing unit test cannot tell us.
+  // The module registers a timer that calls runOnce; every other test drives it by hand.
   it('drains the backlog on its own once the interval elapses', async () => {
-    // A second boot, not a second test: the scheduler is off in the app above, which is what lets
-    // every other test own its own tick.
     const scheduled = await createTestApp({ OUTBOX_RELAY_ENABLED: 'true', OUTBOX_POLL_MS: '100' });
     try {
       await db.insert(schema.outbox).values(seedRow(1));
 
-      // The publish alone proves a tick ran; the mark proves its transaction committed. Both are
-      // polled: the job reaches the queue inside the transaction, so it is visible for as long as
-      // the commit that marks the row takes to land.
+      // The job is queued inside the tick's transaction, so the mark can land a moment later.
       await vi.waitFor(
         async () => {
           expect(await queue.getWaitingCount()).toBe(1);

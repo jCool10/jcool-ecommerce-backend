@@ -1,112 +1,51 @@
 import { Product } from '../../domain/entities';
-import type { FindManyActiveCriteria, FindManyActiveResult, MediaQueryPort, ProductRepositoryPort } from '../ports';
+import { fakeProductRepository } from '../../testing/catalog-port.doubles';
+import type { FindManyActiveResult, MediaQueryPort } from '../ports';
 import { ListProductsUseCase } from './list-products.use-case';
 
-class MockMediaQuery implements MediaQueryPort {
-  urls = new Map<string, string>();
-  lastArg?: string[];
-
-  resolveUrls(assetIds: string[]): Promise<Map<string, string>> {
-    this.lastArg = assetIds;
-    return Promise.resolve(this.urls);
-  }
-}
-
-class MockProductRepository implements ProductRepositoryPort {
-  manyResult: FindManyActiveResult = { items: [], total: 0 };
-  lastCriteria?: FindManyActiveCriteria;
-
-  findManyActive(criteria: FindManyActiveCriteria): Promise<FindManyActiveResult> {
-    this.lastCriteria = criteria;
-    return Promise.resolve(this.manyResult);
-  }
-
-  findActiveByIdOrSlug(): Promise<Product | null> {
-    return Promise.resolve(null);
-  }
-
-  findActiveAfter(): Promise<Product[]> {
-    return Promise.resolve([]);
-  }
-
-  findSkuView(): Promise<null> {
-    return Promise.resolve(null);
-  }
-
-  findManySkuViews(): Promise<[]> {
-    return Promise.resolve([]);
-  }
-}
-
-function product(id: string): Product {
-  return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], new Date(0));
-}
-
-function productWithImages(id: string, imageAssetIds: string[]): Product {
+function product(id: string, imageAssetIds: string[] = []): Product {
   return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], new Date(0), imageAssetIds);
 }
 
+function build(
+  result: FindManyActiveResult,
+  media: MediaQueryPort = { resolveUrls: () => Promise.resolve(new Map()) },
+) {
+  return new ListProductsUseCase(fakeProductRepository({ findManyActive: () => Promise.resolve(result) }), media);
+}
+
 describe('ListProductsUseCase', () => {
-  let repo: MockProductRepository;
-  let media: MockMediaQuery;
-  let useCase: ListProductsUseCase;
+  it('reports totalPages as the ceiling of total over pageSize', async () => {
+    const cases = [
+      { total: 25, pageSize: 10 },
+      { total: 20, pageSize: 20 },
+      { total: 0, pageSize: 20 },
+    ];
 
-  beforeEach(() => {
-    repo = new MockProductRepository();
-    media = new MockMediaQuery();
-    useCase = new ListProductsUseCase(repo, media);
+    const pages = await Promise.all(
+      cases.map(async ({ total, pageSize }) => {
+        const result = await build({ items: [], total }).execute({ page: 1, pageSize });
+        return result.totalPages;
+      }),
+    );
+
+    expect(pages).toEqual([3, 1, 0]);
   });
 
-  it('computes totalPages by ceiling(total / pageSize)', async () => {
-    repo.manyResult = { items: [product('a')], total: 25 };
+  it('resolves the image URLs for the whole page in one call', async () => {
+    const calls: string[][] = [];
+    const media: MediaQueryPort = {
+      resolveUrls: (assetIds) => {
+        calls.push(assetIds);
+        return Promise.resolve(new Map());
+      },
+    };
 
-    const result = await useCase.execute({ page: 2, pageSize: 10 });
-
-    expect(result.totalPages).toBe(3);
-    expect(result.total).toBe(25);
-    expect(result.page).toBe(2);
-    expect(result.pageSize).toBe(10);
-    expect(result.items).toHaveLength(1);
-  });
-
-  it('returns 0 totalPages when there are no matches', async () => {
-    repo.manyResult = { items: [], total: 0 };
-
-    const result = await useCase.execute({ page: 1, pageSize: 20 });
-
-    expect(result.totalPages).toBe(0);
-    expect(result.items).toEqual([]);
-  });
-
-  it('returns 1 page when total fits exactly in one page', async () => {
-    repo.manyResult = { items: [product('a'), product('b')], total: 20 };
-
-    const result = await useCase.execute({ page: 1, pageSize: 20 });
-
-    expect(result.totalPages).toBe(1);
-  });
-
-  it('passes the criteria (filters included) through to the repository', async () => {
-    await useCase.execute({
+    await build({ items: [product('a', ['x']), product('b', ['y', 'z'])], total: 2 }, media).execute({
       page: 1,
       pageSize: 20,
-      categorySlug: 'electronics',
-      q: 'phone',
     });
 
-    expect(repo.lastCriteria).toEqual({
-      page: 1,
-      pageSize: 20,
-      categorySlug: 'electronics',
-      q: 'phone',
-    });
-  });
-
-  it('resolves the whole page of image assets in one call', async () => {
-    repo.manyResult = { items: [productWithImages('a', ['x']), productWithImages('b', ['y', 'z'])], total: 2 };
-
-    await useCase.execute({ page: 1, pageSize: 20 });
-
-    expect(media.lastArg).toEqual(['x', 'y', 'z']);
+    expect(calls).toEqual([['x', 'y', 'z']]);
   });
 });

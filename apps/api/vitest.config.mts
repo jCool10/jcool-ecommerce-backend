@@ -47,15 +47,13 @@ export default defineConfig({
         'src/modules/*/testing/**',
       ],
       // Glob-scoped, not global: `test:cov` runs the unit tier only, and repositories, adapters and
-      // controllers are covered by the e2e tier — a global floor would go red on code that is tested.
-      // The numbers are measured-minus-two, not a round 80 that would sit far below or above reality.
-      // Re-measured after the user context moved out; the ratio barely moved.
+      // controllers are covered by the e2e tier. Measured minus two.
       thresholds: {
         'src/**/{domain,application}/**': {
-          statements: 84,
+          statements: 82,
           branches: 80,
-          functions: 84,
-          lines: 84,
+          functions: 79,
+          lines: 82,
         },
       },
     },

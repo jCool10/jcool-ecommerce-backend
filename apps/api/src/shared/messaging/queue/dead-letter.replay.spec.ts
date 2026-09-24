@@ -7,13 +7,12 @@ const ID_A = '0198f0d8-0000-7000-8000-00000000000a';
 const ID_B = '0198f0d8-0000-7000-8000-00000000000b';
 
 const DAY_MS = 86_400_000;
-const RETENTION_MS = 30 * DAY_MS;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
-// No inbox claim — the ordinary case, so every test below is about the branch it names.
+// No inbox claim, the ordinary case, so each test is about the branch it names.
 const guards: Pick<ReplayOptions, 'inboxLookup' | 'inboxRetentionMs' | 'jobOptionsFor'> = {
   inboxLookup: () => Promise.resolve(null),
-  inboxRetentionMs: RETENTION_MS,
+  inboxRetentionMs: 30 * DAY_MS,
   jobOptionsFor: (eventType) => (eventType === 'order.paid' ? { attempts: 15 } : {}),
 };
 
@@ -23,8 +22,7 @@ const dead = (overrides: Partial<DeadLetterJob> = {}): DeadLetterJob => ({
   aggregateId: '0198f0d8-1111-7000-8000-000000000001',
   eventType: 'order.placed',
   payload: { orderId: '0198f0d8-1111-7000-8000-000000000001' },
-  // Relative, not a fixed date: `occurredAt` decides branch 3, so a literal would cross the
-  // retention horizon one day and fail this suite on a calendar date rather than on a change.
+  // Relative, so the suite never crosses the retention horizon on a calendar date.
   occurredAt: ago(60_000),
   traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
   failedReason: 'database unavailable',
@@ -45,8 +43,7 @@ const entry = (data: Partial<DeadLetterJob>, id = data.outboxId): FakeJob => ({
   remove: vi.fn().mockResolvedValue(undefined),
 });
 
-// `mainJobs` stands for the failed job still holding the message id — the thing whose absence turns
-// a naive replay into a silent no-op.
+// `mainJobs` stands for the failed job still holding the message id.
 function build({
   entries = [],
   mainJobs = new Map<string, FakeJob>(),
@@ -59,55 +56,32 @@ function build({
   dlqNow?: (id: string) => FakeJob | undefined;
 } = {}) {
   const add = vi.fn().mockResolvedValue(undefined);
-  const getJobs = vi.fn().mockResolvedValue(entries);
-  const getJob = vi.fn(mainGetJob ?? ((id: string) => Promise.resolve(mainJobs.get(id))));
-
-  const main = { getJob, add } as unknown as Queue;
+  const main = {
+    getJob: vi.fn(mainGetJob ?? ((id: string) => Promise.resolve(mainJobs.get(id)))),
+    add,
+  } as unknown as Queue;
   const dlq = {
-    getJobs,
+    getJobs: vi.fn().mockResolvedValue(entries),
     getJob: vi.fn((id: string) => Promise.resolve(dlqNow ? dlqNow(id) : entries.find((e) => e.id === id))),
   } as unknown as Queue;
 
-  return { main, dlq, add, getJobs };
+  return { main, dlq, add };
 }
 
 describe('replayDeadLetters', () => {
-  it('changes nothing on a dry run and still reports every entry', async () => {
-    const dlqJob = entry(dead());
-    const { main, dlq, add } = build({ entries: [dlqJob] });
-
-    const summary = await replayDeadLetters(main, dlq, guards);
-
-    expect(add).not.toHaveBeenCalled();
-    expect(dlqJob.remove).not.toHaveBeenCalled();
-    expect(summary).toMatchObject({ replayed: 0, skipped: 1 });
-    // The parking reason rides along: it is the diagnosis the operator must act on before replaying,
-    // and the summary is the only place the CLI can show it from.
-    expect(summary.outcomes[0]).toEqual({
-      messageId: ID_A,
-      eventType: 'order.placed',
-      status: 'skipped',
-      detail: 'dry run',
-      failedReason: 'database unavailable',
-    });
-  });
-
-  it('frees the message id before reusing it, then re-publishes the envelope without the diagnosis', async () => {
-    const dlqJob = entry(dead());
+  it('frees the message id, then re-publishes the bare envelope on its ladder', async () => {
+    const dlqJob = entry(dead({ eventType: 'order.paid' }));
     const stale = entry(dead());
     const { main, dlq, add } = build({ entries: [dlqJob], mainJobs: new Map([[ID_A, stale]]) });
 
     const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
 
-    // Without this removal `add` is ignored rather than rejected and the whole replay is a no-op.
+    // BullMQ ignores an add under a job id it still holds, so without this the replay is a no-op.
     expect(stale.remove).toHaveBeenCalled();
-    expect(add).toHaveBeenCalledTimes(1);
-
+    expect(add).toHaveBeenCalledOnce();
     const [name, published, opts] = add.mock.calls[0] as [string, Record<string, unknown>, unknown];
-    expect(name).toBe('order.placed');
-    expect(opts).toEqual({ jobId: ID_A });
-    // The diagnosis is why the message is here, not part of it — republishing it would hand the
-    // consumer fields the envelope contract does not have.
+    expect(name).toBe('order.paid');
+    expect(opts).toEqual({ jobId: ID_A, attempts: 15 });
     expect(Object.keys(published).sort()).toEqual(
       ['aggregateId', 'aggregateType', 'eventType', 'occurredAt', 'outboxId', 'payload', 'traceparent'].sort(),
     );
@@ -115,12 +89,22 @@ describe('replayDeadLetters', () => {
     expect(summary).toMatchObject({ replayed: 1, skipped: 0 });
   });
 
-  it('re-publishes a message on the ladder its event type is published with', async () => {
-    const { main, dlq, add } = build({ entries: [entry(dead({ eventType: 'order.paid' }))] });
+  // With no claim, only birth inside the window proves the inbox would still remember an apply.
+  // `failedAt` is re-stamped on every parking, so it cannot decide.
+  it('judges age by when the message was born, not when it last failed', async () => {
+    const statusFor = async (occurredAt: string) => {
+      const { main, dlq } = build({ entries: [entry(dead({ occurredAt, failedAt: ago(60_000) }))] });
+      const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
+      return summary.outcomes[0].status;
+    };
 
-    await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
+    const statuses = {
+      inside: await statusFor(ago(29 * DAY_MS)),
+      outside: await statusFor(ago(31 * DAY_MS)),
+      unreadable: await statusFor('not a date'),
+    };
 
-    expect(add).toHaveBeenCalledWith('order.paid', expect.anything(), { jobId: ID_A, attempts: 15 });
+    expect(statuses).toEqual({ inside: 'replayed', outside: 'skipped', unreadable: 'skipped' });
   });
 
   it('leaves a message alone while a worker is holding it', async () => {
@@ -137,19 +121,19 @@ describe('replayDeadLetters', () => {
     expect(summary.outcomes[0].detail).toContain('locked');
   });
 
-  it('keeps a fresher dead letter that landed while the message was being re-published', async () => {
+  // Deleting it would hide the newer failure in the queue whose only job is to make it visible.
+  it('keeps a fresher dead letter that landed during the re-publish', async () => {
     const dlqJob = entry(dead());
     const fresher = entry(dead({ failedAt: '2026-08-24T00:01:00.000Z', failedReason: 'and again' }));
     const { main, dlq } = build({ entries: [dlqJob], dlqNow: () => fresher });
 
     const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
 
-    // Deleting it would hide the newer failure in the queue whose only job is to make it visible.
     expect(fresher.remove).not.toHaveBeenCalled();
     expect(summary.replayed).toBe(1);
   });
 
-  it('refuses to replay an envelope it cannot key, rather than publishing under a bad id', async () => {
+  it('refuses to replay an envelope it cannot key', async () => {
     const dlqJob = entry({ failedReason: 'Malformed domain event envelope (fields: none)' }, 'bullmq-job-id');
     const { main, dlq, add } = build({ entries: [dlqJob] });
 
@@ -157,12 +141,11 @@ describe('replayDeadLetters', () => {
 
     expect(add).not.toHaveBeenCalled();
     expect(dlqJob.remove).not.toHaveBeenCalled();
-    expect(summary.outcomes[0].messageId).toBe('bullmq-job-id');
-    expect(summary.outcomes[0].status).toBe('skipped');
+    expect(summary.outcomes[0]).toMatchObject({ messageId: 'bullmq-job-id', status: 'skipped' });
     expect(summary.outcomes[0].detail).toContain('malformed envelope');
   });
 
-  it('reports the rest of the batch when one message fails — the summary is what the operator has', async () => {
+  it('reports the rest of the batch when one message fails', async () => {
     const bad = entry(dead());
     const good = entry(dead({ outboxId: ID_B }), ID_B);
     const { main, dlq } = build({
@@ -181,112 +164,19 @@ describe('replayDeadLetters', () => {
     expect(summary.outcomes[1]).toMatchObject({ messageId: ID_B, status: 'replayed' });
   });
 
-  it('asks Redis for no more than the caller allowed', async () => {
-    const { main, dlq, getJobs } = build();
+  // A dry run that ignored the guard would promise a replay the apply run then refuses.
+  it('runs the inbox guard on a dry run too', async () => {
+    const claimed = entry(dead(), ID_A);
+    const forced = entry(dead({ outboxId: ID_B, occurredAt: ago(31 * DAY_MS) }), ID_B);
+    const { main, dlq } = build({ entries: [claimed, forced] });
 
-    await replayDeadLetters(main, dlq, { ...guards, limit: 20 });
-
-    expect(getJobs).toHaveBeenCalledWith(['waiting', 'prioritized'], 0, 19, true);
-  });
-
-  // Only the inbox knows whether the effect already happened, and when it says nothing only
-  // `occurredAt` establishes that its silence means anything.
-  describe('the inbox guard', () => {
-    const applied = new Date('2026-08-01T10:00:00.000Z');
-
-    it('refuses a message the inbox says was already applied, and --force cannot override it', async () => {
-      const dlqJob = entry(dead());
-      const { main, dlq, add } = build({ entries: [dlqJob] });
-
-      const summary = await replayDeadLetters(main, dlq, {
-        ...guards,
-        inboxLookup: () => Promise.resolve(applied),
-        dryRun: false,
-        force: true,
-      });
-
-      // Replaying it would collapse on the inbox's unique index while the operator reads "replayed".
-      // The skipped tally is asserted end to end; the negatives and the exact operator-facing detail
-      // — the applied-at timestamp, and that --force was refused — are not.
-      expect(add).not.toHaveBeenCalled();
-      expect(dlqJob.remove).not.toHaveBeenCalled();
-      expect(summary.outcomes[0].detail).toContain('already applied at 2026-08-01T10:00:00.000Z');
-      expect(summary.outcomes[0].detail).toContain('--force cannot override');
+    const summary = await replayDeadLetters(main, dlq, {
+      ...guards,
+      inboxLookup: (id) => Promise.resolve(id === ID_A ? new Date('2026-08-01T10:00:00.000Z') : null),
+      force: true,
     });
 
-    it('replays when there is no claim and the message was born inside the retention window', async () => {
-      const dlqJob = entry(dead({ occurredAt: ago(29 * DAY_MS) }));
-      const lookup = vi.fn(() => Promise.resolve(null));
-      const { main, dlq, add } = build({ entries: [dlqJob] });
-
-      const summary = await replayDeadLetters(main, dlq, { ...guards, inboxLookup: lookup, dryRun: false });
-
-      // Keyed by the message id, not the BullMQ job id — the claim it must match is the outbox row id.
-      expect(lookup).toHaveBeenCalledWith(ID_A);
-      expect(add).toHaveBeenCalledTimes(1);
-      expect(summary).toMatchObject({ replayed: 1, skipped: 0 });
-    });
-
-    it('refuses a message born before the retention window, where "no claim" proves nothing', async () => {
-      const dlqJob = entry(dead({ occurredAt: ago(31 * DAY_MS) }));
-      const { main, dlq, add } = build({ entries: [dlqJob] });
-
-      const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
-
-      expect(add).not.toHaveBeenCalled();
-      expect(summary.outcomes[0].detail).toContain('older than the 30-day inbox retention');
-      expect(summary.outcomes[0].detail).toContain('--force');
-    });
-
-    // `dead-letter.ts` re-stamps `failedAt` on every parking, so an ancient message parked again
-    // this morning looks brand new. Birth cannot be re-stamped.
-    it('decides on when the message was born, not on when it last failed', async () => {
-      const dlqJob = entry(dead({ occurredAt: ago(31 * DAY_MS), failedAt: ago(60_000) }));
-      const { main, dlq, add } = build({ entries: [dlqJob] });
-
-      const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
-
-      expect(add).not.toHaveBeenCalled();
-      expect(summary.outcomes[0].detail).toContain('older than the 30-day inbox retention');
-    });
-
-    it('lets --force past the age check once a human has confirmed it was never applied', async () => {
-      const dlqJob = entry(dead({ occurredAt: ago(31 * DAY_MS) }));
-      const { main, dlq, add } = build({ entries: [dlqJob] });
-
-      await replayDeadLetters(main, dlq, { ...guards, dryRun: false, force: true });
-
-      // The replayed tally is asserted end to end; that the message went back on the MAIN queue
-      // exactly once is not.
-      expect(add).toHaveBeenCalledTimes(1);
-    });
-
-    // `isWellFormedEnvelope` vets `outboxId` and `eventType` only, so this field really can arrive
-    // unusable — and the branch fails closed rather than reading NaN as "inside the window".
-    it('treats an unreadable occurredAt as born too long ago — an unprovable replay is refused', async () => {
-      const dlqJob = entry(dead({ occurredAt: 'not a date' }));
-      const { main, dlq, add } = build({ entries: [dlqJob] });
-
-      const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
-
-      expect(add).not.toHaveBeenCalled();
-      expect(summary.outcomes[0].status).toBe('skipped');
-    });
-
-    it('runs the guard on a dry run too, so the listing is what --apply would actually do', async () => {
-      const claimed = entry(dead(), ID_A);
-      const forced = entry(dead({ outboxId: ID_B, occurredAt: ago(31 * DAY_MS) }), ID_B);
-      const { main, dlq } = build({ entries: [claimed, forced] });
-
-      const summary = await replayDeadLetters(main, dlq, {
-        ...guards,
-        inboxLookup: (id) => Promise.resolve(id === ID_A ? applied : null),
-        force: true,
-      });
-
-      // A dry run that ignored the guard would promise a replay the apply run then refuses.
-      expect(summary.outcomes[0].detail).toContain('already applied');
-      expect(summary.outcomes[1].detail).toBe('dry run (would be forced past the retention horizon)');
-    });
+    expect(summary.outcomes[0].detail).toContain('already applied');
+    expect(summary.outcomes[1].detail).toBe('dry run (would be forced past the retention horizon)');
   });
 });

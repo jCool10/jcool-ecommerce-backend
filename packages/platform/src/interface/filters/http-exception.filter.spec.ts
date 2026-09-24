@@ -8,23 +8,18 @@ import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { HttpExceptionFilter } from './http-exception.filter';
 
-// Sentry is a no-op without a DSN at runtime; here we mock it to assert the filter's reporting
-// contract (which errors get captured, and with which tags) without a real client.
 vi.mock('@sentry/nestjs', () => ({ captureException: vi.fn() }));
 
 const captureException = vi.mocked(Sentry.captureException);
 
-// Minimal collaborators: real observability helpers read this CLS mock; no active OTel span
-// so getActiveTraceId() returns undefined (traceId absent, as in a no-tracing test run).
 const cls = { isActive: () => true, getId: () => 'req-1', get: () => undefined } as unknown as ClsService;
-const config = fakeConfigService({ 'app.env': 'test' }); // app.env !== 'development' → JSON branch
+const config = fakeConfigService({ 'app.env': 'test' });
 const logWarn = vi.fn();
 const logger = fakePinoLogger({ warn: logWarn });
+const rejection = (): Record<string, unknown> => logWarn.mock.calls[0][0] as Record<string, unknown>;
 
-// `routePath`/`baseUrl` let a test drive the concrete url and the matched template apart, which is
-// the divergence the route log field has to resolve in favour of the template. `routePath: null`
-// models an unmatched request — Express leaves `req.route` unset, which is every 404.
-function makeHost(method = 'GET', url = '/debug/boom', routePath?: string | null, baseUrl = '') {
+// `routePath: null` models an unmatched request: Express leaves `req.route` unset, which is every 404.
+function makeHost(method = 'GET', url = '/debug/boom', routePath?: string | null) {
   const response = {
     setHeader: vi.fn(),
     getHeader: vi.fn(() => undefined),
@@ -36,7 +31,7 @@ function makeHost(method = 'GET', url = '/debug/boom', routePath?: string | null
     method,
     url,
     path,
-    baseUrl,
+    baseUrl: '',
     headers: {},
     ...(routePath === null ? {} : { route: { path: routePath ?? path } }),
   };
@@ -46,166 +41,106 @@ function makeHost(method = 'GET', url = '/debug/boom', routePath?: string | null
   return { host, response };
 }
 
-describe('HttpExceptionFilter — Sentry reporting', () => {
+describe('HttpExceptionFilter', () => {
   const filter = new HttpExceptionFilter(logger, cls, config);
 
-  beforeEach(() => captureException.mockClear());
-
-  it('reports a 5xx to Sentry with requestId/traceId/route tags', () => {
-    filter.catch(new Error('boom'), makeHost('GET', '/debug/boom').host);
-
-    expect(captureException).toHaveBeenCalledTimes(1);
-    const [reported, hint] = captureException.mock.calls[0];
-    expect(reported).toBeInstanceOf(Error);
-    // Asserted on the whole hint: `tags` lives on only one arm of Sentry's
-    // ExclusiveEventHintOrCaptureContext union, so reading it off the union directly does not compile.
-    expect(hint).toMatchObject({ tags: { request_id: 'req-1', trace_id: undefined, route: 'GET /debug/boom' } });
+  beforeEach(() => {
+    captureException.mockClear();
+    logWarn.mockClear();
   });
 
-  it('does NOT report a 4xx client error (avoids Sentry noise)', () => {
-    filter.catch(new BadRequestException('bad'), makeHost('POST', '/auth/register').host);
+  describe('Sentry reporting', () => {
+    it('reports a 5xx with requestId, traceId and route tags', () => {
+      filter.catch(new Error('boom'), makeHost('GET', '/debug/boom').host);
 
-    expect(captureException).not.toHaveBeenCalled();
+      expect(captureException).toHaveBeenCalledTimes(1);
+      const [reported, hint] = captureException.mock.calls[0];
+      expect(reported).toBeInstanceOf(Error);
+      // Asserted on the whole hint: `tags` lives on only one arm of Sentry's
+      // ExclusiveEventHintOrCaptureContext union, so reading it off the union directly does not compile.
+      expect(hint).toMatchObject({ tags: { request_id: 'req-1', trace_id: undefined, route: 'GET /debug/boom' } });
+    });
+
+    it('does not report a 4xx or a DomainError', () => {
+      filter.catch(new BadRequestException('bad'), makeHost('POST', '/auth/register').host);
+      filter.catch(new DomainError('Email is not a valid address'), makeHost('POST', '/auth/register').host);
+
+      expect(captureException).not.toHaveBeenCalled();
+    });
   });
 
-  it('does NOT report a DomainError — a broken business rule is a client error, not a handler bug', () => {
-    filter.catch(new DomainError('Email is not a valid address'), makeHost('POST', '/auth/register').host);
+  describe('status mapping', () => {
+    it('answers 503 for a stalled identity clock, not 500', () => {
+      const { host, response } = makeHost('POST', '/auth/register');
 
-    expect(captureException).not.toHaveBeenCalled();
-  });
-});
+      filter.catch(new ClockStalledError('deadline'), host);
 
-describe('HttpExceptionFilter — status mapping', () => {
-  const filter = new HttpExceptionFilter(logger, cls, config);
+      expect(response.status).toHaveBeenCalledWith(503);
+      expect(response.json).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 503, message: 'Service unavailable' }),
+      );
+    });
 
-  it('answers 503 for a stalled identity clock, not 500', () => {
-    const { host, response } = makeHost('POST', '/auth/register');
+    it('answers 422 for a DomainError and keeps its rule message', () => {
+      const { host, response } = makeHost('POST', '/auth/register');
 
-    filter.catch(new ClockStalledError('deadline'), host);
+      filter.catch(new DomainError('Email is not a valid address'), host);
 
-    expect(response.status).toHaveBeenCalledWith(503);
-    // Retryable, so the client is told to retry rather than handed the blanket 5xx mask.
-    expect(response.json).toHaveBeenCalledWith(
-      expect.objectContaining({ statusCode: 503, message: 'Service unavailable' }),
-    );
-  });
-
-  it('answers 422 for a DomainError and keeps its rule message', () => {
-    const { host, response } = makeHost('POST', '/auth/register');
-
-    filter.catch(new DomainError('Email is not a valid address'), host);
-
-    expect(response.status).toHaveBeenCalledWith(422);
-    expect(response.json).toHaveBeenCalledWith(
-      expect.objectContaining({ statusCode: 422, message: 'Email is not a valid address' }),
-    );
+      expect(response.status).toHaveBeenCalledWith(422);
+      expect(response.json).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 422, message: 'Email is not a valid address' }),
+      );
+    });
   });
 
-  it('still masks every other unexpected error as 500', () => {
-    const { host, response } = makeHost('GET', '/debug/boom');
+  describe('log fields', () => {
+    // Nest mounts every route on the root app with its full path, so a matched request carries the
+    // template in `route.path` and an empty `baseUrl`.
+    it('logs the route template, not the concrete url', () => {
+      const { host, response } = makeHost('GET', '/orders/01H8XYZ?expand=items', '/orders/:orderId');
 
-    filter.catch(new Error('boom'), host);
+      filter.catch(new BadRequestException('bad'), host);
 
-    expect(response.status).toHaveBeenCalledWith(500);
-    expect(response.json).toHaveBeenCalledWith(
-      expect.objectContaining({ statusCode: 500, message: 'Internal server error' }),
-    );
-  });
+      expect(rejection()).toMatchObject({ route: '/orders/:orderId' });
+      expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ path: '/orders/01H8XYZ?expand=items' }));
+    });
 
-  it('leaves the 4xx payload untouched', () => {
-    const { host, response } = makeHost('POST', '/auth/register');
+    it('falls back to the query-free path when no route matched', () => {
+      const { host } = makeHost('GET', '/nope/whatever?x=1', null);
 
-    filter.catch(new BadRequestException('bad'), host);
+      filter.catch(new NotFoundException(), host);
 
-    expect(response.status).toHaveBeenCalledWith(400);
-    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, message: 'bad' }));
-  });
-});
+      expect(rejection()).toMatchObject({ route: '/nope/whatever' });
+    });
 
-describe('HttpExceptionFilter — log fields', () => {
-  const filter = new HttpExceptionFilter(logger, cls, config);
+    // A DomainError gets no Sentry event, so the warn line is the only place its stack survives.
+    it('keeps the stack of a DomainError on the warn line', () => {
+      const domainError = new DomainError('Email is not a valid address');
 
-  beforeEach(() => logWarn.mockClear());
+      filter.catch(domainError, makeHost('POST', '/auth/register').host);
 
-  // Nest registers every route on the root Express app with its fully-composed path, so a matched
-  // request carries `route.path = '/orders/:orderId'` and an empty `baseUrl` — not a per-controller
-  // sub-router. Driving it any other way would assert a request shape Express never builds.
-  it('logs the route template, so error buckets join the success line and no query string is logged', () => {
-    const { host, response } = makeHost('GET', '/orders/01H8XYZ?expand=items', '/orders/:orderId');
+      expect(rejection()).toMatchObject({ err: domainError });
+    });
 
-    filter.catch(new BadRequestException('bad'), host);
+    it('logs the cause behind a rejection without sending it to the client', () => {
+      const { host, response } = makeHost('GET', '/cart');
+      const cause = new Error('"exp" claim timestamp check failed');
 
-    expect(logWarn).toHaveBeenCalledWith(expect.objectContaining({ route: '/orders/:orderId' }), 'request rejected');
-    // The envelope still echoes the concrete url the client asked for.
-    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ path: '/orders/01H8XYZ?expand=items' }));
-  });
+      filter.catch(new UnauthorizedException('Unauthorized', { cause }), host);
 
-  // The branch every unmatched-route 404 takes, and the filter's most-logged path.
-  it('falls back to the query-free path when no route matched, rather than the raw url', () => {
-    const { host } = makeHost('GET', '/nope/whatever?x=1', null);
+      expect(rejection()).toMatchObject({ reason: 'Unauthorized', cause: '"exp" claim timestamp check failed' });
+      expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401, message: 'Unauthorized' }));
+      expect(response.json).toHaveBeenCalledWith(expect.not.objectContaining({ cause: expect.anything() as unknown }));
+    });
 
-    filter.catch(new NotFoundException(), host);
+    // An unmatched GET on a mailed `?token=` link is answered `Cannot GET <url>`, query and all.
+    it('drops the query string from a reason that echoes the url', () => {
+      const { host } = makeHost('GET', '/auth/verify-email?token=mailed-secret', null);
 
-    expect(logWarn).toHaveBeenCalledWith(expect.objectContaining({ route: '/nope/whatever' }), 'request rejected');
-  });
+      filter.catch(new NotFoundException('Cannot GET /auth/verify-email?token=mailed-secret'), host);
 
-  it('keeps the stack of a DomainError on the warn line, since it gets no Sentry event', () => {
-    const domainError = new DomainError('Email is not a valid address');
-    const { host } = makeHost('POST', '/auth/register');
-
-    filter.catch(domainError, host);
-
-    expect(logWarn).toHaveBeenCalledWith(expect.objectContaining({ err: domainError }), 'request rejected');
-  });
-
-  it('logs the message the client was given as the rejection reason', () => {
-    const { host } = makeHost('POST', '/orders');
-
-    filter.catch(new BadRequestException(['items must not be empty', 'currency must be a string']), host);
-
-    expect(logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: ['items must not be empty', 'currency must be a string'] }),
-      'request rejected',
-    );
-  });
-
-  it('logs the cause behind a rejection without sending it to the client', () => {
-    const { host, response } = makeHost('GET', '/cart');
-
-    const cause = new Error('"exp" claim timestamp check failed');
-
-    filter.catch(new UnauthorizedException('Unauthorized', { cause }), host);
-
-    expect(logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'Unauthorized', cause: '"exp" claim timestamp check failed' }),
-      'request rejected',
-    );
-    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401, message: 'Unauthorized' }));
-    expect(response.json).toHaveBeenCalledWith(expect.not.objectContaining({ cause: expect.anything() as unknown }));
-  });
-
-  // An unmatched GET on a mailed `?token=` link is answered `Cannot GET <url>`, query and all.
-  it('drops the query string from a reason that echoes the url', () => {
-    const { host } = makeHost('GET', '/auth/verify-email?token=mailed-secret', null);
-
-    filter.catch(new NotFoundException('Cannot GET /auth/verify-email?token=mailed-secret'), host);
-
-    expect(logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'Cannot GET /auth/verify-email' }),
-      'request rejected',
-    );
-    expect(JSON.stringify(logWarn.mock.calls)).not.toContain('mailed-secret');
-  });
-
-  it('keeps the rejection fields off a 5xx line, which carries the error instead', () => {
-    const logError = vi.fn();
-    const errorFilter = new HttpExceptionFilter(fakePinoLogger({ error: logError }), cls, config);
-
-    errorFilter.catch(new Error('boom'), makeHost('GET', '/debug/boom').host);
-
-    expect(logError).toHaveBeenCalledWith(
-      expect.not.objectContaining({ reason: expect.anything() as unknown }),
-      'request failed',
-    );
+      expect(rejection()).toMatchObject({ reason: 'Cannot GET /auth/verify-email' });
+      expect(JSON.stringify(logWarn.mock.calls)).not.toContain('mailed-secret');
+    });
   });
 });

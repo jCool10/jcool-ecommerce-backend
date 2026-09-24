@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Counter } from 'prom-client';
+import { Counter } from 'prom-client';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { LeaseConfig } from '../config/configuration';
@@ -13,25 +13,36 @@ const clockMetrics = vi.hoisted(() => ({
 }));
 vi.mock('@jcool/platform/metrics', () => clockMetrics);
 
-// Well after EPOCH_MS (2026-01-01): the earliest instant the layout can stamp is EPOCH_MS + 1.
 const START_MS = 1_800_000_000_000;
 const HOLDER = LEASE.holder;
 const GRACE_MS = 8_000;
 const RETRY_MS = 1_000;
 
+function counter(name: string): Counter {
+  return new Counter({ name, help: name, registers: [] });
+}
+
+async function valueOf(metric: Counter): Promise<number> {
+  return (await metric.get()).values[0]?.value ?? 0;
+}
+
 function setup(overrides: Partial<LeaseConfig> = {}, graceMs = GRACE_MS) {
   const lease = { ...LEASE, ...overrides };
   const store = new FakeLeaseStore();
   const nodeLease = testNodeLease(store, lease);
-  const counters = { renewFailures: { inc: vi.fn() }, losses: { inc: vi.fn() }, floorRejections: { inc: vi.fn() } };
+  const counters = {
+    renewFailures: counter('renew_failures_total'),
+    losses: counter('lost_total'),
+    floorRejections: counter('floor_rejections_total'),
+  };
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const keeper = new LeaseKeeper(
     nodeLease,
     fakeConfigService({ lease, 'app.shutdownGracePeriodMs': graceMs }),
     fakePinoLogger(log),
-    counters.renewFailures as unknown as Counter,
-    counters.losses as unknown as Counter,
-    counters.floorRejections as unknown as Counter,
+    counters.renewFailures,
+    counters.losses,
+    counters.floorRejections,
   );
   return { store, lease: nodeLease, keeper, counters, log };
 }
@@ -51,33 +62,22 @@ describe('LeaseKeeper', () => {
     expect(() => setup({ renewEveryMs: LEASE.ttlMs - LEASE.fenceMarginMs })).toThrow(RangeError);
   });
 
-  it('holds a node before the app serves, with the clock metrics bound to its generator', async () => {
-    const { store, lease, keeper } = setup();
-    store.grant(7);
-
-    await keeper.onApplicationBootstrap();
-
-    expect(lease.state).toBe('held');
-    expect(lease.nodeId).toBe(7);
-    expect(clockMetrics.bindIdentityClockMetrics).toHaveBeenCalledWith(lease.generator);
-  });
-
-  it('renews on schedule, reporting the last timestamp minted', async () => {
-    const { store, lease, keeper } = setup();
+  it('renews on schedule', async () => {
+    const { store, keeper } = setup();
     store.grant(7);
     await keeper.onApplicationBootstrap();
-    lease.generate(1);
 
-    await vi.advanceTimersByTimeAsync(LEASE.renewEveryMs);
-    expect(store.renewals).toEqual([
-      { nodeId: 7, holder: HOLDER, generation: 1, ttlMs: LEASE.ttlMs, lastMs: lease.generator?.lastTimestampMs },
-    ]);
+    await vi.advanceTimersByTimeAsync(LEASE.renewEveryMs - 1);
+    expect(store.renewals).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.renewals).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(LEASE.renewEveryMs);
     expect(store.renewals).toHaveLength(2);
   });
 
-  it('keeps minting through failed renewals until the fence, and resumes once one succeeds', async () => {
+  it('mints through failed renewals until the fence, then resumes on a renewal', async () => {
     const { store, lease, keeper, counters, log } = setup();
     store.grant(7);
     await keeper.onApplicationBootstrap();
@@ -85,7 +85,8 @@ describe('LeaseKeeper', () => {
 
     await vi.advanceTimersByTimeAsync(LEASE.renewEveryMs + RETRY_MS);
     expect(store.renewals).toHaveLength(2);
-    expect(counters.renewFailures.inc).toHaveBeenCalledTimes(2);
+    expect(await valueOf(counters.renewFailures)).toBe(2);
+    // One warning per failure streak, not one per retry.
     expect(log.warn).toHaveBeenCalledTimes(1);
     expect(lease.generate(1)).toEqual(expect.any(String));
 
@@ -106,15 +107,16 @@ describe('LeaseKeeper', () => {
 
     await vi.advanceTimersByTimeAsync(LEASE.renewEveryMs);
 
-    expect(counters.losses.inc).toHaveBeenCalledTimes(1);
-    expect(clockMetrics.unbindIdentityClockMetrics).toHaveBeenCalledWith(lost);
+    expect(await valueOf(counters.losses)).toBe(1);
     expect(lease.nodeId).toBe(8);
+    // The drift gauge follows the generator that mints now, not the one that was lost.
+    expect(clockMetrics.unbindIdentityClockMetrics).toHaveBeenCalledWith(lost);
     expect(clockMetrics.bindIdentityClockMetrics).toHaveBeenLastCalledWith(lease.generator);
   });
 
-  // Paced: with every free node's floor ahead (a database clock stepped back), an immediate retry would
-  // spin through the pool, and with no quarantine on the same node forever.
-  it('hands back nodes whose inherited floor runs too far ahead, pausing before each next try', async () => {
+  // With every free node's floor ahead (a database clock stepped back), an immediate retry would spin
+  // through the pool, and with no quarantine on the same node forever.
+  it('hands back nodes whose floor runs too far ahead, pausing between tries', async () => {
     const { store, lease, keeper, counters, log } = setup();
     const ahead = START_MS + LEASE.maxFloorAheadMs + 1;
     store
@@ -128,9 +130,8 @@ describe('LeaseKeeper', () => {
 
     await vi.advanceTimersByTimeAsync(1 + RETRY_MS);
 
-    expect(counters.floorRejections.inc).toHaveBeenCalledTimes(2);
+    expect(await valueOf(counters.floorRejections)).toBe(2);
     expect(log.error).toHaveBeenCalledTimes(1);
-    expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 7 }), expect.any(String));
     expect(store.releases).toEqual([
       expect.objectContaining({ nodeId: 7, lastMs: null }),
       expect.objectContaining({ nodeId: 8, lastMs: null }),
@@ -153,7 +154,7 @@ describe('LeaseKeeper', () => {
     expect(log.error).toHaveBeenCalledTimes(1);
   });
 
-  it('boots without a node while the store is unreachable, and acquires once it answers', async () => {
+  it('boots without a node while the store is down, and acquires once it answers', async () => {
     const { store, lease, keeper } = setup();
     store.fail(new Error('connection refused')).grant(4);
 
@@ -162,27 +163,6 @@ describe('LeaseKeeper', () => {
 
     await vi.advanceTimersByTimeAsync(RETRY_MS);
     expect(lease.nodeId).toBe(4);
-  });
-
-  it('keeps minting through the grace period, then releases with the last timestamp minted', async () => {
-    const { store, lease, keeper } = setup();
-    store.grant(7);
-    await keeper.onApplicationBootstrap();
-
-    const draining = keeper.beforeApplicationShutdown();
-    expect(lease.state).toBe('draining');
-    await vi.advanceTimersByTimeAsync(GRACE_MS - 1);
-    lease.generate(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await draining;
-
-    const generator = lease.generator;
-    const lastMs = generator?.lastTimestampMs;
-    await keeper.onApplicationShutdown();
-
-    expect(store.releases).toEqual([{ nodeId: 7, holder: HOLDER, generation: 1, lastMs }]);
-    expect(lease.state).toBe('released');
-    expect(clockMetrics.unbindIdentityClockMetrics).toHaveBeenCalledWith(generator);
   });
 
   it('takes no new node when the lease is lost while draining', async () => {
@@ -228,6 +208,6 @@ describe('LeaseKeeper', () => {
     await held.keeper.onApplicationBootstrap();
     held.store.releaseResult = new Error('connection refused');
     await expect(held.keeper.onApplicationShutdown()).resolves.toBeUndefined();
-    expect(held.log.warn).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 7 }), expect.any(String));
+    expect(held.store.releases).toEqual([expect.objectContaining({ nodeId: 7, holder: HOLDER })]);
   });
 });

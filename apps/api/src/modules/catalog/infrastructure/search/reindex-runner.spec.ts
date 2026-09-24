@@ -1,13 +1,14 @@
 import type { CatalogSearchPort, ProductRepositoryPort, SearchableProduct } from '../../application/ports';
 import { Product } from '../../domain/entities';
+import { fakeCatalogSearch, fakeProductRepository } from '../../testing/catalog-port.doubles';
 import { reindexAll } from './reindex-runner';
 
 // More reads than any fixture here needs: a cursor that fails to advance would page forever, and a
 // thrown error names that better than a hung run does.
 const RUNAWAY_READS = 20;
 
-function product(id: string, createdAt: Date): Product {
-  return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], createdAt);
+function product(id: string): Product {
+  return new Product(id, `Product ${id}`, id, null, 'ACTIVE', { slug: 'c', name: 'C' }, [], new Date(0));
 }
 
 interface FakeRepository {
@@ -22,13 +23,11 @@ interface FakeRepository {
 function repositoryOf(total: number): FakeRepository {
   const cursorsRead: (string | null)[] = [];
   const hooks: { afterPage?: () => void } = {};
-  // Zero-padded so the id order the scan follows is the insertion order the assertions read, the way
-  // a uuidv7 sorts by creation time.
-  const all = Array.from({ length: total }, (_, i) => product(`p${String(i).padStart(4, '0')}`, new Date(i * 1_000)));
+  // Zero-padded so id order is insertion order, the way a uuidv7 sorts by creation time.
+  const all = Array.from({ length: total }, (_, i) => product(`p${String(i).padStart(4, '0')}`));
 
-  const repo = {
-    findManyActive: () => Promise.resolve({ items: [], total: 0 }),
-    findActiveAfter: (afterId: string | null, limit: number) => {
+  const repo = fakeProductRepository({
+    findActiveAfter: (afterId, limit) => {
       cursorsRead.push(afterId);
       if (cursorsRead.length > RUNAWAY_READS) {
         throw new Error(`scan did not terminate after ${RUNAWAY_READS} reads`);
@@ -37,10 +36,7 @@ function repositoryOf(total: number): FakeRepository {
       hooks.afterPage?.();
       return Promise.resolve(page);
     },
-    findActiveByIdOrSlug: () => Promise.resolve(null),
-    findSkuView: () => Promise.resolve(null),
-    findManySkuViews: () => Promise.resolve([]),
-  } satisfies ProductRepositoryPort;
+  });
 
   return {
     repo,
@@ -57,7 +53,7 @@ function searchSpy(): { search: CatalogSearchPort; calls: string[]; indexed: Sea
   const calls: string[] = [];
   const indexed: SearchableProduct[] = [];
 
-  const search = {
+  const search = fakeCatalogSearch({
     ensureIndex: () => {
       calls.push('ensureIndex');
       return Promise.resolve();
@@ -66,46 +62,28 @@ function searchSpy(): { search: CatalogSearchPort; calls: string[]; indexed: Sea
       calls.push('resetIndex');
       return Promise.resolve();
     },
-    bulkIndex: (docs: SearchableProduct[]) => {
+    bulkIndex: (docs) => {
       calls.push(`bulkIndex:${docs.length}`);
       indexed.push(...docs);
       return Promise.resolve();
     },
-    indexProduct: () => Promise.resolve(),
-    deleteProduct: () => Promise.resolve(),
-    search: () => Promise.resolve({ items: [], total: 0 }),
-  } satisfies CatalogSearchPort;
+  });
 
   return { search, calls, indexed };
 }
 
 describe('reindexAll', () => {
-  it('applies the index settings before loading anything into it', async () => {
+  // Clearing after the load would wipe what was just written.
+  it('applies the settings, then clears on reset, before loading anything', async () => {
     const { repo } = repositoryOf(1);
-    const { search, calls } = searchSpy();
+    const plain = searchSpy();
+    const reset = searchSpy();
 
-    await reindexAll(repo, search);
+    await reindexAll(repo, plain.search);
+    await reindexAll(repo, reset.search, { reset: true });
 
-    expect(calls[0]).toBe('ensureIndex');
-  });
-
-  it('leaves existing documents in place by default', async () => {
-    const { repo } = repositoryOf(1);
-    const { search, calls } = searchSpy();
-
-    await reindexAll(repo, search);
-
-    expect(calls).not.toContain('resetIndex');
-  });
-
-  // Ordered, not merely present: clearing after the load would wipe what was just written.
-  it('clears the index before loading when asked to reset', async () => {
-    const { repo } = repositoryOf(1);
-    const { search, calls } = searchSpy();
-
-    await reindexAll(repo, search, { reset: true });
-
-    expect(calls.indexOf('resetIndex')).toBeLessThan(calls.indexOf('bulkIndex:1'));
+    expect(plain.calls).toEqual(['ensureIndex', 'bulkIndex:1']);
+    expect(reset.calls).toEqual(['ensureIndex', 'resetIndex', 'bulkIndex:1']);
   });
 
   it('pages through a catalog larger than one read and indexes every product once', async () => {
@@ -115,28 +93,26 @@ describe('reindexAll', () => {
     const count = await reindexAll(repo, search);
 
     expect(count).toBe(1_100);
-    expect(indexed.map((doc) => doc.id)).toHaveLength(1_100);
     expect(new Set(indexed.map((doc) => doc.id)).size).toBe(1_100);
     // Each page seeks from the previous page's last row instead of counting rows skipped.
     expect(cursorsRead).toEqual([null, 'p0499', 'p0999']);
   });
 
-  it('stops at the first short page instead of asking for another', async () => {
-    const { repo, cursorsRead } = repositoryOf(300);
-    const { search } = searchSpy();
+  // With no total to stop on, only a catalog that ends on a full page costs one extra empty read.
+  it('stops after a short page, or one empty read past a full one', async () => {
+    const reads = await Promise.all(
+      [0, 300, 500].map(async (total) => {
+        const { repo, cursorsRead } = repositoryOf(total);
+        const indexedCount = await reindexAll(repo, searchSpy().search);
+        return { total, indexedCount, reads: cursorsRead.length };
+      }),
+    );
 
-    await reindexAll(repo, search);
-
-    expect(cursorsRead).toHaveLength(1);
-  });
-
-  // Without a total to stop on, a catalog that ends on a full page costs exactly one empty read.
-  it('confirms the end with a single read when the last page is full', async () => {
-    const { repo, cursorsRead } = repositoryOf(500);
-    const { search } = searchSpy();
-
-    expect(await reindexAll(repo, search)).toBe(500);
-    expect(cursorsRead).toHaveLength(2);
+    expect(reads).toEqual([
+      { total: 0, indexedCount: 0, reads: 1 },
+      { total: 300, indexedCount: 300, reads: 1 },
+      { total: 500, indexedCount: 500, reads: 2 },
+    ]);
   });
 
   it('still indexes every surviving product when one leaves the ACTIVE set mid-run', async () => {
@@ -152,13 +128,5 @@ describe('reindexAll', () => {
 
     const survivors = Array.from({ length: 599 }, (_, i) => `p${String(i + 1).padStart(4, '0')}`);
     expect(indexed.map((doc) => doc.id)).toEqual(expect.arrayContaining(survivors));
-  });
-
-  it('reports nothing indexed for an empty catalog', async () => {
-    const { repo } = repositoryOf(0);
-    const { search, calls } = searchSpy();
-
-    expect(await reindexAll(repo, search)).toBe(0);
-    expect(calls).toEqual(['ensureIndex']);
   });
 });

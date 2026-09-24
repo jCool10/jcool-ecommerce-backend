@@ -36,7 +36,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
   const sweepNamed = (name: string): RetentionSweep => {
     const sweep = registry.all().find((s) => s.name === name);
-    if (!sweep) throw new Error(`no retention sweep named "${name}" — registration is what makes it run`);
+    if (!sweep) throw new Error(`no retention sweep named "${name}"`);
     return sweep;
   };
 
@@ -66,30 +66,37 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   });
 
   describe('auth-tokens', () => {
-    it.each([
-      ['auth-tokens:email-verification', schema.emailVerificationTokens] as const,
-      ['auth-tokens:password-reset', schema.passwordResetTokens] as const,
-    ])('%s keeps a token that can still be spent', async (name, table) => {
-      const userId = await insertUser(`${name.replace(/[:.]/g, '-')}@example.com`);
-      const row = async (suffix: string, expiresAt: Date, consumedAt: Date | null = null) => ({
-        id: await identity.mintOwnedBy(userId),
-        userId,
-        tokenHash: `${suffix}-${'0'.repeat(40)}`,
-        expiresAt,
-        consumedAt,
-      });
-      await db.insert(table).values([
-        await row('live', hoursFromNow(1)),
-        await row('expired', daysAgo(1)),
-        // Spent: `consume` can never match it again.
-        await row('consumed', hoursFromNow(1), daysAgo(1)),
+    it('keeps a verification or reset token that can still be spent', async () => {
+      const outcomes: { name: string; deleted: number; left: string[] }[] = [];
+      for (const [name, table] of [
+        ['auth-tokens:email-verification', schema.emailVerificationTokens] as const,
+        ['auth-tokens:password-reset', schema.passwordResetTokens] as const,
+      ]) {
+        const userId = await insertUser(`${name.replace(/[:.]/g, '-')}@example.com`);
+        const row = async (suffix: string, expiresAt: Date, consumedAt: Date | null = null) => ({
+          id: await identity.mintOwnedBy(userId),
+          userId,
+          tokenHash: `${suffix}-${'0'.repeat(40)}`,
+          expiresAt,
+          consumedAt,
+        });
+        await db.insert(table).values([
+          await row('live', hoursFromNow(1)),
+          await row('expired', daysAgo(1)),
+          // Spent: `consume` can never match it again.
+          await row('consumed', hoursFromNow(1), daysAgo(1)),
+        ]);
+
+        const deleted = await sweepNamed(name).sweep(500);
+        const left = await db.select({ tokenHash: table.tokenHash }).from(table);
+        outcomes.push({ name, deleted, left: left.map((r) => r.tokenHash) });
+      }
+
+      const live = [`live-${'0'.repeat(40)}`];
+      expect(outcomes).toEqual([
+        { name: 'auth-tokens:email-verification', deleted: 2, left: live },
+        { name: 'auth-tokens:password-reset', deleted: 2, left: live },
       ]);
-
-      const deleted = await sweepNamed(name).sweep(500);
-
-      expect(deleted).toBe(2);
-      const left = await db.select({ tokenHash: table.tokenHash }).from(table);
-      expect(left).toEqual([{ tokenHash: `live-${'0'.repeat(40)}` }]);
     });
 
     // Revocation is evidence: collecting a revoked token on the expiry clock turns a detected

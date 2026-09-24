@@ -23,7 +23,7 @@ function addressTheKeysAgreeAbout(): string {
     const [right, wrong] = bucketsUnderBothKeys(email);
     if (right === wrong) return email;
   }
-  throw new Error('No test address collides under the two keys — has BUCKET_COUNT changed?');
+  throw new Error('No test address collides under the two keys; has BUCKET_COUNT changed?');
 }
 
 function addressTheKeysDisagreeAbout(): string {
@@ -32,7 +32,7 @@ function addressTheKeysDisagreeAbout(): string {
     const [right, wrong] = bucketsUnderBothKeys(email);
     if (right !== wrong) return email;
   }
-  throw new Error('No test address routes differently under the two keys — are they the same key?');
+  throw new Error('No test address routes differently under the two keys; are they the same key?');
 }
 
 /**
@@ -82,7 +82,7 @@ describe('Identity bucket key pin after a partial restore (integration)', () => 
   // Characterization of a known gap, not the intended behaviour: with bootstrap on, an absent pin
   // reads as a first boot (`onConflictDoNothing` in identity-bucket-key.verifier.ts), so whatever
   // key is running becomes the reference once the one-row canary is blind.
-  it('adopts a wrong key as authoritative when the restore brought back users but not the pin', async () => {
+  it('adopts a wrong key when a restore brings back users but not the pin', async () => {
     const blindSpot = addressTheKeysAgreeAbout();
     await restoreWithoutThePin([blindSpot]);
 

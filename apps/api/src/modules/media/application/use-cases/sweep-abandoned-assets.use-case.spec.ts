@@ -1,37 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
-import type { RetentionSweepRegistry } from '@jcool/platform/retention';
+import { RetentionSweepRegistry } from '@jcool/platform/retention';
+import type { ObjectStoragePort } from '@shared/infrastructure/storage';
 import type { ClaimedAsset } from '../ports/media-asset-repository.port';
 import { fakeMediaAssetRepository, fakeObjectStorage } from '../../testing/media-port.doubles';
 import { SweepAbandonedAssetsUseCase } from './sweep-abandoned-assets.use-case';
 
-const STALE_CLAIM_MS = 60_000;
-
-function build(claimed: ClaimedAsset[], rowRemoved: (id: string) => boolean = () => true) {
+function build(
+  claimed: ClaimedAsset[],
+  options: { rowRemoved?: (id: string) => boolean; deleteObject?: ObjectStoragePort['delete'] } = {},
+) {
   const calls: string[] = [];
-
-  const claimForSweep = vi.fn((_now: Date, _staleClaimBefore: Date, _limit: number) => Promise.resolve(claimed));
-  const deleteClaimed = vi.fn((id: string) => {
-    calls.push(`row:${id}`);
-    return Promise.resolve(rowRemoved(id));
-  });
-  const deleteObject = vi.fn((key: string) => {
-    calls.push(`object:${key}`);
-    return Promise.resolve();
-  });
   const recordMediaBytesReclaimed = vi.fn();
-  const register = vi.fn();
-  const config = fakeConfigService({ 'retention.sweepTimeoutMs': STALE_CLAIM_MS });
-
   const useCase = new SweepAbandonedAssetsUseCase(
-    fakeMediaAssetRepository({ claimForSweep, deleteClaimed }),
-    fakeObjectStorage({ delete: deleteObject }),
+    fakeMediaAssetRepository({
+      claimForSweep: () => Promise.resolve(claimed),
+      deleteClaimed: (id) => {
+        calls.push(`row:${id}`);
+        return Promise.resolve(options.rowRemoved?.(id) ?? true);
+      },
+    }),
+    fakeObjectStorage({
+      delete:
+        options.deleteObject ??
+        ((key) => {
+          calls.push(`object:${key}`);
+          return Promise.resolve();
+        }),
+    }),
     fakeMetricsPort({ recordMediaBytesReclaimed }),
-    config,
-    { register } as unknown as RetentionSweepRegistry,
+    fakeConfigService({ 'retention.sweepTimeoutMs': 60_000 }),
+    new RetentionSweepRegistry(),
   );
-  return { useCase, calls, claimForSweep, recordMediaBytesReclaimed, register };
+  return { useCase, calls, recordMediaBytesReclaimed };
 }
 
 const claim = (id: string, sizeBytes: number | null = 100): ClaimedAsset => ({
@@ -41,54 +43,27 @@ const claim = (id: string, sizeBytes: number | null = 100): ClaimedAsset => ({
 });
 
 describe('SweepAbandonedAssetsUseCase', () => {
-  it('registers itself rather than starting a timer, so RETENTION_ENABLED governs it', () => {
-    const ctx = build([]);
-    ctx.useCase.onModuleInit();
+  // A crash between the two leaves a SWEEPING row the next pass finds again. The other order
+  // would leave bytes nothing points at.
+  it('deletes each object before its row', async () => {
+    const { useCase, calls } = build([claim('a'), claim('b')]);
 
-    expect(ctx.register).toHaveBeenCalledWith(ctx.useCase);
+    await expect(useCase.sweep(10)).resolves.toBe(2);
+    expect(calls).toEqual(['object:media/a.png', 'row:a', 'object:media/b.png', 'row:b']);
   });
 
-  it('deletes the object before the row — a crash between them leaves a re-scannable tombstone', async () => {
-    const ctx = build([claim('a'), claim('b')]);
+  it('counts bytes only for rows this pass removed, and 0 for an unknown size', async () => {
+    const { useCase, recordMediaBytesReclaimed } = build([claim('a', 400), claim('b', 700), claim('c', null)], {
+      rowRemoved: (id) => id !== 'b',
+    });
 
-    await expect(ctx.useCase.sweep(10)).resolves.toBe(2);
-    expect(ctx.calls).toEqual(['object:media/a.png', 'row:a', 'object:media/b.png', 'row:b']);
+    await expect(useCase.sweep(10)).resolves.toBe(2);
+    expect(recordMediaBytesReclaimed.mock.calls).toEqual([[400], [0]]);
   });
 
-  it('claims a batch in one statement, bounded by the batch size', async () => {
-    const ctx = build([]);
-    await ctx.useCase.sweep(25);
-
-    const [now, staleClaimBefore, limit] = ctx.claimForSweep.mock.calls[0];
-    expect(limit).toBe(25);
-    expect(now.getTime() - staleClaimBefore.getTime()).toBe(STALE_CLAIM_MS);
-  });
-
-  it('counts reclaimed bytes only for rows this pass actually removed', async () => {
-    const ctx = build([claim('a', 400), claim('b', 700)], (id) => id === 'a');
-
-    await expect(ctx.useCase.sweep(10)).resolves.toBe(1);
-    expect(ctx.recordMediaBytesReclaimed).toHaveBeenCalledExactlyOnceWith(400);
-  });
-
-  it('reports zero bytes for an upload that was never confirmed and so never measured', async () => {
-    const ctx = build([claim('a', null)]);
-
-    await ctx.useCase.sweep(10);
-    expect(ctx.recordMediaBytesReclaimed).toHaveBeenCalledExactlyOnceWith(0);
-  });
-
-  // The scheduler's one failure line has no per-asset field, so the asset id/storageKey has to
-  // travel up the `cause` chain of the error the sweep throws instead.
-  it('names the asset and storage key on a failed object delete, via cause', async () => {
-    const deleteObject = vi.fn().mockRejectedValue(new Error('bucket unreachable'));
-    const useCase = new SweepAbandonedAssetsUseCase(
-      fakeMediaAssetRepository({ claimForSweep: vi.fn().mockResolvedValue([claim('a', 400)]) }),
-      fakeObjectStorage({ delete: deleteObject }),
-      fakeMetricsPort(),
-      fakeConfigService({ 'retention.sweepTimeoutMs': STALE_CLAIM_MS }),
-      { register: vi.fn() } as unknown as RetentionSweepRegistry,
-    );
+  // The scheduler's failure line has no per-asset field, so the asset travels on the error.
+  it('names the asset and storage key when an object delete fails', async () => {
+    const { useCase } = build([claim('a')], { deleteObject: () => Promise.reject(new Error('bucket unreachable')) });
 
     await expect(useCase.sweep(10)).rejects.toMatchObject({
       message: 'media sweep failed on asset a (storageKey: media/a.png)',

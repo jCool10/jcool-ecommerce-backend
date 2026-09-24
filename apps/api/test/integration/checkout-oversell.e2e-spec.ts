@@ -66,7 +66,7 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     return rows.length;
   }
 
-  it('N buyers contend for the last unit → exactly one checks out, the rest 409, no oversell', async () => {
+  it('sells the last unit to exactly one of many buyers and 409s the rest', async () => {
     const { variantId, statuses } = await race(1, CONTENDERS);
 
     const winners = statuses.filter((s) => s === 201);
@@ -75,7 +75,7 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     expect(losers).toHaveLength(CONTENDERS - 1); // every non-winner answered a clean 409, none errored
 
     const stock = await getStockView(app, variantId);
-    // available pinned to exactly 0 (never negative) — the no-oversell invariant, on-hand undecremented.
+    // Available pinned at exactly 0, never negative, and on-hand undecremented.
     expect(stock).toEqual({ onHand: 1, reserved: 1, available: 0 });
     expect(await countHeldReservations(app, variantId)).toBe(1);
     // Every loser's checkout rolled fully back: exactly one order carries the SKU (the winner's).
@@ -83,10 +83,10 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
   });
 
   // K equals the default optimistic retry budget (3) on purpose: every CAS miss implies a rival's
-  // reserving bump, so K misses exhaust the K units and the next re-read sees available=0 — a
-  // terminal 409 — before the budget is spent, leaving no slot unclaimed. With K above the budget a
+  // reserving bump, so K misses exhaust the K units and the next re-read sees available=0, a
+  // terminal 409, before the budget is spent, leaving no slot unclaimed. With K above the budget a
   // contender could 409 as a conflict with a slot still open.
-  it('onHand=K with N>K → exactly K check out, available floored at 0', async () => {
+  it('sells K units to exactly K of more buyers, flooring available at 0', async () => {
     const K = 3;
     const { variantId, statuses } = await race(K, CONTENDERS);
 

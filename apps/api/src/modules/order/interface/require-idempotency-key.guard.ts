@@ -11,17 +11,17 @@ export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
 /**
  * Requiring the header is the endpoint's contract: the client must be able to name each attempt so
  * a network retry replays instead of double-charging. Runs after the global auth guards, so an
- * unauthenticated request 401s before it reaches here; the normalized value is stashed on the
+ * unauthenticated request 401s before it reaches here; the validated key is stashed on the
  * request for the interceptor, which owns the store lifecycle.
  */
 @Injectable()
 export class RequireIdempotencyKeyGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<IdempotentRequest>();
-    const raw = request.headers[IDEMPOTENCY_KEY_HEADER];
-    const value = Array.isArray(raw) ? raw[0] : raw;
+    // Node joins a repeated custom header into one comma-separated string, so this is never an array.
+    const value = request.headers[IDEMPOTENCY_KEY_HEADER];
 
-    if (!value || !isUUID(value)) {
+    if (typeof value !== 'string' || !isUUID(value)) {
       throw new BadRequestException('A valid Idempotency-Key header (UUID) is required');
     }
 

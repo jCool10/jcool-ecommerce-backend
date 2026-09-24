@@ -6,7 +6,7 @@ export type FakeMetricsPort = { [K in keyof MetricsPort]: Mock<MetricsPort[K]> }
 
 /**
  * The port is wide and almost every spec fakes one method of it, so the hand-rolled version is
- * always `{ recordX: vi.fn() } as unknown as MetricsPort` — a cast that keeps compiling when the
+ * always `{ recordX: vi.fn() } as unknown as MetricsPort`, a cast that keeps compiling when the
  * code under test starts calling a second method, and then throws "not a function" at runtime.
  * Recording all of them costs nothing and removes the cast from the spec.
  */
@@ -38,7 +38,7 @@ const METHODS = [
 ] as const satisfies readonly (keyof MetricsPort)[];
 
 /**
- * `satisfies readonly (keyof MetricsPort)[]` only checks that each entry IS a key — it does not
+ * `satisfies readonly (keyof MetricsPort)[]` only checks that each entry IS a key; it does not
  * require covering the union, and the cast in `fakeMetricsPort` erases the gap. So a new method on
  * the port would compile clean, be omitted from the fake, and produce exactly the "not a function"
  * the docblock above claims to have removed. This line is the missing half: it resolves to `never`

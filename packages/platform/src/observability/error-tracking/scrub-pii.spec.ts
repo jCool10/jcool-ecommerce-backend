@@ -30,7 +30,7 @@ describe('scrubPii', () => {
     expect(headers.accept).toBe('json');
   });
 
-  it('drops the raw query string and strips the url query (external sink gets no query PII)', () => {
+  it('drops the query string from both the raw field and the url', () => {
     const out = scrubPii(
       event({ request: { url: 'https://api.example.com/search?token=abc&q=hi', query_string: 'token=abc&q=hi' } }),
       HINT,
@@ -40,20 +40,19 @@ describe('scrubPii', () => {
     expect(out.request?.url).toBe('https://api.example.com/search');
   });
 
-  it('drops the customer email from event.user (external sink gets no PII)', () => {
+  it('drops the customer email from event.user but keeps the id', () => {
     const out = scrubPii(event({ user: { id: 'u1', email: 'a@b.com' } }), HINT);
 
     expect(out.user?.email).toBeUndefined();
-    // The id stays: an error still has to be attributable to an account.
     expect(out.user?.id).toBe('u1');
   });
 
-  it('tolerates a string request body and a missing request (no throw)', () => {
+  it('tolerates a string request body and a missing request', () => {
     expect(() => scrubPii(event({ request: { data: 'raw-body-string' } }), HINT)).not.toThrow();
     expect(() => scrubPii(event({}), HINT)).not.toThrow();
   });
 
-  it('returns the same event instance (mutated in place, as beforeSend expects)', () => {
+  it('redacts sensitive keys in extra, in place', () => {
     const input = event({ extra: { password: 'x' } });
     const out = scrubPii(input, HINT);
     expect(out).toBe(input);

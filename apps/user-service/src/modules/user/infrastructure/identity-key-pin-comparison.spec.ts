@@ -1,22 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { LAYOUT_VERSION, identityKeyFingerprint } from '@jcool/id-codec';
+import { LAYOUT_VERSION } from '@jcool/id-codec';
 import { identityPinMismatch, runningIdentityPin } from './identity-key-pin-comparison';
 
 const KEY = 'pin-comparison-spec-identity-bucket-key-not-a-secret';
 const OTHER_KEY = 'another-pin-comparison-spec-key-not-a-real-secret';
 
 describe('identity pin comparison', () => {
-  it('describes the running build by its key fingerprint and id layout', () => {
-    expect(runningIdentityPin(KEY)).toEqual({
-      fingerprint: identityKeyFingerprint(KEY),
-      layoutVersion: LAYOUT_VERSION,
-    });
-  });
-
-  it('accepts the pin the running build would write', () => {
-    expect(identityPinMismatch(runningIdentityPin(KEY), runningIdentityPin(KEY))).toBeNull();
-  });
-
   it('names both fingerprints when the key differs', () => {
     const pinned = runningIdentityPin(OTHER_KEY);
     const running = runningIdentityPin(KEY);

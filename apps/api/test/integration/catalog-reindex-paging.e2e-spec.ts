@@ -13,7 +13,7 @@ const PAGE = 10;
 // thrown error names that better than a hung suite does.
 const RUNAWAY_PAGES = 20;
 
-// The keyset scan behind the reindex backstop, driven against real Postgres — the only tier where
+// The keyset scan behind the reindex backstop, driven against real Postgres: the only tier where
 // the cursor's round trip through the driver is exercised. A timestamp cursor cannot survive that
 // trip: `created_at` holds microseconds and a JS Date carries milliseconds, so the bound value
 // lands before the row it came from and the seek re-serves it.

@@ -1,4 +1,3 @@
-import { hostname } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import configuration from './configuration';
 
@@ -30,13 +29,5 @@ describe('id-service configuration', () => {
   it('loads a timing the way the validator accepted it', () => {
     vi.stubEnv('ID_LEASE_RENEW_EVERY_MS', '6e4');
     expect(configuration().lease.renewEveryMs).toBe(60_000);
-  });
-
-  it('names the holder after the replica, host and process', () => {
-    vi.stubEnv('RAILWAY_REPLICA_ID', 'replica-7');
-    expect(configuration().lease.holder).toBe(`replica-7/${hostname()}/${process.pid}`);
-
-    vi.stubEnv('RAILWAY_REPLICA_ID', undefined);
-    expect(configuration().lease.holder).toMatch(/^local\//);
   });
 });

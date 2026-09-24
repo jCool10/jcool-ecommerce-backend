@@ -1,7 +1,8 @@
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
-import { beforeEach, describe, expect, it } from 'vitest';
-import type { ActiveSession, AuthAuditPort, AuthAuditRecord } from '../application/ports';
+import { describe, expect, it } from 'vitest';
+import type { AuthenticatedUser } from '@jcool/platform/rbac';
+import type { AuthAuditRecord } from '../application/ports';
 import type {
   AuthTokens,
   EmailVerificationService,
@@ -18,345 +19,121 @@ import type {
   RegisterUserUseCase,
   ResendVerificationUseCase,
 } from '../application/use-cases';
+import { User } from '../domain/entities/user.entity';
+import { RecordingAuthAudit } from '../testing/recording-auth-audit.double';
 import { AuthController } from './auth.controller';
-import type { AuthenticatedUser } from '@jcool/platform/rbac';
 import type { AuthCookieService } from './security';
-
-class MockAudit implements AuthAuditPort {
-  readonly records: AuthAuditRecord[] = [];
-  record(entry: AuthAuditRecord): void {
-    this.records.push(entry);
-  }
-}
 
 const IP = '203.0.113.9';
 const UA = 'vitest-agent';
+const EMAIL = 'user@test.local';
+const SESSION_ID = 'fam-9';
 const TOKENS: AuthTokens = { accessToken: 'access', refreshToken: 'refresh', expiresIn: 300 };
-const REFRESHED_TOKENS: AuthTokens & { userId: string } = { ...TOKENS, userId: 'u1' };
+// Routes behind a bearer token audit the caller; the rest audit whoever the service answers with.
 const CURRENT: AuthenticatedUser = { userId: 'u1', role: 'CUSTOMER', jti: 'jti-1', exp: 9999999999 };
-const res = {} as Response; // cookie service is mocked, so it never touches res
+const ANSWERED_ID = 'u9';
+const res = {} as Response;
 
-describe('AuthController (audit trail)', () => {
-  let audit: MockAudit;
-  let cookieCalls: { set: number; clear: number };
-  let cookies: AuthCookieService;
+const stub = <T>(methods: Partial<Record<keyof T, unknown>>): T => methods as unknown as T;
 
-  beforeEach(() => {
-    audit = new MockAudit();
-    cookieCalls = { set: 0, clear: 0 };
-    cookies = {
-      setSession: () => cookieCalls.set++,
-      clear: () => cookieCalls.clear++,
-    } as unknown as AuthCookieService;
-  });
+function controllerWith(overrides: { login?: () => Promise<AuthTokens>; revokeSession?: () => Promise<boolean> } = {}) {
+  const audit = new RecordingAuthAudit();
+  const cookies: string[] = [];
+  const controller = new AuthController(
+    stub<RegisterUserUseCase>({
+      execute: () => Promise.resolve(new User(ANSWERED_ID, EMAIL, 'hash', 'CUSTOMER', new Date(), new Date())),
+    }),
+    stub<LoginUserUseCase>({ execute: overrides.login ?? (() => Promise.resolve(TOKENS)) }),
+    stub<GetProfileUseCase>({}),
+    stub<RefreshTokensUseCase>({ execute: () => Promise.resolve({ ...TOKENS, userId: ANSWERED_ID }) }),
+    stub<LogoutUserUseCase>({ execute: () => Promise.resolve() }),
+    stub<AuthCookieService>({ setSession: () => cookies.push('set'), clear: () => cookies.push('clear') }),
+    audit,
+    stub<EmailVerificationService>({ verify: () => Promise.resolve({ userId: ANSWERED_ID }) }),
+    stub<ResendVerificationUseCase>({}),
+    stub<PasswordResetService>({ reset: () => Promise.resolve({ userId: ANSWERED_ID }) }),
+    stub<ForgotPasswordUseCase>({}),
+    stub<ChangePasswordUseCase>({ execute: () => Promise.resolve() }),
+    stub<SessionService>({
+      revokeSession: overrides.revokeSession ?? (() => Promise.resolve(true)),
+      revokeAll: () => Promise.resolve(),
+    }),
+  );
+  return { controller, audit, cookies };
+}
 
-  function build(over: {
-    login?: LoginUserUseCase;
-    register?: RegisterUserUseCase;
-    refresh?: RefreshTokensUseCase;
-    logout?: LogoutUserUseCase;
-    emailVerification?: EmailVerificationService;
-    resendVerification?: ResendVerificationUseCase;
-    passwordReset?: PasswordResetService;
-    forgotPassword?: ForgotPasswordUseCase;
-    changePassword?: ChangePasswordUseCase;
-    sessions?: SessionService;
-  }): AuthController {
-    const login = over.login ?? ({ execute: () => Promise.resolve(TOKENS) } as unknown as LoginUserUseCase);
-    const register =
-      over.register ??
-      ({
-        execute: () => Promise.resolve({ id: 'u1', email: 'user@test.local', role: 'CUSTOMER' }),
-      } as unknown as RegisterUserUseCase);
-    const refresh =
-      over.refresh ?? ({ execute: () => Promise.resolve(REFRESHED_TOKENS) } as unknown as RefreshTokensUseCase);
-    const logout = over.logout ?? ({ execute: () => Promise.resolve() } as unknown as LogoutUserUseCase);
-    const getProfile = { execute: () => Promise.reject(new Error('unused')) } as unknown as GetProfileUseCase;
-    const emailVerification =
-      over.emailVerification ??
-      ({ verify: () => Promise.resolve({ userId: 'u1' }) } as unknown as EmailVerificationService);
-    const resendVerification =
-      over.resendVerification ?? ({ execute: () => Promise.resolve() } as unknown as ResendVerificationUseCase);
-    const passwordReset =
-      over.passwordReset ?? ({ reset: () => Promise.resolve({ userId: 'u1' }) } as unknown as PasswordResetService);
-    const forgotPassword =
-      over.forgotPassword ?? ({ execute: () => Promise.resolve() } as unknown as ForgotPasswordUseCase);
-    const changePassword =
-      over.changePassword ?? ({ execute: () => Promise.resolve() } as unknown as ChangePasswordUseCase);
-    const sessions =
-      over.sessions ??
-      ({
-        listActiveSessions: () => Promise.resolve([]),
-        revokeSession: () => Promise.resolve(true),
-        revokeAll: () => Promise.resolve(),
-      } as unknown as SessionService);
-    return new AuthController(
-      register,
-      login,
-      getProfile,
-      refresh,
-      logout,
-      cookies,
-      audit,
-      emailVerification,
-      resendVerification,
-      passwordReset,
-      forgotPassword,
-      changePassword,
-      sessions,
-    );
-  }
+// The e2e tier checks responses and cookies, never the audit trail, so this is its only check.
+describe('AuthController audit trail', () => {
+  it('audits each successful route once, setting or clearing the session cookie', async () => {
+    const routes: Record<string, (controller: AuthController) => Promise<unknown>> = {
+      register: (c) => c.register({ email: EMAIL, password: 'pw' }, IP, UA),
+      verifyEmail: (c) => c.verifyEmail({ token: 'raw-token' }, IP, UA),
+      resetPassword: (c) => c.resetPassword({ token: 'raw-token', password: 'new-password' }, IP, UA),
+      revokeSession: (c) => c.revokeSession(CURRENT, SESSION_ID, IP, UA),
+      login: (c) => c.login({ email: EMAIL, password: 'pw' }, res, IP, UA),
+      refresh: (c) => c.refresh('refresh', res, IP, UA),
+      changePassword: (c) =>
+        c.changePasswordRequest(CURRENT, { currentPassword: 'old-pw', newPassword: 'new-password' }, res, IP, UA),
+      logoutAll: (c) => c.logoutAll(CURRENT, res, IP, UA),
+      logout: (c) => c.logout(CURRENT, 'refresh', res, IP, UA),
+    };
 
-  it('audits login.succeeded with request context and sets the session cookie', async () => {
-    const controller = build({});
+    const outcomes: Record<string, { audit: AuthAuditRecord[]; cookies: string[] }> = {};
+    for (const [route, call] of Object.entries(routes)) {
+      const { controller, audit, cookies } = controllerWith();
+      await call(controller);
+      outcomes[route] = { audit: audit.records, cookies };
+    }
 
-    await controller.login({ email: 'user@test.local', password: 'pw' }, res, IP, UA);
-
-    expect(cookieCalls.set).toBe(1);
-    expect(audit.records).toEqual([
-      { event: 'login.succeeded', outcome: 'success', email: 'user@test.local', ip: IP, userAgent: UA },
-    ]);
-  });
-
-  it('audits login.failed then rethrows the generic 401 (no session cookie)', async () => {
-    const login = {
-      execute: () => Promise.reject(new UnauthorizedException('Invalid credentials')),
-    } as unknown as LoginUserUseCase;
-    const controller = build({ login });
-
-    await expect(controller.login({ email: 'user@test.local', password: 'bad' }, res, IP, UA)).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
-    expect(cookieCalls.set).toBe(0);
-    expect(audit.records).toEqual([
-      {
-        event: 'login.failed',
-        outcome: 'failure',
-        email: 'user@test.local',
-        ip: IP,
-        userAgent: UA,
-        reason: 'invalid_credentials',
+    const success = { outcome: 'success', ip: IP, userAgent: UA } as const;
+    expect(outcomes).toEqual({
+      register: { audit: [{ event: 'user.registered', ...success, userId: ANSWERED_ID, email: EMAIL }], cookies: [] },
+      verifyEmail: { audit: [{ event: 'email.verified', ...success, userId: ANSWERED_ID }], cookies: [] },
+      resetPassword: { audit: [{ event: 'password.reset', ...success, userId: ANSWERED_ID }], cookies: [] },
+      revokeSession: {
+        audit: [{ event: 'session.revoked', ...success, userId: 'u1', metadata: { sessionId: SESSION_ID } }],
+        cookies: [],
       },
-    ]);
+      login: { audit: [{ event: 'login.succeeded', ...success, email: EMAIL }], cookies: ['set'] },
+      refresh: { audit: [{ event: 'token.refreshed', ...success, userId: ANSWERED_ID }], cookies: ['set'] },
+      changePassword: { audit: [{ event: 'password.changed', ...success, userId: 'u1' }], cookies: ['clear'] },
+      logoutAll: { audit: [{ event: 'logout.all', ...success, userId: 'u1' }], cookies: ['clear'] },
+      logout: { audit: [{ event: 'logout', ...success, userId: 'u1' }], cookies: ['clear'] },
+    });
   });
 
-  it('audits logout with the subject and clears the session cookie', async () => {
-    const controller = build({});
+  it('audits a failed login by its cause and rethrows it unchanged, with no cookie', async () => {
+    const failures: Record<string, Error> = {
+      invalid_credentials: new UnauthorizedException('Invalid credentials'),
+      email_not_verified: new ForbiddenException('Email not verified'),
+      error: new Error('connection terminated'),
+    };
 
-    await controller.logout(CURRENT, 'refresh', res, IP, UA);
-
-    expect(cookieCalls.clear).toBe(1);
-    expect(audit.records).toEqual([{ event: 'logout', outcome: 'success', userId: 'u1', ip: IP, userAgent: UA }]);
-  });
-
-  it('audits user.registered with the new account id + email', async () => {
-    const controller = build({});
-
-    await controller.register({ email: 'user@test.local', password: 'pw' }, IP, UA);
-
-    expect(audit.records).toEqual([
-      { event: 'user.registered', outcome: 'success', userId: 'u1', email: 'user@test.local', ip: IP, userAgent: UA },
-    ]);
-  });
-
-  it('audits token.refreshed on a successful rotation', async () => {
-    const controller = build({});
-
-    await controller.refresh('refresh', res, IP, UA);
-
-    expect(cookieCalls.set).toBe(1);
-    expect(audit.records).toEqual([
-      { event: 'token.refreshed', outcome: 'success', userId: 'u1', ip: IP, userAgent: UA },
-    ]);
-  });
-
-  it('verifies an email token and audits email.verified with the subject', async () => {
-    let verifiedToken: string | undefined;
-    const emailVerification = {
-      verify: (token: string) => {
-        verifiedToken = token;
-        return Promise.resolve({ userId: 'u9' });
-      },
-    } as unknown as EmailVerificationService;
-    const controller = build({ emailVerification });
-
-    await controller.verifyEmail({ token: 'raw-token' }, IP, UA);
-
-    expect(verifiedToken).toBe('raw-token');
-    expect(audit.records).toEqual([
-      { event: 'email.verified', outcome: 'success', userId: 'u9', ip: IP, userAgent: UA },
-    ]);
-  });
-
-  it('delegates resend to the use case (no controller-level audit — the service records the send)', async () => {
-    let resentEmail: string | undefined;
-    const resendVerification = {
-      execute: (email: string) => {
-        resentEmail = email;
-        return Promise.resolve();
-      },
-    } as unknown as ResendVerificationUseCase;
-    const controller = build({ resendVerification });
-
-    await controller.resendVerificationEmail({ email: 'user@test.local' });
-
-    expect(resentEmail).toBe('user@test.local');
-    expect(audit.records).toEqual([]);
-  });
-
-  it('delegates forgot-password to the use case (no controller-level audit — the service records the request)', async () => {
-    let requestedEmail: string | undefined;
-    const forgotPassword = {
-      execute: (email: string) => {
-        requestedEmail = email;
-        return Promise.resolve();
-      },
-    } as unknown as ForgotPasswordUseCase;
-    const controller = build({ forgotPassword });
-
-    await controller.forgotPasswordRequest({ email: 'user@test.local' });
-
-    expect(requestedEmail).toBe('user@test.local');
-    expect(audit.records).toEqual([]);
-  });
-
-  it('resets the password and audits password.reset with the subject', async () => {
-    let resetArgs: { token: string; password: string } | undefined;
-    const passwordReset = {
-      reset: (token: string, password: string) => {
-        resetArgs = { token, password };
-        return Promise.resolve({ userId: 'u9' });
-      },
-    } as unknown as PasswordResetService;
-    const controller = build({ passwordReset });
-
-    await controller.resetPassword({ token: 'raw-token', password: 'new-password' }, IP, UA);
-
-    expect(resetArgs).toEqual({ token: 'raw-token', password: 'new-password' });
-    expect(audit.records).toEqual([
-      { event: 'password.reset', outcome: 'success', userId: 'u9', ip: IP, userAgent: UA },
-    ]);
-  });
-
-  it('changes the password, clears the cookie, and audits password.changed', async () => {
-    let changeArgs: { userId: string; currentPassword: string; newPassword: string } | undefined;
-    const changePassword = {
-      execute: (input: { userId: string; currentPassword: string; newPassword: string }) => {
-        changeArgs = input;
-        return Promise.resolve();
-      },
-    } as unknown as ChangePasswordUseCase;
-    const controller = build({ changePassword });
-
-    await controller.changePasswordRequest(
-      CURRENT,
-      { currentPassword: 'old-pw', newPassword: 'new-password' },
-      res,
-      IP,
-      UA,
+    const outcomes = await Promise.all(
+      Object.entries(failures).map(async ([reason, failure]) => {
+        const { controller, audit, cookies } = controllerWith({ login: () => Promise.reject(failure) });
+        const thrown = await controller.login({ email: EMAIL, password: 'pw' }, res, IP, UA).then(
+          () => 'resolved',
+          (error: unknown) => error,
+        );
+        return [reason, { rethrown: thrown === failure, audit: audit.records, cookies }] as const;
+      }),
     );
 
-    expect(changeArgs).toEqual({ userId: 'u1', currentPassword: 'old-pw', newPassword: 'new-password' });
-    expect(cookieCalls.clear).toBe(1);
-    expect(audit.records).toEqual([
-      { event: 'password.changed', outcome: 'success', userId: 'u1', ip: IP, userAgent: UA },
-    ]);
+    const failedLogin = (reason: string) => ({
+      rethrown: true,
+      audit: [{ event: 'login.failed', outcome: 'failure', email: EMAIL, ip: IP, userAgent: UA, reason }],
+      cookies: [],
+    });
+    expect(Object.fromEntries(outcomes)).toEqual({
+      invalid_credentials: failedLogin('invalid_credentials'),
+      email_not_verified: failedLogin('email_not_verified'),
+      error: failedLogin('error'),
+    });
   });
 
-  it('logs out all sessions, clears the cookie, and audits logout.all', async () => {
-    let revokedAllFor: string | undefined;
-    const sessions = {
-      listActiveSessions: () => Promise.resolve([]),
-      revokeSession: () => Promise.resolve(true),
-      revokeAll: (userId: string) => {
-        revokedAllFor = userId;
-        return Promise.resolve();
-      },
-    } as unknown as SessionService;
-    const controller = build({ sessions });
-
-    await controller.logoutAll(CURRENT, res, IP, UA);
-
-    expect(revokedAllFor).toBe('u1');
-    expect(cookieCalls.clear).toBe(1);
-    expect(audit.records).toEqual([{ event: 'logout.all', outcome: 'success', userId: 'u1', ip: IP, userAgent: UA }]);
-  });
-
-  it('lists the caller’s active sessions, flagging the current one', async () => {
-    const active: ActiveSession[] = [
-      {
-        id: 'fam-current',
-        createdAt: new Date('2026-01-01T00:00:00.000Z'),
-        expiresAt: new Date('2026-01-08T00:00:00.000Z'),
-        current: true,
-      },
-      {
-        id: 'fam-other',
-        createdAt: new Date('2026-01-02T00:00:00.000Z'),
-        expiresAt: new Date('2026-01-09T00:00:00.000Z'),
-        current: false,
-      },
-    ];
-    let listedFor: { userId: string; token: string | null } | undefined;
-    const sessions = {
-      listActiveSessions: (userId: string, token: string | null) => {
-        listedFor = { userId, token };
-        return Promise.resolve(active);
-      },
-      revokeSession: () => Promise.resolve(true),
-      revokeAll: () => Promise.resolve(),
-    } as unknown as SessionService;
-    const controller = build({ sessions });
-
-    const result = await controller.listSessions(CURRENT, 'raw-refresh');
-
-    expect(listedFor).toEqual({ userId: 'u1', token: 'raw-refresh' });
-    expect(result).toEqual([
-      {
-        id: 'fam-current',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        expiresAt: '2026-01-08T00:00:00.000Z',
-        current: true,
-      },
-      { id: 'fam-other', createdAt: '2026-01-02T00:00:00.000Z', expiresAt: '2026-01-09T00:00:00.000Z', current: false },
-    ]);
-    expect(audit.records).toEqual([]); // a read is not an audited event
-  });
-
-  it('revokes a named session and audits session.revoked', async () => {
-    let revokeArgs: { userId: string; id: string } | undefined;
-    const sessions = {
-      listActiveSessions: () => Promise.resolve([]),
-      revokeSession: (userId: string, id: string) => {
-        revokeArgs = { userId, id };
-        return Promise.resolve(true);
-      },
-      revokeAll: () => Promise.resolve(),
-    } as unknown as SessionService;
-    const controller = build({ sessions });
-
-    await controller.revokeSession(CURRENT, 'fam-9', IP, UA);
-
-    expect(revokeArgs).toEqual({ userId: 'u1', id: 'fam-9' });
-    expect(audit.records).toEqual([
-      {
-        event: 'session.revoked',
-        outcome: 'success',
-        userId: 'u1',
-        ip: IP,
-        userAgent: UA,
-        metadata: { sessionId: 'fam-9' },
-      },
-    ]);
-  });
-
-  it('404s revoking a session that is not the caller’s, and audits nothing', async () => {
-    const sessions = {
-      listActiveSessions: () => Promise.resolve([]),
-      revokeSession: () => Promise.resolve(false),
-      revokeAll: () => Promise.resolve(),
-    } as unknown as SessionService;
-    const controller = build({ sessions });
+  it("404s revoking a session that is not the caller's, and audits nothing", async () => {
+    const { controller, audit } = controllerWith({ revokeSession: () => Promise.resolve(false) });
 
     await expect(controller.revokeSession(CURRENT, 'fam-unknown', IP, UA)).rejects.toBeInstanceOf(NotFoundException);
     expect(audit.records).toEqual([]);

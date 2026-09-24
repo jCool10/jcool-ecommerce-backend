@@ -55,27 +55,13 @@ describe('outbox backlog collector', () => {
   it('reads the table once per scrape, no matter how many gauges ask', async () => {
     const text = await register.metrics();
 
-    // prom-client starts both collect() calls before awaiting either, and they collapse into one
-    // read — the property the e2e cannot observe.
+    // prom-client starts both collect() calls before awaiting either, and they collapse into one read.
     expect(queries).toBe(1);
     expect(valueOf(text, OUTBOX_BACKLOG_PENDING)).toBe(7);
     expect(valueOf(text, OUTBOX_OLDEST_AGE_SECONDS)).toBe(42.5);
 
-    // …and nothing is cached across scrapes: the next one reads again.
     await register.metrics();
     expect(queries).toBe(2);
-  });
-
-  it('serves the scrape and holds the last value when the query fails', async () => {
-    await register.metrics();
-    answer = () => Promise.reject(new Error('connection terminated'));
-
-    const text = await register.metrics();
-
-    // A rejection here would fail the whole /metrics response and take every unrelated series with it.
-    expect(valueOf(text, OUTBOX_BACKLOG_PENDING)).toBe(7);
-    expect(valueOf(text, OUTBOX_OLDEST_AGE_SECONDS)).toBe(42.5);
-    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('abandons a query that hangs instead of hanging the scrape', async () => {

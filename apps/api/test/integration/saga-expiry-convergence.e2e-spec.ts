@@ -2,7 +2,6 @@ import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import type { Job, Queue } from 'bullmq';
-import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
@@ -11,17 +10,18 @@ import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/pay
 import { ReconcileStaleOrdersUseCase } from '../../src/modules/payment/application/use-cases/reconcile-stale-orders.use-case';
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
 import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
+import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
 import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import {
+  lapseReservation,
   placeAndOpenSession,
   postWebhook,
   readOrder,
   readPayment,
+  readReservation,
   readStock,
   seedSellableSku,
   signOutcome,
@@ -44,16 +44,11 @@ const ATTEMPTS = '2';
 
 const INTERVAL_NAME = 'order-reservation-ttl-sweep';
 
-/**
- * The reservation sweep and the gateway-driven reconcile both end an order nobody paid for, but only
- * reconcile can close the checkout session first — so the two are supposed to run in that order.
- * This file boots the pair in configurations the boot assert accepts and asks whether the ordering
- * it claims actually holds.
- */
+// Only reconcile closes the checkout session before it ends an order, so the reservation sweep is
+// meant to reach an order after reconcile has had its chance.
 describe('Saga expiry convergence between the two sweeps (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let db: DrizzleDB;
   let gateway: FakeSignerGatewayAdapter;
   let sweep: SweepExpiredReservationsUseCase;
   let reconcile: ReconcileStaleOrdersUseCase;
@@ -63,11 +58,7 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
   let metrics: MetricsPort;
   let sku: SellableSku;
 
-  // When SAGA-1 lands, this boot is what fails: the fix makes the app refuse a reconcile interval
-  // that cannot run before the reservation TTL, and these settings are deliberately that pair. The
-  // failure therefore takes the whole file down, including the SAGA-2 test below, which is unrelated
-  // to it — two red tests, one cause. That is the loud discrimination this file is for, not a
-  // regression to chase.
+  // A cadence the boot assert should refuse. Once it does, this boot fails and takes both tests down.
   beforeAll(async () => {
     gateway = new FakeSignerGatewayAdapter(WEBHOOK_SECRET);
     app = await createTestApp(
@@ -78,7 +69,7 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
         RESERVATION_SWEEP_GRACE_SEC: String(ORDER_TTL_SEC),
         INVENTORY_RESERVATION_TTL: '15m',
         RECONCILE_ENABLED: 'true',
-        // The cadence: reconcile ticks once an hour on orders that expire after fifteen minutes.
+        // Reconcile ticks once an hour on orders that expire after fifteen minutes.
         RECONCILE_INTERVAL_MS: ONE_HOUR_MS,
         ORDER_TTL_SEC: String(ORDER_TTL_SEC),
         QUEUE_WORKER_ENABLED: 'true',
@@ -88,7 +79,6 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
       [{ provide: PAYMENT_GATEWAY, useValue: gateway }],
     );
     pool = app.get<Pool>(PG_POOL);
-    db = app.get<DrizzleDB>(DRIZZLE);
     sweep = app.get(SweepExpiredReservationsUseCase);
     reconcile = app.get(ReconcileStaleOrdersUseCase);
     relay = app.get(OutboxRelay);
@@ -112,34 +102,26 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
     vi.restoreAllMocks();
   });
 
-  /** Ages the hold by writing `expires_at`, so nothing here waits on a clock. */
-  async function lapsedOrder(minutesAgo = 30): Promise<OpenOrder> {
+  async function lapsedOrder(): Promise<OpenOrder> {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
-    await db
-      .update(schema.reservations)
-      .set({ expiresAt: new Date(Date.now() - minutesAgo * 60_000) })
-      .where(eq(schema.reservations.orderId, order.orderId));
+    await lapseReservation(app, order.orderId);
     return order;
   }
-
-  const readReservation = async (orderId: string) =>
-    (await db.select().from(schema.reservations).where(eq(schema.reservations.orderId, orderId)))[0];
 
   const deadLetters = async (eventType: string): Promise<Job<DeadLetterJob>[]> => {
     const jobs = (await dlq.getJobs(['waiting', 'prioritized'])) as Job<DeadLetterJob>[];
     return jobs.filter((job) => job.data.eventType === eventType);
   };
 
-  /** The state that makes the window matter: stock is sellable again, the page still takes money. */
+  // Stock is sellable again while the hosted page still takes money.
   async function expectStockBackWhileSessionStaysOpen(order: OpenOrder): Promise<void> {
     expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.EXPIRED);
-    expect((await readReservation(order.orderId)).status).toBe('RELEASED');
+    expect((await readReservation(app, order.orderId)).status).toBe('RELEASED');
     expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
     expect(gateway.wasExpired(order.sessionId)).toBe(false);
     expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.PENDING);
   }
 
-  /** Pays the still-open session and reads back what that money bought: nothing. */
   async function payTheOpenSession(order: OpenOrder, eventId: string): Promise<void> {
     const refundOwed = vi.spyOn(metrics, 'recordRefundOwed');
 
@@ -151,64 +133,41 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
     expect(refundOwed).toHaveBeenCalledWith('webhook_direct');
   }
 
-  // CHARACTERIZATION — pins today's behaviour, which is NOT the intended one.
-  //
-  // Intended invariant: when the reservation sweep is enabled, reconcile has genuinely already had a
-  //   chance at every order the sweep will expire — because only reconcile closes the checkout
-  //   session before releasing the hold (reconcile-stale-orders.use-case.ts:124-126 states that
-  //   ordering as a requirement).
-  // Violated at: src/modules/order/interface/reservation-ttl.scheduler.ts:109 — `assertBehindReconcile`
-  //   compares THRESHOLDS only (`holdTtlSec + graceSec < orderTtlSec`). It never reads
-  //   `reconcile.enabled`, `reconcile.intervalMs` or `reconcile.batchSize`, so a reconcile that is
-  //   off, ticking slower than the TTL it guards, or permanently saturated by an oldest-first batch
-  //   passes the assert unchanged — and the sweep starts anyway, reaching orders first.
-  // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — SAGA-1 (and matrix q2: whether
-  //   the assert should also cover cadence and batch drain, or whether cadence belongs in a separate
-  //   readiness check).
-  it('starts the sweep behind a reconcile that cannot reach an order before it, and the boot assert says nothing', async () => {
+  // Known defect. Intended: an enabled sweep only reaches orders reconcile has already had a chance
+  // to close. Actual: ReservationTtlScheduler.assertBehindReconcile compares TTL thresholds only and
+  // never reads whether reconcile is enabled, how often it ticks or how much its batch drains.
+  it('starts the sweep behind a reconcile that cannot reach an order first', async () => {
     const config = app.get(ConfigService);
-    // Exactly the inputs the assert weighs — and it accepted them: 900s of hold + 900s of grace is
-    // not less than the 900s order TTL.
+    // The inputs the assert weighs, which it accepted: 900s of hold plus 900s of grace.
     expect(config.get('inventory.reservationTtl')).toBe('15m');
     expect(config.get('reservationSweep.graceSec')).toBe(ORDER_TTL_SEC);
     expect(config.get('reconcile.orderTtlSec')).toBe(ORDER_TTL_SEC);
-    // ...and the input it never looks at: reconcile runs four times less often than orders expire.
+    // The input it never reads: reconcile runs four times less often than orders expire.
     expect(config.get('reconcile.intervalMs')).toBe(Number(ONE_HOUR_MS));
     expect(app.get(SchedulerRegistry).doesExist('interval', INTERVAL_NAME)).toBe(true);
 
     const order = await lapsedOrder();
 
-    // The tick the sweep's own timer would run. Its expiry event is emitted to the outbox but not
-    // relayed here on purpose: the close is a separate hop by construction, so this is the window
-    // every expiry passes through, not a stall invented by the test.
+    // The expiry event is not relayed: the session close is a separate hop, so every expiry passes
+    // through this window.
     expect(await sweep.execute(SWEEP_ALL)).toMatchObject({ scanned: 1, expired: 1 });
 
     await expectStockBackWhileSessionStaysOpen(order);
     await payTheOpenSession(order, 'evt_saga_cadence_paid');
 
-    // And reconcile can no longer repair any of it: its queue is orders still PENDING, and the sweep
-    // already took this one terminal. The next tick, an hour away, will not even see it.
+    // Reconcile only reads PENDING orders, so it can no longer repair this one.
     expect(await reconcile.execute({ staleAfterSec: 0, ttlSec: ORDER_TTL_SEC, batchSize: 50 })).toMatchObject({
       scanned: 0,
       finalized: 0,
     });
   });
 
-  // CHARACTERIZATION — pins today's behaviour, which is NOT the intended one.
-  //
-  // Intended invariant: a released stock hold and a closed checkout session are one outcome, so a
-  //   session that cannot be closed keeps the stock held rather than leaving a payable page behind.
-  // Violated at: src/modules/order/application/use-cases/sweep-expired-reservations.use-case.ts —
-  //   the release commits with only an `order.expired` outbox row to carry the close, and the
-  //   consumer's retry budget is finite: src/shared/messaging/queue/queue.constants.ts:35-47 caps it
-  //   at `QUEUE_CONSUMER_ATTEMPTS`, after which src/shared/messaging/queue/dead-letter.ts:63 parks
-  //   the message on a queue with no worker. Nothing re-derives the owed close from the EXPIRED
-  //   order, so the session stays payable until a human replays the DLQ.
-  // Follow-up: plans/260910-1940-edge-case-invariant-fixes/plan.md — SAGA-2.
-  it('leaves a payable session on released stock when the expiry event exhausts its retry budget', async () => {
+  // Known defect. Intended: releasing the hold and closing the session are one outcome, so a session
+  // that cannot be closed keeps the stock held. Actual: SweepExpiredReservationsUseCase commits the
+  // release with only an order.expired outbox row to carry the close; once the consumer's retry
+  // budget is spent the message is dead-lettered and nothing re-derives the owed close.
+  it('leaves a payable session on released stock once the expiry dead-letters', async () => {
     const order = await lapsedOrder();
-    // A gateway that refuses this one session for as long as the budget lasts — an outage, a revoked
-    // key, a session the account no longer owns.
     gateway.failExpireSession(order.sessionId);
 
     expect(await sweep.execute(SWEEP_ALL)).toMatchObject({ scanned: 1, expired: 1 });
@@ -224,8 +183,7 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
     );
     expect(dead.data.attemptsMade).toBe(Number(ATTEMPTS));
 
-    // The outbox row is marked published, so nothing will ever emit this event again: the dead-letter
-    // entry is the only remaining record that a session is still owed a close.
+    // The outbox row is marked published, so the dead letter is the only record the close is owed.
     await expect(relay.runOnce(50)).resolves.toMatchObject({ published: 0, failed: 0 });
     await expectStockBackWhileSessionStaysOpen(order);
 
