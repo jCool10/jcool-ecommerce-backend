@@ -15,8 +15,8 @@ import {
 import {
   DrizzleProductRepository,
   ElasticsearchCatalogSearch,
-  reindexAll,
-  type ReindexCounts,
+  rebuildIndex,
+  type RebuildResult,
 } from '../../src/modules/catalog/infrastructure';
 import {
   PRODUCTS_ALIAS,
@@ -33,6 +33,7 @@ import { resetDatabase } from '../setup/reset-database';
 import {
   UNREACHABLE_SEARCH_URL,
   dropSearchIndices,
+  readPhysicalIndices,
   refreshSearchIndex,
   resetSearchIndex,
   searchEnv,
@@ -104,10 +105,9 @@ describe('Catalog search (integration, real Elasticsearch + Postgres)', () => {
   const port = (): CatalogSearchPort => app.get<CatalogSearchPort>(CATALOG_SEARCH);
 
   // The CLI's rebuild, run in-process against the wired repository.
-  async function reindex(): Promise<ReindexCounts> {
-    const counts = await reindexAll(app.get(DrizzleProductRepository), port());
-    await refreshSearchIndex(engine);
-    return counts;
+  async function reindex(): Promise<Omit<RebuildResult, 'retired'>> {
+    const { documents, tombstones } = await rebuildIndex(app.get(DrizzleProductRepository), port(), { graceMs: 0 });
+    return { documents, tombstones };
   }
 
   async function search(query: Record<string, string | number>): Promise<SearchBody> {
@@ -128,9 +128,6 @@ describe('Catalog search (integration, real Elasticsearch + Postgres)', () => {
     const res = await engine.client.get<Partial<SearchableProduct>>({ index: PRODUCTS_ALIAS, id });
     return { version: res._version, name: res._source?.name, status: res._source?.status };
   }
-
-  const physicalIndices = async (): Promise<string[]> =>
-    Object.keys(await engine.client.indices.get({ index: `${PRODUCTS_INDEX_PREFIX}*` }));
 
   it('serves a product created through the admin API once its change event is delivered', async () => {
     const category = await createTestCategory(app, 'Provisioned');
@@ -157,7 +154,7 @@ describe('Catalog search (integration, real Elasticsearch + Postgres)', () => {
       await port().ensureIndex();
 
       expect(Object.keys(await engine.client.indices.getAlias({ name: PRODUCTS_ALIAS }))).toEqual([INITIAL_INDEX]);
-      expect(await physicalIndices()).toEqual([INITIAL_INDEX]);
+      expect(await readPhysicalIndices(engine)).toEqual([INITIAL_INDEX]);
     });
 
     const liveFields = async (): Promise<string[]> => {
@@ -188,7 +185,7 @@ describe('Catalog search (integration, real Elasticsearch + Postgres)', () => {
       await port().ensureIndex();
 
       expect(await liveFields()).toContain('currency');
-      expect(await physicalIndices()).toEqual([INITIAL_INDEX]);
+      expect(await readPhysicalIndices(engine)).toEqual([INITIAL_INDEX]);
     });
 
     it('adopts an index left without its alias and brings its mapping up to date', async () => {

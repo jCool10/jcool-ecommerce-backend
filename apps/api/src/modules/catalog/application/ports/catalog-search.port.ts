@@ -49,13 +49,35 @@ export interface SearchDocumentWrite {
   doc: SearchableProduct | null;
 }
 
+export class RebuildInProgressError extends Error {
+  constructor() {
+    super('a search index rebuild is already in progress');
+    this.name = 'RebuildInProgressError';
+  }
+}
+
 export interface CatalogSearchPort {
   // Idempotent, so a reindex or a restart may call it freely.
   ensureIndex(): Promise<void>;
-  // Versioned. A write at or below the stored version is ignored, not an error.
+  // Versioned. A write at or below the stored version is ignored, not an error. Reaches a rebuild in
+  // progress too, so a change made during the build survives the swap.
   write(changes: SearchDocumentWrite[]): Promise<void>;
   // Best-effort read: an engine failure resolves to an empty result rather than throwing, because
   // search is an optional path over Postgres. Writes, by contrast, surface their error so the caller
   // can retry.
   search(criteria: SearchCriteria): Promise<SearchResult>;
+
+  // Opens an empty index for a full rebuild and returns the handle the rest of that run acts on.
+  // Rejects with RebuildInProgressError while another rebuild holds the lock.
+  beginRebuild(): Promise<string>;
+  // Versioned like write(), into the rebuild only.
+  writeRebuild(changes: SearchDocumentWrite[]): Promise<void>;
+  // Serves search from this rebuild's index and ends it in one atomic step; refused once its lock was
+  // cleared. Returns the indices it retired, leftovers of earlier runs included.
+  promoteRebuild(rebuild: string): Promise<string[]>;
+  // Drops this rebuild, or with none given whichever holds the lock, as a crashed run leaves it.
+  // Search never left the index it was on.
+  abortRebuild(rebuild?: string): Promise<void>;
+  // Deletes those of the given indices that nothing serves from any more.
+  dropRetired(indices: string[]): Promise<void>;
 }

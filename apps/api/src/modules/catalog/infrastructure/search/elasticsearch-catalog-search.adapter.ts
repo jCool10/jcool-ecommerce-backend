@@ -3,18 +3,20 @@ import { ConfigService } from '@nestjs/config';
 import { Client, type estypes } from '@elastic/elasticsearch';
 import { PinoLogger } from 'nestjs-pino';
 import type { OutboundCall } from '@jcool/platform/resilience';
-import type {
-  CatalogSearchPort,
-  SearchCriteria,
-  SearchDocumentWrite,
-  SearchHit,
-  SearchResult,
-  SearchableProduct,
+import {
+  type CatalogSearchPort,
+  RebuildInProgressError,
+  type SearchCriteria,
+  type SearchDocumentWrite,
+  type SearchHit,
+  type SearchResult,
+  type SearchableProduct,
 } from '../../application/ports';
 import {
   PRODUCTS_ALIAS,
   PRODUCTS_INDEX_DEFINITION,
   PRODUCTS_INDEX_PREFIX,
+  REBUILD_ALIAS,
   SEARCH_MAX_TOTAL_HITS,
 } from './index-settings';
 import { SearchEngineError, assertApplied, logShapeOf, withoutRequest } from './search-engine-error';
@@ -35,6 +37,9 @@ const LOG_CONTEXT = 'ElasticsearchCatalogSearch';
 const INITIAL_INDEX = `${PRODUCTS_INDEX_PREFIX}0`;
 const WRITE_CHUNK = 500;
 const EMPTY: SearchResult = { items: [], total: 0 };
+const INDEX_NOT_FOUND = 'index_not_found_exception';
+// What releasing a lock answers when the swap or another abort got there first.
+const GONE = new Set(['aliases_not_found_exception', INDEX_NOT_FOUND]);
 
 // Never matches the read filter, so a tombstone holds its version without ever being served.
 const TOMBSTONE_STATUS = 'INACTIVE';
@@ -116,24 +121,105 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
   }
 
   async write(changes: SearchDocumentWrite[]): Promise<void> {
+    // The rebuild alias exists only while a rebuild runs, so its copy failing as missing is the normal case.
+    await this.bulkWrite(changes, [PRODUCTS_ALIAS, REBUILD_ALIAS], REBUILD_ALIAS);
+  }
+
+  async writeRebuild(changes: SearchDocumentWrite[]): Promise<void> {
+    await this.bulkWrite(changes, [REBUILD_ALIAS]);
+  }
+
+  async beginRebuild(): Promise<string> {
+    const client = this.client;
+    if (!client) return '';
+
+    const write = this.calls.write;
+    const rebuilding = () => this.call(write, () => client.indices.existsAlias({ name: REBUILD_ALIAS }));
+    if (await rebuilding()) throw new RebuildInProgressError();
+    const index = `${PRODUCTS_INDEX_PREFIX}${Date.now()}`;
+    await this.call(write, () =>
+      client.indices.create({
+        index,
+        ...PRODUCTS_INDEX_DEFINITION,
+        // As the write index, the engine refuses to put the alias on a second one, which closes the
+        // gap between the check above and this create.
+        aliases: { [REBUILD_ALIAS]: { is_write_index: true } },
+      }),
+    ).catch(async (error: unknown) => {
+      if (await rebuilding()) throw new RebuildInProgressError();
+      throw error;
+    });
+    return index;
+  }
+
+  async promoteRebuild(rebuild: string): Promise<string[]> {
+    const client = this.client;
+    if (!client) return [];
+
+    const write = this.calls.write;
+    const indices = await this.physicalIndices(client);
+    // Cleared by --clear-stale while this run was filling; the lock may now be another run's.
+    if (!indices.some(({ name, aliases }) => name === rebuild && aliases.includes(REBUILD_ALIAS))) {
+      throw new Error(`${rebuild} no longer holds the rebuild lock`);
+    }
+    const serving = indices.filter(({ aliases }) => aliases.includes(PRODUCTS_ALIAS)).map(({ name }) => name);
+
+    // Otherwise the last pages stay invisible to search until the engine's next periodic refresh.
+    await this.call(write, () => client.indices.refresh({ index: rebuild }));
+    await this.call(write, () =>
+      client.indices.updateAliases({
+        // must_exist on every remove: without it the engine applies the other actions around an alias
+        // that moved since the read above, instead of refusing the whole swap.
+        actions: [
+          ...serving.map((index) => ({ remove: { index, alias: PRODUCTS_ALIAS, must_exist: true } })),
+          { add: { index: rebuild, alias: PRODUCTS_ALIAS, is_write_index: true } },
+          { remove: { index: rebuild, alias: REBUILD_ALIAS, must_exist: true } },
+        ],
+      }),
+    );
+    return indices.map(({ name }) => name).filter((name) => name !== rebuild);
+  }
+
+  async abortRebuild(rebuild?: string): Promise<void> {
     const client = this.client;
     if (!client) return;
 
-    for (let offset = 0; offset < changes.length; offset += WRITE_CHUNK) {
-      const chunk = changes.slice(offset, offset + WRITE_CHUNK);
-      await this.call(this.calls.write, async () => {
-        const response = await client.bulk({
-          index: PRODUCTS_ALIAS,
-          // A missing alias fails the write instead of auto-creating a bare index under its name.
-          require_alias: true,
-          operations: chunk.flatMap((change) => [
-            { index: { _id: change.id, version: change.version, version_type: 'external' as const } },
-            change.doc ?? { id: change.id, status: TOMBSTONE_STATUS },
-          ]),
-        });
-        // Inside the call: items shed under load come back in a 200, and the breaker must still count them.
-        assertApplied(response, chunk.length);
-      });
+    const write = this.calls.write;
+    const locked = (await this.physicalIndices(client)).filter(
+      ({ name, aliases }) =>
+        (rebuild === undefined || name === rebuild) &&
+        aliases.includes(REBUILD_ALIAS) &&
+        !aliases.includes(PRODUCTS_ALIAS),
+    );
+    for (const { name } of locked) {
+      // Deleted only once the release went through: the engine applies either the release or a swap still
+      // in flight, never both, so an index the swap moved search onto is kept.
+      const released = await this.call(write, () =>
+        client.indices.updateAliases({
+          actions: [{ remove: { index: name, alias: REBUILD_ALIAS, must_exist: true } }],
+        }),
+      ).then(
+        () => true,
+        (error: unknown) => {
+          if (error instanceof SearchEngineError && GONE.has(error.type)) return false;
+          throw error;
+        },
+      );
+      if (released) await this.call(write, () => client.indices.delete({ index: name }));
+    }
+  }
+
+  async dropRetired(indices: string[]): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+
+    // Re-read rather than trust the list: an index behind any alias, or outside the prefix, stays.
+    const idle = new Set(
+      (await this.physicalIndices(client)).filter(({ aliases }) => aliases.length === 0).map(({ name }) => name),
+    );
+    const doomed = indices.filter((index) => idle.has(index));
+    if (doomed.length > 0) {
+      await this.call(this.calls.write, () => client.indices.delete({ index: doomed }));
     }
   }
 
@@ -192,6 +278,44 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
       sort: SORT,
       highlight: HIGHLIGHT,
     };
+  }
+
+  private async bulkWrite(
+    changes: SearchDocumentWrite[],
+    targets: readonly string[],
+    mayBeMissing?: string,
+  ): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+
+    for (let offset = 0; offset < changes.length; offset += WRITE_CHUNK) {
+      const chunk = changes.slice(offset, offset + WRITE_CHUNK);
+      await this.call(this.calls.write, async () => {
+        const response = await client.bulk({
+          // A missing alias fails the write instead of auto-creating a bare index under its name.
+          require_alias: true,
+          operations: chunk.flatMap((change) =>
+            targets.flatMap((index) => [
+              { index: { _index: index, _id: change.id, version: change.version, version_type: 'external' as const } },
+              change.doc ?? { id: change.id, status: TOMBSTONE_STATUS },
+            ]),
+          ),
+        });
+        // Inside the call: items shed under load come back in a 200, and the breaker must still count them.
+        assertApplied(
+          response,
+          chunk.length,
+          (error, position) => targets[position % targets.length] === mayBeMissing && error.type === INDEX_NOT_FOUND,
+        );
+      });
+    }
+  }
+
+  private async physicalIndices(client: Client): Promise<{ name: string; aliases: string[] }[]> {
+    const found = await this.call(this.calls.write, () =>
+      client.indices.getAlias({ index: `${PRODUCTS_INDEX_PREFIX}*` }),
+    );
+    return Object.entries(found).map(([name, { aliases }]) => ({ name, aliases: Object.keys(aliases) }));
   }
 
   private async call<T>(through: OutboundCall, task: () => Promise<T>): Promise<T> {

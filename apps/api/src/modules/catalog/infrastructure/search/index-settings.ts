@@ -3,7 +3,11 @@ import type { estypes } from '@elastic/elasticsearch';
 // Every read and write names the alias, never a physical index, so a rebuild can swap what is behind it.
 export const PRODUCTS_ALIAS = 'products';
 
-// Physical indices are `products_v<n>`; bootstrap creates `products_v0`.
+// Exists only while a rebuild runs: live writes reach the index being filled through it, and its
+// presence is the lock that keeps a second rebuild out.
+export const REBUILD_ALIAS = 'products_rebuilding';
+
+// Physical indices are `products_v<n>`; bootstrap creates `products_v0`, a rebuild `products_v<epoch ms>`.
 export const PRODUCTS_INDEX_PREFIX = 'products_v';
 
 // How far from/size paging can reach. Pinned on the index so the adapter can report a total the

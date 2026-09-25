@@ -27,19 +27,30 @@ export function isSearchEngineFault(error: unknown): boolean {
   return true;
 }
 
-// Bulk answers 200 even when items fail, so only the items say whether the documents landed.
-export function assertApplied(response: estypes.BulkResponse, sent: number): void {
+/**
+ * Bulk answers 200 even when items fail, so only the items say whether the documents landed.
+ * `tolerated` exempts an item by its position in the request.
+ */
+export function assertApplied(
+  response: estypes.BulkResponse,
+  sent: number,
+  tolerated: (error: estypes.ErrorCause, position: number) => boolean = () => false,
+): void {
   if (!response.errors) return;
-  const refused = response.items.flatMap(({ index }) =>
-    index?.error && index.error.type !== VERSION_CONFLICT ? [{ type: index.error.type, status: index.status }] : [],
+  const refused = response.items.flatMap(({ index }, position) =>
+    index?.error && index.error.type !== VERSION_CONFLICT && !tolerated(index.error, position)
+      ? [{ id: index._id, type: index.error.type, status: index.status }]
+      : [],
   );
   if (refused.length > 0) {
     // One shed item makes the whole batch the engine's fault, whatever else it refused.
     const reported = refused.find((item) => isFaultStatus(item.status)) ?? refused[0];
+    // A document may be sent to several indices; it counts once however many of its copies failed.
+    const documents = new Set(refused.map((item) => item.id)).size;
     throw new SearchEngineError(
       reported.type,
       reported.status,
-      `search engine refused ${refused.length} of ${sent} documents: ${reported.type}`,
+      `search engine refused ${documents} of ${sent} documents: ${reported.type}`,
     );
   }
 }

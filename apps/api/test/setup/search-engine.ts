@@ -2,7 +2,11 @@ import type { INestApplication } from '@nestjs/common';
 import { Client } from '@elastic/elasticsearch';
 import { ElasticsearchContainer } from '@testcontainers/elasticsearch';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../src/modules/catalog/application/ports';
-import { PRODUCTS_ALIAS, PRODUCTS_INDEX_PREFIX } from '../../src/modules/catalog/infrastructure/search/index-settings';
+import {
+  PRODUCTS_ALIAS,
+  PRODUCTS_INDEX_PREFIX,
+  SEARCH_MAX_TOTAL_HITS,
+} from '../../src/modules/catalog/infrastructure/search/index-settings';
 
 const SEARCH_IMAGE = 'docker.elastic.co/elasticsearch/elasticsearch:9.5.4';
 // The module writes -Xmx2G into this exact file; overwriting it leaves one heap setting, not two.
@@ -51,9 +55,44 @@ export function searchEnv(engine: StartedSearchEngine): Record<string, string> {
   };
 }
 
+export async function readPhysicalIndices(engine: StartedSearchEngine): Promise<string[]> {
+  return Object.keys(await engine.client.indices.get({ index: `${PRODUCTS_INDEX_PREFIX}*` })).sort();
+}
+
+/** The physical indices behind each alias; an alias that does not exist has no key. */
+export async function readAliasTargets(engine: StartedSearchEngine): Promise<Record<string, string[]>> {
+  const found = await engine.client.indices.getAlias({ index: `${PRODUCTS_INDEX_PREFIX}*` });
+  const targets: Record<string, string[]> = {};
+  for (const [index, { aliases }] of Object.entries(found)) {
+    for (const alias of Object.keys(aliases)) {
+      (targets[alias] ??= []).push(index);
+    }
+  }
+  for (const indices of Object.values(targets)) indices.sort();
+  return targets;
+}
+
+/** Every document's version by id, tombstones included. */
+export async function readDocumentVersions(
+  engine: StartedSearchEngine,
+  index: string,
+): Promise<Record<string, number>> {
+  await engine.client.indices.refresh({ index });
+  const res = await engine.client.search({
+    index,
+    size: SEARCH_MAX_TOTAL_HITS,
+    version: true,
+    _source: false,
+    query: { match_all: {} },
+  });
+  return Object.fromEntries(
+    res.hits.hits.flatMap((hit) => (hit._id && hit._version !== undefined ? [[hit._id, hit._version]] : [])),
+  );
+}
+
 /** By name: the engine refuses a wildcard delete. */
 export async function dropSearchIndices(engine: StartedSearchEngine): Promise<void> {
-  const indices = Object.keys(await engine.client.indices.get({ index: `${PRODUCTS_INDEX_PREFIX}*` }));
+  const indices = await readPhysicalIndices(engine);
   if (indices.length > 0) {
     await engine.client.indices.delete({ index: indices });
   }

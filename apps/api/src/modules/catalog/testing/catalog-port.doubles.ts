@@ -19,7 +19,7 @@ export function fakeProductSearchState(overrides: Partial<ProductSearchStatePort
     findByIds: () => Promise.resolve([]),
     findAfter: () => Promise.resolve([]),
     bumpCategoryProducts: () => Promise.resolve([]),
-    ...overrdes,
+    ...overrides,
   };
 }
 
@@ -28,6 +28,11 @@ export function fakeCatalogSearch(overrides: Partial<CatalogSearchPort> = {}): C
     ensureIndex: () => Promise.resolve(),
     write: () => Promise.resolve(),
     search: () => Promise.resolve({ items: [], total: 0 }),
+    beginRebuild: () => Promise.resolve('products_v1'),
+    writeRebuild: () => Promise.resolve(),
+    promoteRebuild: () => Promise.resolve([]),
+    abortRebuild: () => Promise.resolve(),
+    dropRetired: () => Promise.resolve(),
     ...overrides,
   };
 }
