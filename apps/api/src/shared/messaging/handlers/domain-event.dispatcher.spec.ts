@@ -22,7 +22,7 @@ function job(eventType: string): DomainEventJob {
 }
 
 // Order's finalized events come from its domain type, so a new one fails typecheck here until it is
-// listed. Payment's two are literals in its outbox mapper.
+// listed. Payment's and Catalog's are literals in their outbox mappers.
 const PRODUCED_EVENT_TYPES = Object.keys({
   'order.placed': true,
   'order.paid': true,
@@ -31,7 +31,15 @@ const PRODUCED_EVENT_TYPES = Object.keys({
   'order.cancelled': true,
   'payment.succeeded': true,
   'payment.failed': true,
-} satisfies Record<OrderFinalizedEvent['eventName'] | 'order.placed' | 'payment.succeeded' | 'payment.failed', true>);
+  'catalog.product.changed': true,
+} satisfies Record<
+  | OrderFinalizedEvent['eventName']
+  | 'order.placed'
+  | 'payment.succeeded'
+  | 'payment.failed'
+  | 'catalog.product.changed',
+  true
+>);
 
 const run = async (dispatcher: ReturnType<typeof dispatcherWith>, event: DomainEventJob) =>
   (await dispatcher.prepare(event))(tx);
@@ -71,6 +79,25 @@ describe('DomainEventDispatcher', () => {
 
     await expect(step(tx)).resolves.toBe(sendMail);
     expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  // A post-commit effect runs after the claim and is never retried; a failed index write must retry.
+  it('writes a product change to the search engine before the transaction and leaves the step empty', async () => {
+    const applyProductChanged = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = dispatcherWith({ applyProductChanged });
+
+    const step = await dispatcher.prepare(job('catalog.product.changed'));
+    expect(applyProductChanged).toHaveBeenCalledOnce();
+
+    await expect(step(tx)).resolves.toBeUndefined();
+    expect(applyProductChanged).toHaveBeenCalledOnce();
+  });
+
+  it('fails the prepare when the product change cannot be written', async () => {
+    const outage = new Error('search engine unavailable');
+    const dispatcher = dispatcherWith({ applyProductChanged: vi.fn().mockRejectedValue(outage) });
+
+    await expect(dispatcher.prepare(job('catalog.product.changed'))).rejects.toBe(outage);
   });
 
   it('runs each effectful event on its own handler inside the consumer transaction', async () => {

@@ -6,7 +6,12 @@ import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { vi } from 'vitest';
 import type { SearchCriteria, SearchDocumentWrite, SearchableProduct } from '../../application/ports';
-import { ElasticsearchCatalogSearch, SEARCH_ENGINE_BREAKER } from './elasticsearch-catalog-search.adapter';
+import {
+  ElasticsearchCatalogSearch,
+  SEARCH_READ_BREAKER,
+  SEARCH_WRITE_BREAKER,
+  type SearchEngineCalls,
+} from './elasticsearch-catalog-search.adapter';
 import { SEARCH_MAX_TOTAL_HITS } from './index-settings';
 import { SearchEngineError, isSearchEngineFault } from './search-engine-error';
 
@@ -27,6 +32,9 @@ const DOC: SearchableProduct = {
 const QUERY: SearchCriteria = { q: 'widget', page: 1, pageSize: 20 };
 
 const passThrough: OutboundCall = { run: (task) => task() };
+const refusing = (breaker: string): OutboundCall => ({
+  run: () => Promise.reject(new DownstreamUnavailableError(breaker, 'open')),
+});
 
 const live = (id: string, version: number): SearchDocumentWrite => ({ id, version, doc: { ...DOC, id } });
 
@@ -50,7 +58,7 @@ interface Reply {
 }
 
 /** A stand-in engine on a random port: `respond` answers every request, and requests are recorded. */
-async function startEngine(respond: (request: EngineRequest) => Reply, call: OutboundCall = passThrough) {
+async function startEngine(respond: (request: EngineRequest) => Reply, calls: Partial<SearchEngineCalls> = {}) {
   const requests: EngineRequest[] = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -71,7 +79,7 @@ async function startEngine(respond: (request: EngineRequest) => Reply, call: Out
   const warn = vi.fn();
   const adapter = new ElasticsearchCatalogSearch(
     enabledConfig(`http://127.0.0.1:${port}`),
-    call,
+    { read: calls.read ?? passThrough, write: calls.write ?? passThrough },
     fakePinoLogger({ warn }),
   );
   const stop = async () => {
@@ -123,7 +131,7 @@ describe('ElasticsearchCatalogSearch', () => {
     const run = vi.fn();
     const adapter = new ElasticsearchCatalogSearch(
       fakeConfigService({ 'search.enabled': false }),
-      { run },
+      { read: { run }, write: { run } },
       fakePinoLogger(),
     );
 
@@ -212,7 +220,7 @@ describe('ElasticsearchCatalogSearch', () => {
             }
           },
         };
-        const engine = await startEngine(bulkReply(items), recording);
+        const engine = await startEngine(bulkReply(items), { write: recording });
         try {
           await engine.adapter.write(items.map((item) => live(item.index._id, 1))).catch(() => undefined);
         } finally {
@@ -254,14 +262,33 @@ describe('ElasticsearchCatalogSearch', () => {
     expect([answered(400), answered(404), itemFailed(400)].map(isSearchEngineFault)).toEqual([false, false, false]);
   });
 
-  it('answers an empty page when the breaker refuses a search, and fails a refused write', async () => {
-    const refusing: OutboundCall = {
-      run: () => Promise.reject(new DownstreamUnavailableError(SEARCH_ENGINE_BREAKER, 'open')),
-    };
-    const adapter = new ElasticsearchCatalogSearch(enabledConfig('http://127.0.0.1:1'), refusing, fakePinoLogger());
+  it('answers an empty page while the read breaker is open and still lands writes', async () => {
+    const engine = await startEngine(bulkReply([bulkItem('p1', 201)]), { read: refusing(SEARCH_READ_BREAKER) });
+    try {
+      await expect(engine.adapter.write([live('p1', 1)])).resolves.toBeUndefined();
+      await expect(engine.adapter.search(QUERY)).resolves.toEqual({ items: [], total: 0 });
+    } finally {
+      await engine.stop();
+    }
 
-    await expect(adapter.search(QUERY)).resolves.toEqual({ items: [], total: 0 });
-    await expect(adapter.write([live('p1', 1)])).rejects.toBeInstanceOf(DownstreamUnavailableError);
+    expect(engine.requests.map((request) => request.path.split('?')[0])).toEqual(['/products/_bulk']);
+  });
+
+  // Shed bulk items or a full disk refuse writes on a cluster that still answers queries.
+  it('fails writes and provisioning while the write breaker is open and still serves search', async () => {
+    const engine = await startEngine(() => searchReply(1, [{ _id: 'p1', _source: { ...DOC, id: 'p1' } }]), {
+      write: refusing(SEARCH_WRITE_BREAKER),
+    });
+    try {
+      expect((await engine.adapter.search(QUERY)).items.map((hit) => hit.id)).toEqual(['p1']);
+      await expect(engine.adapter.write([live('p1', 1)])).rejects.toBeInstanceOf(DownstreamUnavailableError);
+      await expect(engine.adapter.ensureIndex()).rejects.toBeInstanceOf(DownstreamUnavailableError);
+    } finally {
+      await engine.stop();
+    }
+
+    expect(engine.searchBodies()).toHaveLength(1);
+    expect(engine.requests).toHaveLength(1);
   });
 
   // The client's error carries the request, body and headers included.

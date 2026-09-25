@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ProductChangedHandler } from '@modules/catalog/interface/queue/product-changed.handler';
 import { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
@@ -41,6 +42,7 @@ export class DomainEventDispatcher {
     orderExpired: OrderExpiredHandler,
     orderCancelled: OrderCancelledHandler,
     orderPaidMail: OrderPaidMailHandler,
+    productChanged: ProductChangedHandler,
   ) {
     this.handlers = new Map<string, PreparedHandler>([
       ['order.placed', inTransaction((job) => orderEvents.record(job))],
@@ -79,6 +81,15 @@ export class DomainEventDispatcher {
       // transaction moved money and nothing else, leaving the order still to settle.
       ['payment.succeeded', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
       ['payment.failed', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
+      // The index write happens before the claim, never as a post-commit effect: a failure there must
+      // roll the claim back and retry, and a claimed message is never retried.
+      [
+        'catalog.product.changed',
+        async (job) => {
+          await productChanged.apply(job);
+          return () => Promise.resolve();
+        },
+      ],
     ]);
   }
 

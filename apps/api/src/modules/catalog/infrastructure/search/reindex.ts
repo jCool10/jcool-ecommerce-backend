@@ -9,12 +9,17 @@ import { DrizzleModule } from '@shared/infrastructure/database';
 import * as schema from '@shared/infrastructure/database/schema';
 import type { CatalogSearchPort, ProductSearchStatePort } from '../../application/ports';
 import { DrizzleProductRepository } from '../drizzle-product.repository';
-import { ElasticsearchCatalogSearch, SEARCH_ENGINE_CALL } from './elasticsearch-catalog-search.adapter';
+import {
+  ElasticsearchCatalogSearch,
+  SEARCH_ENGINE_CALLS,
+  type SearchEngineCalls,
+} from './elasticsearch-catalog-search.adapter';
 import { reindexAll } from './reindex-runner';
 
 // An operator command fails on the first error rather than learning an outage; the breaker factory
 // also infers its dependencies from constructor types, which tsx cannot supply.
 const passThrough: OutboundCall = { run: (task) => task() };
+const unguarded: SearchEngineCalls = { read: passThrough, write: passThrough };
 
 // Deliberately not the full app, so no queue consumers or scheduled sweeps run for the command's
 // lifetime. ClsService is provided but never active here, so the DB query counter it feeds no-ops.
@@ -32,7 +37,7 @@ const passThrough: OutboundCall = { run: (task) => task() };
   ],
   providers: [
     DrizzleProductRepository,
-    { provide: SEARCH_ENGINE_CALL, useValue: passThrough },
+    { provide: SEARCH_ENGINE_CALLS, useValue: unguarded },
     ElasticsearchCatalogSearch,
   ],
 })

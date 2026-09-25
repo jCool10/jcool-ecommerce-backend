@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import configuration from '@shared/config/configuration';
-import { cappedBackoffMs, retryHorizonMs } from './queue.constants';
+import {
+  CATALOG_EVENT_PRIORITY,
+  ORDER_PAID_BACKOFF,
+  cappedBackoffMs,
+  jobOptionsFor,
+  retryHorizonMs,
+} from './queue.constants';
 
 const MINUTE_MS = 60_000;
 const LADDER_ENV = [
@@ -32,5 +38,22 @@ describe('retry ladders', () => {
     expect(shared).toBe(127_000);
     expect(orderPaid).toBeGreaterThanOrEqual(30 * MINUTE_MS);
     expect(orderPaid).toBeLessThan(40 * MINUTE_MS);
+  });
+});
+
+describe('jobOptionsFor', () => {
+  // BullMQ serves unprioritized jobs first, so only catalog work carries a priority.
+  it('puts catalog events on the long ladder behind order and payment work', () => {
+    expect(jobOptionsFor('catalog.product.changed', 15)).toEqual({
+      attempts: 15,
+      backoff: { type: ORDER_PAID_BACKOFF },
+      priority: CATALOG_EVENT_PRIORITY,
+    });
+    expect(CATALOG_EVENT_PRIORITY).toBeGreaterThan(0);
+  });
+
+  it('keeps order.paid on the long ladder without a priority and every other event on the defaults', () => {
+    expect(jobOptionsFor('order.paid', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
+    expect(jobOptionsFor('order.placed', 15)).toEqual({});
   });
 });

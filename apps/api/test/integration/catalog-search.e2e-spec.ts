@@ -25,6 +25,7 @@ import {
   SEARCH_MAX_TOTAL_HITS,
 } from '../../src/modules/catalog/infrastructure/search/index-settings';
 import { authHeader } from '../setup/bearer.helper';
+import { drainDomainEvents } from '../setup/domain-events';
 import { archiveTestCategory, createTestCategory, createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
@@ -131,7 +132,7 @@ describe('Catalog search (integration, real Elasticsearch + Postgres)', () => {
   const physicalIndices = async (): Promise<string[]> =>
     Object.keys(await engine.client.indices.get({ index: `${PRODUCTS_INDEX_PREFIX}*` }));
 
-  it('serves a product created through the admin API once a reindex writes it', async () => {
+  it('serves a product created through the admin API once its change event is delivered', async () => {
     const category = await createTestCategory(app, 'Provisioned');
     const { accessToken } = await createTestAdminPrincipal(app);
     const created = await request(app.getHttpServer())
@@ -140,7 +141,8 @@ describe('Catalog search (integration, real Elasticsearch + Postgres)', () => {
       .send({ name: 'Solo Provisioned Item', slug: 'solo-provisioned-item', categoryId: category.id, status: 'ACTIVE' })
       .expect(201);
 
-    await reindex();
+    await drainDomainEvents(app);
+    await refreshSearchIndex(engine);
     const body = await search({ q: 'Provisioned', categorySlug: category.slug });
 
     expect(hitIds(body)).toEqual([(created.body as { id: string }).id]);
@@ -438,7 +440,7 @@ describe('Catalog search (integration, real Elasticsearch + Postgres)', () => {
         'search.url': UNREACHABLE_SEARCH_URL,
         'search.requestTimeoutMs': 2_000,
       }),
-      { run: (task) => task() },
+      { read: { run: (task) => task() }, write: { run: (task) => task() } },
       fakePinoLogger(),
     );
 

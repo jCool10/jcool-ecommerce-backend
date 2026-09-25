@@ -19,8 +19,16 @@ import {
 } from './index-settings';
 import { SearchEngineError, assertApplied, logShapeOf, withoutRequest } from './search-engine-error';
 
-export const SEARCH_ENGINE_CALL = Symbol('SEARCH_ENGINE_CALL');
-export const SEARCH_ENGINE_BREAKER = 'elasticsearch';
+export const SEARCH_ENGINE_CALLS = Symbol('SEARCH_ENGINE_CALLS');
+export const SEARCH_READ_BREAKER = 'elasticsearch-read';
+export const SEARCH_WRITE_BREAKER = 'elasticsearch-write';
+
+// Apart because the engine can refuse writes (shed bulk items, a full disk) while still answering
+// queries; one breaker would then blank public search over a write-side fault.
+export interface SearchEngineCalls {
+  read: OutboundCall;
+  write: OutboundCall;
+}
 
 const LOG_CONTEXT = 'ElasticsearchCatalogSearch';
 
@@ -62,7 +70,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
   // which emits no decorator metadata, so an inferred constructor type resolves to undefined there.
   constructor(
     @Inject(ConfigService) config: ConfigService,
-    @Inject(SEARCH_ENGINE_CALL) private readonly engine: OutboundCall,
+    @Inject(SEARCH_ENGINE_CALLS) private readonly calls: SearchEngineCalls,
     @Inject(PinoLogger) private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -90,18 +98,19 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     const client = this.client;
     if (!client) return;
 
-    if (!(await this.call(() => client.indices.existsAlias({ name: PRODUCTS_ALIAS })))) {
+    const write = this.calls.write;
+    if (!(await this.call(write, () => client.indices.existsAlias({ name: PRODUCTS_ALIAS })))) {
       // Replicas booting together race to create it; the losers only add the alias.
-      await this.call(() => client.indices.create({ index: INITIAL_INDEX, ...PRODUCTS_INDEX_DEFINITION })).catch(
+      await this.call(write, () => client.indices.create({ index: INITIAL_INDEX, ...PRODUCTS_INDEX_DEFINITION })).catch(
         unlessAlreadyExists,
       );
-      await this.call(() =>
+      await this.call(write, () =>
         client.indices.putAlias({ index: INITIAL_INDEX, name: PRODUCTS_ALIAS, is_write_index: true }),
       );
     }
     // Also after a create, since the index that already existed may predate the current fields.
     // Additive only: a changed type or analyzer fails here and needs a rebuild.
-    await this.call(() =>
+    await this.call(write, () =>
       client.indices.putMapping({ index: PRODUCTS_ALIAS, properties: PRODUCTS_INDEX_DEFINITION.mappings.properties }),
     );
   }
@@ -112,7 +121,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
 
     for (let offset = 0; offset < changes.length; offset += WRITE_CHUNK) {
       const chunk = changes.slice(offset, offset + WRITE_CHUNK);
-      await this.call(async () => {
+      await this.call(this.calls.write, async () => {
         const response = await client.bulk({
           index: PRODUCTS_ALIAS,
           // A missing alias fails the write instead of auto-creating a bare index under its name.
@@ -133,7 +142,9 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     if (!client) return EMPTY;
 
     try {
-      const response = await this.call(() => client.search<SearchableProduct>(this.searchRequest(criteria)));
+      const response = await this.call(this.calls.read, () =>
+        client.search<SearchableProduct>(this.searchRequest(criteria)),
+      );
       const total = response.hits.total;
       return {
         items: response.hits.hits.flatMap((hit) => (hit._source ? [toSearchHit(hit._source, hit.highlight)] : [])),
@@ -183,9 +194,9 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     };
   }
 
-  private async call<T>(task: () => Promise<T>): Promise<T> {
+  private async call<T>(through: OutboundCall, task: () => Promise<T>): Promise<T> {
     try {
-      return await this.engine.run(task);
+      return await through.run(task);
     } catch (error) {
       throw withoutRequest(error);
     }

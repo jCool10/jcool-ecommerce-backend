@@ -1,8 +1,8 @@
-import type { CatalogSearchPort, ProductRepositoryPort } from '../application/ports';
+import type { CatalogSearchPort, ProductRepositoryPort, ProductSearchStatePort } from '../application/ports';
 
 /**
- * Whole-port doubles for the product read port and the search port. Every method answers with an
- * empty value, so a spec overrides only what it exercises and still passes a real port, not a cast.
+ * Whole-port doubles for the product read, search state and search ports. Every method answers with
+ * an empty value, so a spec overrides only what it exercises and still passes a real port, not a cast.
  */
 export function fakeProductRepository(overrides: Partial<ProductRepositoryPort> = {}): ProductRepositoryPort {
   return {
@@ -10,6 +10,14 @@ export function fakeProductRepository(overrides: Partial<ProductRepositoryPort> 
     findActiveByIdOrSlug: () => Promise.resolve(null),
     findSkuView: () => Promise.resolve(null),
     findManySkuViews: () => Promise.resolve([]),
+    ...overrides,
+  };
+}
+
+export function fakeProductSearchState(overrides: Partial<ProductSearchStatePort> = {}): ProductSearchStatePort {
+  return {
+    findByIds: () => Promise.resolve([]),
+    findAfter: () => Promise.resolve([]),
     ...overrides,
   };
 }

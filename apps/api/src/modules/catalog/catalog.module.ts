@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { CircuitBreakerFactory, ResilienceModule, type OutboundCall } from '@jcool/platform/resilience';
+import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
 import { CacheModule } from '@shared/cache';
 import { MediaModule } from '@modules/media/media.module';
 import {
@@ -13,6 +13,7 @@ import {
 import { CATALOG_SKU_QUERY } from './application/public/catalog-sku-query.port';
 import { CatalogAdminService } from './application/services/catalog-admin.service';
 import { CatalogSkuQueryService } from './application/services/catalog-sku-query.service';
+import { ProductSearchSyncService } from './application/services/product-search-sync.service';
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from './application/use-cases';
 import {
   CachingCatalogAdminRepository,
@@ -21,13 +22,16 @@ import {
   DrizzleProductRepository,
   ElasticsearchCatalogSearch,
   MediaQueryAdapter,
-  SEARCH_ENGINE_BREAKER,
-  SEARCH_ENGINE_CALL,
+  SEARCH_ENGINE_CALLS,
+  SEARCH_READ_BREAKER,
+  SEARCH_WRITE_BREAKER,
   SearchIndexBootstrap,
   isSearchEngineFault,
+  type SearchEngineCalls,
 } from './infrastructure';
 import { AdminCatalogController } from './interface/admin-catalog.controller';
 import { CatalogController } from './interface/catalog.controller';
+import { ProductChangedHandler } from './interface/queue/product-changed.handler';
 
 /**
  * `CATALOG_SKU_QUERY` is the published SKU-read language for other contexts (Cart reads live
@@ -51,18 +55,25 @@ import { CatalogController } from './interface/catalog.controller';
     { provide: CATALOG_ADMIN_REPOSITORY, useClass: CachingCatalogAdminRepository },
     { provide: CATALOG_SKU_QUERY, useClass: CatalogSkuQueryService },
     {
-      provide: SEARCH_ENGINE_CALL,
+      provide: SEARCH_ENGINE_CALLS,
       inject: [ConfigService, CircuitBreakerFactory],
-      useFactory: (config: ConfigService, breakers: CircuitBreakerFactory): OutboundCall =>
-        breakers.create(SEARCH_ENGINE_BREAKER, {
+      useFactory: (config: ConfigService, breakers: CircuitBreakerFactory): SearchEngineCalls => {
+        const options = {
           timeoutMs: config.getOrThrow<number>('search.requestTimeoutMs'),
           isDownstreamFault: isSearchEngineFault,
-        }),
+        };
+        return {
+          read: breakers.create(SEARCH_READ_BREAKER, options),
+          write: breakers.create(SEARCH_WRITE_BREAKER, options),
+        };
+      },
     },
     { provide: CATALOG_SEARCH, useClass: ElasticsearchCatalogSearch },
     { provide: MEDIA_QUERY, useClass: MediaQueryAdapter },
     SearchIndexBootstrap,
+    ProductSearchSyncService,
+    ProductChangedHandler,
   ],
-  exports: [CATALOG_SKU_QUERY],
+  exports: [CATALOG_SKU_QUERY, ProductChangedHandler],
 })
 export class CatalogModule {}

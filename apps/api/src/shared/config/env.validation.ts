@@ -407,7 +407,8 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsNotEmpty()
   USER_DIRECTORY_NOT_FOUND_GRACE?: string;
 
-  // order.paid waits on the user-service for the buyer's address, so it outlasts the shared ladder.
+  // order.paid (user-service) and catalog events (search engine) wait on another service, so they outlast
+  // the default ladder.
   @IsOptional()
   @Type(() => Number)
   @IsInt()

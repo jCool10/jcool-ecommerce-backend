@@ -7,9 +7,11 @@ import { CatalogModule } from './catalog.module';
 import {
   CachingProductRepository,
   DrizzleProductRepository,
-  SEARCH_ENGINE_BREAKER,
-  SEARCH_ENGINE_CALL,
+  SEARCH_ENGINE_CALLS,
+  SEARCH_READ_BREAKER,
+  SEARCH_WRITE_BREAKER,
   isSearchEngineFault,
+  type SearchEngineCalls,
 } from './infrastructure';
 
 interface ProviderEntry {
@@ -37,16 +39,24 @@ describe('CatalogModule', () => {
     expect(boundTo(PRODUCT_SEARCH_STATE)).toBe(DrizzleProductRepository);
   });
 
-  // Counting a 4xx would let one malformed query open the breaker and blank search for everyone.
-  it('breaks search engine calls on engine faults only, within the request timeout', () => {
+  // Counting a 4xx would let one malformed query open a breaker, and sharing one would let shed index
+  // writes blank search for everyone.
+  it('breaks search reads and index writes apart, on engine faults only, within the request timeout', () => {
     const create = vi.fn((): OutboundCall => ({ run: (task) => task() }));
     const breakers: Pick<CircuitBreakerFactory, 'create'> = { create };
 
-    providerFor(SEARCH_ENGINE_CALL)?.useFactory?.(fakeConfigService({ 'search.requestTimeoutMs': 1_234 }), breakers);
+    const calls = providerFor(SEARCH_ENGINE_CALLS)?.useFactory?.(
+      fakeConfigService({ 'search.requestTimeoutMs': 1_234 }),
+      breakers,
+    ) as SearchEngineCalls;
 
-    expect(create).toHaveBeenCalledWith(SEARCH_ENGINE_BREAKER, {
-      timeoutMs: 1_234,
-      isDownstreamFault: isSearchEngineFault,
-    });
+    const options = { timeoutMs: 1_234, isDownstreamFault: isSearchEngineFault };
+    expect(create.mock.calls).toEqual([
+      [SEARCH_READ_BREAKER, options],
+      [SEARCH_WRITE_BREAKER, options],
+    ]);
+    expect(SEARCH_READ_BREAKER).not.toBe(SEARCH_WRITE_BREAKER);
+    expect(calls.read).toBe(create.mock.results[0]?.value);
+    expect(calls.write).toBe(create.mock.results[1]?.value);
   });
 });
