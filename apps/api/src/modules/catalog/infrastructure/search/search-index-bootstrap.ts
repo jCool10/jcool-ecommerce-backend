@@ -1,7 +1,7 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@jcool/kernel';
 import { CATALOG_SEARCH, type CatalogSearchPort } from '../../application/ports';
+import { logShapeOf } from './search-engine-error';
 
 // Long enough for a merely slow engine, short enough that an unreachable one never holds a deploy open.
 const PROVISION_TIMEOUT_MS = 5_000;
@@ -9,11 +9,10 @@ const PROVISION_TIMEOUT_MS = 5_000;
 const LOG_CONTEXT = 'SearchIndexBootstrap';
 
 /**
- * Applies the index settings at boot so the engine is never left holding an index it auto-created on
- * the first write: such an index has no `filterableAttributes`, the read filter is rejected, and
- * because a failed search degrades to an empty result the whole catalog reads as "matches nothing",
- * with the rejection visible only as a log line. Best-effort and time-boxed on purpose — a failed or
- * slow attempt leaves the settings to the next restart or to `search:reindex`, which applies them too.
+ * Creates the index behind its alias at boot, or adds the fields a deploy introduced to the one
+ * already there, so the first write never meets a missing alias or an unknown field. A changed
+ * type or analyzer fails here and is logged: that deploy needs a rebuild. Best-effort and time-boxed
+ * on purpose — a failed or slow attempt leaves it to the next restart or to `search:reindex`.
  */
 @Injectable()
 export class SearchIndexBootstrap implements OnModuleInit {
@@ -27,7 +26,7 @@ export class SearchIndexBootstrap implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     const provisioning = this.search.ensureIndex().catch((error: unknown) => {
       this.logger.warn(
-        { err: toError(error) },
+        { error: logShapeOf(error) },
         'search index provisioning failed; search returns empty until it succeeds',
       );
     });

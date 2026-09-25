@@ -42,17 +42,20 @@ export interface SearchResult {
   total: number;
 }
 
+export interface SearchDocumentWrite {
+  id: string;
+  version: number;
+  // null: the product left the public projection. Stored as a tombstone, never deleted.
+  doc: SearchableProduct | null;
+}
+
 export interface CatalogSearchPort {
   // Idempotent, so a reindex or a restart may call it freely.
   ensureIndex(): Promise<void>;
-  // Drops every document but keeps the index and its settings, so a full reindex cannot leave behind
-  // docs whose product has since left the indexed set.
-  resetIndex(): Promise<void>;
-  bulkIndex(docs: SearchableProduct[]): Promise<void>;
-  indexProduct(doc: SearchableProduct): Promise<void>;
-  deleteProduct(id: string): Promise<void>;
+  // Versioned. A write at or below the stored version is ignored, not an error.
+  write(changes: SearchDocumentWrite[]): Promise<void>;
   // Best-effort read: an engine failure resolves to an empty result rather than throwing, because
   // search is an optional path over Postgres. Writes, by contrast, surface their error so the caller
-  // decides whether a lagging index fails its mutation.
+  // can retry.
   search(criteria: SearchCriteria): Promise<SearchResult>;
 }

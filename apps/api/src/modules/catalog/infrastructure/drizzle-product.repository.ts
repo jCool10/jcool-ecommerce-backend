@@ -163,34 +163,6 @@ export class DrizzleProductRepository implements ProductRepositoryPort, ProductS
     );
   }
 
-  async findActiveAfter(afterId: string | null, limit: number): Promise<Product[]> {
-    return this.db.transaction(
-      async (tx) => {
-        const conditions: SQL[] = [eq(products.status, 'ACTIVE'), isNull(categories.archivedAt)];
-        if (afterId) {
-          // Seeks the primary key, not `created_at`: a timestamp cursor can only travel as a
-          // millisecond-precision JS Date, which lands before the microseconds Postgres stored and
-          // re-serves every row inside that millisecond.
-          conditions.push(gt(products.id, afterId));
-        }
-        const where = and(...conditions);
-
-        const idRows = await tx
-          .select({ id: products.id })
-          .from(products)
-          .innerJoin(categories, eq(products.categoryId, categories.id))
-          .where(where)
-          .orderBy(asc(products.id))
-          .limit(limit);
-        const ids = idRows.map((row) => row.id);
-
-        const byId = await this.hydrateActive(tx, ids);
-        return ids.map((id) => byId.get(id)).filter((product): product is Product => product !== undefined);
-      },
-      { isolationLevel: 'repeatable read', accessMode: 'read only' },
-    );
-  }
-
   async findByIds(ids: string[]): Promise<ProductSearchState[]> {
     if (ids.length === 0) {
       return [];

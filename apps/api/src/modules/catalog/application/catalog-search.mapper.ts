@@ -1,5 +1,5 @@
 import type { Product } from '../domain/entities';
-import type { SearchableProduct } from './ports';
+import type { ProductSearchState, SearchDocumentWrite, SearchableProduct } from './ports';
 
 // Sole pricing currency today; a variant priced only in another currency reads as unpriced here, the
 // same VND-scoped read the SKU view uses, so search and product detail agree on the price shown.
@@ -7,7 +7,7 @@ const DEFAULT_CURRENCY = 'VND';
 
 /**
  * Pure — no SDK, no I/O — which is why it sits in application: both the reindex command
- * (infrastructure) and the admin write path build their documents through it.
+ * (infrastructure) and the search sync build their documents through it.
  */
 export function toSearchableProduct(product: Product): SearchableProduct {
   const amountsMinor = product.variants
@@ -28,5 +28,13 @@ export function toSearchableProduct(product: Product): SearchableProduct {
     minPriceMinor,
     currency: minPriceMinor === null ? null : DEFAULT_CURRENCY,
     createdAtEpoch: product.createdAt.getTime(),
+  };
+}
+
+export function toSearchDocumentWrite(state: ProductSearchState): SearchDocumentWrite {
+  return {
+    id: state.id,
+    version: state.version,
+    doc: state.product ? toSearchableProduct(state.product) : null,
   };
 }

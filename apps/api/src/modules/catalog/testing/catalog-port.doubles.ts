@@ -7,7 +7,6 @@ import type { CatalogSearchPort, ProductRepositoryPort } from '../application/po
 export function fakeProductRepository(overrides: Partial<ProductRepositoryPort> = {}): ProductRepositoryPort {
   return {
     findManyActive: () => Promise.resolve({ items: [], total: 0 }),
-    findActiveAfter: () => Promise.resolve([]),
     findActiveByIdOrSlug: () => Promise.resolve(null),
     findSkuView: () => Promise.resolve(null),
     findManySkuViews: () => Promise.resolve([]),
@@ -18,10 +17,7 @@ export function fakeProductRepository(overrides: Partial<ProductRepositoryPort> 
 export function fakeCatalogSearch(overrides: Partial<CatalogSearchPort> = {}): CatalogSearchPort {
   return {
     ensureIndex: () => Promise.resolve(),
-    resetIndex: () => Promise.resolve(),
-    bulkIndex: () => Promise.resolve(),
-    indexProduct: () => Promise.resolve(),
-    deleteProduct: () => Promise.resolve(),
+    write: () => Promise.resolve(),
     search: () => Promise.resolve({ items: [], total: 0 }),
     ...overrides,
   };

@@ -1,53 +1,52 @@
 import { MODULE_METADATA } from '@nestjs/common/constants';
-import { Test } from '@nestjs/testing';
-import { PinoLogger } from 'nestjs-pino';
+import type { CircuitBreakerFactory, OutboundCall } from '@jcool/platform/resilience';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { describe, expect, it, vi } from 'vitest';
-import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import {
-  CATALOG_ADMIN_REPOSITORY,
-  CATALOG_SEARCH,
-  PRODUCT_REPOSITORY,
-  PRODUCT_SOURCE_REPOSITORY,
-} from './application/ports';
-import { CatalogAdminService } from './application/services/catalog-admin.service';
+import { PRODUCT_REPOSITORY, PRODUCT_SEARCH_STATE } from './application/ports';
 import { CatalogModule } from './catalog.module';
-import { CachingProductRepository, DrizzleProductRepository } from './infrastructure';
-import { fakeCatalogSearch, fakeProductRepository } from './testing/catalog-port.doubles';
+import {
+  CachingProductRepository,
+  DrizzleProductRepository,
+  SEARCH_ENGINE_BREAKER,
+  SEARCH_ENGINE_CALL,
+  isSearchEngineFault,
+} from './infrastructure';
 
 interface ProviderEntry {
   provide?: unknown;
   useClass?: unknown;
   useExisting?: unknown;
+  useFactory?: (...deps: unknown[]) => unknown;
+}
+
+function providerFor(token: symbol): ProviderEntry | undefined {
+  const providers = (Reflect.getMetadata(MODULE_METADATA.PROVIDERS, CatalogModule) ?? []) as ProviderEntry[];
+  return providers.find((provider) => typeof provider === 'object' && provider.provide === token);
 }
 
 function boundTo(token: symbol): unknown {
-  const providers = (Reflect.getMetadata(MODULE_METADATA.PROVIDERS, CatalogModule) ?? []) as ProviderEntry[];
-  const entry = providers.find((provider) => typeof provider === 'object' && provider.provide === token);
+  const entry = providerFor(token);
   return entry?.useExisting ?? entry?.useClass;
 }
 
 describe('CatalogModule', () => {
-  // The search document is re-derived right after a write commits. A cached read could answer from
-  // a generation whose invalidation has not landed yet and index the state the write replaced.
-  it('feeds the admin search sync from the uncached repository', async () => {
-    const sourceRead = vi.fn().mockResolvedValue(null);
-    const cachedRead = vi.fn().mockResolvedValue(null);
-    const moduleRef = await Test.createTestingModule({
-      providers: [
-        CatalogAdminService,
-        { provide: CATALOG_ADMIN_REPOSITORY, useValue: { archiveProduct: vi.fn().mockResolvedValue({ id: 'prod1' }) } },
-        { provide: CATALOG_SEARCH, useValue: fakeCatalogSearch() },
-        { provide: PRODUCT_REPOSITORY, useValue: fakeProductRepository({ findActiveByIdOrSlug: cachedRead }) },
-        { provide: PRODUCT_SOURCE_REPOSITORY, useValue: fakeProductRepository({ findActiveByIdOrSlug: sourceRead }) },
-        { provide: PinoLogger, useFactory: () => fakePinoLogger() },
-      ],
-    }).compile();
-
-    await moduleRef.get(CatalogAdminService).archiveProduct('prod1');
-
-    expect(boundTo(PRODUCT_SOURCE_REPOSITORY)).toBe(DrizzleProductRepository);
+  // The indexer writes what it reads under the version it reads, so it must read the row, never a
+  // cache generation whose invalidation has not landed.
+  it('feeds the search state from the uncached repository', () => {
     expect(boundTo(PRODUCT_REPOSITORY)).toBe(CachingProductRepository);
-    expect(sourceRead).toHaveBeenCalledWith('prod1');
-    expect(cachedRead).not.toHaveBeenCalled();
+    expect(boundTo(PRODUCT_SEARCH_STATE)).toBe(DrizzleProductRepository);
+  });
+
+  // Counting a 4xx would let one malformed query open the breaker and blank search for everyone.
+  it('breaks search engine calls on engine faults only, within the request timeout', () => {
+    const create = vi.fn((): OutboundCall => ({ run: (task) => task() }));
+    const breakers: Pick<CircuitBreakerFactory, 'create'> = { create };
+
+    providerFor(SEARCH_ENGINE_CALL)?.useFactory?.(fakeConfigService({ 'search.requestTimeoutMs': 1_234 }), breakers);
+
+    expect(create).toHaveBeenCalledWith(SEARCH_ENGINE_BREAKER, {
+      timeoutMs: 1_234,
+      isDownstreamFault: isSearchEngineFault,
+    });
   });
 });

@@ -51,24 +51,32 @@ services:
 
   # The search index is derived from Postgres and rebuildable from it, so this volume is a cache,
   # not a system of record.
-  meilisearch:
-    image: getmeili/meilisearch:v1.53.1
-    container_name: jcool-meilisearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.4
+    container_name: jcool-elasticsearch
     restart: unless-stopped
+    # Loopback only: anyone who reaches it with the password reads the whole index.
     ports:
-      - "${SEARCH_HOST_PORT:-7700}:7700"
+      - "127.0.0.1:${SEARCH_HOST_PORT:-9200}:9200"
     environment:
-      # Blank runs the engine keyless, which only MEILI_ENV=development allows.
-      MEILI_MASTER_KEY: ${SEARCH_MASTER_KEY:-}
-      MEILI_ENV: development
+      discovery.type: single-node
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      # Writes name the alias; this stops any client from creating a bare index by writing to a typo.
+      action.auto_create_index: "false"
+      # Defaulted, like the other local-only passwords: a blank one leaves `elastic` unusable and the
+      # healthcheck failing with no reason. The app below falls back to the same value.
+      ELASTIC_PASSWORD: ${SEARCH_PASSWORD:-jcool-local-search-pw-not-secret}
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    mem_limit: 1g
     volumes:
-      - meilidata:/meili_data
+      - esdata:/usr/share/elasticsearch/data
     healthcheck:
-      # curl ships in this image (unlike the node-only app image below).
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7700/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      test: ["CMD-SHELL", "curl -fs -u elastic:$$ELASTIC_PASSWORD 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
     networks:
       - jcool-net
 
@@ -151,7 +159,8 @@ services:
       # Inside the compose network the app reaches services by NAME, not the host-mapped ports.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       REDIS_URL: redis://redis:6379
-      SEARCH_URL: http://meilisearch:7700
+      SEARCH_URL: http://elasticsearch:9200
+      SEARCH_PASSWORD: ${SEARCH_PASSWORD:-jcool-local-search-pw-not-secret}
       SMTP_URL: smtp://mailpit:1025
       STORAGE_ENDPOINT: http://minio:9000
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
@@ -164,7 +173,7 @@ services:
       USER_SERVICE_INTERNAL_URL: http://user-service:3000
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
-    # meilisearch is deliberately not listed: search is an optional read path the app must boot
+    # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
     depends_on:
       postgres:
@@ -454,7 +463,7 @@ volumes:
   idpgdata:
   userpgdata:
   redisdata:
-  meilidata:
+  esdata:
   miniodata:
   promdata:
   grafanadata:

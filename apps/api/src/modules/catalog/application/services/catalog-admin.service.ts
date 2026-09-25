@@ -1,21 +1,15 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { MediaAssetUnavailableError } from '@modules/media/application/public/media-facade.port';
-import { toError } from '@jcool/kernel';
 import { Slug } from '../../domain/slug.vo';
 import type { AdminProduct, Category, Price, ProductImage, Sku } from '../../domain/entities';
-import { toSearchableProduct } from '../catalog-search.mapper';
 import {
   type AttachImageData,
   CATALOG_ADMIN_REPOSITORY,
-  CATALOG_SEARCH,
-  PRODUCT_SOURCE_REPOSITORY,
   type CatalogAdminRepositoryPort,
-  type CatalogSearchPort,
   type CreateCategoryData,
   type CreateProductData,
   type CreateSkuData,
-  type ProductRepositoryPort,
   type SetPriceData,
   type UpdateCategoryData,
   type UpdateProductData,
@@ -35,10 +29,6 @@ export class CatalogAdminService {
   constructor(
     @Inject(CATALOG_ADMIN_REPOSITORY)
     private readonly repo: CatalogAdminRepositoryPort,
-    @Inject(PRODUCT_SOURCE_REPOSITORY)
-    private readonly products: ProductRepositoryPort,
-    @Inject(CATALOG_SEARCH)
-    private readonly search: CatalogSearchPort,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -58,10 +48,10 @@ export class CatalogAdminService {
       throw new NotFoundException(`Category not found: ${id}`);
     }
     this.logger.info({ categoryId: id }, 'category updated');
-    // A rename lands in the category fields denormalized into every product document underneath —
-    // an unbounded fan-out this request deliberately does not run; `search:reindex` converges them.
+    // The category fields are denormalized into every product document underneath. A reindex cannot
+    // refresh them: the rename bumps no product version, so the engine keeps the copy it holds.
     if (data.name !== undefined || data.slug !== undefined) {
-      this.logger.warn({ categoryId: id }, 'category renamed; its product search documents stay stale until a reindex');
+      this.logger.warn({ categoryId: id }, 'category renamed; its product search documents keep the old category');
     }
     return updated;
   }
@@ -75,11 +65,11 @@ export class CatalogAdminService {
       throw new NotFoundException(`Category not found: ${id}`);
     }
     this.logger.info({ categoryId: id }, 'category archived');
-    // No search sync: the archive's row lock serializes against the product writes that name this
-    // category (a create, and a categoryId move), so none of those can commit behind the count. A
-    // status-only PATCH names no category and takes no lock, so a product can still be activated
-    // under an archived category; the public read's `categories.archived_at IS NULL` filter — not
-    // anything here — is what keeps that product out of the results.
+    // The archive's row lock serializes against the product writes that name this category (a
+    // create, and a categoryId move), so none of those can commit behind the count. A status-only
+    // PATCH names no category and takes no lock, so a product can still be activated under an
+    // archived category; the public read's `categories.archived_at IS NULL` filter is what keeps
+    // that product out of the results.
     return category;
   }
 
@@ -87,7 +77,6 @@ export class CatalogAdminService {
     await this.assertCategoryUsable(data.categoryId);
     const created = await this.repo.createProduct({ ...data, slug: Slug.of(data.slug).value });
     this.logger.info({ productId: created.id, categoryId: created.categoryId }, 'product created');
-    await this.syncSearchDocument(created.id);
     return created;
   }
 
@@ -101,7 +90,6 @@ export class CatalogAdminService {
       throw new NotFoundException(`Product not found: ${id}`);
     }
     this.logger.info({ productId: id }, 'product updated');
-    await this.syncSearchDocument(updated.id);
     return updated;
   }
 
@@ -111,7 +99,6 @@ export class CatalogAdminService {
       throw new NotFoundException(`Product not found: ${id}`);
     }
     this.logger.info({ productId: id }, 'product archived');
-    await this.syncSearchDocument(archived.id);
     return archived;
   }
 
@@ -119,7 +106,6 @@ export class CatalogAdminService {
     await this.assertProductExists(productId);
     const created = await this.repo.createSku(productId, data);
     this.logger.info({ skuId: created.id, productId }, 'sku created');
-    await this.syncSearchDocument(created.productId);
     return created;
   }
 
@@ -129,7 +115,6 @@ export class CatalogAdminService {
       throw new NotFoundException(`SKU not found: ${id}`);
     }
     this.logger.info({ skuId: id, productId: updated.productId }, 'sku updated');
-    await this.syncSearchDocument(updated.productId);
     return updated;
   }
 
@@ -139,12 +124,11 @@ export class CatalogAdminService {
       throw new NotFoundException(`SKU not found: ${id}`);
     }
     this.logger.info({ skuId: id, productId: archived.productId }, 'sku archived');
-    await this.syncSearchDocument(archived.productId);
     return archived;
   }
 
   /**
-   * Images are not indexed, so none of these syncs the search document: a search hit renders from
+   * Images are not in the search document, so none of these changes it: a search hit renders from
    * the document's own fields, and adding an image to one would make every attach a reindex.
    */
   async listProductImages(productId: string): Promise<ProductImage[]> {
@@ -195,8 +179,6 @@ export class CatalogAdminService {
     const payload: SetPriceData = { currency: data.currency ?? DEFAULT_CURRENCY, amountMinor: data.amountMinor };
     const price = await this.repo.setPrice(skuId, payload);
     this.logger.info({ skuId, amountMinor: price.amountMinor, currency: price.currency }, 'price set');
-    // A variant's price is denormalized into its parent's document, so the parent is what re-indexes.
-    await this.syncSearchDocument(sku.productId);
     return price;
   }
 
@@ -213,27 +195,6 @@ export class CatalogAdminService {
     const category = await this.repo.findCategoryById(categoryId);
     if (!category || category.archivedAt !== null) {
       throw new NotFoundException(`Category not found: ${categoryId}`);
-    }
-  }
-
-  /**
-   * Re-reading the public ACTIVE projection is what decides index-vs-delete, so a draft, an archived
-   * product and one under an archived category all leave the index without restating that rule.
-   * Best-effort dual-write: a crash between the commit and this call leaves the index behind and
-   * `search:reindex` is the backstop; the proper fix is an outbox emit inside the mutation's transaction.
-   */
-  private async syncSearchDocument(productId: string): Promise<void> {
-    try {
-      const product = await this.products.findActiveByIdOrSlug(productId);
-      // The lookup also matches on slug, so a product whose slug equals this id would answer for it
-      // once the real row stops being ACTIVE; only an id match is this product.
-      if (product?.id === productId) {
-        await this.search.indexProduct(toSearchableProduct(product));
-      } else {
-        await this.search.deleteProduct(productId);
-      }
-    } catch (error) {
-      this.logger.warn({ productId, err: toError(error) }, 'search index sync failed for product');
     }
   }
 }

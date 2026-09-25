@@ -1,0 +1,209 @@
+import { Inject, Injectable, type OnApplicationShutdown } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Client, type estypes } from '@elastic/elasticsearch';
+import { PinoLogger } from 'nestjs-pino';
+import type { OutboundCall } from '@jcool/platform/resilience';
+import type {
+  CatalogSearchPort,
+  SearchCriteria,
+  SearchDocumentWrite,
+  SearchHit,
+  SearchResult,
+  SearchableProduct,
+} from '../../application/ports';
+import {
+  PRODUCTS_ALIAS,
+  PRODUCTS_INDEX_DEFINITION,
+  PRODUCTS_INDEX_PREFIX,
+  SEARCH_MAX_TOTAL_HITS,
+} from './index-settings';
+import { SearchEngineError, assertApplied, logShapeOf, withoutRequest } from './search-engine-error';
+
+export const SEARCH_ENGINE_CALL = Symbol('SEARCH_ENGINE_CALL');
+export const SEARCH_ENGINE_BREAKER = 'elasticsearch';
+
+const LOG_CONTEXT = 'ElasticsearchCatalogSearch';
+
+const INITIAL_INDEX = `${PRODUCTS_INDEX_PREFIX}0`;
+const WRITE_CHUNK = 500;
+const EMPTY: SearchResult = { items: [], total: 0 };
+
+// Never matches the read filter, so a tombstone holds its version without ever being served.
+const TOMBSTONE_STATUS = 'INACTIVE';
+
+const SEARCH_FIELDS = ['name^4', 'skus^3', 'categoryName^2', 'description'];
+// The id tiebreak keeps equal scores in one order across pages; doc order shifts on every merge.
+const SORT: estypes.Sort = [{ _score: { order: 'desc' } }, { id: { order: 'asc' } }];
+const HIGHLIGHT: estypes.SearchHighlight = {
+  number_of_fragments: 0,
+  pre_tags: ['<em>'],
+  post_tags: ['</em>'],
+  fields: { name: {}, description: {} },
+};
+
+function unlessAlreadyExists(error: unknown): void {
+  if (!(error instanceof SearchEngineError && error.type === 'resource_already_exists_exception')) {
+    throw error;
+  }
+}
+
+/**
+ * `SEARCH_ENABLED=false` leaves the client unbuilt and every method a no-op, so dev and unit tests
+ * need no engine. `search` degrades to an empty page (an optional read must never 5xx over data
+ * Postgres can serve); the writes reject so their caller can retry.
+ */
+@Injectable()
+export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicationShutdown {
+  private readonly client: Client | null;
+  // Half the request timeout, so a slow shard answers with the hits it has before the call is abandoned.
+  private readonly searchTimeout: string;
+
+  // Explicit @Inject rather than type reflection: the reindex CLI builds this under tsx/esbuild,
+  // which emits no decorator metadata, so an inferred constructor type resolves to undefined there.
+  constructor(
+    @Inject(ConfigService) config: ConfigService,
+    @Inject(SEARCH_ENGINE_CALL) private readonly engine: OutboundCall,
+    @Inject(PinoLogger) private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+    const enabled = config.get<boolean>('search.enabled') ?? false;
+    const requestTimeout = enabled ? config.getOrThrow<number>('search.requestTimeoutMs') : 0;
+    const password = config.get<string>('search.password');
+    this.searchTimeout = `${Math.floor(requestTimeout / 2)}ms`;
+    this.client = enabled
+      ? new Client({
+          node: config.getOrThrow<string>('search.url'),
+          ...(password && { auth: { username: config.getOrThrow<string>('search.username'), password } }),
+          // v9 has no default, so a hung engine would hold its caller forever.
+          requestTimeout,
+          // Retries belong to the caller; one inside the client outlives the breaker's timeout.
+          maxRetries: 0,
+        })
+      : null;
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    await this.client?.close();
+  }
+
+  async ensureIndex(): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+
+    if (!(await this.call(() => client.indices.existsAlias({ name: PRODUCTS_ALIAS })))) {
+      // Replicas booting together race to create it; the losers only add the alias.
+      await this.call(() => client.indices.create({ index: INITIAL_INDEX, ...PRODUCTS_INDEX_DEFINITION })).catch(
+        unlessAlreadyExists,
+      );
+      await this.call(() =>
+        client.indices.putAlias({ index: INITIAL_INDEX, name: PRODUCTS_ALIAS, is_write_index: true }),
+      );
+    }
+    // Also after a create, since the index that already existed may predate the current fields.
+    // Additive only: a changed type or analyzer fails here and needs a rebuild.
+    await this.call(() =>
+      client.indices.putMapping({ index: PRODUCTS_ALIAS, properties: PRODUCTS_INDEX_DEFINITION.mappings.properties }),
+    );
+  }
+
+  async write(changes: SearchDocumentWrite[]): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+
+    for (let offset = 0; offset < changes.length; offset += WRITE_CHUNK) {
+      const chunk = changes.slice(offset, offset + WRITE_CHUNK);
+      await this.call(async () => {
+        const response = await client.bulk({
+          index: PRODUCTS_ALIAS,
+          // A missing alias fails the write instead of auto-creating a bare index under its name.
+          require_alias: true,
+          operations: chunk.flatMap((change) => [
+            { index: { _id: change.id, version: change.version, version_type: 'external' as const } },
+            change.doc ?? { id: change.id, status: TOMBSTONE_STATUS },
+          ]),
+        });
+        // Inside the call: items shed under load come back in a 200, and the breaker must still count them.
+        assertApplied(response, chunk.length);
+      });
+    }
+  }
+
+  async search(criteria: SearchCriteria): Promise<SearchResult> {
+    const client = this.client;
+    if (!client) return EMPTY;
+
+    try {
+      const response = await this.call(() => client.search<SearchableProduct>(this.searchRequest(criteria)));
+      const total = response.hits.total;
+      return {
+        items: response.hits.hits.flatMap((hit) => (hit._source ? [toSearchHit(hit._source, hit.highlight)] : [])),
+        total: Math.min(typeof total === 'number' ? total : (total?.value ?? 0), SEARCH_MAX_TOTAL_HITS),
+      };
+    } catch (error) {
+      this.logger.warn({ error: logShapeOf(error) }, 'catalog search failed');
+      return EMPTY;
+    }
+  }
+
+  private searchRequest(criteria: SearchCriteria): estypes.SearchRequest {
+    const from = (criteria.page - 1) * criteria.pageSize;
+    const request: estypes.SearchRequest = {
+      index: PRODUCTS_ALIAS,
+      query: {
+        bool: {
+          must: {
+            multi_match: {
+              query: criteria.q,
+              type: 'best_fields',
+              fields: SEARCH_FIELDS,
+              fuzziness: 'AUTO',
+              prefix_length: 1,
+              max_expansions: 20,
+            },
+          },
+          filter: [
+            { term: { status: 'ACTIVE' } },
+            ...(criteria.categorySlug ? [{ term: { categorySlug: criteria.categorySlug } }] : []),
+          ],
+        },
+      },
+      track_total_hits: SEARCH_MAX_TOTAL_HITS,
+      timeout: this.searchTimeout,
+    };
+    // The engine refuses a page past the window; a count still answers the total the caller pages by.
+    if (from >= SEARCH_MAX_TOTAL_HITS) {
+      return { ...request, size: 0 };
+    }
+    return {
+      ...request,
+      from,
+      size: Math.min(criteria.pageSize, SEARCH_MAX_TOTAL_HITS - from),
+      sort: SORT,
+      highlight: HIGHLIGHT,
+    };
+  }
+
+  private async call<T>(task: () => Promise<T>): Promise<T> {
+    try {
+      return await this.engine.run(task);
+    } catch (error) {
+      throw withoutRequest(error);
+    }
+  }
+}
+
+// The engine highlights only the fields that matched; the rest keep their plain text.
+function toSearchHit(source: SearchableProduct, highlight: Record<string, string[]> | undefined): SearchHit {
+  return {
+    id: source.id,
+    name: source.name,
+    slug: source.slug,
+    categorySlug: source.categorySlug,
+    minPriceMinor: source.minPriceMinor,
+    currency: source.currency,
+    highlight: {
+      name: highlight?.name?.[0] ?? source.name,
+      description: highlight?.description?.[0] ?? source.description ?? undefined,
+    },
+  };
+}

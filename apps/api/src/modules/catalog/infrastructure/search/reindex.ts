@@ -3,13 +3,18 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
 import { ObservabilityLoggerModule } from '@jcool/platform/observability';
+import type { OutboundCall } from '@jcool/platform/resilience';
 import { ConfigModule } from '@shared/config';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import * as schema from '@shared/infrastructure/database/schema';
-import type { CatalogSearchPort, ProductRepositoryPort } from '../../application/ports';
+import type { CatalogSearchPort, ProductSearchStatePort } from '../../application/ports';
 import { DrizzleProductRepository } from '../drizzle-product.repository';
-import { MeilisearchCatalogSearch } from './meilisearch-catalog-search.adapter';
+import { ElasticsearchCatalogSearch, SEARCH_ENGINE_CALL } from './elasticsearch-catalog-search.adapter';
 import { reindexAll } from './reindex-runner';
+
+// An operator command fails on the first error rather than learning an outage; the breaker factory
+// also infers its dependencies from constructor types, which tsx cannot supply.
+const passThrough: OutboundCall = { run: (task) => task() };
 
 // Deliberately not the full app, so no queue consumers or scheduled sweeps run for the command's
 // lifetime. ClsService is provided but never active here, so the DB query counter it feeds no-ops.
@@ -25,12 +30,15 @@ import { reindexAll } from './reindex-runner';
     ObservabilityLoggerModule,
     DrizzleModule.forRoot({ schema }),
   ],
-  providers: [DrizzleProductRepository, MeilisearchCatalogSearch],
+  providers: [
+    DrizzleProductRepository,
+    { provide: SEARCH_ENGINE_CALL, useValue: passThrough },
+    ElasticsearchCatalogSearch,
+  ],
 })
 class ReindexContext {}
 
 async function reindex(): Promise<void> {
-  const reset = process.argv.includes('--reset');
   const app = await NestFactory.createApplicationContext(ReindexContext, { logger: ['error', 'warn'] });
   try {
     // The adapter is a silent no-op when search is off, which for an on-demand rebuild would report
@@ -39,12 +47,13 @@ async function reindex(): Promise<void> {
       throw new Error('SEARCH_ENABLED is not "true": the search adapter would no-op and index nothing');
     }
 
-    // The non-caching repository on purpose: a rebuild reads the source of truth, never a snapshot.
-    const repo: ProductRepositoryPort = app.get(DrizzleProductRepository);
-    const search: CatalogSearchPort = app.get(MeilisearchCatalogSearch);
+    // The uncached repository on purpose: a rebuild reads the source of truth, never a snapshot.
+    const states: ProductSearchStatePort = app.get(DrizzleProductRepository);
+    const search: CatalogSearchPort = app.get(ElasticsearchCatalogSearch);
 
-    const indexed = await reindexAll(repo, search, { reset });
-    console.log(`Reindex complete: ${indexed} ACTIVE products indexed${reset ? ' (index reset first)' : ''}`);
+    const { documents, tombstones } = await reindexAll(states, search);
+    // Sent, not written: the engine ignores any change at or below the version it already holds.
+    console.log(`Reindex complete: ${documents} documents and ${tombstones} tombstones sent`);
   } finally {
     await app.close();
   }

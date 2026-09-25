@@ -1,11 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
-import { inArray, sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ProductSearchState } from '../../src/modules/catalog/application/ports';
 import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure';
-import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../src/shared/infrastructure/database/schema';
 import { archiveProduct, seedProducts } from '../setup/fixtures/catalog.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
@@ -14,133 +11,71 @@ const PAGE = 10;
 // thrown error names that better than a hung suite does.
 const RUNAWAY_PAGES = 20;
 
-// The keyset scan behind the reindex backstop, driven against real Postgres: the only tier where
-// the cursor's round trip through the driver is exercised. A timestamp cursor cannot survive that
-// trip: `created_at` holds microseconds and a JS Date carries milliseconds, so the bound value
-// lands before the row it came from and the seek re-serves it.
+// The keyset scan behind the reindex, driven against real Postgres: the only tier where the
+// cursor's round trip through the driver is exercised.
 describe('Catalog reindex paging (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let db: DrizzleDB;
   let repo: DrizzleProductRepository;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool());
     repo = app.get(DrizzleProductRepository);
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  // Postgres stores created_at to the microsecond; every row is stamped to the same one, so a
-  // timestamp-keyed cursor has no tiebreak left to advance on.
-  async function collapseCreatedAt(productIds: string[]): Promise<void> {
-    await db
-      .update(schema.products)
-      .set({ createdAt: sql`timestamptz '2026-08-12 09:41:00.123456+00'` })
-      .where(inArray(schema.products.id, productIds));
-  }
-
-  async function scanAll(): Promise<string[]> {
-    const seen: string[] = [];
-    let cursor: string | null = null;
+  async function scanStates(from: string | null = null): Promise<{ pages: number[]; states: ProductSearchState[] }> {
+    const pages: number[] = [];
+    const states: ProductSearchState[] = [];
+    let cursor = from;
     for (let page = 0; ; page += 1) {
       if (page > RUNAWAY_PAGES) {
         throw new Error(`scan did not terminate after ${RUNAWAY_PAGES} pages`);
       }
-      const items = await repo.findActiveAfter(cursor, PAGE);
-      seen.push(...items.map((product) => product.id));
-      if (items.length < PAGE) {
-        return seen;
+      const batch = await repo.findAfter(cursor, PAGE);
+      pages.push(batch.length);
+      if (batch.length === 0) {
+        return { pages, states };
       }
-      cursor = items[items.length - 1].id;
+      states.push(...batch);
+      cursor = batch[batch.length - 1].id;
     }
   }
 
-  it('serves every ACTIVE product exactly once when a whole page shares one created_at', async () => {
+  it('returns every product whatever its status, in ascending id order', async () => {
+    const { categoryId, productIds: active } = await seedProducts(app, 4);
+    const { productIds: drafts } = await seedProducts(app, 4, { categoryId, status: 'DRAFT' });
+    const { productIds: archived } = await seedProducts(app, 4, { categoryId, status: 'ARCHIVED' });
+
+    const { states } = await scanStates();
+
+    expect(states.map((entry) => entry.id)).toEqual([...active, ...drafts, ...archived].sort());
+    const projected = states.filter((entry) => entry.product !== null).map((entry) => entry.id);
+    expect(projected.sort()).toEqual([...active].sort());
+  });
+
+  it('pages by cursor and ends with an empty page', async () => {
     const { productIds } = await seedProducts(app, 25);
-    await collapseCreatedAt(productIds);
 
-    const seen = await scanAll();
+    const { pages, states } = await scanStates();
 
-    expect(seen).toHaveLength(25);
-    expect(new Set(seen).size).toBe(25);
-    expect([...seen].sort()).toEqual([...productIds].sort());
+    expect(pages).toEqual([PAGE, PAGE, 5, 0]);
+    expect(states.map((entry) => entry.id)).toEqual([...productIds].sort());
   });
 
-  it('excludes the cursor row itself from the next page', async () => {
-    const { productIds } = await seedProducts(app, 3);
-    await collapseCreatedAt(productIds);
+  it('never skips a row when products are archived on either side of the cursor mid-scan', async () => {
+    const { productIds } = await seedProducts(app, 25);
+    const ordered = [...productIds].sort();
+    const first = await repo.findAfter(null, PAGE);
+    const behind = ordered[3];
+    const ahead = ordered[PAGE + 5];
 
-    const [first] = await repo.findActiveAfter(null, 1);
-    const next = await repo.findActiveAfter(first.id, PAGE);
+    await archiveProduct(app, behind);
+    await archiveProduct(app, ahead);
+    const { states: rest } = await scanStates(first[first.length - 1].id);
 
-    expect(next.map((product) => product.id)).not.toContain(first.id);
-    expect(next).toHaveLength(2);
-  });
-
-  it('skips products that are not ACTIVE', async () => {
-    const { categoryId, productIds: active } = await seedProducts(app, 5);
-    const { productIds: drafts } = await seedProducts(app, 5, { categoryId, status: 'DRAFT' });
-    await collapseCreatedAt([...active, ...drafts]);
-
-    const seen = await scanAll();
-
-    expect([...seen].sort()).toEqual([...active].sort());
-  });
-
-  describe('findAfter', () => {
-    async function scanStates(from: string | null = null): Promise<{ pages: number[]; states: ProductSearchState[] }> {
-      const pages: number[] = [];
-      const states: ProductSearchState[] = [];
-      let cursor = from;
-      for (let page = 0; ; page += 1) {
-        if (page > RUNAWAY_PAGES) {
-          throw new Error(`scan did not terminate after ${RUNAWAY_PAGES} pages`);
-        }
-        const batch = await repo.findAfter(cursor, PAGE);
-        pages.push(batch.length);
-        if (batch.length === 0) {
-          return { pages, states };
-        }
-        states.push(...batch);
-        cursor = batch[batch.length - 1].id;
-      }
-    }
-
-    it('returns every product whatever its status, in ascending id order', async () => {
-      const { categoryId, productIds: active } = await seedProducts(app, 4);
-      const { productIds: drafts } = await seedProducts(app, 4, { categoryId, status: 'DRAFT' });
-      const { productIds: archived } = await seedProducts(app, 4, { categoryId, status: 'ARCHIVED' });
-
-      const { states } = await scanStates();
-
-      expect(states.map((entry) => entry.id)).toEqual([...active, ...drafts, ...archived].sort());
-      const projected = states.filter((entry) => entry.product !== null).map((entry) => entry.id);
-      expect(projected.sort()).toEqual([...active].sort());
-    });
-
-    it('pages by cursor and ends with an empty page', async () => {
-      const { productIds } = await seedProducts(app, 25);
-
-      const { pages, states } = await scanStates();
-
-      expect(pages).toEqual([PAGE, PAGE, 5, 0]);
-      expect(states.map((entry) => entry.id)).toEqual([...productIds].sort());
-    });
-
-    it('never skips a row when products are archived on either side of the cursor mid-scan', async () => {
-      const { productIds } = await seedProducts(app, 25);
-      const ordered = [...productIds].sort();
-      const first = await repo.findAfter(null, PAGE);
-      const behind = ordered[3];
-      const ahead = ordered[PAGE + 5];
-
-      await archiveProduct(app, behind);
-      await archiveProduct(app, ahead);
-      const { states: rest } = await scanStates(first[first.length - 1].id);
-
-      expect([...first, ...rest].map((entry) => entry.id)).toEqual(ordered);
-      expect(rest.find((entry) => entry.id === ahead)?.product).toBeNull();
-    });
+    expect([...first, ...rest].map((entry) => entry.id)).toEqual(ordered);
+    expect(rest.find((entry) => entry.id === ahead)?.product).toBeNull();
   });
 });

@@ -1,37 +1,34 @@
-import { toSearchableProduct } from '../../application/catalog-search.mapper';
-import type { CatalogSearchPort, ProductRepositoryPort } from '../../application/ports';
+import { toSearchDocumentWrite } from '../../application/catalog-search.mapper';
+import type { CatalogSearchPort, ProductSearchStatePort } from '../../application/ports';
 
 const PAGE_SIZE = 500;
 
-export interface ReindexOptions {
-  /** Costs a window in which search matches nothing. */
-  reset?: boolean;
+export interface ReindexCounts {
+  documents: number;
+  tombstones: number;
 }
 
 /**
- * Upserting by id makes a re-run idempotent, but it only ever adds: a document whose product has
- * since left the ACTIVE set survives until a `reset` run drops it.
+ * Writes every product at its row version, a tombstone for each one outside the public projection,
+ * so a re-run converges instead of needing a reset. It only repairs what bumped a version: a change
+ * that did not keeps the engine refusing the same-version write.
  */
-export async function reindexAll(
-  repo: ProductRepositoryPort,
-  search: CatalogSearchPort,
-  options: ReindexOptions = {},
-): Promise<number> {
+export async function reindexAll(states: ProductSearchStatePort, search: CatalogSearchPort): Promise<ReindexCounts> {
   await search.ensureIndex();
-  if (options.reset) await search.resetIndex();
 
-  // Keyset, not offset: each page is its own snapshot, so a product archived behind the cursor
-  // mid-run would shift every later row up one offset and one of them would never be read. The
-  // cursor is the id alone — carrying a timestamp costs precision the seek needs to advance.
+  const counts: ReindexCounts = { documents: 0, tombstones: 0 };
   let cursor: string | null = null;
-  let indexed = 0;
   for (;;) {
-    const items = await repo.findActiveAfter(cursor, PAGE_SIZE);
-    if (items.length === 0) break;
-    await search.bulkIndex(items.map(toSearchableProduct));
-    indexed += items.length;
-    cursor = items[items.length - 1].id;
-    if (items.length < PAGE_SIZE) break;
+    const page = await states.findAfter(cursor, PAGE_SIZE);
+    if (page.length === 0) break;
+    const changes = page.map(toSearchDocumentWrite);
+    await search.write(changes);
+    for (const change of changes) {
+      if (change.doc) counts.documents += 1;
+      else counts.tombstones += 1;
+    }
+    cursor = page[page.length - 1].id;
+    if (page.length < PAGE_SIZE) break;
   }
-  return indexed;
+  return counts;
 }
