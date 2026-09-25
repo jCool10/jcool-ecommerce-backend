@@ -6,6 +6,7 @@ import {
   CATALOG_SEARCH,
   MEDIA_QUERY,
   PRODUCT_REPOSITORY,
+  PRODUCT_SEARCH_STATE,
   PRODUCT_SOURCE_REPOSITORY,
 } from './application/ports';
 import { CATALOG_SKU_QUERY } from './application/public/catalog-sku-query.port';
@@ -43,6 +44,7 @@ import { CatalogController } from './interface/catalog.controller';
     DrizzleCatalogAdminRepository,
     { provide: PRODUCT_REPOSITORY, useClass: CachingProductRepository },
     { provide: PRODUCT_SOURCE_REPOSITORY, useExisting: DrizzleProductRepository },
+    { provide: PRODUCT_SEARCH_STATE, useExisting: DrizzleProductRepository },
     { provide: CATALOG_ADMIN_REPOSITORY, useClass: CachingCatalogAdminRepository },
     { provide: CATALOG_SKU_QUERY, useClass: CatalogSkuQueryService },
     { provide: CATALOG_SEARCH, useClass: MeilisearchCatalogSearch },

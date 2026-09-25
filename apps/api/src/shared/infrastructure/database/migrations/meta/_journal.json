@@ -169,6 +169,13 @@
       "when": 1790044608871,
       "tag": "0023_same_winter_soldier",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790319285458,
+      "tag": "0024_perfect_gwen_stacy",
+      "breakpoints": true
     }
   ]
 }

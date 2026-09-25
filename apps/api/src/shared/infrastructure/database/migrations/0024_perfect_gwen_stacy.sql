@@ -1,0 +1,1 @@
+ALTER TABLE "products" ADD COLUMN "search_version" bigint DEFAULT 0 NOT NULL;

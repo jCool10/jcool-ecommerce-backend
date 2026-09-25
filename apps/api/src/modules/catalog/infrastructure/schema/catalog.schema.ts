@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
 // Infrastructure only — the domain layer must never import this module.
@@ -43,6 +43,9 @@ export const products = pgTable(
     categoryId: uuid('category_id')
       .notNull()
       .references(() => categories.id),
+    // Bumped under the product row lock by every write that changes the search document, so it
+    // follows commit order, which no clock value does.
+    searchVersion: bigint('search_version', { mode: 'number' }).notNull().default(0),
     ...stamps,
   },
   (t) => [
