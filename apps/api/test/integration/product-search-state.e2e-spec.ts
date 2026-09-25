@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PRODUCT_SEARCH_STATE, type ProductSearchStatePort } from '../../src/modules/catalog/application/ports';
@@ -10,6 +10,7 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
   archiveProduct,
   archiveTestCategory,
+  createTestCategory,
   createTestProduct,
   type TestProduct,
 } from '../setup/fixtures/catalog.fixture';
@@ -110,5 +111,56 @@ describe('Product search state (integration, real Postgres)', () => {
     expect(found.find((entry) => entry.id === active.productId)?.product?.id).toBe(active.productId);
     expect(found.find((entry) => entry.id === draft.productId)?.product).toBeNull();
     expect(found.some((entry) => entry.id === ABSENT_UUID)).toBe(false);
+  });
+
+  describe('bumpCategoryProducts', () => {
+    async function versionsOf(productIds: string[]): Promise<Record<string, number>> {
+      const rows = await db
+        .select({ id: schema.products.id, version: schema.products.searchVersion })
+        .from(schema.products)
+        .where(inArray(schema.products.id, productIds));
+      return Object.fromEntries(rows.map((row) => [row.id, row.version]));
+    }
+
+    const ascendingIds = (howMany: number): string[] =>
+      Array.from({ length: howMany }, () => crypto.randomUUID()).sort();
+
+    // Stored in the order given. The cases give the highest id first, so storage order runs against
+    // id order and only the ORDER BY yields ascending pages.
+    async function insertProducts(rows: [id: string, categoryId: string][]): Promise<void> {
+      await db
+        .insert(schema.products)
+        .values(rows.map(([id, categoryId]) => ({ id, categoryId, name: `Paged ${id}`, slug: `paged-${id}` })));
+    }
+
+    it('bumps a category in ascending id pages until none is left, each product once', async () => {
+      const category = await createTestCategory(app);
+      const ids = ascendingIds(5);
+      await insertProducts([...ids].reverse().map((id) => [id, category.id]));
+
+      const pages: string[][] = [];
+      let after: string | null = null;
+      for (let i = 0; i < 4; i += 1) {
+        const page = await state.bumpCategoryProducts(category.id, after, 2);
+        pages.push(page);
+        after = page.at(-1) ?? after;
+      }
+
+      expect(pages).toEqual([[ids[0], ids[1]], [ids[2], ids[3]], [ids[4]], []]);
+      expect(await versionsOf(ids)).toEqual(Object.fromEntries(ids.map((id) => [id, 1])));
+    });
+
+    it('never returns or bumps a product of another category', async () => {
+      const [mine, theirs] = [await createTestCategory(app), await createTestCategory(app)];
+      const [first, other, last] = ascendingIds(3);
+      await insertProducts([
+        [last, mine.id],
+        [other, theirs.id],
+        [first, mine.id],
+      ]);
+
+      expect(await state.bumpCategoryProducts(mine.id, null, 10)).toEqual([first, last]);
+      expect(await versionsOf([first, other, last])).toEqual({ [first]: 1, [other]: 0, [last]: 1 });
+    });
   });
 });

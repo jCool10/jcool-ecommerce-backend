@@ -5,7 +5,7 @@ import type {
   SearchDocumentWrite,
 } from '../../application/ports';
 import { Product } from '../../domain/entities';
-import { fakeCatalogSearch } from '../../testing/catalog-port.doubles';
+import { fakeCatalogSearch, fakeProductSearchState } from '../../testing/catalog-port.doubles';
 import { reindexAll } from './reindex-runner';
 
 // More reads than any fixture here needs: a cursor that fails to advance would page forever, and a
@@ -29,7 +29,7 @@ function statesOf(total: number): { states: ProductSearchStatePort; cursorsRead:
   const cursorsRead: (string | null)[] = [];
   const all = Array.from({ length: total }, (_, i) => stateOf(i));
 
-  const states: ProductSearchStatePort = {
+  const states = fakeProductSearchState({
     findByIds: () => Promise.reject(new Error('a rebuild pages by cursor')),
     findAfter: (afterId, limit) => {
       cursorsRead.push(afterId);
@@ -38,7 +38,7 @@ function statesOf(total: number): { states: ProductSearchStatePort; cursorsRead:
       }
       return Promise.resolve(all.filter((entry) => afterId === null || entry.id > afterId).slice(0, limit));
     },
-  };
+  });
   return { states, cursorsRead };
 }
 

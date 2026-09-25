@@ -48,11 +48,6 @@ export class CatalogAdminService {
       throw new NotFoundException(`Category not found: ${id}`);
     }
     this.logger.info({ categoryId: id }, 'category updated');
-    // The category fields are denormalized into every product document underneath. A reindex cannot
-    // refresh them: the rename bumps no product version, so the engine keeps the copy it holds.
-    if (data.name !== undefined || data.slug !== undefined) {
-      this.logger.warn({ categoryId: id }, 'category renamed; its product search documents keep the old category');
-    }
     return updated;
   }
 

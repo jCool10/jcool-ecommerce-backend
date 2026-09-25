@@ -18,7 +18,8 @@ export function fakeProductSearchState(overrides: Partial<ProductSearchStatePort
   return {
     findByIds: () => Promise.resolve([]),
     findAfter: () => Promise.resolve([]),
-    ...overrides,
+    bumpCategoryProducts: () => Promise.resolve([]),
+    ...overrdes,
   };
 }
 

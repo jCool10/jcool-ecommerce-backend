@@ -86,15 +86,15 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     return body ? req.send(body) : req;
   };
 
-  const productBody = (name: string, status: ProductStatus) => ({
+  const productBody = (name: string, status: ProductStatus, categoryId = category.id) => ({
     name,
     slug: `sync-${uniq()}`,
-    categoryId: category.id,
+    categoryId,
     status,
   });
 
-  async function createProduct(name: string, status: ProductStatus = 'ACTIVE'): Promise<string> {
-    const res = await send('post', '/admin/products', productBody(name, status)).expect(201);
+  async function createProduct(name: string, status: ProductStatus = 'ACTIVE', categoryId?: string): Promise<string> {
+    const res = await send('post', '/admin/products', productBody(name, status, categoryId)).expect(201);
     return (res.body as { id: string }).id;
   }
 
@@ -103,15 +103,13 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     await refreshSearchIndex(engine);
   }
 
-  async function search(q: string): Promise<SearchHitBody[]> {
-    const res = await request(app.getHttpServer())
-      .get('/products/search')
-      .query({ q, categorySlug: category.slug })
-      .expect(200);
+  async function search(q: string, categorySlug = category.slug): Promise<SearchHitBody[]> {
+    const res = await request(app.getHttpServer()).get('/products/search').query({ q, categorySlug }).expect(200);
     return (res.body as { items: SearchHitBody[] }).items;
   }
 
-  const found = async (q: string): Promise<string[]> => (await search(q)).map((hit) => hit.id).sort();
+  const found = async (q: string, categorySlug?: string): Promise<string[]> =>
+    (await search(q, categorySlug)).map((hit) => hit.id).sort();
 
   async function stored(id: string): Promise<{ version?: number; name?: string; status?: string }> {
     const res = await engine.client.get<Partial<SearchableProduct>>({ index: PRODUCTS_ALIAS, id });
@@ -126,17 +124,51 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     return row.version;
   }
 
+  const versionsOf = (productIds: string[]): Promise<number[]> => Promise.all(productIds.map(versionOf));
+
+  async function expectIndexedAtRowVersions(productIds: string[]): Promise<void> {
+    const indexed = await Promise.all(productIds.map(async (id) => (await stored(id)).version));
+    expect(indexed).toEqual(await versionsOf(productIds));
+  }
+
   const inboxRowsFor = (messageId: string) =>
     db.select().from(schema.inbox).where(eq(schema.inbox.messageId, messageId));
 
-  /** Publishes the pending outbox rows and hands back the one job queued for this product. */
-  async function relayJobFor(productId: string): Promise<Job<DomainEventJob>> {
+  /** Publishes the pending outbox rows and hands back the one job queued for this aggregate. */
+  async function relayJobFor(aggregateId: string): Promise<Job<DomainEventJob>> {
     await relay.runOnce(100);
     const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized']);
-    const mine = jobs.filter((job) => job.data.aggregateId === productId);
+    const mine = jobs.filter((job) => job.data.aggregateId === aggregateId);
     expect(mine).toHaveLength(1);
     return mine[0];
   }
+
+  interface SeededCategory {
+    id: string;
+    slug: string;
+    active: string[];
+    all: string[];
+  }
+
+  /** Three ACTIVE products, a DRAFT and an archived one under a fresh category, all indexed. */
+  async function seedCategory(): Promise<SeededCategory> {
+    const res = await send('post', '/admin/categories', { name: 'Quartz Nebula', slug: `quartz-${uniq()}` }).expect(
+      201,
+    );
+    const { id, slug } = res.body as { id: string; slug: string };
+    const active: string[] = [];
+    for (const name of ['Brass Kettle', 'Brass Ladle', 'Brass Whisk']) {
+      active.push(await createProduct(name, 'ACTIVE', id));
+    }
+    const draft = await createProduct('Brass Funnel', 'DRAFT', id);
+    const archived = await createProduct('Brass Sieve', 'ACTIVE', id);
+    await send('delete', `/admin/products/${archived}`).expect(200);
+    await converge();
+    return { id, slug, active: active.sort(), all: [...active, draft, archived] };
+  }
+
+  const renameCategory = (categoryId: string, patch: { name?: string; slug?: string }) =>
+    send('patch', `/admin/categories/${categoryId}`, patch).expect(200);
 
   const searchPort = (): CatalogSearchPort => app.get<CatalogSearchPort>(CATALOG_SEARCH);
 
@@ -293,5 +325,124 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
 
     expect(await job.getState()).toBe('prioritized');
     expect(job.opts.priority).toBe(CATALOG_EVENT_PRIORITY);
+  });
+
+  describe('category rename', () => {
+    it('moves the active products of a renamed category to its new name', async () => {
+      const seeded = await seedCategory();
+
+      await renameCategory(seeded.id, { name: 'Walnut Orchard' });
+      expect(await found('Quartz Nebula', seeded.slug)).toEqual(seeded.active);
+      expect(await found('Walnut Orchard', seeded.slug)).toEqual([]);
+
+      await converge();
+      expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
+      expect(await found('Quartz Nebula', seeded.slug)).toEqual([]);
+    });
+
+    it('moves the active products of a category to its new slug', async () => {
+      const seeded = await seedCategory();
+      const slug = `walnut-${uniq()}`;
+
+      await renameCategory(seeded.id, { slug });
+      expect(await found('Brass', seeded.slug)).toEqual(seeded.active);
+
+      await converge();
+      expect(await found('Brass', slug)).toEqual(seeded.active);
+      expect(await found('Brass', seeded.slug)).toEqual([]);
+    });
+
+    it('moves every product of the category one version up and indexes each at its row version', async () => {
+      const seeded = await seedCategory();
+      const before = await versionsOf(seeded.all);
+
+      await renameCategory(seeded.id, { name: 'Walnut Orchard' });
+      await converge();
+
+      expect(await versionsOf(seeded.all)).toEqual(before.map((version) => version + 1));
+      await expectIndexedAtRowVersions(seeded.all);
+    });
+
+    it('retries a rename whose fan-out failed, leaving no claim behind in between', async () => {
+      const seeded = await seedCategory();
+      await renameCategory(seeded.id, { name: 'Walnut Orchard' });
+      const job = await relayJobFor(seeded.id);
+      vi.spyOn(searchPort(), 'write').mockRejectedValueOnce(new Error('search engine unavailable'));
+
+      await expect(processor.process(job.data)).rejects.toThrow('search engine unavailable');
+      expect(await inboxRowsFor(job.data.outboxId)).toEqual([]);
+
+      await expect(processor.process(job.data)).resolves.toBe('processed');
+      expect(await inboxRowsFor(job.data.outboxId)).toHaveLength(1);
+      await refreshSearchIndex(engine);
+      expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
+      await expectIndexedAtRowVersions(seeded.all);
+    });
+
+    it('skips a redelivered rename it already applied and keeps the documents current', async () => {
+      const seeded = await seedCategory();
+      await renameCategory(seeded.id, { name: 'Walnut Orchard' });
+      const job = await relayJobFor(seeded.id);
+      await expect(processor.process(job.data)).resolves.toBe('processed');
+      await refreshSearchIndex(engine);
+      expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
+
+      await expect(processor.process(job.data)).resolves.toBe('duplicate');
+      await refreshSearchIndex(engine);
+
+      expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
+      await expectIndexedAtRowVersions(seeded.all);
+    });
+
+    // The fan-out has read its page when the edit commits and the edit's own delivery lands; the
+    // fan-out's older write must then lose.
+    it('keeps a product edit that lands while the fan-out holds an older read', async () => {
+      const seeded = await seedCategory();
+      const [edited] = seeded.active;
+      await renameCategory(seeded.id, { name: 'Walnut Orchard' });
+      const rename = await relayJobFor(seeded.id);
+
+      const port = searchPort();
+      const write = port.write.bind(port) as CatalogSearchPort['write'];
+      vi.spyOn(port, 'write').mockImplementationOnce(async (changes) => {
+        await send('patch', `/admin/products/${edited}`, { name: 'Copper Kettle' }).expect(200);
+        const edit = await relayJobFor(edited);
+        await expect(processor.process(edit.data)).resolves.toBe('processed');
+        return write(changes);
+      });
+
+      await expect(processor.process(rename.data)).resolves.toBe('processed');
+      await refreshSearchIndex(engine);
+
+      const hits = await search('Walnut Orchard', seeded.slug);
+      expect(hits.map((hit) => hit.id).sort()).toEqual(seeded.active);
+      expect(hits.find((hit) => hit.id === edited)?.name).toBe('Copper Kettle');
+      await expectIndexedAtRowVersions(seeded.all);
+    });
+
+    it('leaves a product moved out before the fan-out to its own change', async () => {
+      const seeded = await seedCategory();
+      const [moved, ...stayed] = seeded.active;
+      const [before] = await versionsOf([moved]);
+
+      await renameCategory(seeded.id, { name: 'Walnut Orchard' });
+      await send('patch', `/admin/products/${moved}`, { categoryId: category.id }).expect(200);
+      await converge();
+
+      expect(await found('Brass')).toEqual([moved]);
+      expect(await versionOf(moved)).toBe(before + 1);
+      expect(await found('Walnut Orchard', seeded.slug)).toEqual(stayed);
+      await expectIndexedAtRowVersions(seeded.all);
+    });
+
+    it('queues a rename behind order and payment work like any catalog event', async () => {
+      await renameCategory(category.id, { name: 'Patient Pantry' });
+
+      const job = await relayJobFor(category.id);
+
+      expect(job.data.eventType).toBe('catalog.category.renamed');
+      expect(await job.getState()).toBe('prioritized');
+      expect(job.opts.priority).toBe(CATALOG_EVENT_PRIORITY);
+    });
   });
 });

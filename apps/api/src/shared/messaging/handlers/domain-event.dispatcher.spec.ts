@@ -32,12 +32,14 @@ const PRODUCED_EVENT_TYPES = Object.keys({
   'payment.succeeded': true,
   'payment.failed': true,
   'catalog.product.changed': true,
+  'catalog.category.renamed': true,
 } satisfies Record<
   | OrderFinalizedEvent['eventName']
   | 'order.placed'
   | 'payment.succeeded'
   | 'payment.failed'
-  | 'catalog.product.changed',
+  | 'catalog.product.changed'
+  | 'catalog.category.renamed',
   true
 >);
 
@@ -81,23 +83,31 @@ describe('DomainEventDispatcher', () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
+  const catalogEvents = [
+    ['catalog.product.changed', 'applyProductChanged'],
+    ['catalog.category.renamed', 'applyCategoryRenamed'],
+  ] as const;
+
   // A post-commit effect runs after the claim and is never retried; a failed index write must retry.
-  it('writes a product change to the search engine before the transaction and leaves the step empty', async () => {
-    const applyProductChanged = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = dispatcherWith({ applyProductChanged });
+  it.each(catalogEvents)(
+    'writes %s to the search engine before the transaction and leaves the step empty',
+    async (eventType, double) => {
+      const apply = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = dispatcherWith({ [double]: apply });
 
-    const step = await dispatcher.prepare(job('catalog.product.changed'));
-    expect(applyProductChanged).toHaveBeenCalledOnce();
+      const step = await dispatcher.prepare(job(eventType));
+      expect(apply).toHaveBeenCalledOnce();
 
-    await expect(step(tx)).resolves.toBeUndefined();
-    expect(applyProductChanged).toHaveBeenCalledOnce();
-  });
+      await expect(step(tx)).resolves.toBeUndefined();
+      expect(apply).toHaveBeenCalledOnce();
+    },
+  );
 
-  it('fails the prepare when the product change cannot be written', async () => {
+  it.each(catalogEvents)('fails the prepare when %s cannot be written', async (eventType, double) => {
     const outage = new Error('search engine unavailable');
-    const dispatcher = dispatcherWith({ applyProductChanged: vi.fn().mockRejectedValue(outage) });
+    const dispatcher = dispatcherWith({ [double]: vi.fn().mockRejectedValue(outage) });
 
-    await expect(dispatcher.prepare(job('catalog.product.changed'))).rejects.toBe(outage);
+    await expect(dispatcher.prepare(job(eventType))).rejects.toBe(outage);
   });
 
   it('runs each effectful event on its own handler inside the consumer transaction', async () => {

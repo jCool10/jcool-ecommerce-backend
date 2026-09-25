@@ -40,8 +40,7 @@ export function buildJobOptions(attempts: number, backoffMs: number): DefaultJob
     backoff: { type: 'exponential', delay: backoffMs },
     // Bounded both ways — the outbox row is the durable record, these are only a debugging trail.
     removeOnComplete: { age: 3_600, count: 1_000 },
-    // Kept even after the DLQ has its copy: that move is one more Redis write and can fail, and
-    // BullMQ raises no `failed` for a job killed by the stalled-job limit.
+    // Kept even after the DLQ has its copy: that move is one more Redis write and can fail.
     removeOnFail: { age: REMOVE_ON_FAIL_AGE_SEC, count: 10_000 },
   };
 }

@@ -187,6 +187,26 @@ export class DrizzleProductRepository implements ProductRepositoryPort, ProductS
     );
   }
 
+  async bumpCategoryProducts(categoryId: string, afterId: string | null, limit: number): Promise<string[]> {
+    // Locked in id order, so two fan-outs of one category queue up instead of deadlocking; a product
+    // write locks a single product and cannot close a cycle. No key update: the bump changes no key,
+    // and a stronger lock would also stall image and SKU inserts on the page.
+    const page = this.db
+      .select({ id: products.id })
+      .from(products)
+      .where(and(eq(products.categoryId, categoryId), afterId ? gt(products.id, afterId) : undefined))
+      .orderBy(asc(products.id))
+      .limit(limit)
+      .for('no key update');
+    const rows = await this.db
+      .update(products)
+      .set({ searchVersion: sql`${products.searchVersion} + 1` })
+      .where(inArray(products.id, page))
+      .returning({ id: products.id });
+    // RETURNING follows no order, and the caller resumes after the last id.
+    return rows.map((row) => row.id).sort();
+  }
+
   private readSearchStates(
     selectVersions: (tx: DrizzleTx) => Promise<{ id: string; version: number }[]>,
   ): Promise<ProductSearchState[]> {

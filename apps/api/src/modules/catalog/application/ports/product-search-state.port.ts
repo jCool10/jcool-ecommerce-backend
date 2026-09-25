@@ -11,11 +11,18 @@ export interface ProductSearchState {
   product: Product | null;
 }
 
-/** Version and projection come from one snapshot, so they always describe the same row state. */
+/** The reads take version and projection from one snapshot, so they always describe the same row state. */
 export interface ProductSearchStatePort {
   /** Unknown ids are absent from the result. */
   findByIds(ids: string[]): Promise<ProductSearchState[]>;
 
   /** Keyset page over every product, whatever its status, ascending by id. */
   findAfter(afterId: string | null, limit: number): Promise<ProductSearchState[]>;
+
+  /**
+   * Raises the version of the category's next page of products, whatever their status, so a rewrite
+   * of their documents is not refused as stale. Returns the bumped ids ascending; empty once none is
+   * left past the cursor.
+   */
+  bumpCategoryProducts(categoryId: string, afterId: string | null, limit: number): Promise<string[]>;
 }

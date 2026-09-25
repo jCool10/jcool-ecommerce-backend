@@ -68,4 +68,63 @@ describe('ProductSearchSyncService', () => {
 
     await expect(service.syncProduct(PRODUCT_ID)).rejects.toBe(outage);
   });
+
+  describe('syncCategory', () => {
+    const CATEGORY_ID = '0198f0d8-3333-7000-8000-0000000000c1';
+    const [A, B, C, D] = ['a', 'b', 'c', 'd'].map((suffix) => `0198f0d8-3333-7000-8000-00000000000${suffix}`);
+    const tombstone = (id: string) => ({ id, version: 5, doc: null });
+
+    function buildFanOut(pages: string[][], write = vi.fn<CatalogSearchPort['write']>().mockResolvedValue()) {
+      const bumpCategoryProducts = vi.fn<ProductSearchStatePort['bumpCategoryProducts']>().mockResolvedValue([]);
+      for (const page of pages) bumpCategoryProducts.mockResolvedValueOnce(page);
+      const findByIds = vi
+        .fn<ProductSearchStatePort['findByIds']>()
+        .mockImplementation((ids) => Promise.resolve(ids.map((id) => ({ id, version: 5, product: null }))));
+      const service = new ProductSearchSyncService(
+        fakeProductSearchState({ bumpCategoryProducts, findByIds }),
+        fakeCatalogSearch({ write }),
+        fakePinoLogger(),
+      );
+      return { service, bumpCategoryProducts, findByIds, write };
+    }
+
+    it('bumps and writes the category page by page, resuming after the last id of each page', async () => {
+      const { service, bumpCategoryProducts, findByIds, write } = buildFanOut([[A, B], [C]]);
+
+      await expect(service.syncCategory(CATEGORY_ID, 2)).resolves.toBe(3);
+
+      expect(bumpCategoryProducts.mock.calls).toEqual([
+        [CATEGORY_ID, null, 2],
+        [CATEGORY_ID, B, 2],
+        [CATEGORY_ID, C, 2],
+      ]);
+      expect(findByIds.mock.calls).toEqual([[[A, B]], [[C]]]);
+      expect(write.mock.calls).toEqual([[[tombstone(A), tombstone(B)]], [[tombstone(C)]]]);
+    });
+
+    it('writes nothing for a category without products, paging 500 at a time by default', async () => {
+      const { service, bumpCategoryProducts, write } = buildFanOut([]);
+
+      await expect(service.syncCategory(CATEGORY_ID)).resolves.toBe(0);
+
+      expect(bumpCategoryProducts.mock.calls).toEqual([[CATEGORY_ID, null, 500]]);
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it('stops at the page whose write fails and rejects with the engine error', async () => {
+      const outage = new Error('search engine unavailable');
+      const { service, bumpCategoryProducts, write } = buildFanOut(
+        [
+          [A, B],
+          [C, D],
+        ],
+        vi.fn<CatalogSearchPort['write']>().mockResolvedValueOnce().mockRejectedValueOnce(outage),
+      );
+
+      await expect(service.syncCategory(CATEGORY_ID, 2)).rejects.toBe(outage);
+
+      expect(write).toHaveBeenCalledTimes(2);
+      expect(bumpCategoryProducts).toHaveBeenCalledTimes(2);
+    });
+  });
 });

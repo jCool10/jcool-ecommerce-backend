@@ -31,6 +31,7 @@ import {
 } from './infrastructure';
 import { AdminCatalogController } from './interface/admin-catalog.controller';
 import { CatalogController } from './interface/catalog.controller';
+import { CategoryRenamedHandler } from './interface/queue/category-renamed.handler';
 import { ProductChangedHandler } from './interface/queue/product-changed.handler';
 
 /**
@@ -73,7 +74,8 @@ import { ProductChangedHandler } from './interface/queue/product-changed.handler
     SearchIndexBootstrap,
     ProductSearchSyncService,
     ProductChangedHandler,
+    CategoryRenamedHandler,
   ],
-  exports: [CATALOG_SKU_QUERY, ProductChangedHandler],
+  exports: [CATALOG_SKU_QUERY, ProductChangedHandler, CategoryRenamedHandler],
 })
 export class CatalogModule {}

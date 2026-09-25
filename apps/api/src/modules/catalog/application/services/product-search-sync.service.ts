@@ -5,6 +5,9 @@ import { CATALOG_SEARCH, PRODUCT_SEARCH_STATE, type CatalogSearchPort, type Prod
 
 const LOG_CONTEXT = 'ProductSearchSyncService';
 
+// Caps the product rows one page locks and the documents one engine write carries.
+export const CATEGORY_FAN_OUT_BATCH = 500;
+
 /**
  * Writes the product as it is now, never as the event saw it, so any delivery (late, repeated or out
  * of order) converges: the engine refuses a version at or below the one it holds.
@@ -28,5 +31,23 @@ export class ProductSearchSyncService {
       return;
     }
     await this.search.write(states.map(toSearchDocumentWrite));
+  }
+
+  /**
+   * Rewrites every product of the category, page by page, and returns how many it wrote. The category
+   * lives only in the documents, so each page is bumped first. A failed page rejects, and the retry
+   * starts over: bumping again only moves versions forward.
+   */
+  async syncCategory(categoryId: string, batchSize = CATEGORY_FAN_OUT_BATCH): Promise<number> {
+    let written = 0;
+    let afterId: string | null = null;
+    for (;;) {
+      const ids = await this.states.bumpCategoryProducts(categoryId, afterId, batchSize);
+      if (ids.length === 0) return written;
+      const states = await this.states.findByIds(ids);
+      await this.search.write(states.map(toSearchDocumentWrite));
+      written += states.length;
+      afterId = ids[ids.length - 1];
+    }
   }
 }

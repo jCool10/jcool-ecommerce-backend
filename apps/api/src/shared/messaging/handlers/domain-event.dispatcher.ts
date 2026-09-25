@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { CategoryRenamedHandler } from '@modules/catalog/interface/queue/category-renamed.handler';
 import { ProductChangedHandler } from '@modules/catalog/interface/queue/product-changed.handler';
 import { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
@@ -30,6 +31,16 @@ const inTransaction =
   (job) =>
     Promise.resolve((tx) => handle(job, tx));
 
+// For work that must be retried until it lands, which a post-commit effect never is: a failure rejects
+// before the claim commits. It runs on every delivery, duplicates included, and nothing it does rolls
+// back with the claim, so it must be safe to repeat.
+const beforeClaim =
+  (apply: (job: DomainEventJob) => Promise<void>): PreparedHandler =>
+  async (job) => {
+    await apply(job);
+    return () => Promise.resolve();
+  };
+
 const UNREGISTERED_EVENT_LABEL = 'unregistered';
 
 @Injectable()
@@ -43,6 +54,7 @@ export class DomainEventDispatcher {
     orderCancelled: OrderCancelledHandler,
     orderPaidMail: OrderPaidMailHandler,
     productChanged: ProductChangedHandler,
+    categoryRenamed: CategoryRenamedHandler,
   ) {
     this.handlers = new Map<string, PreparedHandler>([
       ['order.placed', inTransaction((job) => orderEvents.record(job))],
@@ -81,15 +93,8 @@ export class DomainEventDispatcher {
       // transaction moved money and nothing else, leaving the order still to settle.
       ['payment.succeeded', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
       ['payment.failed', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
-      // The index write happens before the claim, never as a post-commit effect: a failure there must
-      // roll the claim back and retry, and a claimed message is never retried.
-      [
-        'catalog.product.changed',
-        async (job) => {
-          await productChanged.apply(job);
-          return () => Promise.resolve();
-        },
-      ],
+      ['catalog.product.changed', beforeClaim((job) => productChanged.apply(job))],
+      ['catalog.category.renamed', beforeClaim((job) => categoryRenamed.apply(job))],
     ]);
   }
 
