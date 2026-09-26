@@ -40,22 +40,32 @@ export function buildJobOptions(attempts: number, backoffMs: number): DefaultJob
     backoff: { type: 'exponential', delay: backoffMs },
     // Bounded both ways — the outbox row is the durable record, these are only a debugging trail.
     removeOnComplete: { age: 3_600, count: 1_000 },
-    // Kept even after the DLQ has its copy: that move is one more Redis write and can fail, and
-    // BullMQ raises no `failed` for a job killed by the stalled-job limit.
+    // Kept even after the DLQ has its copy: that move is one more Redis write and can fail.
     removeOnFail: { age: REMOVE_ON_FAIL_AGE_SEC, count: 10_000 },
   };
 }
 
-/** A custom backoff type: the worker's strategy is the only thing that computes it. */
+/**
+ * A custom backoff type: the worker's strategy is the only thing that computes it. Named for its first
+ * user, but jobs already in Redis carry this string, so it stays.
+ */
 export const ORDER_PAID_BACKOFF = 'order-paid';
 
+/** BullMQ serves every job without a priority first, so any value here yields to order and payment work. */
+export const CATALOG_EVENT_PRIORITY = 10;
+
 /**
- * Overrides of the queue defaults, per event. order.paid alone waits on another service — the
- * user-service, for the buyer's address — so it retries for as long as that service may be down.
- * Every path that publishes to the main queue must apply these, or a replay runs the short ladder.
+ * Overrides of the queue defaults, per event. order.paid and catalog events wait on another service
+ * (the user-service for the buyer's address, the search engine), so they retry for as long as it may
+ * be down. Catalog events also queue behind every other event, so a large burst waits for order and
+ * payment work instead of ahead of it; only the catalog jobs already running can hold it up. Every path
+ * that publishes to the main queue must apply these, or a replay runs the short ladder.
  */
 export function jobOptionsFor(eventType: string, orderPaidAttempts: number): JobsOptions {
-  return eventType === 'order.paid' ? { attempts: orderPaidAttempts, backoff: { type: ORDER_PAID_BACKOFF } } : {};
+  const longLadder = { attempts: orderPaidAttempts, backoff: { type: ORDER_PAID_BACKOFF } };
+  if (eventType === 'order.paid') return longLadder;
+  if (eventType.startsWith('catalog.')) return { ...longLadder, priority: CATALOG_EVENT_PRIORITY };
+  return {};
 }
 
 /** Exponential with a ceiling: past a few minutes, doubling only thins the attempts out. */

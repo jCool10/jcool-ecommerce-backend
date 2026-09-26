@@ -1,18 +1,9 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
-import { Money } from '@jcool/kernel';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { type Mock, vi } from 'vitest';
 import { MediaAssetUnavailableError } from '@modules/media/application/public/media-facade.port';
-import { Product } from '../../domain/entities';
 import type { AdminProduct, Category, Sku } from '../../domain/entities';
-import { fakeCatalogSearch, fakeProductRepository } from '../../testing/catalog-port.doubles';
-import type {
-  CatalogAdminRepositoryPort,
-  CatalogSearchPort,
-  ProductRepositoryPort,
-  SearchableProduct,
-  SetPriceData,
-} from '../ports';
+import type { CatalogAdminRepositoryPort, SetPriceData } from '../ports';
 import { CatalogAdminService } from './catalog-admin.service';
 
 const now = new Date('2026-01-01T00:00:00.000Z');
@@ -48,22 +39,6 @@ const sku = (over: Partial<Sku> = {}): Sku => ({
   ...over,
 });
 
-const activeProjection = (id = 'prod1', slug = 'headphones'): Product =>
-  new Product(
-    id,
-    'Headphones',
-    slug,
-    null,
-    'ACTIVE',
-    { slug: 'electronics', name: 'Electronics' },
-    [{ id: 'sku1', sku: 'WH-BLK', name: 'Black', prices: [Money.of(1_990_000, 'VND')] }],
-    now,
-  );
-
-const answering = (projection: Product | null): Partial<ProductRepositoryPort> => ({
-  findActiveByIdOrSlug: () => Promise.resolve(projection),
-});
-
 // Plain `Mock` members so `expect(repo.method)` is not flagged as an unbound method; `keyof` still
 // pins the port shape.
 type MockRepo = Record<keyof CatalogAdminRepositoryPort, Mock>;
@@ -90,27 +65,10 @@ function makeRepo(): MockRepo {
   };
 }
 
-function build(products: Partial<ProductRepositoryPort> = {}, search: Partial<CatalogSearchPort> = {}) {
+function build() {
   const repo = makeRepo();
-  const indexed: SearchableProduct[] = [];
-  const deleted: string[] = [];
-  const service = new CatalogAdminService(
-    repo,
-    fakeProductRepository(products),
-    fakeCatalogSearch({
-      indexProduct: (doc) => {
-        indexed.push(doc);
-        return Promise.resolve();
-      },
-      deleteProduct: (id) => {
-        deleted.push(id);
-        return Promise.resolve();
-      },
-      ...search,
-    }),
-    fakePinoLogger(),
-  );
-  return { service, repo, indexed, deleted };
+  const service = new CatalogAdminService(repo, fakePinoLogger());
+  return { service, repo };
 }
 
 describe('CatalogAdminService', () => {
@@ -133,7 +91,7 @@ describe('CatalogAdminService', () => {
   });
 
   it('answers 404 when the target of a write does not exist', async () => {
-    const { service, repo, indexed, deleted } = build();
+    const { service, repo } = build();
     for (const lookup of [
       repo.updateProduct,
       repo.archiveProduct,
@@ -170,7 +128,6 @@ describe('CatalogAdminService', () => {
     expect(outcomes).toEqual(writes.map(([name]) => [name, 404]));
     expect(repo.createSku).not.toHaveBeenCalled();
     expect(repo.setPrice).not.toHaveBeenCalled();
-    expect([...indexed, ...deleted]).toEqual([]);
   });
 
   it('refuses a category archive with 409 while products remain, and 404 if unknown', async () => {
@@ -210,58 +167,5 @@ describe('CatalogAdminService', () => {
     await expect(service.setPrice('sku1', { amountMinor: 500, currency: 'USD' })).resolves.toMatchObject({
       currency: 'USD',
     });
-  });
-
-  it('indexes the re-read ACTIVE projection after a product write', async () => {
-    const { service, repo, indexed, deleted } = build(answering(activeProjection()));
-    repo.findCategoryById.mockResolvedValue(category());
-    repo.createProduct.mockResolvedValue(product({ status: 'ACTIVE' }));
-
-    await service.createProduct({ name: 'P', slug: 'p', status: 'ACTIVE', categoryId: 'cat1' });
-
-    expect(indexed).toEqual([expect.objectContaining({ id: 'prod1', skus: ['WH-BLK'], minPriceMinor: 1_990_000 })]);
-    expect(deleted).toEqual([]);
-  });
-
-  // The projection lookup also matches on slug, so once prod1 leaves the ACTIVE set a product
-  // slugged "prod1" answers for it, and indexing that one would file a stranger under prod1's id.
-  it('deletes rather than indexes when another product answers on a colliding slug', async () => {
-    const { service, repo, indexed, deleted } = build(answering(activeProjection('other-prod', 'prod1')));
-    repo.archiveProduct.mockResolvedValue(product({ status: 'ARCHIVED' }));
-
-    await service.archiveProduct('prod1');
-
-    expect(indexed).toEqual([]);
-    expect(deleted).toEqual(['prod1']);
-  });
-
-  // A variant's name, SKU code and price are denormalised into its parent's document.
-  it('re-syncs the parent product document after every SKU-level write', async () => {
-    const { service, repo, indexed, deleted } = build(answering(activeProjection('parent-prod')));
-    repo.findProductById.mockResolvedValue(product({ id: 'parent-prod' }));
-    repo.createSku.mockResolvedValue(sku({ productId: 'parent-prod' }));
-    repo.updateSku.mockResolvedValue(sku({ productId: 'parent-prod' }));
-    repo.archiveSku.mockResolvedValue(sku({ productId: 'parent-prod', archivedAt: now }));
-    repo.findSkuById.mockResolvedValue(sku({ productId: 'parent-prod' }));
-    repo.setPrice.mockResolvedValue({ variantId: 'sku1', currency: 'VND', amountMinor: 1000 });
-
-    await service.createSku('parent-prod', { sku: 'WH-RED', name: 'Red' });
-    await service.updateSku('sku1', { name: 'Midnight Black' });
-    await service.archiveSku('sku1');
-    await service.setPrice('sku1', { amountMinor: 1000 });
-
-    expect(indexed.map((doc) => doc.id)).toEqual(['parent-prod', 'parent-prod', 'parent-prod', 'parent-prod']);
-    expect(deleted).toEqual([]);
-  });
-
-  // Best-effort dual write: `search:reindex` is the backstop for a document the sync missed.
-  it('completes the mutation when the search sync fails', async () => {
-    const readFails = build({ findActiveByIdOrSlug: () => Promise.reject(new Error('db unavailable')) });
-    const engineDown = build({}, { deleteProduct: () => Promise.reject(new Error('connect ECONNREFUSED')) });
-    readFails.repo.archiveProduct.mockResolvedValue(product({ status: 'ARCHIVED' }));
-    engineDown.repo.archiveProduct.mockResolvedValue(product({ status: 'ARCHIVED' }));
-
-    await expect(readFails.service.archiveProduct('prod1')).resolves.toEqual(product({ status: 'ARCHIVED' }));
-    await expect(engineDown.service.archiveProduct('prod1')).resolves.toEqual(product({ status: 'ARCHIVED' }));
   });
 });

@@ -1,37 +1,75 @@
-import { toSearchableProduct } from '../../application/catalog-search.mapper';
-import type { CatalogSearchPort, ProductRepositoryPort } from '../../application/ports';
+import { setTimeout as delay } from 'node:timers/promises';
+import { toSearchDocumentWrite } from '../../application/catalog-search.mapper';
+import type { CatalogSearchPort, ProductSearchStatePort } from '../../application/ports';
 
 const PAGE_SIZE = 500;
+// Long enough for a search already routed to a retired index to finish.
+const GRACE_MS = 30_000;
 
-export interface ReindexOptions {
-  /** Costs a window in which search matches nothing. */
-  reset?: boolean;
+export interface RebuildOptions {
+  pageSize?: number;
+  graceMs?: number;
+  sleep?: (ms: number) => Promise<unknown>;
+  // Checked between pages; once aborted, the run drops its index instead of leaving the lock behind.
+  signal?: AbortSignal;
+}
+
+export interface RebuildResult {
+  documents: number;
+  tombstones: number;
+  retired: string[];
 }
 
 /**
- * Upserting by id makes a re-run idempotent, but it only ever adds: a document whose product has
- * since left the ACTIVE set survives until a `reset` run drops it.
+ * Fills a fresh index from Postgres, swaps search onto it, and drops the retired indices after a grace.
+ * Live writes reach the new index for the whole build, so a change made meanwhile is kept, and no
+ * catch-up pass is needed. Every product goes in at its row version, a tombstone for each one outside
+ * the public projection, so a late stale write cannot bring an archived product back after the swap.
  */
-export async function reindexAll(
-  repo: ProductRepositoryPort,
+export async function rebuildIndex(
+  states: ProductSearchStatePort,
   search: CatalogSearchPort,
-  options: ReindexOptions = {},
-): Promise<number> {
-  await search.ensureIndex();
-  if (options.reset) await search.resetIndex();
+  { pageSize = PAGE_SIZE, graceMs = GRACE_MS, sleep = delay, signal }: RebuildOptions = {},
+): Promise<RebuildResult> {
+  const rebuild = await search.beginRebuild();
 
-  // Keyset, not offset: each page is its own snapshot, so a product archived behind the cursor
-  // mid-run would shift every later row up one offset and one of them would never be read. The
-  // cursor is the id alone — carrying a timestamp costs precision the seek needs to advance.
-  let cursor: string | null = null;
-  let indexed = 0;
-  for (;;) {
-    const items = await repo.findActiveAfter(cursor, PAGE_SIZE);
-    if (items.length === 0) break;
-    await search.bulkIndex(items.map(toSearchableProduct));
-    indexed += items.length;
-    cursor = items[items.length - 1].id;
-    if (items.length < PAGE_SIZE) break;
+  let counts: Omit<RebuildResult, 'retired'>;
+  let retired: string[];
+  try {
+    counts = await fill(states, search, pageSize, signal);
+    retired = await search.promoteRebuild(rebuild);
+  } catch (error) {
+    await search.abortRebuild(rebuild).catch((abortError: unknown) => {
+      throw new AggregateError([error, abortError], 'the rebuild failed, and so did its abort');
+    });
+    throw error;
   }
-  return indexed;
+
+  await sleep(graceMs);
+  await search.dropRetired(retired);
+  return { ...counts, retired };
+}
+
+async function fill(
+  states: ProductSearchStatePort,
+  search: CatalogSearchPort,
+  pageSize: number,
+  signal: AbortSignal | undefined,
+): Promise<Omit<RebuildResult, 'retired'>> {
+  const counts = { documents: 0, tombstones: 0 };
+  let cursor: string | null = null;
+  for (;;) {
+    signal?.throwIfAborted();
+    const page = await states.findAfter(cursor, pageSize);
+    if (page.length === 0) break;
+    const changes = page.map(toSearchDocumentWrite);
+    await search.writeRebuild(changes);
+    for (const change of changes) {
+      if (change.doc) counts.documents += 1;
+      else counts.tombstones += 1;
+    }
+    cursor = page[page.length - 1].id;
+    if (page.length < pageSize) break;
+  }
+  return counts;
 }

@@ -22,7 +22,7 @@ When a fence blocks a change, the change is wrong far more often than the fence 
 
 ## Tests
 
-**Where a test goes.** A behaviour provable against objects is a unit spec beside its source (`src/**/*.spec.ts`). A behaviour that only exists once the application is wired to real Postgres, Redis, S3, Meilisearch or SMTP is an integration suite in [`test/integration/`](../apps/api/test/integration). Do not mock the database to pull an integration concern down into the unit tier — that mock is precisely the thing the integration tier exists to stop trusting.
+**Where a test goes.** A behaviour provable against objects is a unit spec beside its source (`src/**/*.spec.ts`). A behaviour that only exists once the application is wired to real Postgres, Redis, S3, Elasticsearch or SMTP is an integration suite in [`test/integration/`](../apps/api/test/integration). Do not mock the database to pull an integration concern down into the unit tier — that mock is precisely the thing the integration tier exists to stop trusting.
 
 **Do not delete a unit spec under `src/**/{domain,application}/**` because an e2e suite appears to cover it.** Coverage is measured on the unit tier only and floored on exactly that glob ([`vitest.config.mts`](../apps/api/vitest.config.mts)); e2e coverage contributes nothing to it. Removing an in-glob spec that looks redundant therefore lowers the numerator directly, and the measured slack against the functions floor has been as small as five functions — a single use-case spec has been enough to take it to one. Redundancy *outside* the glob costs nothing to remove.
 

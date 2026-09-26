@@ -1,0 +1,14 @@
+# Railway: one node, no domain and no TCP proxy, so only the private network reaches it.
+cluster.name: docker-cluster
+discovery.type: single-node
+# Railway's private network is IPv6-only: bound to 0.0.0.0, the api could not reach it.
+network.host: '::'
+# Without TLS, the transport port trusts whatever user a peer claims; one node needs no peers.
+transport.host: _local_
+xpack.security.enabled: true
+# Plain HTTP only because nothing outside the private network can connect.
+xpack.security.http.ssl.enabled: false
+# Writes name the alias; this stops a typo from creating a bare index.
+action.auto_create_index: false
+# Railway cannot raise the host's vm.max_map_count, which the default mmap store needs.
+node.store.allow_mmap: false

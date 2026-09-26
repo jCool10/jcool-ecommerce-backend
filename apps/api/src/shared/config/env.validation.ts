@@ -245,11 +245,22 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsNotEmpty()
   SEARCH_URL?: string;
 
-  // Optional because a local engine may run keyless.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  SEARCH_USERNAME?: string;
+
+  // Optional because a local engine may run with security off.
   @IsOptional()
   @IsString()
   @MinLength(16)
-  SEARCH_API_KEY?: string;
+  SEARCH_PASSWORD?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  SEARCH_REQUEST_TIMEOUT_MS?: number;
 
   // The four storage vars are optional here and required together in StorageModule, which is where
   // "half-configured" can be told apart from "not configured" — a rule per-variable decorators
@@ -396,7 +407,8 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsNotEmpty()
   USER_DIRECTORY_NOT_FOUND_GRACE?: string;
 
-  // order.paid waits on the user-service for the buyer's address, so it outlasts the shared ladder.
+  // order.paid (user-service) and catalog events (search engine) wait on another service, so they outlast
+  // the default ladder.
   @IsOptional()
   @Type(() => Number)
   @IsInt()

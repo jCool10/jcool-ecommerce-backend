@@ -6,6 +6,7 @@ export * from './drizzle-product.repository';
 export * from './media-query.adapter';
 export * from './product-cache.codec';
 export * from './product-row.mapper';
-export * from './search/meilisearch-catalog-search.adapter';
+export * from './search/elasticsearch-catalog-search.adapter';
 export * from './search/reindex-runner';
+export * from './search/search-engine-error';
 export * from './search/search-index-bootstrap';

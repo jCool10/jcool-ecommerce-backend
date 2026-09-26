@@ -4,8 +4,8 @@ import { IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, MaxLength, Min }
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
 
 // `q` is required, unlike the list endpoint's optional substring filter: a relevance search with no
-// terms has nothing to rank by. `categorySlug` is pinned to the slug shape because it reaches the
-// engine inside a filter expression — the adapter escapes it as well, so neither layer stands alone.
+// terms has nothing to rank by. `categorySlug` reaches the engine as an exact term, never parsed as
+// syntax; the slug shape only rejects a value no category could have.
 export class SearchProductsQueryDto {
   @ApiProperty({
     maxLength: 100,

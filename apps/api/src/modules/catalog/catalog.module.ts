@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
 import { CacheModule } from '@shared/cache';
 import { MediaModule } from '@modules/media/media.module';
 import {
@@ -6,23 +8,31 @@ import {
   CATALOG_SEARCH,
   MEDIA_QUERY,
   PRODUCT_REPOSITORY,
-  PRODUCT_SOURCE_REPOSITORY,
+  PRODUCT_SEARCH_STATE,
 } from './application/ports';
 import { CATALOG_SKU_QUERY } from './application/public/catalog-sku-query.port';
 import { CatalogAdminService } from './application/services/catalog-admin.service';
 import { CatalogSkuQueryService } from './application/services/catalog-sku-query.service';
+import { ProductSearchSyncService } from './application/services/product-search-sync.service';
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from './application/use-cases';
 import {
   CachingCatalogAdminRepository,
   CachingProductRepository,
   DrizzleCatalogAdminRepository,
   DrizzleProductRepository,
+  ElasticsearchCatalogSearch,
   MediaQueryAdapter,
-  MeilisearchCatalogSearch,
+  SEARCH_ENGINE_CALLS,
+  SEARCH_READ_BREAKER,
+  SEARCH_WRITE_BREAKER,
   SearchIndexBootstrap,
+  isSearchEngineFault,
+  type SearchEngineCalls,
 } from './infrastructure';
 import { AdminCatalogController } from './interface/admin-catalog.controller';
 import { CatalogController } from './interface/catalog.controller';
+import { CategoryRenamedHandler } from './interface/queue/category-renamed.handler';
+import { ProductChangedHandler } from './interface/queue/product-changed.handler';
 
 /**
  * `CATALOG_SKU_QUERY` is the published SKU-read language for other contexts (Cart reads live
@@ -32,7 +42,7 @@ import { CatalogController } from './interface/catalog.controller';
  */
 @Module({
   // MediaModule for `MEDIA_FACADE` only — image bytes and their lifecycle stay entirely over there.
-  imports: [CacheModule, MediaModule],
+  imports: [CacheModule, MediaModule, ResilienceModule],
   controllers: [CatalogController, AdminCatalogController],
   providers: [
     ListProductsUseCase,
@@ -42,13 +52,30 @@ import { CatalogController } from './interface/catalog.controller';
     DrizzleProductRepository,
     DrizzleCatalogAdminRepository,
     { provide: PRODUCT_REPOSITORY, useClass: CachingProductRepository },
-    { provide: PRODUCT_SOURCE_REPOSITORY, useExisting: DrizzleProductRepository },
+    { provide: PRODUCT_SEARCH_STATE, useExisting: DrizzleProductRepository },
     { provide: CATALOG_ADMIN_REPOSITORY, useClass: CachingCatalogAdminRepository },
     { provide: CATALOG_SKU_QUERY, useClass: CatalogSkuQueryService },
-    { provide: CATALOG_SEARCH, useClass: MeilisearchCatalogSearch },
+    {
+      provide: SEARCH_ENGINE_CALLS,
+      inject: [ConfigService, CircuitBreakerFactory],
+      useFactory: (config: ConfigService, breakers: CircuitBreakerFactory): SearchEngineCalls => {
+        const options = {
+          timeoutMs: config.getOrThrow<number>('search.requestTimeoutMs'),
+          isDownstreamFault: isSearchEngineFault,
+        };
+        return {
+          read: breakers.create(SEARCH_READ_BREAKER, options),
+          write: breakers.create(SEARCH_WRITE_BREAKER, options),
+        };
+      },
+    },
+    { provide: CATALOG_SEARCH, useClass: ElasticsearchCatalogSearch },
     { provide: MEDIA_QUERY, useClass: MediaQueryAdapter },
     SearchIndexBootstrap,
+    ProductSearchSyncService,
+    ProductChangedHandler,
+    CategoryRenamedHandler,
   ],
-  exports: [CATALOG_SKU_QUERY],
+  exports: [CATALOG_SKU_QUERY, ProductChangedHandler, CategoryRenamedHandler],
 })
 export class CatalogModule {}

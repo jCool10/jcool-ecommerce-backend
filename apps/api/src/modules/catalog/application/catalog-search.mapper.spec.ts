@@ -1,6 +1,6 @@
 import { Money } from '@jcool/kernel';
 import { Product, type ProductVariant } from '../domain/entities';
-import { toSearchableProduct } from './catalog-search.mapper';
+import { toSearchDocumentWrite, toSearchableProduct } from './catalog-search.mapper';
 
 function variant(sku: string, ...prices: Money[]): ProductVariant {
   return { id: `v-${sku}`, sku, name: sku, prices };
@@ -50,5 +50,21 @@ describe('toSearchableProduct', () => {
       { minPriceMinor: null, currency: null },
       { minPriceMinor: null, currency: null },
     ]);
+  });
+});
+
+describe('toSearchDocumentWrite', () => {
+  it('carries the row version with the document of a public product', () => {
+    const write = toSearchDocumentWrite({
+      id: 'p1',
+      version: 7,
+      product: product([variant('WH-BLK', Money.of(1_990_000, 'VND'))]),
+    });
+
+    expect(write).toMatchObject({ id: 'p1', version: 7, doc: { id: 'p1', skus: ['WH-BLK'] } });
+  });
+
+  it('writes a tombstone at the row version once the product leaves the public projection', () => {
+    expect(toSearchDocumentWrite({ id: 'p1', version: 8, product: null })).toEqual({ id: 'p1', version: 8, doc: null });
   });
 });

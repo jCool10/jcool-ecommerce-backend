@@ -3,7 +3,13 @@ import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, or, sql, type SQ
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
 import type { Product, ProductStatus } from '../domain/entities';
-import type { FindManyActiveCriteria, FindManyActiveResult, ProductRepositoryPort } from '../application/ports';
+import type {
+  FindManyActiveCriteria,
+  FindManyActiveResult,
+  ProductRepositoryPort,
+  ProductSearchState,
+  ProductSearchStatePort,
+} from '../application/ports';
 import type { SkuView } from '../application/public/catalog-sku-query.port';
 import { assembleProducts } from './product-row.mapper';
 
@@ -100,7 +106,7 @@ async function loadImageAssetIds(db: DrizzleDB | DrizzleTx, productIds: string[]
 }
 
 @Injectable()
-export class DrizzleProductRepository implements ProductRepositoryPort {
+export class DrizzleProductRepository implements ProductRepositoryPort, ProductSearchStatePort {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
 
   async findManyActive(criteria: FindManyActiveCriteria): Promise<FindManyActiveResult> {
@@ -148,32 +154,7 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
           .where(where);
         const total = totalRows[0]?.value ?? 0;
 
-        if (ids.length === 0) {
-          return { items: [], total };
-        }
-
-        const rows = await tx
-          .select(flatColumns)
-          .from(products)
-          .innerJoin(categories, eq(products.categoryId, categories.id))
-          // Archived variants are excluded in the JOIN, not the WHERE, so the product still lists.
-          .leftJoin(
-            productVariants,
-            and(eq(productVariants.productId, products.id), isNull(productVariants.archivedAt)),
-          )
-          .leftJoin(prices, eq(prices.variantId, productVariants.id))
-          .where(inArray(products.id, ids))
-          .orderBy(
-            desc(products.createdAt),
-            desc(products.id),
-            productVariants.createdAt,
-            productVariants.id,
-            prices.currency,
-          );
-
-        const images = await loadImageAssetIds(tx, ids);
-
-        const byId = new Map(assembleProducts(rows, images).map((product) => [product.id, product]));
+        const byId = await this.hydrateActive(tx, ids);
         const items = ids.map((id) => byId.get(id)).filter((product): product is Product => product !== undefined);
 
         return { items, total };
@@ -182,48 +163,83 @@ export class DrizzleProductRepository implements ProductRepositoryPort {
     );
   }
 
-  async findActiveAfter(afterId: string | null, limit: number): Promise<Product[]> {
+  async findByIds(ids: string[]): Promise<ProductSearchState[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.readSearchStates((tx) =>
+      tx
+        .select({ id: products.id, version: products.searchVersion })
+        .from(products)
+        .where(inArray(products.id, ids))
+        .orderBy(asc(products.id)),
+    );
+  }
+
+  async findAfter(afterId: string | null, limit: number): Promise<ProductSearchState[]> {
+    return this.readSearchStates((tx) =>
+      tx
+        .select({ id: products.id, version: products.searchVersion })
+        .from(products)
+        .where(afterId ? gt(products.id, afterId) : undefined)
+        .orderBy(asc(products.id))
+        .limit(limit),
+    );
+  }
+
+  async bumpCategoryProducts(categoryId: string, afterId: string | null, limit: number): Promise<string[]> {
+    // Locked in id order, so two fan-outs of one category queue up instead of deadlocking; a product
+    // write locks a single product and cannot close a cycle. No key update: the bump changes no key,
+    // and a stronger lock would also stall image and SKU inserts on the page.
+    const page = this.db
+      .select({ id: products.id })
+      .from(products)
+      .where(and(eq(products.categoryId, categoryId), afterId ? gt(products.id, afterId) : undefined))
+      .orderBy(asc(products.id))
+      .limit(limit)
+      .for('no key update');
+    const rows = await this.db
+      .update(products)
+      .set({ searchVersion: sql`${products.searchVersion} + 1` })
+      .where(inArray(products.id, page))
+      .returning({ id: products.id });
+    // RETURNING follows no order, and the caller resumes after the last id.
+    return rows.map((row) => row.id).sort();
+  }
+
+  private readSearchStates(
+    selectVersions: (tx: DrizzleTx) => Promise<{ id: string; version: number }[]>,
+  ): Promise<ProductSearchState[]> {
     return this.db.transaction(
       async (tx) => {
-        const conditions: SQL[] = [eq(products.status, 'ACTIVE'), isNull(categories.archivedAt)];
-        if (afterId) {
-          // Seeks the primary key, not `created_at`: a timestamp cursor can only travel as a
-          // millisecond-precision JS Date, which lands before the microseconds Postgres stored and
-          // re-serves every row inside that millisecond.
-          conditions.push(gt(products.id, afterId));
-        }
-        const where = and(...conditions);
-
-        const idRows = await tx
-          .select({ id: products.id })
-          .from(products)
-          .innerJoin(categories, eq(products.categoryId, categories.id))
-          .where(where)
-          .orderBy(asc(products.id))
-          .limit(limit);
-        const ids = idRows.map((row) => row.id);
-        if (ids.length === 0) {
-          return [];
-        }
-
-        const rows = await tx
-          .select(flatColumns)
-          .from(products)
-          .innerJoin(categories, eq(products.categoryId, categories.id))
-          .leftJoin(
-            productVariants,
-            and(eq(productVariants.productId, products.id), isNull(productVariants.archivedAt)),
-          )
-          .leftJoin(prices, eq(prices.variantId, productVariants.id))
-          .where(inArray(products.id, ids))
-          .orderBy(asc(products.id), productVariants.createdAt, productVariants.id, prices.currency);
-
-        const images = await loadImageAssetIds(tx, ids);
-        const byId = new Map(assembleProducts(rows, images).map((product) => [product.id, product]));
-        return ids.map((id) => byId.get(id)).filter((product): product is Product => product !== undefined);
+        const versions = await selectVersions(tx);
+        const byId = await this.hydrateActive(
+          tx,
+          versions.map((row) => row.id),
+        );
+        return versions.map((row) => ({ id: row.id, version: row.version, product: byId.get(row.id) ?? null }));
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
+  }
+
+  // Re-applies the public filter, so an id outside it is simply absent from the map.
+  private async hydrateActive(tx: DrizzleTx, ids: string[]): Promise<Map<string, Product>> {
+    if (ids.length === 0) {
+      return new Map();
+    }
+    const rows = await tx
+      .select(flatColumns)
+      .from(products)
+      .innerJoin(categories, eq(products.categoryId, categories.id))
+      // Archived variants are excluded in the JOIN, not the WHERE, so the product still lists.
+      .leftJoin(productVariants, and(eq(productVariants.productId, products.id), isNull(productVariants.archivedAt)))
+      .leftJoin(prices, eq(prices.variantId, productVariants.id))
+      .where(and(inArray(products.id, ids), eq(products.status, 'ACTIVE'), isNull(categories.archivedAt)))
+      .orderBy(asc(products.id), productVariants.createdAt, productVariants.id, prices.currency);
+
+    const images = await loadImageAssetIds(tx, ids);
+    return new Map(assembleProducts(rows, images).map((product) => [product.id, product]));
   }
 
   async findActiveByIdOrSlug(idOrSlug: string): Promise<Product | null> {

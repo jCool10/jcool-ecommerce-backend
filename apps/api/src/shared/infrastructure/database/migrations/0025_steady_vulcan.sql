@@ -1,0 +1,1 @@
+DROP INDEX "idx_products_active_id";

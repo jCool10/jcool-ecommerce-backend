@@ -145,9 +145,12 @@ export default () => ({
     // Off unless explicitly on: the index is derived from Postgres and only ever an extra read
     // path, so nothing boots or tests against a required engine.
     enabled: process.env.SEARCH_ENABLED === 'true',
-    url: process.env.SEARCH_URL ?? 'http://localhost:7700',
-    // Undefined → keyless engine, which the engine permits only outside its production mode.
-    apiKey: process.env.SEARCH_API_KEY,
+    url: process.env.SEARCH_URL ?? 'http://localhost:9200',
+    username: process.env.SEARCH_USERNAME ?? 'elastic',
+    // Undefined → no auth header, for an engine running with security off.
+    password: process.env.SEARCH_PASSWORD,
+    // Also the circuit breaker's timeout for engine calls.
+    requestTimeoutMs: parseIntOr(process.env.SEARCH_REQUEST_TIMEOUT_MS, 5000),
   },
   storage: {
     // Presence of the whole group is the switch, like SMTP_URL: set → a real bucket, unset → the

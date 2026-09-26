@@ -22,7 +22,7 @@ function job(eventType: string): DomainEventJob {
 }
 
 // Order's finalized events come from its domain type, so a new one fails typecheck here until it is
-// listed. Payment's two are literals in its outbox mapper.
+// listed. Payment's and Catalog's are literals in their outbox mappers.
 const PRODUCED_EVENT_TYPES = Object.keys({
   'order.placed': true,
   'order.paid': true,
@@ -31,7 +31,17 @@ const PRODUCED_EVENT_TYPES = Object.keys({
   'order.cancelled': true,
   'payment.succeeded': true,
   'payment.failed': true,
-} satisfies Record<OrderFinalizedEvent['eventName'] | 'order.placed' | 'payment.succeeded' | 'payment.failed', true>);
+  'catalog.product.changed': true,
+  'catalog.category.renamed': true,
+} satisfies Record<
+  | OrderFinalizedEvent['eventName']
+  | 'order.placed'
+  | 'payment.succeeded'
+  | 'payment.failed'
+  | 'catalog.product.changed'
+  | 'catalog.category.renamed',
+  true
+>);
 
 const run = async (dispatcher: ReturnType<typeof dispatcherWith>, event: DomainEventJob) =>
   (await dispatcher.prepare(event))(tx);
@@ -71,6 +81,33 @@ describe('DomainEventDispatcher', () => {
 
     await expect(step(tx)).resolves.toBe(sendMail);
     expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  const catalogEvents = [
+    ['catalog.product.changed', 'applyProductChanged'],
+    ['catalog.category.renamed', 'applyCategoryRenamed'],
+  ] as const;
+
+  // A post-commit effect runs after the claim and is never retried; a failed index write must retry.
+  it.each(catalogEvents)(
+    'writes %s to the search engine before the transaction and leaves the step empty',
+    async (eventType, double) => {
+      const apply = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = dispatcherWith({ [double]: apply });
+
+      const step = await dispatcher.prepare(job(eventType));
+      expect(apply).toHaveBeenCalledOnce();
+
+      await expect(step(tx)).resolves.toBeUndefined();
+      expect(apply).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(catalogEvents)('fails the prepare when %s cannot be written', async (eventType, double) => {
+    const outage = new Error('search engine unavailable');
+    const dispatcher = dispatcherWith({ [double]: vi.fn().mockRejectedValue(outage) });
+
+    await expect(dispatcher.prepare(job(eventType))).rejects.toBe(outage);
   });
 
   it('runs each effectful event on its own handler inside the consumer transaction', async () => {

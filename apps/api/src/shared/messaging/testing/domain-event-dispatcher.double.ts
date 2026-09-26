@@ -1,5 +1,7 @@
 import { vi } from 'vitest';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import type { CategoryRenamedHandler } from '@modules/catalog/interface/queue/category-renamed.handler';
+import type { ProductChangedHandler } from '@modules/catalog/interface/queue/product-changed.handler';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import type { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
@@ -13,6 +15,8 @@ export interface DispatcherHandlerDoubles {
   closeExpired?: OrderExpiredHandler['close'];
   closeCancelled?: OrderCancelledHandler['close'];
   prepareMail?: OrderPaidMailHandler['prepare'];
+  applyProductChanged?: ProductChangedHandler['apply'];
+  applyCategoryRenamed?: CategoryRenamedHandler['apply'];
 }
 
 /**
@@ -26,5 +30,7 @@ export function dispatcherWith(doubles: DispatcherHandlerDoubles = {}): DomainEv
     { close: doubles.closeExpired ?? vi.fn() } as unknown as OrderExpiredHandler,
     { close: doubles.closeCancelled ?? vi.fn() } as unknown as OrderCancelledHandler,
     { prepare: doubles.prepareMail ?? vi.fn() } as unknown as OrderPaidMailHandler,
+    { apply: doubles.applyProductChanged ?? vi.fn() } as unknown as ProductChangedHandler,
+    { apply: doubles.applyCategoryRenamed ?? vi.fn() } as unknown as CategoryRenamedHandler,
   );
 }

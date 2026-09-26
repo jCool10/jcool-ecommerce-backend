@@ -71,7 +71,8 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
         connection: this.connection,
         prefix: this.prefix,
         concurrency: this.concurrency,
-        // BullMQ consults this only for a type it has no built-in for, which is order.paid's alone.
+        // BullMQ consults this only for a type it has no built-in for: the long ladder order.paid and
+        // catalog events share.
         settings: {
           backoffStrategy: (attemptsMade: number) =>
             cappedBackoffMs(attemptsMade, this.backoffMs, this.orderPaidBackoffCapMs),

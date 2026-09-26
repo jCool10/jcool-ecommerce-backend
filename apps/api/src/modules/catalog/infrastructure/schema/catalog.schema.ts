@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
 // Infrastructure only — the domain layer must never import this module.
@@ -43,6 +43,9 @@ export const products = pgTable(
     categoryId: uuid('category_id')
       .notNull()
       .references(() => categories.id),
+    // Bumped under the product row lock by every write that changes the search document, so it
+    // follows commit order, which no clock value does.
+    searchVersion: bigint('search_version', { mode: 'number' }).notNull().default(0),
     ...stamps,
   },
   (t) => [
@@ -52,12 +55,6 @@ export const products = pgTable(
     // index cannot supply, so drizzle-kit's default would build an index the planner never uses.
     index('idx_products_active_created')
       .on(t.createdAt.desc().nullsFirst(), t.id.desc().nullsFirst())
-      .where(sql`${t.status} = 'ACTIVE'`),
-    // Serves the reindex scan, which seeks the primary key ascending. Without it that scan falls to
-    // `products_pkey` and re-checks `status` on every heap tuple, so a catalog dominated by
-    // DRAFT/ARCHIVED rows costs a full-table walk per rebuild.
-    index('idx_products_active_id')
-      .on(t.id)
       .where(sql`${t.status} = 'ACTIVE'`),
     // Only reachable when the query binds `category_id` itself, not when it filters the category
     // across the join. The trailing `id` covers the id-page projection.
