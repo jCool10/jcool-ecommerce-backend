@@ -23,6 +23,7 @@ Conventions used below:
 - [Change Railway service config](#change-railway-service-config)
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Logs in Loki](#logs-in-loki)
+- [Deploy Elasticsearch](#deploy-elasticsearch)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
@@ -109,6 +110,10 @@ pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges ba
 A user-service dump then needs the service booted against it **with the key that dump was taken
 under**; the api's and the id-service's carry no key.
 
+After restoring the api's database, [rebuild the search index](#rebuild-the-search-index) before
+catalog writes resume. A restore rewinds `products.search_version`, so the engine holds versions the
+database no longer reaches and would ignore every later write to those products until they caught up.
+
 ### Restoring into an environment with a different key
 
 The user-service's dump carries the `identity_key_pin` row, so the restored database still remembers the original key's fingerprint. Booting the user-service against it under a different `IDENTITY_BUCKET_KEY` **refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not a restore problem.
@@ -140,21 +145,53 @@ Consequences to plan for:
 
 ## Rebuild the search index
 
-`/products/search` reads a **derived** index. Postgres is the source of truth, so the index can always be thrown away and rebuilt — it is never restored from a backup.
+`/products/search` reads a **derived** index. Postgres is the source of truth, so the index can always be thrown away and rebuilt — it is never restored from a backup. Live writes keep it current through the outbox ([ADR](./docs/adr-search-index-consistency.md)). Rebuild when one of these happened:
+
+- **A deploy changed the index definition** (`index-settings.ts`) other than by adding a field. Boot adds new fields to the live index and nothing else. A changed field type or analyzer name fails there and logs `search index provisioning failed`; a changed setting (the analyzer's filters, `max_result_window`) is not applied at all, and nothing says so. Rebuild right after that deploy, within the retry horizon (about 33 minutes), while any writes the old mapping refuses are still retrying.
+- **`SEARCH_ENABLED` was turned on** in an environment that ran with it off. Catalog events consumed meanwhile changed nothing.
+- **Catalog entries were dropped from the DLQ** instead of replayed.
+- **The api's database was restored** ([Restore](#restore)).
+- **The `products` alias is gone.** Search answers empty until the rebuild puts it back.
 
 ```bash
-# local — requires SEARCH_ENABLED=true, SEARCH_URL and (if the engine is keyed) SEARCH_API_KEY
+# local — needs SEARCH_ENABLED=true, SEARCH_URL, SEARCH_PASSWORD, and DATABASE_URL on the database you mean
 pnpm search:reindex
 
-# drop the index and rebuild it from scratch (schema/settings changes)
-pnpm search:reindex --reset
+# container — the compiled twin, since `tsx` is a devDependency and is not installed there
+npm run search:reindex:prod
 ```
 
-The command boots a **minimal** Nest context — config + database + the search adapter only — so no queue consumers or scheduled sweeps run for its lifetime.
+The command boots a **minimal** Nest context — config + database + the search adapter only — so no queue consumers or scheduled sweeps run for its lifetime. It fills a fresh `products_v<epoch ms>` from Postgres page by page, tombstones included, behind the `products_rebuilding` alias; every live write reaches that index as well as the one search reads. It then moves `products` onto the new index in one atomic call and, `--grace-seconds` later (30 by default), deletes the indices search no longer uses. Search answers from the old index until the swap, so it never goes empty.
 
 It refuses to run when `SEARCH_ENABLED` is not `"true"`, deliberately: the search adapter is a silent no-op when search is off, so an unguarded rebuild would report success over an untouched index. That is the one failure this command must never hide.
 
-**Reindex is not part of deploy.** It is not in `preDeployCommand`, so a dead search engine still lets a deploy through — the index is an extra read path, never a boot requirement. The cost is that a shape change to the indexed document needs this run by hand afterwards.
+Before running it:
+
+- **Check which database it reads.** Nothing stops an empty or wrong fill from being promoted, and the index it replaced is deleted by the time the command returns. In the container `DATABASE_URL` is production's; locally it is whatever `.env` says.
+- **Wait for any rollout to finish.** A replica of the previous release still consuming events writes documents in its own shape, and the fill cannot replace a document already at its row's version.
+- **On a large index, give the command a longer timeout.** Every engine call, the refresh before the swap and the deletes included, is bounded by `SEARCH_REQUEST_TIMEOUT_MS` (5 s by default): `SEARCH_REQUEST_TIMEOUT_MS=60000 npm run search:reindex:prod`.
+
+**One rebuild at a time.** `products_rebuilding` is the lock: a second run fails with `a search index rebuild is already in progress` while one fills. Ctrl-C (or `SIGTERM`) stops the fill at the next page and drops the half-built index; repeats are ignored while it cleans up. A hard crash (`kill -9`, an OOM kill, the container replaced, possibly a dropped `railway ssh` session) cannot clean up: it leaves the lock and the half-built index, live writes keep copying into it, and every later run refuses to start. So after any failed run, check the aliases (below). If `products_rebuilding` is still listed and no rebuild is running, rerun with `--clear-stale` (in the container: `npm run search:reindex:prod -- --clear-stale`, since npm keeps flags before `--` for itself): it drops the index holding the lock, then rebuilds. Never use it while another rebuild runs. It fails that run, which then leaves search on the index it was on.
+
+**Verify.** The command prints `Rebuild complete: <n> documents and <m> tombstones; retired <indices>`. Documents must equal the searchable products, and both together the product count:
+
+```sql
+-- local, against the same database
+SELECT count(*) FILTER (WHERE p.status = 'ACTIVE' AND c.archived_at IS NULL) AS documents,
+       count(*) AS total
+FROM products p JOIN categories c ON c.id = p.category_id;
+```
+
+Then look at the engine from the api container, signed in the way the api is:
+
+```sh
+# container (api) — the credentials come from this container's env
+es() { node -e 'const [m, p] = process.argv.length > 2 ? process.argv.slice(1) : ["GET", process.argv[1]]; const e = process.env; fetch(e.SEARCH_URL + p, { method: m, headers: { authorization: "Basic " + Buffer.from(e.SEARCH_USERNAME + ":" + e.SEARCH_PASSWORD).toString("base64") } }).then(async (r) => console.log(r.status, await r.text()))' "$@"; }
+es '/_cat/aliases/products*?v'   # products on the new index, no products_rebuilding
+es '/_cat/count/products?v'      # documents plus tombstones
+```
+
+**Reindex is not part of deploy.** It is not in `preDeployCommand`, so a dead search engine still lets a deploy through — the index is an extra read path, never a boot requirement. The cost is that a type or analyzer change to the indexed document needs this run by hand afterwards.
 
 ---
 
@@ -217,7 +254,7 @@ A row here has **not** been dead-lettered — it was never delivered at all, so 
 
 ## Replay the dead-letter queue
 
-A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service). A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
+A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service), and for `catalog.*` events, which wait out a search engine outage on the same ladder. A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
 
 **Replay used to be unconditionally safe. It is not any more, and the tool now says so.** The old guarantee was that a message goes back under its outbox row id, the inbox dedups on that id, and a needless replay collapses into nothing. [Inbox retention](#retention-sweeps) ends it: once a claim has been swept, "no claim" no longer means "never applied", and replaying such a message applies its effect a second time.
 
@@ -254,6 +291,8 @@ npm run queue:replay-dlq:prod -- --apply
 ```
 
 The guard runs on a dry run too, so the listing is what `--apply` would actually do rather than a promise it would then refuse.
+
+**A `catalog.*` message is always safe to replay, `--force` included.** Its handler re-reads the product from Postgres and writes it as it is now, and the engine ignores any version it already holds, so a second application changes nothing. A `catalog.category.renamed` can also land here as permanent without any engine fault: a deploy that outlasts the worker's 10 s close window interrupts its fan-out, and a second such interruption exceeds BullMQ's stall limit. Replaying it restarts the fan-out from the first page. Dropping catalog messages instead of replaying them is fine too, provided a [rebuild](#rebuild-the-search-index) follows.
 
 The CLI reads its Redis URL, queue prefix **and inbox window** through the app's own config factory rather than re-reading the environment, so it cannot report a reassuringly empty queue by looking under a different prefix than the app writes to, nor draw the horizon in a different place than the sweep does. It boots no Nest context at all — a replay is something you want to be able to run while the app itself is the thing that is broken. It now needs **Postgres as well as Redis**: the inbox check is not optional, so a replay cannot be performed while the database is down.
 
@@ -410,7 +449,7 @@ So on a development or staging database that still holds rows, recreate it rathe
 
 ```bash
 docker compose --profile '*' down -v   # every profile, so all three Postgres volumes go
-docker compose up -d postgres redis meilisearch mailpit minio minio-init
+docker compose up -d postgres redis elasticsearch mailpit minio minio-init
 pnpm db:migrate && pnpm db:seed
 ```
 
@@ -551,6 +590,189 @@ hours to appear. To recover:
 
 To stop shipping, remove `LOKI_URL` from the three services in `.railway/railway.ts` and apply.
 Each service goes back to stdout only on its next deploy.
+
+---
+
+## Deploy Elasticsearch
+
+`elasticsearch` is a Railway service declared in `.railway/railway.ts`, built from `infra/elasticsearch/`,
+with its data on the `elasticsearch-data` volume. It holds only the catalog search index, which is
+derived from the api's Postgres ([ADR](./docs/adr-search-index-consistency.md)), so losing the volume
+costs a [rebuild](#rebuild-the-search-index), not data. Like the monitoring stack it is outside
+`cd.yml`: a config change is `railway up --ci --service elasticsearch`. A service with a volume never
+runs two deployments at once, so each redeploy takes search away for a minute or two; meanwhile
+`/products/search` answers empty and catalog events retry.
+
+What it depends on:
+
+- **No public surface, ever.** No domain and no TCP proxy: only the private network reaches it, over
+  plain HTTP. `railway domain list --service elasticsearch` prints nothing, and the service's
+  Settings → Networking shows no TCP proxy.
+- **HTTP binds `::`, transport only loopback** (`infra/elasticsearch/elasticsearch.yml`). Railway's
+  private network is IPv6-only. The transport port runs without TLS and would trust whatever user a
+  peer claimed, and a single node has no peers to talk to.
+- **It starts as root only to hand the root-owned volume to uid 1000**, then drops to it
+  (`railway-entrypoint.sh`). Elasticsearch refuses to run as root.
+- **No healthcheck path.** With security on, Railway's unauthenticated probe would get 401, so
+  readiness is checked by hand below.
+- **The api signs in as `jcool_api`**, whose role `jcool_api_search` reaches `products*` and the
+  cluster `monitor` privilege, nothing else. `ELASTIC_PASSWORD` never leaves this service.
+  `API_SEARCH_PASSWORD` is stored here too, where the engine ignores it; the api references it as
+  `SEARCH_PASSWORD`, so the two cannot drift.
+- **Memory.** Heap 512 MB (`ES_JAVA_OPTS`). Measured locally, idle: about 0.95 GiB. While
+  rebuilding 60k products: up to 1.15 GiB of process memory, 1.4 GiB counting page cache. The budget
+  is 1.5 GB. Replace these with Railway's figures after the first release.
+
+In the service's shell (`railway ssh --service elasticsearch`), every call signs in as `elastic` from
+that container's env and every password travels through stdin, so none reaches argv, shell history
+or a log:
+
+```sh
+# container (elasticsearch)
+es() { curl -fsS -w '\n' -K <(printf 'user = "elastic:%s"\n' "$ELASTIC_PASSWORD") -H 'content-type: application/json' "$@"; }
+# the security index answers a few seconds after the node does
+until es -o /dev/null localhost:9200/_security/_authenticate 2>/dev/null; do sleep 2; done
+```
+
+### First release
+
+The merge that adds this service also removes api variables, so CD stops at "Apply Railway config"
+before it deploys anything. Finish from an up-to-date `main`, in this order:
+
+0. **Record the api's `SEARCH_ENABLED` and `SEARCH_URL`** from the dashboard (neither is a secret).
+   Step 8 and the rollback depend on them. Step 3 deletes `SEARCH_API_KEY`: if search is on today and
+   the engine it names should come back after a rollback, keep its key wherever secrets live first.
+1. **Back up** the api's database ([Back up](#back-up)).
+2. **Merge**, then wait until the CD run fails at "Apply Railway config". An apply of yours that
+   lands first turns CD's into a no-op, and CD then deploys the api ahead of the engine.
+3. **Apply.**
+
+   ```bash
+   railway config plan    # api: SEARCH_API_KEY and SEARCH_HOST_PORT deleted, SEARCH_URL becomes a reference,
+                          # SEARCH_USERNAME and SEARCH_PASSWORD added; elasticsearch and its volume created
+   railway config apply --confirm-destructive
+   ```
+
+   The apply also redeploys the api, and its pre-deploy step applies the migrations, which the running
+   code tolerates. Until step 4, `SEARCH_PASSWORD` has no value: the new code either refuses to boot
+   (a blank password fails validation), so Railway keeps the running deployment, or boots unable to
+   sign in, so search answers empty and catalog events retry. Either way, carry on through step 7
+   within about 33 minutes, the catalog retry horizon; step 11 catches what falls past it.
+4. **Set the secrets**, generated straight into Railway:
+
+   ```bash
+   openssl rand -hex 24 | tr -d '\n' | railway variable set ELASTIC_PASSWORD --stdin --service elasticsearch --skip-deploys
+   openssl rand -hex 24 | tr -d '\n' | railway variable set API_SEARCH_PASSWORD --stdin --service elasticsearch --skip-deploys
+   ```
+
+5. **Deploy it:** `railway up --ci --service elasticsearch`, then wait for `started` in
+   `railway logs --service elasticsearch`.
+6. **Create the api's role and user** in the service's shell, after the helper above. Both calls
+   answer `"created":true`.
+
+   ```sh
+   es -X PUT localhost:9200/_security/role/jcool_api_search --data-binary @- <<'EOF'
+   {
+     "cluster": ["monitor"],
+     "indices": [
+       {
+         "names": ["products*"],
+         "privileges": ["read", "write", "create_index", "delete_index", "manage", "view_index_metadata"]
+       }
+     ]
+   }
+   EOF
+
+   printf '{"password":"%s","roles":["jcool_api_search"]}' "$API_SEARCH_PASSWORD" |
+     es -X PUT localhost:9200/_security/user/jcool_api --data-binary @-
+   ```
+
+7. **Deploy the api:** re-run the failed CD job. The apply is now a no-op, the pre-deploy step applies
+   the two migrations (`products.search_version`, and dropping `idx_products_active_id`), and the api
+   creates `products_v0` behind the `products` alias at boot.
+8. **Enable search** if step 0 found it off: `railway variable set SEARCH_ENABLED=true --service
+   jcool-ecommerce-backend`, which redeploys the api.
+9. **Check reachability and privilege** from the api's shell (`railway ssh --service
+   jcool-ecommerce-backend`), with the `es` helper from [Rebuild the search index](#rebuild-the-search-index):
+
+   ```sh
+   es /_cluster/health            # 200, "status":"green"
+   es /_security/_authenticate    # 200, "roles":["jcool_api_search"]
+   es PUT /stray-index            # 403
+   ```
+
+10. **Rebuild**, once step 7's rollout has finished: `npm run search:reindex:prod` in the api's shell.
+    Documents must equal the searchable products and tombstones the rest.
+11. **Drain the overlap.** During the rolling deploy an old replica's worker can take a `catalog.*` job,
+    find no handler for it and dead-letter it. List the DLQ with `npm run queue:replay-dlq:prod`. If
+    it holds only `catalog.*` entries, replay them with `npm run queue:replay-dlq:prod -- --apply`;
+    anything else is judged as in [Replay the dead-letter queue](#replay-the-dead-letter-queue) first,
+    since `--apply` replays the whole queue.
+12. **Verify.** Edit a product in `/admin`, then search for it: it shows within 2 s. Watch this
+    service's memory for a day, one rebuild included, and write the figures into *Memory* above.
+
+### Roll back
+
+- **Elasticsearch will not boot, or runs out of memory:** `railway variable set SEARCH_ENABLED=false
+  --service jcool-ecommerce-backend`, which redeploys the api. Search answers the empty page and
+  catalog events are consumed without effect. Fix it, turn search back on, then rebuild: a rebuild is
+  required after running with search off.
+- **The api release misbehaves:**
+  1. Take search away from the previous release before it boots, without redeploying anything yet.
+     It has no engine to talk to, and it refuses a blank `SEARCH_URL`, while the current one names
+     the service the revert deletes:
+
+     ```bash
+     railway variable set SEARCH_ENABLED=false --service jcool-ecommerce-backend --skip-deploys
+     railway variable set 'SEARCH_URL=<the value step 0 recorded>' --service jcool-ecommerce-backend --skip-deploys
+     ```
+
+  2. Revert the merge on `main`. The revert's config removes this service, its volume,
+     `SEARCH_USERNAME` and `SEARCH_PASSWORD`, so CD stops at the apply again; finish it with
+     `railway config plan` and `railway config apply --confirm-destructive`, then re-run the failed
+     CD job.
+  3. Keep both migrations: the previous release ignores `search_version`, and its active-products
+     scan works without `idx_products_active_id`, only slower. `catalog.*` rows still in the outbox
+     dead-letter under it; drop them. Turn search back on only for an engine that still exists and
+     whose key you kept (step 0).
+- **Never restore the database backup to roll back code.** It would drop every order placed since the
+  backup. The backup exists for data loss, and a restore is followed by a rebuild.
+
+### Rotate a password
+
+**`jcool_api`.** Set a new value, which redeploys this service:
+
+```bash
+openssl rand -hex 24 | tr -d '\n' | railway variable set API_SEARCH_PASSWORD --stdin --service elasticsearch
+```
+
+Apply it in the service's shell, after the helper above, then redeploy the api so its reference picks
+it up (`railway redeploy --service jcool-ecommerce-backend --yes`). Until then the api's search answers
+empty and catalog events retry.
+
+```sh
+printf '{"password":"%s"}' "$API_SEARCH_PASSWORD" |
+  es -X POST localhost:9200/_security/user/jcool_api/_password --data-binary @-
+```
+
+**`elastic`.** Set a new value the same way (`ELASTIC_PASSWORD`). The image seeds it as the bootstrap
+password on every start, and `elastic` signs in with that for as long as no password has been stored
+for it through the API, so the redeploy is usually the whole rotation. Check in the service's shell:
+
+```sh
+elastic_status() { curl -s -o /dev/null -w '%{http_code}' -K <(printf 'user = "elastic:%s"\n' "$ELASTIC_PASSWORD") localhost:9200/_security/_authenticate; }
+until [ "$(elastic_status)" != 503 ]; do sleep 2; done; elastic_status; echo
+```
+
+`200` means done. `401` means a password was stored for `elastic` at some point; write the env value
+over it:
+
+```sh
+printf '%s\n%s\n' "$ELASTIC_PASSWORD" "$ELASTIC_PASSWORD" |
+  chroot --userspec=1000:0 --skip-chdir / elasticsearch-reset-password -u elastic -i -b --url http://localhost:9200
+```
+
+The api is unaffected either way.
 
 ---
 
@@ -756,7 +978,8 @@ The order confirmation reads the buyer's address from the user-service before it
 with a 500 ms timeout (`USER_SERVICE_TIMEOUT_MS`) behind the `user-service` breaker. A failure goes
 back on a ladder of its own: `ORDER_PAID_CONSUMER_ATTEMPTS` (15) deliveries, doubling from
 `QUEUE_CONSUMER_BACKOFF_MS` up to `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` (5 minutes). That rides out
-about 33 minutes of outage.
+about 33 minutes of outage. `catalog.*` events share this ladder, so tuning `ORDER_PAID_CONSUMER_*`
+moves both.
 
 A buyer the user-service does not know is retried until the event is `USER_DIRECTORY_NOT_FOUND_GRACE`
 (10m) old, since a freshly restored directory can miss the newest accounts. After that it is parked

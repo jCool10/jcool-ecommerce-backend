@@ -18,8 +18,8 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — six b
 
 | | |
 | --- | --- |
-| **Scale** | api: 6 bounded contexts · 437 TypeScript files · 17 tables · 24 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
-| **Tests** | The claims above are pinned on real Postgres, Redis, MinIO, Meilisearch and SMTP (Testcontainers), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
+| **Scale** | api: 6 bounded contexts · 437 TypeScript files · 17 tables · 26 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
+| **Tests** | The claims above are pinned on real Postgres, Redis, MinIO, Elasticsearch and SMTP (Testcontainers), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
@@ -81,7 +81,7 @@ flowchart TB
         PG[(PostgreSQL 16)]:::db
         RD[(Redis 7)]:::db
         S3[(S3 / MinIO)]:::db
-        MS[(Meilisearch)]:::db
+        ES[(Elasticsearch)]:::db
         SMTP[(SMTP)]:::db
         STRIPE([Stripe]):::ext
     end
@@ -98,9 +98,11 @@ flowchart TB
     P --> OB
     P --> STRIPE
     C --> RD
-    C --> MS
+    C --> OB
+    C -->|search| ES
     M --> S3
     W --> PG
+    W -->|versioned writes| ES
 
     classDef ctx fill:#1f2937,stroke:#4b5563,color:#e5e7eb
     classDef box fill:#111827,stroke:#374151,color:#e5e7eb
@@ -115,6 +117,7 @@ client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ user-service   /aut
                               gateway :8080 ─▶ api            every other route but /internal/*
                               gateway :4000 ─▶ id-service ×3 ─▶ id-postgres   private network only
                 user-service ─▶ gateway :4000
+                         api ─▶ elasticsearch :9200   private network only, as a user limited to products*
       api, user-service, id-service ─▶ loki ◀── grafana (public, login only) ──▶ prometheus ─▶ api /metrics
 ```
 
@@ -186,7 +189,7 @@ packages/
 │                            #   health, throttler, rbac, mail, resilience, retention; one subpath export each
 └── testing/                 # @jcool/testing — test doubles, source-only, dev dependency only
 test/load/  k6/              # k6 mixes
-infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana
+infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana, Elasticsearch
 .railway/railway.ts          # Railway deploy config (infrastructure as code)
 turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflows/
 ```
@@ -217,6 +220,7 @@ The parts worth reading the code for. Each row names the file to open.
 | **At-least-once → exactly-once** | The consumer claims `message_id = outbox.id` in an `inbox` table (`UNIQUE (consumer, message_id)`) and applies the handler's effect **in that same transaction** (anything slow, such as a call to another service, is prepared before it opens). A redelivery loses the claim and does nothing; a handler that throws takes its claim down with it, so the redelivery does the work | `shared/messaging/queue/domain-event.processor.ts` |
 | **Sweeping the inbox safely** | Inbox claims are swept on a schedule (`RETENTION_INBOX_DAYS`, default 30d), and the app **refuses to boot** if that retention is shorter than the queue's failed-job horizon — deleting a claim while its message can still be redelivered would apply the effect twice | `shared/messaging/inbox/sweep-inbox.ts` |
 | **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery; `order.paid`, which waits on the user-service, gets 15 with a capped backoff), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
+| **Search index consistency** | No transaction reaches the engine, so the index follows Postgres through the outbox. Every catalog write bumps `products.search_version` and appends its event in the same transaction; the worker re-reads the product and writes it with `version_type: external`, so the engine refuses a stale, repeated or reordered delivery. An archived product stays as a versioned tombstone, so a late write cannot bring it back. A rebuild fills a fresh index behind a second alias and swaps atomically ([ADR](./docs/adr-search-index-consistency.md)) | `modules/catalog/application/services/product-search-sync.service.ts`, `modules/catalog/infrastructure/search/elasticsearch-catalog-search.adapter.ts` |
 | **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts` |
 | **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `packages/platform/src/observability/tracing/propagation.ts` |
 
@@ -270,7 +274,7 @@ cp .env.example .env
 pnpm dev:link-env
 
 # 3. infrastructure (the ports below are the host-mapped ones)
-docker compose up -d postgres redis meilisearch mailpit minio minio-init
+docker compose up -d postgres redis elasticsearch mailpit minio minio-init
 
 # 4. schema + sample data
 pnpm db:migrate
@@ -282,9 +286,9 @@ pnpm start:dev
 
 - API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs>
 - Mail inbox (Mailpit) → <http://localhost:8025> · MinIO console → <http://localhost:9001>
-- Postgres → `localhost:5433` · Redis → `localhost:6380` · Meilisearch → `localhost:7700`
+- Postgres → `localhost:5433` · Redis → `localhost:6380` · Elasticsearch → `localhost:9200`
 
-`minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Meilisearch is only needed with `SEARCH_ENABLED=true`. Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
+`minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Elasticsearch is only needed with `SEARCH_ENABLED=true`, and on a Linux host it wants `sudo sysctl -w vm.max_map_count=262144` first (Docker Desktop already sets it). Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
 Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose --profile '*' down -v` (without a profile, `down` leaves the profile-gated services, the user-service's Postgres and its volume included). The user-service is opt-in, since it needs `apps/user-service/.env`: `docker compose --profile user-service up -d --build user-service` serves it on <http://127.0.0.1:3002>, with its Postgres on 127.0.0.1:5434. Redis runs with AOF on, which the api and the user-service both require.
 
@@ -335,7 +339,7 @@ none of those paths itself.
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
 | `GET` | `/products` | Public | List (paginated; optional `categorySlug`, `q`) |
-| `GET` | `/products/search` | Public | Relevance search over the Meilisearch index |
+| `GET` | `/products/search` | Public | Relevance search over the Elasticsearch index; eventual, about 1–2 s behind a write |
 | `GET` | `/products/:idOrSlug` | Public | Detail by id or slug (`404` if unknown or not `ACTIVE`) |
 | `POST` `PATCH` `DELETE` | `/admin/categories`, `/admin/products`, `/admin/skus` | `ADMIN` | Create, update, **archive** |
 | `PUT` | `/admin/skus/:skuId/price` | `ADMIN` | Set SKU price (idempotent upsert) |
@@ -398,15 +402,15 @@ A rejected `complete` leaves the asset `PENDING` on purpose — the sweep alread
 Two tiers, kept separate on purpose.
 
 ```bash
-pnpm test           # 671 unit tests, 177 files across every workspace; hermetic, no Docker
+pnpm test           # 706 unit tests, 181 files across every workspace; hermetic, no Docker
 pnpm test:cov       # same, with the coverage floors CI enforces
-pnpm test:e2e       # 91 integration suites (api 60, user-service 24, id-service 7); requires Docker
+pnpm test:e2e       # 94 integration suites (api 63, user-service 24, id-service 7); requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
 
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated ids are stable within a run.
-- **Integration** (`apps/*/test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Meilisearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
+- **Integration** (`apps/*/test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Elasticsearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
 
 Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
@@ -489,7 +493,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 ## Operations
 
-[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: never rotating the user-service's `IDENTITY_BUCKET_KEY`, backup/restore per database (including restoring a dump into one pinned to a different key fingerprint), rotating the JWKS and `INTERNAL_API_TOKEN`, rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
+[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: never rotating the user-service's `IDENTITY_BUCKET_KEY`, backup/restore per database (including restoring a dump into one pinned to a different key fingerprint), rotating the JWKS and `INTERNAL_API_TOKEN`, deploying Elasticsearch and rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
 
 **Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only: the builder runs `pnpm deploy --prod` for `@jcool/api`, and the runtime stage takes its `node_modules` plus the app's `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
 
@@ -514,6 +518,7 @@ Stated plainly, because a reviewer will find them anyway.
 - **The id `CHECK` is a floor, not a type.** Every snowflake id column carries `CHECK (… >= 4194304)`, so no writer, raw SQL included, can store a value below 2^22: the small integers with an all-zero timestamp field, such as a row counter or a count. Anything above it passes the database and the column's write check alike. An epoch-ms stamp or a large count decodes into some real-looking bucket, and a rounded id into its neighbour; a dense integer layout leaves no spare bits to tell them from an id.
 - **32 ids per node-millisecond, and 30 leasable nodes, are real ceilings.** They are what 63 bits leave after 41 for the timestamp and 12 for the bucket. A single replica saturates at 32,000 ids/s and a request may ask for at most 32, one node-millisecond, so it busy-waits into the next millisecond at most once, for up to about 1 ms with the event loop blocked; across nodes, the fleet tops out near a million a second. The node pool is the tighter one. A rolling deploy holds two nodes per replica plus quarantine, so more than ~12 id-service replicas needs bits taken from `seq` or `ts` first. A replica that exits without releasing (a crash, an OOM kill, `SIGKILL`) keeps its node for up to TTL + quarantine, about 310 s by default; with 3 replicas holding nodes, about 27 such exits inside that window exhaust the pool. Railway restarts a crashing replica at most 5 times, so one bad deploy locks at most 18. Taking bits from `seq` or `ts` is a layout change: a data migration that rewrites every stored id and the pinned version, shipped with a `LAYOUT_VERSION` bump. The pin refuses a database whose recorded version differs from the build's, and the codec spec pins the layout beside `LAYOUT_VERSION`, so a layout change fails CI until that expectation is rewritten, and the failure message asks for the bump.
 - **The IP-keyed throttle tiers are only as good as `req.ip`, and until the public domain moves onto the gateway they count connections.** Directly behind Railway's edge, no `TRUST_PROXY` value names the client, so the api believes no forwarding header and `req.ip` is the edge's address, which changes per connection. The `default` tier (100/60 s app-wide) and the IP half of the auth tiers then count per *connection* and never accumulate. Measured on the live deployment: a client opening a fresh connection per request sees `x-ratelimit-remaining: 99` every time, and ten consecutive failed logins against one email never tripped the 5-per-15-min account block; a client reusing one connection does get throttled. The guards are right — [the composition is unit-tested three ways](./packages/platform/src/throttler). The fix is the gateway: it takes the client from the edge's `X-Real-IP` and hands the api a single entry, and the system tests prove the throttle then keys on the client ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)). Production now refuses to boot with `TRUST_PROXY` unset, so the setting can no longer be forgotten silently.
+- **Search trails writes and is not read-your-writes.** A catalog write reaches the index through the outbox, so `/products/search` shows it after the relay's poll interval plus the engine's refresh interval, about 1–2 s. A catalog event still failing after its retry horizon (about 33 minutes) waits in the dead-letter queue until `queue:replay-dlq` or `search:reindex` converges it ([RUNBOOK](./RUNBOOK.md#rebuild-the-search-index)).
 - **No API version prefix.** Changes are additive-only; a breaking change would introduce `/v2` rather than reinterpret an existing path.
 - **Traces are local-only.** Metrics and logs are deployed (Prometheus, Loki, Grafana on Railway), but no trace collector is — a hosted one is an operational commitment this project does not need to make its point. In production a `traceId` only joins log lines.
 
@@ -532,7 +537,7 @@ Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lin
 | `alerts:check` · `alerts:test` | Prometheus rules parse · and fire (and clear) on the timelines they claim to |
 | `test` · `test:cov` · `test:e2e` | Unit · unit with the coverage floor · integration (needs Docker) |
 | `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | Drizzle migration workflow (`:prod` runs the compiled CLI — the image's release command) |
-| `search:reindex` | Rebuild the Meilisearch index from Postgres |
+| `search:reindex` | Rebuild the search index from Postgres into a fresh index, then swap the `products` alias onto it, so search never goes empty |
 | `queue:replay-dlq` | Inspect the dead-letter queue; `--apply` to replay (dry run is the default) |
 | `identity:verify` | Scan every user-service user row for an id that does not route to its email's bucket |
 | `storage:verify` | Reconcile bucket against `media_assets` three ways: orphan objects, `ATTACHED` rows whose object is gone, and `product_images` rows whose asset row is gone |
@@ -542,7 +547,7 @@ Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lin
 | `db:seed:perf-user` · `db:seed:perf` | Perf user in user-service · catalog and that user's cart in the api (resolves the user by logging in to user-service, so seed the user first) |
 | `seed:users:bulk` · `db:metrics:users` | Bulk identity seed · DB benchmark capture, both against the user-service database |
 
-`:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `storage:verify:prod`) run the compiled CLI from `dist/`, because `tsx` is a devDependency and is not installed in the image.
+`:prod` twins (`db:migrate:prod`, `queue:replay-dlq:prod`, `search:reindex:prod`, `storage:verify:prod`) run the compiled CLI from `dist/`, because `tsx` is a devDependency and is not installed in the image.
 
 ---
 

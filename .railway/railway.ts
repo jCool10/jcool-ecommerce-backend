@@ -10,6 +10,7 @@ const USER_SERVICE_PORT = '3000';
 const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
 const LOKI_PORT = '3100';
+const ELASTICSEARCH_PORT = '9200';
 
 // Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
 const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
@@ -30,10 +31,7 @@ const API_VARIABLES = [
   'POSTGRES_USER',
   'REDIS_HOST_PORT',
   'REDIS_URL',
-  'SEARCH_API_KEY',
   'SEARCH_ENABLED',
-  'SEARCH_HOST_PORT',
-  'SEARCH_URL',
   'SMTP_URL',
   'STORAGE_ACCESS_KEY_ID',
   'STORAGE_BUCKET',
@@ -100,6 +98,10 @@ export default defineRailway(() => {
       USER_SERVICE_INTERNAL_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
       AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
       LOKI_URL,
+      // A user limited to products* (RUNBOOK); its password lives on the elasticsearch service.
+      SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,
+      SEARCH_USERNAME: 'jcool_api',
+      SEARCH_PASSWORD: '${{elasticsearch.API_SEARCH_PASSWORD}}',
     },
   });
 
@@ -188,6 +190,22 @@ export default defineRailway(() => {
     },
   });
 
+  // Derived from the api's Postgres and rebuilt from it, so a lost volume costs a reindex, not data.
+  const elasticsearchData = volume('elasticsearch-data', { sizeMB: 5_000, region: 'iad' });
+
+  // No domain and no TCP proxy, ever. No healthcheck path either: with security on, Railway's
+  // unauthenticated probe would get 401.
+  const elasticsearch = service('elasticsearch', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/elasticsearch/Dockerfile' },
+    deploy: { numReplicas: 1, restartPolicyMaxRetries: 5 },
+    volumeMounts: { '/usr/share/elasticsearch/data': elasticsearchData },
+    env: {
+      // API_SEARCH_PASSWORD is jcool_api's: the engine ignores it, the api references it.
+      ...preserved(['ELASTIC_PASSWORD', 'API_SEARCH_PASSWORD']),
+      ES_JAVA_OPTS: '-Xms512m -Xmx512m',
+    },
+  });
+
   // The tsdb outlives a deploy; the retention window is set in railway-entrypoint.sh.
   const prometheusData = volume('prometheus-data', { sizeMB: 5_000, region: 'iad' });
 
@@ -262,6 +280,8 @@ export default defineRailway(() => {
       gateway,
       userPostgres,
       userService,
+      elasticsearchData,
+      elasticsearch,
       prometheusData,
       prometheus,
       lokiChunks,

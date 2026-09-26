@@ -38,9 +38,9 @@ infra
 bruno
 k6
 
-# Railway has no bind mounts: the prometheus, grafana and loki images bake their config instead, so
-# these files must be in the context. Last match wins, which is why the secrets directory is
-# re-excluded below — it must stay out of every image, including the api's `COPY . .`.
+# Railway has no bind mounts: the prometheus, grafana, loki and elasticsearch images bake their config
+# instead, so these files must be in the context. Last match wins, which is why the secrets directory
+# is re-excluded below — it must stay out of every image, including the api's `COPY . .`.
 !infra/prometheus/Dockerfile
 !infra/prometheus/prometheus.railway.yml
 !infra/prometheus/railway-entrypoint.sh
@@ -50,6 +50,9 @@ k6
 !infra/grafana/railway
 !infra/loki/Dockerfile
 !infra/loki/config.yaml
+!infra/elasticsearch/Dockerfile
+!infra/elasticsearch/elasticsearch.yml
+!infra/elasticsearch/railway-entrypoint.sh
 infra/prometheus/secrets
 
 # Not compiled into the image — tsconfig.build.json already excludes both.
