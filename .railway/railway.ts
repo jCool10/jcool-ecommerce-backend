@@ -18,7 +18,6 @@ const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
-  'DATABASE_URL',
   'LOG_LEVEL',
   'MAIL_FROM',
   // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.
@@ -30,7 +29,6 @@ const API_VARIABLES = [
   'POSTGRES_PASSWORD',
   'POSTGRES_USER',
   'REDIS_HOST_PORT',
-  'REDIS_URL',
   'SEARCH_ENABLED',
   'SMTP_URL',
   'STORAGE_ACCESS_KEY_ID',
@@ -62,14 +60,17 @@ const USER_SERVICE_VARIABLES = [
   'LOG_LEVEL',
   'MAIL_FROM',
   'PASSWORD_RESET_TTL',
-  // The api's instance: auth:* is read there.
-  'REDIS_URL',
   'REFRESH_TOKEN_TTL',
   'SMTP_URL',
   'THROTTLE_ENABLED',
 ];
 
 const preserved = (names: string[]) => Object.fromEntries(names.map((name) => [name, preserve()]));
+
+// The api's Postgres and Redis predate the IaC and stay outside it. Referencing them by name keeps
+// the URLs in step with the databases and draws the links on Railway's canvas.
+const API_DATABASE_URL = '${{Postgres.DATABASE_URL}}';
+const REDIS_URL = '${{Redis.REDIS_URL}}';
 
 export default defineRailway(() => {
   const api = service(API_SERVICE, {
@@ -90,6 +91,8 @@ export default defineRailway(() => {
       ...preserved(API_VARIABLES),
       // Pinned rather than left to Railway's default: the gateway dials it.
       PORT: API_PORT,
+      DATABASE_URL: API_DATABASE_URL,
+      REDIS_URL,
       // Every request depends on these: the api verifies what the user-service signed, and reads
       // an epoch or an address from it. Referenced, not preserved, so the two cannot drift.
       JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
@@ -183,6 +186,8 @@ export default defineRailway(() => {
       NODE_ENV: 'production',
       PORT: USER_SERVICE_PORT,
       DATABASE_URL: userPostgres.env.DATABASE_URL,
+      // The api's instance: auth:* is read there.
+      REDIS_URL,
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
       // Only ever reached over the private network.
       TRUST_PROXY: 'fd12::/16',
@@ -269,6 +274,9 @@ export default defineRailway(() => {
       GF_SERVER_HTTP_PORT: GRAFANA_PORT,
       GF_SERVER_ROOT_URL: 'https://${{RAILWAY_PUBLIC_DOMAIN}}',
       GF_USERS_ALLOW_SIGN_UP: 'false',
+      // Read by the provisioned datasources.
+      PROMETHEUS_URL: `http://\${{prometheus.RAILWAY_PRIVATE_DOMAIN}}:${PROMETHEUS_PORT}`,
+      LOKI_URL,
     },
   });
 

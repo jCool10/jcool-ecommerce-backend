@@ -1,6 +1,6 @@
 # Overrides the compose datasources (prometheus:9090, jaeger:16686) inside the Railway image.
-# Prometheus and Loki are reached over Railway's private network; no Jaeger runs there, and no
-# provisioned dashboard references it.
+# Prometheus and Loki are reached over Railway's private network, at the URLs .railway/railway.ts
+# references; no Jaeger runs there, and no provisioned dashboard references it.
 apiVersion: 1
 
 datasources:
@@ -8,7 +8,7 @@ datasources:
     type: prometheus
     uid: prometheus
     access: proxy
-    url: http://prometheus.railway.internal:9090
+    url: ${PROMETHEUS_URL}
     isDefault: true
     jsonData:
       timeInterval: 15s
@@ -17,7 +17,7 @@ datasources:
     type: loki
     uid: loki
     access: proxy
-    url: http://loki.railway.internal:3100
+    url: ${LOKI_URL}
     jsonData:
       maxLines: 1000
       # With no trace backend on Railway, a traceId links to every service's lines for that trace.
