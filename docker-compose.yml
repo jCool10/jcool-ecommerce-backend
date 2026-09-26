@@ -101,8 +101,9 @@ services:
   # Stands in for Cloudflare R2: same S3 API and same adapter, so a local upload exercises the code
   # that runs in production rather than a disk-backed lookalike.
   minio:
-    # MinIO withdrew its Docker Hub repos; quay.io is its remaining official registry.
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # MinIO no longer serves images anonymously from Docker Hub or quay.io. pgsty maintains the
+    # community build; the digest pins it because a third party can retag.
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     container_name: jcool-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -125,7 +126,7 @@ services:
   # One-shot: MinIO starts with no buckets, and the app never creates one — a process that can make
   # a bucket can make the wrong bucket and never notice. Exits as soon as the bucket is there.
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
     container_name: jcool-minio-init
     depends_on:
       minio:

@@ -8,8 +8,9 @@ import {
 } from '@aws-sdk/client-s3';
 import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio';
 
-// Same image the local stack runs, so a suite proves the storage that ships rather than a nearby one.
-const STORAGE_IMAGE = 'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z';
+// Same image the local stack runs (docker-compose.yml explains the source and the digest pin).
+const STORAGE_IMAGE =
+  'pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372';
 const BUCKET = 'jcool-media-test';
 const ACCESS_KEY = 'jcool_test';
 const SECRET_KEY = 'jcool_test_pw';
