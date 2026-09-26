@@ -1,5 +1,5 @@
-import { Type } from 'class-transformer';
 import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import { StrictInt } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
 export function DatabaseEnv<TBase extends EnvBase>(Base: TBase) {
@@ -17,25 +17,25 @@ export function DatabaseEnv<TBase extends EnvBase>(Base: TBase) {
 
     // The timeouts allow 0, which opts back into pg's native behaviour (wait forever / never reap idle).
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(1)
     DB_POOL_MAX?: number;
 
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(0)
     DB_POOL_CONNECTION_TIMEOUT_MS?: number;
 
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(0)
     DB_POOL_IDLE_TIMEOUT_MS?: number;
 
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(0)
     DB_QUERY_TIMEOUT_MS?: number;

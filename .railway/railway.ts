@@ -93,6 +93,8 @@ export default defineRailway(() => {
       PORT: API_PORT,
       DATABASE_URL: API_DATABASE_URL,
       REDIS_URL,
+      // Railway keeps routing to the old deployment for a moment after SIGTERM; fits drainingSeconds.
+      SHUTDOWN_GRACE_PERIOD_MS: '5000',
       // Every request depends on these: the api verifies what the user-service signed, and reads
       // an epoch or an address from it. Referenced, not preserved, so the two cannot drift.
       JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
@@ -191,6 +193,7 @@ export default defineRailway(() => {
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
       // Only ever reached over the private network.
       TRUST_PROXY: 'fd12::/16',
+      SHUTDOWN_GRACE_PERIOD_MS: '5000',
       LOKI_URL,
     },
   });

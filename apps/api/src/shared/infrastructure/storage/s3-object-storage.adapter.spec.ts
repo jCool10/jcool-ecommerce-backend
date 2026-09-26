@@ -27,4 +27,13 @@ describe('S3ObjectStorageAdapter', () => {
     expect(url.searchParams.get('response-content-disposition')).toBe('inline; filename="abc.webp"');
     expect(url.searchParams.get('X-Amz-Signature')).toBeTruthy();
   });
+
+  it('signs no body checksum into a presigned PUT, which the browser uploads unchecksummed', async () => {
+    const { url } = await build().presignPut('products/abc.webp', 'image/webp');
+    const params = [...new URL(url).searchParams.keys()].map((key) => key.toLowerCase());
+
+    expect(params.filter((key) => key.startsWith('x-amz-checksum') || key === 'x-amz-sdk-checksum-algorithm')).toEqual(
+      [],
+    );
+  });
 });

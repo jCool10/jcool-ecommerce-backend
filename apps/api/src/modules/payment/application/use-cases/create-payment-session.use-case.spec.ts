@@ -6,7 +6,7 @@ import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { OrderReadPort, OrderView } from '../ports/order-read.port';
 import { DuplicateActivePaymentError } from '../ports/payment-repository.port';
-import { PaymentGatewayError } from '../ports/payment-gateway.port';
+import { PaymentGatewayError, type RetrievedSession } from '../ports/payment-gateway.port';
 import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';
 import { CreatePaymentSessionUseCase } from './create-payment-session.use-case';
 
@@ -41,6 +41,11 @@ function build(
     createError?: Error;
     sessionError?: Error;
     expireError?: Error;
+    /** What `retrieveSession` answers for `existing`'s handle — only reachable when it is PENDING. */
+    retrieveResult?: RetrievedSession;
+    retrieveError?: Error;
+    /** `null` simulates a webhook/sweep winning the compare-and-set race to retire a dead session. */
+    retireWrite?: Payment | null;
   } = {},
 ) {
   const order = opts.order === undefined ? orderView() : opts.order;
@@ -68,20 +73,27 @@ function build(
         providerSessionId: 'cs_test_new',
         redirectUrl: 'https://checkout.stripe.test/pay/cs_test_new',
       });
-  const updateStatus = vi.fn().mockImplementation((_id: string, status: PaymentStatus) => Promise.resolve(status));
+  const updateStatus = vi
+    .fn()
+    .mockImplementation((_id: string, status: PaymentStatus) =>
+      Promise.resolve(opts.retireWrite === undefined ? status : opts.retireWrite),
+    );
   const expireSession = opts.expireError
     ? vi.fn().mockRejectedValue(opts.expireError)
     : vi.fn().mockResolvedValue('expired');
+  const retrieveSession = opts.retrieveError
+    ? vi.fn().mockRejectedValue(opts.retrieveError)
+    : vi.fn().mockResolvedValue(opts.retrieveResult ?? { status: 'UNKNOWN' });
   const metrics = fakeMetricsPort();
 
   const useCase = new CreatePaymentSessionUseCase(
     { findForPayment } as unknown as OrderReadPort,
     fakePaymentRepository({ findByOrderId: vi.fn().mockResolvedValue(opts.existing ?? null), create, updateStatus }),
-    fakePaymentGateway({ createSession, expireSession }),
+    fakePaymentGateway({ createSession, expireSession, retrieveSession }),
     metrics,
     fakePinoLogger(),
   );
-  return { useCase, create, createSession, expireSession, updateStatus, metrics };
+  return { useCase, create, createSession, expireSession, retrieveSession, updateStatus, metrics };
 }
 
 describe('CreatePaymentSessionUseCase', () => {
@@ -90,7 +102,8 @@ describe('CreatePaymentSessionUseCase', () => {
       'unknown order': { order: null },
       "someone else's order": { order: orderView({ userId: OTHER }) },
       'order not pending': { order: orderView({ status: 'DRAFT' }) },
-      'pending payment open': { existing: persistedPayment(PaymentStatus.PENDING) },
+      // Already owns the order's charge; unlike a PENDING payment, there is nothing to ask the
+      // gateway to reuse.
       'payment already succeeded': { existing: persistedPayment(PaymentStatus.SUCCEEDED) },
     };
 
@@ -109,9 +122,89 @@ describe('CreatePaymentSessionUseCase', () => {
       ['unknown order', 404, 0, 0],
       ["someone else's order", 404, 0, 0],
       ['order not pending', 409, 0, 0],
-      ['pending payment open', 409, 0, 0],
       ['payment already succeeded', 409, 0, 0],
     ]);
+  });
+
+  describe('an existing PENDING payment', () => {
+    it('reuses the still-open session, counting a successful saga step', async () => {
+      const { useCase, createSession, updateStatus, metrics } = build({
+        existing: persistedPayment(PaymentStatus.PENDING),
+        retrieveResult: { status: 'PENDING', redirectUrl: 'https://checkout.stripe.test/pay/cs_test_prior' },
+      });
+
+      const result = await useCase.execute(ORDER_ID, OWNER);
+
+      expect(result).toEqual({
+        paymentId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        providerSessionId: 'cs_test_prior',
+        redirectUrl: 'https://checkout.stripe.test/pay/cs_test_prior',
+        clientSecret: undefined,
+      });
+      expect(createSession).not.toHaveBeenCalled();
+      expect(updateStatus).not.toHaveBeenCalled();
+      expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith('payment_session', 'success');
+    });
+
+    it('retires a session the gateway confirms has failed, then opens a fresh one', async () => {
+      const { useCase, create, createSession, updateStatus, retrieveSession } = build({
+        existing: persistedPayment(PaymentStatus.PENDING),
+        retrieveResult: { status: 'FAILED' },
+      });
+
+      const result = await useCase.execute(ORDER_ID, OWNER);
+
+      expect(retrieveSession).toHaveBeenCalledExactlyOnceWith('cs_test_prior');
+      expect(updateStatus).toHaveBeenCalledExactlyOnceWith(
+        'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        PaymentStatus.FAILED,
+        {
+          expectedStatus: PaymentStatus.PENDING,
+        },
+      );
+      expect(createSession).toHaveBeenCalledOnce();
+      expect(create.mock.calls[0][0]).toMatchObject({ providerSessionId: 'cs_test_new' });
+      expect(result.providerSessionId).toBe('cs_test_new');
+    });
+
+    // PAID: money may already be moving on the row we still call PENDING. UNKNOWN: no proof the old
+    // session is dead. Neither is safe to replace.
+    it.each([['PAID'], ['UNKNOWN']] as const)(
+      'refuses rather than replace a session the gateway reports as %s',
+      async (status) => {
+        const { useCase, createSession, updateStatus } = build({
+          existing: persistedPayment(PaymentStatus.PENDING),
+          retrieveResult: { status },
+        });
+
+        await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toThrow('already has an active payment (PENDING)');
+        expect(createSession).not.toHaveBeenCalled();
+        expect(updateStatus).not.toHaveBeenCalled();
+      },
+    );
+
+    it('answers a gateway failure retrieving the session with 502, counting a failed step', async () => {
+      const { useCase, createSession, metrics } = build({
+        existing: persistedPayment(PaymentStatus.PENDING),
+        retrieveError: new PaymentGatewayError('stripe down'),
+      });
+
+      await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toBeInstanceOf(BadGatewayException);
+      expect(createSession).not.toHaveBeenCalled();
+      expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith('payment_session', 'failed');
+    });
+
+    // A webhook or the sweep settled the row in the gap between the probe and the retiring write.
+    it('refuses rather than race a settlement that lands while retiring a dead session', async () => {
+      const { useCase, createSession } = build({
+        existing: persistedPayment(PaymentStatus.PENDING),
+        retrieveResult: { status: 'FAILED' },
+        retireWrite: null,
+      });
+
+      await expect(useCase.execute(ORDER_ID, OWNER)).rejects.toThrow('already has an active payment (PENDING)');
+      expect(createSession).not.toHaveBeenCalled();
+    });
   });
 
   it('opens a fresh session after a failed payment, snapshotting the order amount', async () => {

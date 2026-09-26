@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { holdAllNodesExcept, type LeaseDatabase, openLeaseDatabase } from '../setup/databases';
 
-const CLAIM = { holder: 'claimant', ttlMs: 60_000, quarantineMs: 0 };
-
 describe('lease acquire order', () => {
   let leases: LeaseDatabase;
 
@@ -12,7 +10,9 @@ describe('lease acquire order', () => {
 
   afterEach(() => leases.close());
 
-  // The longest-idle node is the one whose previous holder is least likely to still be minting.
+  // The longest-idle node is the one whose previous holder is least likely to still be minting. Each
+  // probe uses its own holder: an acquire re-adopts any unexpired lease already held under the same
+  // holder id, so reusing one across probes would just hand the first one back every time.
   it('claims the node that expired longest ago, the lowest id on a tie', async () => {
     await holdAllNodesExcept(leases.pool, 5, 7, 9);
     await leases.pool.query(`
@@ -22,7 +22,11 @@ describe('lease acquire order', () => {
     `);
 
     const order = [];
-    for (let i = 0; i < 4; i += 1) order.push((await leases.store.acquire(CLAIM))?.nodeId ?? null);
+    for (let i = 0; i < 4; i += 1) {
+      order.push(
+        (await leases.store.acquire({ holder: `claimant-${i}`, ttlMs: 60_000, quarantineMs: 0 }))?.nodeId ?? null,
+      );
+    }
 
     expect(order).toEqual([5, 7, 9, null]);
   });

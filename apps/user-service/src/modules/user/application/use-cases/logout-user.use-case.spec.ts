@@ -32,4 +32,23 @@ describe('LogoutUserUseCase', () => {
     expect(denylist.entries).toEqual([{ jti: 'j1', expiresAt: new Date(exp * 1000) }]);
     expect(refreshTokens.revoked).toEqual([{ userId: 'u1', tokenHash: hashRefreshToken('raw-refresh-token') }]);
   });
+
+  // A non-string cookie value (cookie-parser's `j:` JSON decoding) makes hashing throw; that must
+  // surface before the denylist write starts, or its promise is left unhandled.
+  it('never starts the denylist write when the refresh token cannot be hashed', async () => {
+    const refreshTokens = new FakeRefreshTokenRepository();
+    const denylist = new RecordingDenylist();
+
+    await expect(
+      new LogoutUserUseCase(refreshTokens, denylist).execute({
+        userId: 'u1',
+        accessJti: 'j1',
+        accessExp: 1_700_000_000,
+        rawRefreshToken: {} as unknown as string,
+      }),
+    ).rejects.toThrow();
+
+    expect(denylist.entries).toEqual([]);
+    expect(refreshTokens.revoked).toEqual([]);
+  });
 });

@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
@@ -107,14 +107,22 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'live')).not.toBeNull();
   });
 
-  it('deleteExpiredInProgress removes only an expired IN_PROGRESS row', async () => {
-    await repo.tryInsertInProgress(insertInput({ key: 'live', expiresAt: inDays(1) }));
-    await repo.tryInsertInProgress(insertInput({ key: 'stale', expiresAt: inDays(-1) }));
-    await repo.tryInsertInProgress(insertInput({ key: 'done', expiresAt: inDays(-1) }));
+  it('deleteExpiredInProgress removes only an IN_PROGRESS row created before the cutoff', async () => {
+    await repo.tryInsertInProgress(insertInput({ key: 'live' }));
+    await repo.tryInsertInProgress(insertInput({ key: 'stale' }));
+    await repo.tryInsertInProgress(insertInput({ key: 'done' }));
     await repo.markCompleted({ scope: scopeOf(USER_A), key: 'done', responseStatus: 201, responseBody: { ok: true } });
 
+    // The port has no createdAt override (it is always "now" at insert), so backdating the rows that
+    // should look abandoned goes straight at the table — the way a real crash's aftermath does.
+    await db
+      .update(schema.idempotencyKeys)
+      .set({ createdAt: new Date(Date.now() - 60_000) })
+      .where(inArray(schema.idempotencyKeys.key, ['stale', 'done']));
+
+    const cutoff = new Date(Date.now() - 30_000);
     const removed = await Promise.all(
-      ['live', 'stale', 'done'].map((key) => repo.deleteExpiredInProgress(scopeOf(USER_A), key, new Date())),
+      ['live', 'stale', 'done'].map((key) => repo.deleteExpiredInProgress(scopeOf(USER_A), key, cutoff)),
     );
 
     expect(removed).toEqual([0, 1, 0]);

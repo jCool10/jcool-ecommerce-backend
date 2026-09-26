@@ -1,4 +1,5 @@
-import { IsBooleanString, IsEnum, IsNotEmpty, IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, IsString, IsUrl, MinLength } from 'class-validator';
+import { IsStrictBoolean } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
 export enum LogLevel {
@@ -22,7 +23,7 @@ export function ObservabilityEnv<TBase extends EnvBase>(Base: TBase) {
 
     // The OTel SDK (instrumentation.ts) starts only when this is "true".
     @IsOptional()
-    @IsBooleanString()
+    @IsStrictBoolean()
     OTEL_ENABLED?: string;
 
     // service.name on every span; read in instrumentation.ts, declared here so a bad value fails boot.

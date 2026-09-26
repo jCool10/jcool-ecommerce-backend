@@ -12,9 +12,10 @@ import { StockReservationError } from '@modules/inventory/application/public/sto
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { getIdempotencyContext } from '@shared/idempotency';
+import { MAX_PENDING_ORDERS_PER_USER } from '../../order.constants';
 import { Order } from '../../domain/order.entity';
 import { OrderItem } from '../../domain/order-item.entity';
-import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
+import { ORDER_REPOSITORY, TooManyPendingOrdersError, type OrderRepositoryPort } from '../ports/order-repository.port';
 import { CART_SNAPSHOT_READER, type CartSnapshotReaderPort } from '../ports/cart-snapshot.port';
 import { CATALOG_QUERY, type CatalogQueryPort, type OrderSkuView } from '../ports/catalog-query.port';
 import { INVENTORY_RESERVATION, type InventoryReservationPort } from '../ports/inventory-reservation.port';
@@ -26,8 +27,9 @@ const LOG_CONTEXT = 'CheckoutOrder';
 
 /**
  * Order + reservation + outbox event + idempotency COMPLETED commit in ONE transaction: a stock
- * shortfall rolls all of it back (no order, no event, no key), so the client can safely retry. Each
- * line's price is frozen at snapshot time, so a later Catalog price change never moves the total.
+ * shortfall, or the user's own pending-order cap, rolls all of it back (no order, no event, no key),
+ * so the client can safely retry. Each line's price is frozen at snapshot time, so a later Catalog
+ * price change never moves the total.
  */
 @Injectable()
 export class CheckoutOrderUseCase {
@@ -80,10 +82,17 @@ export class CheckoutOrderUseCase {
       // The step is the whole unit, not just the stock call: the hold, the order, the event and the
       // key COMPLETED commit together, so any fault in there ends with no hold taken.
       this.metrics.recordSagaStep('reserve', 'failed');
-      // Out of stock, or the optimistic retry budget was exhausted under contention — the one fault
-      // here that is an answer to the caller rather than a fault of ours. Surface as 409.
+      // Answers to the caller rather than faults of ours, so 409. The stock error's own message
+      // carries the available count, so it goes to the log only.
+      if (error instanceof TooManyPendingOrdersError) {
+        this.logger.warn({ userId, pendingCount: error.pendingCount }, 'checkout refused: too many pending orders');
+        throw new ConflictException(
+          `Too many pending orders (max ${MAX_PENDING_ORDERS_PER_USER}); pay, cancel, or wait for one to expire before checking out again`,
+        );
+      }
       if (error instanceof StockReservationError) {
-        throw new ConflictException(error.message);
+        this.logger.warn({ err: error }, 'checkout refused: insufficient stock');
+        throw new ConflictException('Insufficient stock');
       }
       throw error;
     }

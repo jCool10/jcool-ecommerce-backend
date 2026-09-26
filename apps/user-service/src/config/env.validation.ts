@@ -1,16 +1,17 @@
-import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Min, MinLength } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Min, MinLength } from 'class-validator';
 import { MIN_BUCKET_KEY_LENGTH } from '@jcool/id-codec';
 import {
   AppEnv,
   DatabaseEnv,
   EmptyEnv,
+  IsStrictBoolean,
   MailEnv,
   NodeEnv,
   ObservabilityEnv,
   RedisEnv,
   ResilienceEnv,
   RetentionEnv,
+  StrictInt,
   ThrottleEnv,
   validateEnv,
 } from '@jcool/platform/config';
@@ -18,9 +19,6 @@ import {
 const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
 );
-
-// configuration.ts compares against these literals, so '0' and '1' are refused rather than misread.
-const BOOLEAN_STRINGS = ['true', 'false'];
 
 /** Bounds only; defaults live in configuration.ts. */
 export class EnvironmentVariables extends PlatformEnv {
@@ -30,7 +28,7 @@ export class EnvironmentVariables extends PlatformEnv {
   IDENTITY_BUCKET_KEY!: string;
 
   @IsOptional()
-  @IsIn(BOOLEAN_STRINGS)
+  @IsStrictBoolean()
   IDENTITY_PIN_BOOTSTRAP?: string;
 
   // `kid:pem` entries, comma-separated; parsed and checked when the signer is built.
@@ -75,23 +73,23 @@ export class EnvironmentVariables extends PlatformEnv {
   PASSWORD_RESET_TTL?: string;
 
   @IsOptional()
-  @IsIn(BOOLEAN_STRINGS)
+  @IsStrictBoolean()
   AUTH_REQUIRE_VERIFIED_EMAIL?: string;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   ARGON2_MEMORY_COST?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   ARGON2_TIME_COST?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   ARGON2_PARALLELISM?: number;
@@ -101,7 +99,7 @@ export class EnvironmentVariables extends PlatformEnv {
   ID_SERVICE_URL!: string;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(100)
   ID_SERVICE_TIMEOUT_MS?: number;
@@ -117,24 +115,24 @@ export class EnvironmentVariables extends PlatformEnv {
   INTERNAL_API_TOKEN_PREVIOUS?: string;
 
   @IsOptional()
-  @IsIn(BOOLEAN_STRINGS)
+  @IsStrictBoolean()
   SESSION_EPOCH_RECONCILE_ENABLED?: string;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1_000)
   SESSION_EPOCH_RECONCILE_INTERVAL_MS?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   RETENTION_AUTH_TOKEN_GRACE_DAYS?: number;
 
   // A revoked token that comes back is the reuse signal; see the api's floor.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(30)
   RETENTION_REFRESH_TOKEN_GRACE_DAYS?: number;

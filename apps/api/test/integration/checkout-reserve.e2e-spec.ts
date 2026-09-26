@@ -53,4 +53,18 @@ describe('Checkout holds stock (integration, real Postgres)', () => {
     expect(await stockOf(b.variantId)).toEqual({ onHand: 1, reserved: 0 });
     expect(await db.select().from(schema.reservations)).toHaveLength(0);
   });
+
+  it('answers a stock shortfall with a message that hides the available count', async () => {
+    const token = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 1);
+    await addToCart(app, token, variantId, 2);
+
+    const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
+
+    expect(res.status).toBe(409);
+    // Exact match, not a substring check: the real available count (1) must not sneak into the body
+    // via a `1 unit remaining`-style phrasing either.
+    expect(res.body.message).toBe('Insufficient stock');
+  });
 });

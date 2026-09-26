@@ -84,18 +84,18 @@ describe('Order (integration, real Postgres + Redis)', () => {
 
     it('stores an order total past int32', async () => {
       const token = await newPrincipalToken(app);
-      // Each line fits int32; their sum does not.
-      const a = await createTestProduct(app, { priceMinor: 199_000 });
-      const b = await createTestProduct(app, { priceMinor: 199_000 });
-      await seedStock(app, a.variantId, 10_000);
-      await seedStock(app, b.variantId, 10_000);
-      await addToCart(app, token, a.variantId, 10_000);
-      await addToCart(app, token, b.variantId, 10_000);
+      // Each line fits int32 on its own (10 units at this price); their sum does not.
+      const a = await createTestProduct(app, { priceMinor: 150_000_000 });
+      const b = await createTestProduct(app, { priceMinor: 150_000_000 });
+      await seedStock(app, a.variantId, 10);
+      await seedStock(app, b.variantId, 10);
+      await addToCart(app, token, a.variantId, 10);
+      await addToCart(app, token, b.variantId, 10);
 
       const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
       expect(res.status).toBe(201);
-      expect(res.body.totalAmountMinor).toBe(3_980_000_000);
+      expect(res.body.totalAmountMinor).toBe(3_000_000_000);
     });
 
     it('leaves the cart intact after checkout', async () => {

@@ -15,6 +15,11 @@ export const nodeLeases = pgTable(
       .notNull()
       .default(sql`'epoch'`),
     maxTsMs: bigint('max_ts_ms', { mode: 'number' }),
+    // The lease_until this row carried the instant before its current claim overwrote it. An acquire
+    // that commits here but whose caller never learns it (a client-side query_timeout) retries and
+    // re-adopts this same row by holder; the retry needs this value to floor its generator the same
+    // way the original claim would have, since `lease_until` itself has since moved to the new claim.
+    priorLeaseUntil: timestamp('prior_lease_until', { withTimezone: true }),
     acquiredAt: timestamp('acquired_at', { withTimezone: true }),
     renewedAt: timestamp('renewed_at', { withTimezone: true }),
   },

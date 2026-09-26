@@ -77,6 +77,9 @@ describe('HandlePaymentWebhookUseCase', () => {
         reason: 'conflict',
         conflict: { orderId: ORDER_ID, from: PaymentStatus.FAILED, to: PaymentStatus.SUCCEEDED },
       },
+      // A repeat notice of the outcome the payment already settled to — reconcile or an earlier
+      // delivery got there first. Idempotent, not a conflict: no refund booked, no error logged.
+      'repeat notice of the already-settled outcome': { ...skipped, reason: 'already_settled' },
     };
 
     const outcomes = await Promise.all(
@@ -94,7 +97,24 @@ describe('HandlePaymentWebhookUseCase', () => {
       ['payment not found', true, 0, []],
       ['failure after success', true, 0, []],
       ['success after failure', true, 0, [['webhook_direct']]],
+      ['repeat notice of the already-settled outcome', true, 0, []],
     ]);
+  });
+
+  // Booking no refund is not enough on its own: this used to fall through the SUCCEEDED conflict
+  // branch, which also logs at error level regardless of refund.
+  it('logs nothing at error level for a repeat notice of the already-settled outcome', async () => {
+    const process: WebhookProcessResult = {
+      outcome: 'skipped',
+      reason: 'already_settled',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
+    };
+    const { useCase, error } = build(process);
+
+    await useCase.execute(RAW, HEADERS);
+
+    expect(error).not.toHaveBeenCalled();
   });
 
   // The payment tx already committed, so a 5xx would buy only a retry storm; the settlement event

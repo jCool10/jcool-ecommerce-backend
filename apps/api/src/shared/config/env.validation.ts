@@ -1,27 +1,17 @@
-import { Type } from 'class-transformer';
-import {
-  IsBooleanString,
-  IsEnum,
-  IsInt,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  IsUrl,
-  Max,
-  Min,
-  MinLength,
-} from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
 import {
   AppEnv,
   DatabaseEnv,
   EmptyEnv,
+  IsStrictBoolean,
   MailEnv,
   NodeEnv,
   ObservabilityEnv,
   RedisEnv,
   ResilienceEnv,
   RetentionEnv,
+  StrictInt,
   ThrottleEnv,
   validateEnv,
 } from '@jcool/platform/config';
@@ -54,13 +44,13 @@ export class EnvironmentVariables extends PlatformEnv {
   QUEUE_PREFIX?: string;
 
   @IsOptional()
-  @IsBooleanString()
+  @IsStrictBoolean()
   QUEUE_WORKER_ENABLED?: string;
 
   // The cap is a sanity bound, NOT a guarantee against the pool: each in-flight job holds a
   // connection for its transaction, so this and DB_POOL_MAX have to be sized against each other.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   @Max(50)
@@ -69,7 +59,7 @@ export class EnvironmentVariables extends PlatformEnv {
   // Capped at 10 rather than left open because the backoff doubles: ten tries already stretch the
   // last wait past eight minutes, and a message nobody can apply belongs in the DLQ long before that.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   @Max(10)
@@ -78,20 +68,20 @@ export class EnvironmentVariables extends PlatformEnv {
   // Min 100 so a typo cannot turn the retry budget into a tight loop against whatever dependency is
   // already failing.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(100)
   @Max(60_000)
   QUEUE_CONSUMER_BACKOFF_MS?: number;
 
   @IsOptional()
-  @IsBooleanString()
+  @IsStrictBoolean()
   OUTBOX_RELAY_ENABLED?: string;
 
   // Min 100 so a typo cannot turn the relay into a busy loop opening transactions against the
   // outbox table.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(100)
   OUTBOX_POLL_MS?: number;
@@ -99,26 +89,26 @@ export class EnvironmentVariables extends PlatformEnv {
   // Capped because the publish happens inside the polling transaction, so the batch size is also
   // how long row locks are held.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   @Max(1000)
   OUTBOX_BATCH_SIZE?: number;
 
   @IsOptional()
-  @IsBooleanString()
+  @IsStrictBoolean()
   RECONCILE_ENABLED?: string;
 
   // Min 1000 so a typo can't turn the sweep into a busy loop hammering the payment gateway.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1000)
   RECONCILE_INTERVAL_MS?: number;
 
   // Capped so one tick can't fan out an unbounded number of gateway round-trips.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   @Max(500)
@@ -126,31 +116,31 @@ export class EnvironmentVariables extends PlatformEnv {
 
   // 0 is legal — e2e drives the sweep deterministically.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   ORDER_STALE_THRESHOLD_SEC?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   ORDER_TTL_SEC?: number;
 
   @IsOptional()
-  @IsBooleanString()
+  @IsStrictBoolean()
   RESERVATION_SWEEP_ENABLED?: string;
 
   // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1000)
   RESERVATION_SWEEP_INTERVAL_MS?: number;
 
   // Capped because each distinct order in the batch costs a finalize transaction.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   @Max(500)
@@ -158,20 +148,20 @@ export class EnvironmentVariables extends PlatformEnv {
 
   // 0 is legal — e2e drives the sweep deterministically.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   RESERVATION_SWEEP_GRACE_SEC?: number;
 
   // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   RETENTION_IDEMPOTENCY_GRACE_SEC?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   RETENTION_OUTBOX_DAYS?: number;
@@ -180,14 +170,14 @@ export class EnvironmentVariables extends PlatformEnv {
   // stopping the effect being applied twice. The floor is DERIVED from the queue's failed-job
   // horizon so the pair cannot drift.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(MIN_INBOX_RETENTION_DAYS)
   RETENTION_INBOX_DAYS?: number;
 
   // The floor tracks the GATEWAY's redelivery window (Stripe retries for ~72h), not the queue's.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(14)
   RETENTION_WEBHOOK_EVENT_DAYS?: number;
@@ -195,7 +185,7 @@ export class EnvironmentVariables extends PlatformEnv {
   // Min 1 — a 0 would make every entry stale the instant it is written, turning every read into a
   // stale serve plus a background rebuild.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   CATALOG_CACHE_TTL_SEC?: number;
@@ -203,19 +193,19 @@ export class EnvironmentVariables extends PlatformEnv {
   // The stale window and the jitter below accept 0, which switches off stale-serving (resp. jitter);
   // switching off SWR takes both, since jitter also outlives freshness.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   CACHE_SOFT_TTL_SEC?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   CACHE_STALE_WINDOW_SEC?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   CACHE_TTL_JITTER_SEC?: number;
@@ -223,20 +213,20 @@ export class EnvironmentVariables extends PlatformEnv {
   // Min 100 because a lease shorter than a rebuild admits a second holder on every refill, which is
   // the stampede this lock exists to stop.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(100)
   CACHE_LOCK_LEASE_MS?: number;
 
   // 0 is legal — it opts out of waiting and reads through to Postgres immediately.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   CACHE_LOCK_WAIT_MS?: number;
 
   @IsOptional()
-  @IsBooleanString()
+  @IsStrictBoolean()
   SEARCH_ENABLED?: string;
 
   // @IsNotEmpty so a blank value fails at boot instead of silently falling back to the local default.
@@ -257,7 +247,7 @@ export class EnvironmentVariables extends PlatformEnv {
   SEARCH_PASSWORD?: string;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(100)
   SEARCH_REQUEST_TIMEOUT_MS?: number;
@@ -299,7 +289,7 @@ export class EnvironmentVariables extends PlatformEnv {
   // a cross-field rule no per-field range can express, so it is checked at boot instead
   // (initiate-upload.use-case.ts).
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(60)
   @Max(3600)
@@ -307,20 +297,20 @@ export class EnvironmentVariables extends PlatformEnv {
 
   // Min 300 keeps a slow upload from being swept out from under itself.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(300)
   MEDIA_UPLOAD_TTL_SEC?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(300)
   MEDIA_READY_TTL_SEC?: number;
 
   // Min 1024 rejects a value that would refuse every real image.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1024)
   MEDIA_MAX_BYTES?: number;
@@ -337,7 +327,7 @@ export class EnvironmentVariables extends PlatformEnv {
 
   // Capped so a misconfig can't spin the CAS loop while it pins the stock row's write-lock.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   @Max(10)
@@ -355,7 +345,7 @@ export class EnvironmentVariables extends PlatformEnv {
   PAYMENT_WEBHOOK_SECRET?: string;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(0)
   PAYMENT_WEBHOOK_TOLERANCE_SEC?: number;
@@ -395,7 +385,7 @@ export class EnvironmentVariables extends PlatformEnv {
   INTERNAL_API_TOKEN!: string;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(100)
   USER_SERVICE_TIMEOUT_MS?: number;
@@ -410,14 +400,14 @@ export class EnvironmentVariables extends PlatformEnv {
   // order.paid (user-service) and catalog events (search engine) wait on another service, so they outlast
   // the default ladder.
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(1)
   @Max(30)
   ORDER_PAID_CONSUMER_ATTEMPTS?: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @StrictInt()
   @IsInt()
   @Min(100)
   ORDER_PAID_CONSUMER_BACKOFF_CAP_MS?: number;

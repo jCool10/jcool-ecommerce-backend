@@ -2,7 +2,8 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
@@ -16,9 +17,17 @@ import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { addToCart, readOrder, readPayment, readReservation, readStock } from '../setup/fixtures/order-flow.fixture';
+import {
+  addToCart,
+  postWebhook,
+  readOrder,
+  readPayment,
+  readReservation,
+  readStock,
+} from '../setup/fixtures/order-flow.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
+import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
 
 const WEBHOOK_SECRET = 'whsec_e2e_reconcile_secret_0123456789';
 const STOCK = 5;
@@ -144,6 +153,38 @@ describe('Reconcile stale orders (integration, real Postgres)', () => {
     expect(payment.providerIntentId).toBe('pi_lost_finalize'); // untouched: it was already terminal
     expect((await readReservation(app, orderId, variantId)).status).toBe('COMMITTED');
     expect((await readStock(app, variantId)).quantityOnHand).toBe(STOCK - 1);
+  });
+
+  // The gateway can still deliver `checkout.session.completed` after reconcile has already probed the
+  // same PAID status and settled the order — a duplicate outcome under a fresh event id, not a
+  // conflict, so it must not book a refund for money that in fact paid for this order.
+  it('treats a late paid webhook for a session reconcile already settled as a no-op, booking no refund', async () => {
+    const { orderId, sessionId } = await openPayment();
+    gateway.setPaymentStatus(sessionId, 'PAID');
+    const metrics = app.get<MetricsPort>(METRICS);
+    const refundOwed = vi.spyOn(metrics, 'recordRefundOwed');
+
+    await reconcile.execute(SWEEP_ALL);
+    expect((await readOrder(app, orderId)).status).toBe('PAID');
+    const settled = await readPayment(app, orderId);
+    expect(settled.status).toBe('SUCCEEDED');
+
+    const signed = signWebhook({
+      secret: WEBHOOK_SECRET,
+      event: checkoutSessionCompleted(
+        sessionId,
+        { amountMinor: settled.amountMinor, currency: settled.currency },
+        { eventId: 'evt_late_after_reconcile', paymentIntent: 'pi_late' },
+      ),
+    });
+    const res = await postWebhook(app, signed).expect(200);
+
+    expect(res.body).toEqual({ status: 'skipped' });
+    expect(refundOwed).not.toHaveBeenCalled();
+    expect((await readOrder(app, orderId)).status).toBe('PAID');
+    const after = await readPayment(app, orderId);
+    expect(after.status).toBe('SUCCEEDED');
+    expect(after.providerIntentId).toBeNull(); // the no-op touches nothing on the row, not even this
   });
 
   it('refuses to overwrite a payment status another writer already moved', async () => {

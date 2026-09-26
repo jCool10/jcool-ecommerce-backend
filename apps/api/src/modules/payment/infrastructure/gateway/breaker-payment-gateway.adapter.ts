@@ -6,6 +6,7 @@ import {
   type GatewayPaymentStatus,
   type GatewaySession,
   type PaymentGatewayPort,
+  type RetrievedSession,
   type VerifiedEvent,
 } from '../../application/ports/payment-gateway.port';
 
@@ -40,6 +41,10 @@ export class BreakerPaymentGateway implements PaymentGatewayPort {
 
   getPaymentStatus(ref: string): Promise<GatewayPaymentStatus> {
     return this.guard('report a payment status', () => this.inner.getPaymentStatus(ref));
+  }
+
+  retrieveSession(ref: string): Promise<RetrievedSession> {
+    return this.guard('retrieve a checkout session', () => this.inner.retrieveSession(ref));
   }
 
   expireSession(ref: string): Promise<ExpireSessionOutcome> {

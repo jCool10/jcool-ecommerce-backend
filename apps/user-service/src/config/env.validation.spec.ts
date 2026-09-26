@@ -48,6 +48,13 @@ describe('validate', () => {
     expect(flags.map((name) => refusal({ ...BASE, [name]: 'false' }))).toEqual([null, null, null]);
   });
 
+  // `parseIntOr` (configuration.ts) reads with `parseInt`, which stops at the first non-digit: '6e4'
+  // would load as 2ms, not 2000ms — the value must never validate as an int and then load as this.
+  it('refuses a scientific-notation timeout', () => {
+    expect(refusal({ ...BASE, ID_SERVICE_TIMEOUT_MS: '6e4' })).toContain('ID_SERVICE_TIMEOUT_MS');
+    expect(refusal({ ...BASE, ID_SERVICE_TIMEOUT_MS: '2000' })).toBeNull();
+  });
+
   it('requires an http(s) ID_SERVICE_URL but no public TLD', () => {
     const urls = [
       'gateway:4000',

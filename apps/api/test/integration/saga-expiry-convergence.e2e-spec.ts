@@ -41,6 +41,10 @@ const ONE_HOUR_MS = '3600000';
 const ORDER_TTL_SEC = 900;
 // Two deliveries, 50ms apart, so a whole budget is spent inside a test rather than over 15 seconds.
 const ATTEMPTS = '2';
+// Deliberately different from ATTEMPTS: order.expired now rides the order.paid-style ladder, keyed by
+// this env var rather than QUEUE_CONSUMER_ATTEMPTS, so a value distinct from ATTEMPTS is what proves
+// which ladder actually governed the delivery.
+const ORDER_EXPIRED_ATTEMPTS = '3';
 
 const INTERVAL_NAME = 'order-reservation-ttl-sweep';
 
@@ -75,6 +79,7 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
         QUEUE_WORKER_ENABLED: 'true',
         QUEUE_CONSUMER_ATTEMPTS: ATTEMPTS,
         QUEUE_CONSUMER_BACKOFF_MS: '50',
+        ORDER_PAID_CONSUMER_ATTEMPTS: ORDER_EXPIRED_ATTEMPTS,
       },
       [{ provide: PAYMENT_GATEWAY, useValue: gateway }],
     );
@@ -162,11 +167,13 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
     });
   });
 
-  // Known defect. Intended: releasing the hold and closing the session are one outcome, so a session
-  // that cannot be closed keeps the stock held. Actual: SweepExpiredReservationsUseCase commits the
-  // release with only an order.expired outbox row to carry the close; once the consumer's retry
-  // budget is spent the message is dead-lettered and nothing re-derives the owed close.
-  it('leaves a payable session on released stock once the expiry dead-letters', async () => {
+  // Fixed. order.expired (like order.cancelled) now retries on the same long ladder as order.paid,
+  // whose horizon outlasts a Checkout Session's own lifetime (proven directly in
+  // queue.constants.spec.ts). A gateway outage this permanent still exhausts any finite budget and
+  // dead-letters eventually — no ladder rides out forever — but a REAL outage that outlasts this much
+  // longer budget also outlasts the session itself, so the page it leaves behind is unpayable at the
+  // gateway either way, not merely undetected by us.
+  it('retries order.expired on the long ladder, not the short one the queue defaults to', async () => {
     const order = await lapsedOrder();
     gateway.failExpireSession(order.sessionId);
 
@@ -181,7 +188,9 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
       },
       { timeout: 15_000, interval: 100 },
     );
-    expect(dead.data.attemptsMade).toBe(Number(ATTEMPTS));
+    // ORDER_EXPIRED_ATTEMPTS, not ATTEMPTS: had this fallen through to the queue's shared defaults
+    // (the pre-fix behaviour), it would have dead-lettered after ATTEMPTS deliveries instead.
+    expect(dead.data.attemptsMade).toBe(Number(ORDER_EXPIRED_ATTEMPTS));
 
     // The outbox row is marked published, so the dead letter is the only record the close is owed.
     await expect(relay.runOnce(50)).resolves.toMatchObject({ published: 0, failed: 0 });

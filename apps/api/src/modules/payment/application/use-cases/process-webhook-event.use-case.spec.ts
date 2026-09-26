@@ -190,6 +190,52 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(updateStatus).toHaveBeenCalledWith(PAYMENT_ID, PaymentStatus.FAILED, expect.anything());
   });
 
+  // Reconcile (or an earlier delivery) already settled the payment to the very outcome this event
+  // reports; a fresh event id for the same session is a redelivery in substance, not a conflict.
+  it('treats a repeat notification of the already-settled outcome as an idempotent no-op', async () => {
+    const cases: Array<[PaymentStatus, string]> = [
+      [PaymentStatus.SUCCEEDED, 'checkout.session.completed'],
+      [PaymentStatus.FAILED, 'checkout.session.expired'],
+    ];
+
+    const outcomes = await Promise.all(
+      cases.map(async ([status, eventType]) => {
+        const { useCase, updateStatus, markSkipped, append } = build({
+          verify: stripeEvent(eventType),
+          existing: payment(status),
+        });
+
+        const result = await useCase.execute(RAW, HEADERS);
+        return [result, updateStatus.mock.calls.length, append.mock.calls.length, markSkipped.mock.calls.length];
+      }),
+    );
+
+    expect(outcomes).toEqual([
+      [
+        {
+          outcome: 'skipped',
+          reason: 'already_settled',
+          providerEventId: 'evt_1',
+          eventType: 'checkout.session.completed',
+        },
+        0,
+        0,
+        1,
+      ],
+      [
+        {
+          outcome: 'skipped',
+          reason: 'already_settled',
+          providerEventId: 'evt_1',
+          eventType: 'checkout.session.expired',
+        },
+        0,
+        0,
+        1,
+      ],
+    ]);
+  });
+
   it('skips a conflicting transition (failure after success) without clobbering the payment', async () => {
     const { useCase, updateStatus, markSkipped, append } = build({
       verify: stripeEvent('checkout.session.expired'),

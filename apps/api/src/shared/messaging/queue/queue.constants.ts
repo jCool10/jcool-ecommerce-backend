@@ -57,13 +57,17 @@ export const CATALOG_EVENT_PRIORITY = 10;
 /**
  * Overrides of the queue defaults, per event. order.paid and catalog events wait on another service
  * (the user-service for the buyer's address, the search engine), so they retry for as long as it may
- * be down. Catalog events also queue behind every other event, so a large burst waits for order and
+ * be down. order.expired and order.cancelled wait on Stripe to close the checkout session; the long
+ * ladder outlives the session itself, so one only dead-letters once the session has expired on its
+ * own. Catalog events also queue behind every other event, so a large burst waits for order and
  * payment work instead of ahead of it; only the catalog jobs already running can hold it up. Every path
  * that publishes to the main queue must apply these, or a replay runs the short ladder.
  */
 export function jobOptionsFor(eventType: string, orderPaidAttempts: number): JobsOptions {
   const longLadder = { attempts: orderPaidAttempts, backoff: { type: ORDER_PAID_BACKOFF } };
-  if (eventType === 'order.paid') return longLadder;
+  if (eventType === 'order.paid' || eventType === 'order.expired' || eventType === 'order.cancelled') {
+    return longLadder;
+  }
   if (eventType.startsWith('catalog.')) return { ...longLadder, priority: CATALOG_EVENT_PRIORITY };
   return {};
 }

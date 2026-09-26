@@ -7,6 +7,7 @@ import {
   type GatewayPaymentStatus,
   type GatewayStatus,
   type PaymentGatewayPort,
+  type RetrievedSession,
   type VerifiedEvent,
 } from '../../application/ports/payment-gateway.port';
 import { signStripeStyle, verifyAndParseStripeEvent } from './hmac-signature';
@@ -85,6 +86,17 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
       status: this.statuses.get(ref) ?? 'UNKNOWN',
       intentId: this.intents.get(ref) ?? null,
       ...this.charges.get(ref),
+    });
+  }
+
+  retrieveSession(ref: string): Promise<RetrievedSession> {
+    if (this.unreachable.has(ref)) {
+      return Promise.reject(new PaymentGatewayError(`fake gateway unreachable for ${ref}`));
+    }
+    const status = this.statuses.get(ref) ?? 'UNKNOWN';
+    return Promise.resolve({
+      status,
+      redirectUrl: status === 'PENDING' ? `https://fake.gateway.test/pay/${ref}` : undefined,
     });
   }
 

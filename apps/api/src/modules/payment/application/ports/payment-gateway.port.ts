@@ -47,6 +47,13 @@ export type ExpireSessionOutcome =
   /** The buyer already checked out through it; payment may still be clearing, but nothing to close. */
   | 'already_completed';
 
+export interface RetrievedSession {
+  /** Whether the hosted page can still take money. */
+  status: GatewayStatus;
+  redirectUrl?: string;
+  clientSecret?: string;
+}
+
 export interface PaymentGatewayPort {
   // Recorded on Payment.provider from the adapter, not config, so the two can never drift.
   readonly provider: string;
@@ -58,6 +65,12 @@ export interface PaymentGatewayPort {
    * rather than answering `UNKNOWN`, which would let a TTL sweep expire an order that was paid.
    */
   getPaymentStatus(ref: string): Promise<GatewayPaymentStatus>;
+  /**
+   * Re-reads a still-open session's own redirect handle, for a buyer who presses Pay again while a
+   * PENDING payment's session is still alive. Distinct from `getPaymentStatus`, which the sweep uses
+   * and which never needs a redirect back to the buyer.
+   */
+  retrieveSession(ref: string): Promise<RetrievedSession>;
   /**
    * Resolves only once the session is guaranteed to take no further money; anything else throws,
    * because the hosted page outlives the order and settling early would charge a buyer for an order

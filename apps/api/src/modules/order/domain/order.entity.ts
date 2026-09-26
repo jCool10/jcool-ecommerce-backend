@@ -1,4 +1,5 @@
 import { assertNonEmpty, DomainError, Money } from '@jcool/kernel';
+import { MAX_QUANTITY_PER_ORDER_LINE } from '../order.constants';
 import { OrderItem } from './order-item.entity';
 import { OrderStatus } from './order-status';
 import { assertTransition, isTerminal } from './order-state-machine';
@@ -37,6 +38,13 @@ export class Order {
     assertNonEmpty(userId, 'Order.userId');
     if (items.length === 0) {
       throw new DomainError('Order must have at least one item');
+    }
+    // Checked here, not in OrderItem.of, which also rehydrates orders placed before the cap existed.
+    const oversized = items.find((item) => item.quantity > MAX_QUANTITY_PER_ORDER_LINE);
+    if (oversized) {
+      throw new DomainError(
+        `Order line quantity must not exceed ${MAX_QUANTITY_PER_ORDER_LINE} per SKU: ${oversized.skuId}`,
+      );
     }
     // Money normalizes/validates the currency code and sums exactly (integer minor units).
     const normalizedCurrency = Money.zero(currency).currency;

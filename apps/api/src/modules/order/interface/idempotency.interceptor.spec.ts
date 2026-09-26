@@ -63,6 +63,35 @@ function context(): ExecutionContext {
 }
 
 describe('IdempotencyInterceptor', () => {
+  it('answers 409 without reclaiming while the row is still inside its lease', async () => {
+    const store = makeStore();
+    store.tryInsertInProgress.mockResolvedValue(null);
+    store.findByScopeAndKey.mockResolvedValue(record());
+    const { interceptor } = build(store);
+    const handle = vi.fn(() => of({}));
+    const handler: CallHandler = { handle };
+
+    await expect(interceptor.intercept(context(), handler)).rejects.toBeInstanceOf(ConflictException);
+    expect(store.deleteExpiredInProgress).not.toHaveBeenCalled();
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('reclaims a row once its in-progress lease has passed', async () => {
+    const store = makeStore();
+    const stale = { ...record(), createdAt: new Date(Date.now() - 60_000) };
+    store.tryInsertInProgress.mockResolvedValueOnce(null).mockResolvedValueOnce(stale);
+    store.findByScopeAndKey.mockResolvedValue(stale);
+    const { interceptor } = build(store);
+    const handle = vi.fn(() => of({ ok: true }));
+    const handler: CallHandler = { handle };
+
+    const obs = await interceptor.intercept(context(), handler);
+
+    await expect(firstValueFrom(obs)).resolves.toEqual({ ok: true });
+    expect(store.deleteExpiredInProgress).toHaveBeenCalledExactlyOnceWith(SCOPE, KEY, expect.any(Date));
+    expect(handle).toHaveBeenCalledOnce();
+  });
+
   it('returns 409 when the row vanished between the failed insert and the read', async () => {
     const store = makeStore();
     store.tryInsertInProgress.mockResolvedValue(null);

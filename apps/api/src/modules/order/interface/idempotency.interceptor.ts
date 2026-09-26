@@ -24,9 +24,14 @@ import type { IdempotentRequest } from './require-idempotency-key.guard';
 
 const LOG_CONTEXT = 'IdempotencyInterceptor';
 
-// How long an IN_PROGRESS row is trusted before it counts as abandoned (owner crashed mid-flight)
-// and may be reclaimed.
+// How long a COMPLETED response stays replayable.
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+
+// How long an IN_PROGRESS row is trusted before its owner counts as crashed. Checkout is one local
+// transaction, normally tens of ms. Reclaiming under a request that is still running stays safe: the
+// per-user checkout lock, UNIQUE (user_id, idempotency_key) on orders and the reclaim heal converge
+// both attempts on one order.
+const IN_PROGRESS_LEASE_MS = 30 * 1000;
 
 /**
  * The unique (scope, key) index — not an application read-then-write — is the race backstop:
@@ -91,14 +96,16 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return this.replay(existing, response);
     }
 
-    // IN_PROGRESS: still within TTL → a genuine concurrent request; past TTL → owner crashed, reclaim.
-    if (existing.expiresAt.getTime() > Date.now()) {
+    // IN_PROGRESS: within its lease → a genuine concurrent request; past it → owner crashed, reclaim.
+    const leaseCutoff = new Date(Date.now() - IN_PROGRESS_LEASE_MS);
+    if (existing.createdAt > leaseCutoff) {
       throw new ConflictException('A request with this Idempotency-Key is already in progress');
     }
 
-    // Expiry-scoped delete: if a racing reclaimer already refreshed this row, it is no longer expired
-    // and survives, so our re-INSERT below loses on the unique index (→ 409) instead of both running.
-    await this.store.deleteExpiredInProgress(scope, key, new Date());
+    // Lease-scoped delete: if a racing reclaimer already refreshed this row, its createdAt is no
+    // longer past the cutoff and it survives, so our re-INSERT below loses on the unique index
+    // (→ 409) instead of both running.
+    await this.store.deleteExpiredInProgress(scope, key, leaseCutoff);
     const reclaimed = await this.store.tryInsertInProgress(insertInput);
     if (!reclaimed) {
       // Another request reclaimed first — treat as in-progress.

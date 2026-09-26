@@ -60,4 +60,28 @@ describe('env validation', () => {
   it('boots with env keys the schema does not declare', () => {
     expect(() => validate({ ...BASE_ENV, RAILWAY_DEPLOYMENT_DRAINING_SECONDS: 'not-a-number' })).not.toThrow();
   });
+
+  // `parseIntOr` in configuration.ts reads with `parseInt`, which stops at the first non-digit:
+  // '6e4' would load as 6ms, not 60000ms. Validation must refuse the value a loader would misread
+  // rather than accept it and drift.
+  it('refuses scientific-notation and hex integers that a loader would parse differently', () => {
+    expect(() => validate({ ...BASE_ENV, RECONCILE_INTERVAL_MS: '6e4' })).toThrow(/RECONCILE_INTERVAL_MS/);
+    expect(() => validate({ ...BASE_ENV, QUEUE_CONSUMER_BACKOFF_MS: '1e3' })).toThrow(/QUEUE_CONSUMER_BACKOFF_MS/);
+    expect(() => validate({ ...BASE_ENV, RECONCILE_INTERVAL_MS: '60000' })).not.toThrow();
+  });
+
+  // configuration.ts reads these with `!== 'false'` or `=== 'true'`, so '0'/'1' must be refused
+  // instead of silently loading as the opposite of what they validated as.
+  it("refuses '0'/'1' for boolean switches instead of loading the opposite of what was set", () => {
+    expect(() => validate({ ...BASE_ENV, OUTBOX_RELAY_ENABLED: '0' })).toThrow(/OUTBOX_RELAY_ENABLED/);
+    expect(() => validate({ ...BASE_ENV, SEARCH_ENABLED: '1' })).toThrow(/SEARCH_ENABLED/);
+    expect(() => validate({ ...BASE_ENV, OUTBOX_RELAY_ENABLED: 'false', SEARCH_ENABLED: 'true' })).not.toThrow();
+  });
+
+  // app.config.ts compares COOKIE_SECURE to the literal 'true'; '1' must not validate and then load
+  // as false, or a production auth cookie loses Secure.
+  it('refuses a non-literal COOKIE_SECURE', () => {
+    expect(() => validate({ ...BASE_ENV, COOKIE_SECURE: '1' })).toThrow(/COOKIE_SECURE/);
+    expect(() => validate({ ...BASE_ENV, COOKIE_SECURE: 'true' })).not.toThrow();
+  });
 });

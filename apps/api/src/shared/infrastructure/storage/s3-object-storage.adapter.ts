@@ -40,6 +40,10 @@ export class S3ObjectStorageAdapter implements ObjectStoragePort {
         region: options.region,
         forcePathStyle: true,
         credentials: { accessKeyId: options.accessKeyId, secretAccessKey: options.secretAccessKey },
+        // The default signs a CRC32 of the empty body into every presigned PUT, which a store that
+        // validates it (R2) rejects for any real upload.
+        requestChecksumCalculation: 'WHEN_REQUIRED',
+        responseChecksumValidation: 'WHEN_REQUIRED',
       });
     this.bucket = options.bucket;
     this.presignTtlSec = options.presignTtlSec;

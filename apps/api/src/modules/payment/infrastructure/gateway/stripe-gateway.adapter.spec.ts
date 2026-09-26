@@ -182,6 +182,39 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
     });
   });
 
+  describe('retrieveSession', () => {
+    it('reports UNKNOWN and closes as a no-op offline', async () => {
+      await expect(adapter().retrieveSession('cs_test_anything')).resolves.toEqual({ status: 'UNKNOWN' });
+    });
+
+    it("hands back the session's own redirect URL while it is still open", async () => {
+      const retrieve = vi.fn().mockResolvedValue({
+        payment_status: 'unpaid',
+        status: 'open',
+        url: 'https://checkout.stripe.com/c/pay/cs_live_1',
+      });
+
+      await expect(statusAdapter({ retrieve }).retrieveSession('cs_live_1')).resolves.toEqual({
+        status: 'PENDING',
+        redirectUrl: 'https://checkout.stripe.com/c/pay/cs_live_1',
+      });
+    });
+
+    it('treats a handle Stripe does not recognise as UNKNOWN, so a repeat pay opens a fresh session', async () => {
+      const retrieve = vi.fn().mockRejectedValue(stripeError(404));
+
+      await expect(statusAdapter({ retrieve }).retrieveSession('cs_gone')).resolves.toEqual({ status: 'UNKNOWN' });
+    });
+
+    it('throws on any other provider fault, so an outage is never read as a dead session', async () => {
+      const retrieve = vi.fn().mockRejectedValue(stripeError(503, 'api_error'));
+
+      await expect(statusAdapter({ retrieve }).retrieveSession('cs_live_1')).rejects.toBeInstanceOf(
+        PaymentGatewayError,
+      );
+    });
+  });
+
   describe('expireSession', () => {
     it('accepts an unrecognised handle as already unpayable, without reading it back', async () => {
       const expire = vi.fn().mockRejectedValue(stripeError(404));

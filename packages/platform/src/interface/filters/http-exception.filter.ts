@@ -1,4 +1,4 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
 import type { Request, Response } from 'express';
@@ -129,8 +129,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
   // `cause` is never sent to the client, so a guard can keep the real reason behind a bare 401.
   private rejectionFields(exception: unknown, message: unknown, url: string): { reason: unknown; cause?: string } {
-    const reason = withoutQueryString(message, url);
     const cause = exception instanceof HttpException ? exception.cause : undefined;
+    if (isMalformedJsonBody(exception, message, cause)) {
+      return { reason: MALFORMED_BODY_REASON };
+    }
+    const reason = withoutQueryString(message, url);
     return cause === undefined ? { reason } : { reason, cause: toError(cause).message };
   }
 
@@ -206,4 +209,16 @@ function withoutQueryString(message: unknown, url: string): unknown {
   const query = url.slice(queryAt);
   const strip = (value: unknown): unknown => (typeof value === 'string' ? value.replaceAll(query, '') : value);
   return Array.isArray(message) ? message.map(strip) : strip(message);
+}
+
+const MALFORMED_BODY_REASON = 'malformed request body';
+
+// Nest rewraps body-parser's SyntaxError as a BadRequestException with only its message, and V8's
+// JSON.parse message quotes the body around the fault, so it must never reach the log.
+const JSON_PARSE_ERROR = /(in JSON at position \d+|is not valid JSON|Unexpected end of JSON input)/;
+
+function isMalformedJsonBody(exception: unknown, message: unknown, cause: unknown): boolean {
+  if (!(exception instanceof BadRequestException)) return false;
+  if (cause instanceof SyntaxError) return true;
+  return typeof message === 'string' && JSON_PARSE_ERROR.test(message);
 }

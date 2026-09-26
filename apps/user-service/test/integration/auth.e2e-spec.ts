@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { setTimeout as sleep } from 'node:timers/promises';
 import type { INestApplication } from '@nestjs/common';
 import { decodeProtectedHeader } from 'jose';
 import type { Pool } from 'pg';
@@ -31,11 +30,9 @@ import {
 import { E2E_ES256_KID } from '../setup/e2e-env';
 import { createTestAdmin, createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { waitForLockWaiters } from '../setup/lock-waiters.helper';
 import { RbacProbeController } from '../setup/rbac-probe.controller';
 import { signHs256 } from '../setup/signing-keys';
-
-const LOCK_WAIT_TIMEOUT_MS = 5_000;
-const LOCK_POLL_MS = 10;
 
 describe('Auth (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -309,6 +306,13 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       return rows;
     };
 
+    const tokenEpochOf = async (userEmail: string) => {
+      const { rows } = await pool.query<{ token_epoch: number }>('SELECT token_epoch FROM users WHERE email = $1', [
+        userEmail,
+      ]);
+      return rows[0].token_epoch;
+    };
+
     it('rotates the token pair on a valid refresh cookie', async () => {
       const first = await loginAs(app, { email, password });
 
@@ -338,6 +342,18 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await refresh(first).expect(401);
 
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(401);
+    });
+
+    it('does not bump the epoch or re-alert on a second replay of the same superseded token', async () => {
+      const first = await loginAs(app, { email, password });
+      await refresh(first).expect(200);
+
+      await refresh(first).expect(401); // first replay: still-live successor found and revoked
+      const epochAfterFirstReplay = await tokenEpochOf(email);
+      expect(epochAfterFirstReplay).toBe(1);
+
+      await refresh(first).expect(401); // second replay: family already fully revoked, nothing live left
+      expect(await tokenEpochOf(email)).toBe(epochAfterFirstReplay);
     });
 
     it('lets one of two concurrent refreshes rotate and treats the other as reuse', async () => {
@@ -497,17 +513,3 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     });
   });
 });
-
-// Counts backends in this worker's database parked on a lock; pg_stat_activity is server-wide.
-async function waitForLockWaiters(pool: Pool, count: number): Promise<void> {
-  const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
-  for (;;) {
-    const { rows } = await pool.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM pg_stat_activity
-        WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'`,
-    );
-    if (Number(rows[0].n) >= count) return;
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${count} refreshes to block on the row lock`);
-    await sleep(LOCK_POLL_MS);
-  }
-}

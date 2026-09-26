@@ -44,6 +44,15 @@ describe('CsrfTokenService', () => {
     ]);
   });
 
+  // cookie-parser JSON-decodes a `j:`-prefixed cookie, so a forged one arrives as a non-string.
+  it('rejects a non-string cookie value instead of throwing', () => {
+    const token = csrf.issue();
+
+    expect(csrf.verify({}, token)).toBe(false);
+    expect(csrf.verify(['not-a-token'], token)).toBe(false);
+    expect(csrf.verify(42, token)).toBe(false);
+  });
+
   it('rejects a token whose signature was tampered with or left off', () => {
     const [random] = csrf.issue().split('.');
     const forged = `${random}.not-the-real-signature`;

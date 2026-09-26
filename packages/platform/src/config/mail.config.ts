@@ -1,6 +1,6 @@
-import { Type } from 'class-transformer';
 import { IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
 import { parseIntOr } from './env-parsers';
+import { StrictInt } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
 export function MailEnv<TBase extends EnvBase>(Base: TBase) {
@@ -20,7 +20,7 @@ export function MailEnv<TBase extends EnvBase>(Base: TBase) {
     // queue reclaims the job mid-send, and the original delivery — already applied, already sent —
     // finishes without its lock and is filed as a dead letter.
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(100)
     @Max(25_000)

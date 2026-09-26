@@ -9,18 +9,20 @@ import {
   type GatewayPaymentStatus,
   type GatewayStatus,
   type PaymentGatewayPort,
+  type RetrievedSession,
   type VerifiedEvent,
 } from '../../application/ports/payment-gateway.port';
 import { verifyAndParseStripeEvent } from './hmac-signature';
 import { isSessionNotOpen } from './stripe-fault-classification';
 
 // Stripe's minimum, against a 24h default. The backstop for every session no path here manages to
-// close; it clears the 15-minute stock hold and the reconcile threshold with room to spare.
-const SESSION_LIFETIME_SEC = 30 * 60;
+// close; it clears the 15-minute stock hold and the reconcile threshold with room to spare. The
+// queue's retry ladders are sized against it.
+export const SESSION_LIFETIME_SEC = 30 * 60;
 // Stripe validates the sent value against ITS clock at receipt, not ours at build time: a network
 // hop, an SDK retry of this same body, or slight negative skew would otherwise land under the
 // 30-minute minimum and 400. The backstop only has a lower bound, so extra seconds cost nothing.
-const EXPIRY_CLOCK_MARGIN_SEC = 120;
+export const EXPIRY_CLOCK_MARGIN_SEC = 120;
 
 export interface StripeGatewayOptions {
   webhookSecret?: string;
@@ -133,19 +135,39 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
       return { status: 'UNKNOWN' };
     }
 
+    const session = await this.fetchSession(ref);
+    if (session === null) {
+      return { status: 'UNKNOWN' };
+    }
+    return {
+      status: mapSessionStatus(session),
+      intentId: extractIntentId(session),
+      amountMinor: session.amount_total ?? undefined,
+      currency: session.currency ?? undefined,
+    };
+  }
+
+  async retrieveSession(ref: string): Promise<RetrievedSession> {
+    // Offline: nothing to reuse — the caller opens a fresh (also fabricated) session instead.
+    if (!this.stripe) {
+      return { status: 'UNKNOWN' };
+    }
+
+    const session = await this.fetchSession(ref);
+    if (session === null) {
+      return { status: 'UNKNOWN' };
+    }
+    return { status: mapSessionStatus(session), redirectUrl: session.url ?? undefined };
+  }
+
+  // `null` for an unrecognised handle. Every other fault throws, so an outage is never read as
+  // "not paid" and used to expire a settled order.
+  private async fetchSession(ref: string): Promise<Stripe.Checkout.Session | null> {
     try {
-      const session = await this.stripe.checkout.sessions.retrieve(ref);
-      return {
-        status: mapSessionStatus(session),
-        intentId: extractIntentId(session),
-        amountMinor: session.amount_total ?? undefined,
-        currency: session.currency ?? undefined,
-      };
+      return await this.stripe!.checkout.sessions.retrieve(ref);
     } catch (error) {
-      // An unrecognised handle is an answer, not an outage. Every other fault throws, so an outage
-      // is never read as "not paid" and used to expire a settled order.
       if (isUnknownHandle(error)) {
-        return { status: 'UNKNOWN' };
+        return null;
       }
       throw new PaymentGatewayError(`Stripe checkout session retrieve failed (${describe(error)})`, error);
     }

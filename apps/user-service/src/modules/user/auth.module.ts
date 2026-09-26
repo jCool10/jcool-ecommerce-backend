@@ -35,6 +35,7 @@ import {
   DrizzleRefreshTokenRepository,
   MailerAdapter,
 } from './infrastructure';
+import { AuthLinkPagesController } from './interface/auth-link-pages/auth-link-pages.controller';
 import { AuthController } from './interface/auth.controller';
 import { InternalApiController } from './interface/internal/internal-api.controller';
 import { InternalApiTokenGuard } from './interface/internal/internal-api-token.guard';
@@ -48,7 +49,7 @@ import { UserModule } from './user.module';
 // throttler.
 @Module({
   imports: [UserModule, IdentityModule, SessionStateModule, AccessTokenKeysModule, MailModule],
-  controllers: [AuthController, JwksController, InternalApiController],
+  controllers: [AuthController, AuthLinkPagesController, JwksController, InternalApiController],
   providers: [
     RegisterUserUseCase,
     LoginUserUseCase,

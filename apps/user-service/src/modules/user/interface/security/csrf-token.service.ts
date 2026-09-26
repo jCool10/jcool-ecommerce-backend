@@ -22,8 +22,9 @@ export class CsrfTokenService {
     return `${random}.${this.sign(random)}`;
   }
 
-  verify(cookieValue: string | undefined, headerValue: string | undefined): boolean {
-    if (!cookieValue || !headerValue) return false;
+  // `unknown`: cookie-parser can JSON-decode a `j:`-prefixed cookie into a non-string; treat that as absent.
+  verify(cookieValue: unknown, headerValue: string | undefined): boolean {
+    if (typeof cookieValue !== 'string' || !headerValue) return false;
     if (!this.constantTimeEquals(cookieValue, headerValue)) return false;
 
     const separator = cookieValue.lastIndexOf('.');

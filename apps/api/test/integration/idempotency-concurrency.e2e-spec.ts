@@ -148,7 +148,7 @@ describe('Idempotent checkout (integration, real Postgres)', () => {
     expect(row.orderId).toBe(orderId);
   });
 
-  it('reclaims an expired IN_PROGRESS key and checks out exactly one order', async () => {
+  it('reclaims an IN_PROGRESS key past its lease and checks out exactly one order', async () => {
     const { token, userId } = await newUser();
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, AMPLE_STOCK);
@@ -156,7 +156,9 @@ describe('Idempotent checkout (integration, real Postgres)', () => {
     const key = randomUUID();
     const scope = `user:${userId}`;
 
-    // A matching request hash reaches the reclaim path rather than the 422 branch.
+    // A matching request hash reaches the reclaim path rather than the 422 branch. createdAt (not
+    // expiresAt) is what the interceptor's lease reads, so it is backdated past it here; expiresAt
+    // stays the normal 24h out, since the row's overall replay window is untouched by the lease.
     const body = { marker: true };
     await db.insert(schema.idempotencyKeys).values({
       scope,
@@ -165,7 +167,8 @@ describe('Idempotent checkout (integration, real Postgres)', () => {
       status: 'IN_PROGRESS',
       method: 'POST',
       path: '/orders',
-      expiresAt: new Date(Date.now() - 60_000),
+      createdAt: new Date(Date.now() - 60_000),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
 
     const retry = await postOrder(token, key).send(body);

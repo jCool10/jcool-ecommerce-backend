@@ -165,6 +165,22 @@ describe('LeaseKeeper', () => {
     expect(lease.nodeId).toBe(4);
   });
 
+  // A client-side query_timeout throws without the caller ever learning whether its claim committed.
+  // The lease stays in `acquiring`, not `idle`, until a retry resolves it one way or the other.
+  it('keeps acquiring, not idle, after a store answer whose outcome never arrived', async () => {
+    const { store, lease, keeper } = setup();
+    store.fail(new Error('statement timeout')).grant(14);
+
+    await keeper.onApplicationBootstrap();
+    expect(lease.state).toBe('acquiring');
+    expect(store.acquisitions).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(lease.nodeId).toBe(14);
+    expect(lease.state).toBe('held');
+    expect(store.acquisitions).toHaveLength(2);
+  });
+
   it('takes no new node when the lease is lost while draining', async () => {
     const { store, lease, keeper } = setup({}, LEASE.renewEveryMs * 2);
     store.grant(7).grant(8);

@@ -6,5 +6,6 @@ export * from './observability.config';
 export * from './redis.config';
 export * from './resilience.config';
 export * from './retention.config';
+export * from './strict-env-decorators';
 export * from './throttle.config';
 export * from './validate-env';

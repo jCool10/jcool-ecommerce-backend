@@ -142,5 +142,43 @@ describe('HttpExceptionFilter', () => {
       expect(rejection()).toMatchObject({ reason: 'Cannot GET /auth/verify-email' });
       expect(JSON.stringify(logWarn.mock.calls)).not.toContain('mailed-secret');
     });
+
+    // `@nestjs/core` turns body-parser's JSON SyntaxError into exactly this: a BadRequestException
+    // whose message is V8's own JSON.parse text, quoting the bytes around the parse fault.
+    it('replaces a malformed-JSON reason with a fixed line instead of the quoted body', () => {
+      const { host, response } = makeHost('POST', '/auth/login');
+      const parseMessage = `Unexpected token 'h', ..."password":hunter2} is not valid JSON`;
+
+      filter.catch(new BadRequestException(parseMessage), host);
+
+      expect(rejection()).toMatchObject({ reason: 'malformed request body' });
+      expect(rejection()).not.toHaveProperty('cause');
+      expect(JSON.stringify(logWarn.mock.calls)).not.toContain('hunter2');
+      // The client still gets the original message — it is only their own body, so it is not a leak.
+      expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ message: parseMessage }));
+    });
+
+    // Defends the case where a `cause` is attached later: the fixed line must win even without the
+    // message pattern, and the raw SyntaxError must not resurface through the `cause` field instead.
+    it('also fixes the reason when the cause is a SyntaxError, and drops cause from the log', () => {
+      const { host } = makeHost('POST', '/orders');
+      const cause = new SyntaxError('"password":hunter2} is not valid JSON');
+
+      filter.catch(new BadRequestException('Bad Request', { cause }), host);
+
+      expect(rejection()).toMatchObject({ reason: 'malformed request body' });
+      expect(rejection()).not.toHaveProperty('cause');
+      expect(JSON.stringify(logWarn.mock.calls)).not.toContain('hunter2');
+    });
+
+    // A BadRequestException unrelated to body parsing keeps its real reason — the fix must not
+    // genericize every 400.
+    it('keeps the real reason for an ordinary BadRequestException', () => {
+      const { host } = makeHost('POST', '/orders/checkout');
+
+      filter.catch(new BadRequestException('Cart is empty'), host);
+
+      expect(rejection()).toMatchObject({ reason: 'Cart is empty' });
+    });
   });
 });

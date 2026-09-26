@@ -1,16 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, count, desc, eq, inArray, lt, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { Order } from '../domain/order.entity';
 import { OrderStatus } from '../domain/order-status';
 import { OrderItem } from '../domain/order-item.entity';
-import type {
-  AdminOrderPageQuery,
-  CheckoutPersistResult,
-  OrderPage,
-  OrderPageQuery,
-  OrderRepositoryPort,
-  StalePendingOrder,
+import { MAX_PENDING_ORDERS_PER_USER } from '../order.constants';
+import {
+  TooManyPendingOrdersError,
+  type AdminOrderPageQuery,
+  type CheckoutPersistResult,
+  type OrderPage,
+  type OrderPageQuery,
+  type OrderRepositoryPort,
+  type StalePendingOrder,
 } from '../application/ports/order-repository.port';
 import { orderItems, orders } from './schema/order.schema';
 
@@ -29,6 +31,10 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult> {
     return this.db.transaction(async (tx) => {
+      // One checkout per user at a time, so the pending count below is race-safe. Taken before any
+      // stock row lock, so it cannot cycle with them.
+      await tx.execute(sql`select pg_advisory_xact_lock(${order.userId}::bigint)`);
+
       if (idempotencyKey) {
         // Exit-defense: a prior attempt already committed an order under this key (its idempotency
         // row was then reclaimed). Serialized by the idempotency-key entry gate — at most one
@@ -42,6 +48,14 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
         if (existing) {
           return { orderId: existing.id, created: false };
         }
+      }
+
+      const [{ value: pendingCount }] = await tx
+        .select({ value: count() })
+        .from(orders)
+        .where(and(eq(orders.userId, order.userId), eq(orders.status, OrderStatus.PENDING)));
+      if (pendingCount >= MAX_PENDING_ORDERS_PER_USER) {
+        throw new TooManyPendingOrdersError(order.userId, pendingCount);
       }
 
       const [row] = await tx

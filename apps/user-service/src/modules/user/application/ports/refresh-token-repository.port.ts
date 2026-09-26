@@ -29,7 +29,9 @@ export interface RotateRefreshTokenInput {
 
 /**
  * `rotated` carries the owner's `role`+`tokenEpoch` read in the same transaction, for the successor
- * token; `reuse` means a retired token was replayed and the family is now revoked, `replaced` = theft signal.
+ * token; `reuse` means a retired token was replayed and whatever was still live in the family got
+ * revoked. `replaced` is true only when that revoke actually caught a live token — the theft signal —
+ * so a repeat replay against an already-fully-revoked family reports `false` instead of re-alerting.
  */
 export type RotateOutcome =
   | { status: 'rotated'; userId: string; role: Role; tokenEpoch: number }

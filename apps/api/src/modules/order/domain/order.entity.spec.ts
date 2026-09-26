@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DomainError } from '@jcool/kernel';
+import { MAX_QUANTITY_PER_ORDER_LINE } from '../order.constants';
 import { Order } from './order.entity';
 import { OrderItem } from './order-item.entity';
 import { OrderStatus } from './order-status';
@@ -41,6 +42,25 @@ describe('Order entity', () => {
 
   it('create() rejects an empty item list', () => {
     expect(() => Order.create('u', 'VND', [])).toThrow(DomainError);
+  });
+
+  it('create() accepts a line at the per-order-line cap and rejects one past it', () => {
+    expect(Order.create('u', 'VND', [line(1_000, MAX_QUANTITY_PER_ORDER_LINE)]).items).toHaveLength(1);
+    expect(() => Order.create('u', 'VND', [line(1_000, MAX_QUANTITY_PER_ORDER_LINE + 1)])).toThrow(DomainError);
+  });
+
+  it('rehydrate() keeps a line above the cap, so orders placed before it stay readable', () => {
+    const order = Order.rehydrate({
+      id: 'order-1',
+      userId: 'u',
+      status: OrderStatus.PENDING,
+      currency: 'VND',
+      items: [line(1_000, MAX_QUANTITY_PER_ORDER_LINE + 1)],
+      totalAmountMinor: 1_000 * (MAX_QUANTITY_PER_ORDER_LINE + 1),
+      placedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    expect(order.items[0].quantity).toBe(MAX_QUANTITY_PER_ORDER_LINE + 1);
   });
 
   it('place() moves a draft to PENDING and stamps placedAt, leaving the original untouched', () => {

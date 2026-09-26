@@ -1,17 +1,17 @@
-import { Type } from 'class-transformer';
-import { IsBooleanString, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { parseIntOr } from './env-parsers';
+import { IsStrictBoolean, StrictInt } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
 export function ResilienceEnv<TBase extends EnvBase>(Base: TBase) {
   class ResilienceEnv extends Base {
     @IsOptional()
-    @IsBooleanString()
+    @IsStrictBoolean()
     BREAKER_ENABLED?: string;
 
     // Min 100 so a typo cannot make every call time out before the downstream can possibly answer.
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(100)
     BREAKER_TIMEOUT_MS?: number;
@@ -20,7 +20,7 @@ export function ResilienceEnv<TBase extends EnvBase>(Base: TBase) {
     // breaker that reads as configured cannot in fact be switched off. At the low end 1 opens on the
     // first failure once the window holds enough calls to count.
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(1)
     @Max(99)
@@ -28,7 +28,7 @@ export function ResilienceEnv<TBase extends EnvBase>(Base: TBase) {
 
     // Min 100 keeps the open state from being so brief it never sheds any load.
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(100)
     BREAKER_RESET_TIMEOUT_MS?: number;
@@ -36,7 +36,7 @@ export function ResilienceEnv<TBase extends EnvBase>(Base: TBase) {
     // Min 1000 — a window shorter than the calls it counts would forget each failure before the next
     // arrives.
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(1000)
     BREAKER_ROLLING_WINDOW_MS?: number;
@@ -44,7 +44,7 @@ export function ResilienceEnv<TBase extends EnvBase>(Base: TBase) {
     // 0 and 1 behave identically — one failure is then the whole window — so the floor only rules out
     // the value that reads as "no gate at all".
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(1)
     BREAKER_VOLUME_THRESHOLD?: number;

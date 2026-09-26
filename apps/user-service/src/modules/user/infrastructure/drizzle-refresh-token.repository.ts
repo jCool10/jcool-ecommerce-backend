@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
-import { DRIZZLE, type DrizzleDB } from '../../../database';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '../../../database';
 import { IdentityService } from '../application/services/identity.service';
 import { refreshTokens, users } from './schema/user.schema';
 import type {
@@ -49,10 +49,13 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
 
   /**
    * Rotation and reuse detection share one transaction: the presented row is locked `FOR UPDATE`,
-   * so two concurrent refreshes of the same token cannot both insert a successor.
+   * so two concurrent refreshes of the same token cannot both insert a successor. Takes the shared
+   * user lock first (see {@link lockUser}), so a revoke's exclusive lock always waits behind it.
    */
   async rotate(input: RotateRefreshTokenInput): Promise<RotateOutcome> {
     return this.db.transaction(async (tx) => {
+      await lockUser(tx, input.expectedUserId, 'shared');
+
       const [record] = await tx
         .select()
         .from(refreshTokens)
@@ -64,17 +67,20 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
         return { status: 'invalid' };
       }
 
-      // Retired token replayed → can't tell theft from a late replay, so revoke the whole family.
+      // Retired token replayed → can't tell theft from a late replay, so revoke whatever in the
+      // family is still live.
       if (record.revokedAt !== null || record.replacedByTokenId !== null) {
-        await tx
+        const revokedSiblings = await tx
           .update(refreshTokens)
           .set({ revokedAt: new Date() })
-          .where(and(eq(refreshTokens.familyId, record.familyId), isNull(refreshTokens.revokedAt)));
+          .where(and(eq(refreshTokens.familyId, record.familyId), isNull(refreshTokens.revokedAt)))
+          .returning({ id: refreshTokens.id });
         return {
           status: 'reuse',
           userId: record.userId,
           familyId: record.familyId,
-          replaced: record.replacedByTokenId !== null,
+          // False when nothing live was found — e.g. a repeat replay of an already-revoked family.
+          replaced: revokedSiblings.length > 0,
         };
       }
 
@@ -125,10 +131,14 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
   }
 
   async revokeAllForUser(userId: string): Promise<void> {
-    await this.db
-      .update(refreshTokens)
-      .set({ revokedAt: new Date() })
-      .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)));
+    await this.db.transaction(async (tx) => {
+      // Waits out any rotation already in flight, so its successor gets revoked too.
+      await lockUser(tx, userId, 'exclusive');
+      await tx
+        .update(refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)));
+    });
   }
 
   async listActiveSessions(userId: string, currentTokenHash: string | null): Promise<ActiveSession[]> {
@@ -155,15 +165,19 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
   }
 
   async revokeFamily(userId: string, familyId: string): Promise<boolean> {
-    // Scoped by userId: a foreign/unknown family affects no rows (→ false → 404) without leaking its existence.
-    const revoked = await this.db
-      .update(refreshTokens)
-      .set({ revokedAt: new Date() })
-      .where(
-        and(eq(refreshTokens.userId, userId), eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)),
-      )
-      .returning({ id: refreshTokens.id });
-    return revoked.length > 0;
+    return this.db.transaction(async (tx) => {
+      // Same reasoning as revokeAllForUser — see there.
+      await lockUser(tx, userId, 'exclusive');
+      // Scoped by userId: a foreign/unknown family affects no rows (→ false → 404) without leaking its existence.
+      const revoked = await tx
+        .update(refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(eq(refreshTokens.userId, userId), eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)),
+        )
+        .returning({ id: refreshTokens.id });
+      return revoked.length > 0;
+    });
   }
 
   async deleteCollectable(expiredBefore: Date, revokedBefore: Date, limit: number): Promise<number> {
@@ -187,4 +201,10 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
       .returning({ id: refreshTokens.id });
     return deleted.length;
   }
+}
+
+/** Transaction-scoped advisory lock on the user id: shared for rotate, exclusive for a revoke path. */
+async function lockUser(tx: DrizzleTx, userId: string, mode: 'shared' | 'exclusive'): Promise<void> {
+  const lockFn = mode === 'shared' ? sql`pg_advisory_xact_lock_shared` : sql`pg_advisory_xact_lock`;
+  await tx.execute(sql`select ${lockFn}(${userId}::bigint)`);
 }

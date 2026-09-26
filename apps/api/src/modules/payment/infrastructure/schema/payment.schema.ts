@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
 
 // Infrastructure only, never imported by domain. No cross-context FK: order_id → orders stays an
@@ -35,7 +35,8 @@ export const payments = pgTable(
     provider: text('provider').notNull(),
     providerSessionId: text('provider_session_id').notNull(),
     providerIntentId: text('provider_intent_id'), // filled from the webhook / reconcile later
-    amountMinor: integer('amount_minor').notNull(),
+    // Matches orders.total_amount, which /pay copies here verbatim.
+    amountMinor: bigint('amount_minor', { mode: 'number' }).notNull(),
     currency: text('currency').notNull(),
     status: paymentStatus('status').notNull().default('PENDING'),
     ...stamps,

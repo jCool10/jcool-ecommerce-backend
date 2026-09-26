@@ -27,9 +27,11 @@ export class LogoutUserUseCase {
   ) {}
 
   async execute(input: LogoutInput): Promise<void> {
+    // Hashed first: a throw here must happen before either write below starts.
+    const refreshTokenHash = hashRefreshToken(input.rawRefreshToken);
     await Promise.all([
       this.denylist.denylist(input.accessJti, new Date(input.accessExp * 1000)),
-      this.refreshTokens.revoke(input.userId, hashRefreshToken(input.rawRefreshToken)),
+      this.refreshTokens.revoke(input.userId, refreshTokenHash),
     ]);
   }
 }

@@ -65,12 +65,14 @@ export interface IdempotencyStorePort {
   deleteInProgress(scope: string, key: string, tx?: DrizzleTx): Promise<void>;
 
   /**
-   * Reclaim guard: delete an IN_PROGRESS row for (scope, key) ONLY if it is past `now` (an
-   * abandoned holder). Scoped by expiry so a racing reclaimer that already replaced it with a
-   * fresh row is left untouched — that racer's re-INSERT then wins and this caller loses on the
+   * Reclaim guard: delete an IN_PROGRESS row for (scope, key) ONLY if it was created before `cutoff`
+   * (an abandoned holder, judged by the in-progress lease — see IdempotencyInterceptor's
+   * IN_PROGRESS_LEASE_MS). Scoped by creation time, not the row's own `expires_at` — that field is
+   * the much longer replay/sweep window — so a racing reclaimer that already replaced this row with
+   * a fresh one is left untouched: that racer's re-INSERT then wins and this caller loses on the
    * unique index instead of two handlers running. Returns how many rows were removed.
    */
-  deleteExpiredInProgress(scope: string, key: string, now: Date): Promise<number>;
+  deleteExpiredInProgress(scope: string, key: string, cutoff: Date): Promise<number>;
 
   /**
    * `expires_at` is the ONLY legal condition here. Adding `status = 'COMPLETED'`, or excluding it,

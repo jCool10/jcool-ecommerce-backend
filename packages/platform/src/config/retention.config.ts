@@ -1,19 +1,19 @@
-import { Type } from 'class-transformer';
-import { IsBooleanString, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { parseIntOr } from './env-parsers';
+import { IsStrictBoolean, StrictInt } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
 /** The scheduler's own knobs. Per-table horizons belong to the context that owns the table. */
 export function RetentionEnv<TBase extends EnvBase>(Base: TBase) {
   class RetentionEnv extends Base {
     @IsOptional()
-    @IsBooleanString()
+    @IsStrictBoolean()
     RETENTION_ENABLED?: string;
 
     // Min 1000 so a typo can't turn hourly housekeeping into a loop issuing DELETEs as fast as the
     // pool allows.
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(1000)
     RETENTION_INTERVAL_MS?: number;
@@ -21,14 +21,14 @@ export function RetentionEnv<TBase extends EnvBase>(Base: TBase) {
     // Capped because a larger batch holds row locks on a table the request path is writing to for
     // proportionally longer.
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(1)
     @Max(10_000)
     RETENTION_BATCH_SIZE?: number;
 
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(100)
     RETENTION_SWEEP_TIMEOUT_MS?: number;

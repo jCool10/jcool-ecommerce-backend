@@ -42,4 +42,15 @@ describe('id-service env validation', () => {
       expect(() => validate({ ...BASE_ENV, [key]: '0' }), key).toThrow(new RegExp(key));
     }
   });
+
+  // The loader (`parseIntOr`, `msEnv`) reads with `parseInt`/`Number`, which stops at the first
+  // non-digit: '2e3' would load as a 2ms query timeout, not 2000ms. These fields are redeclared on
+  // the subclass, so this also proves the strict transform survives being applied twice.
+  it('refuses scientific-notation timeouts on both the platform and the redeclared fields', () => {
+    expect(() => validate({ ...BASE_ENV, DB_QUERY_TIMEOUT_MS: '2e3' })).toThrow(/DB_QUERY_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, ID_LEASE_TTL_MS: '6e4' })).toThrow(/ID_LEASE_TTL_MS/);
+
+    const env = validate({ ...BASE_ENV, DB_QUERY_TIMEOUT_MS: '2000', DB_POOL_CONNECTION_TIMEOUT_MS: '5000' });
+    expect([env.DB_QUERY_TIMEOUT_MS, env.DB_POOL_CONNECTION_TIMEOUT_MS]).toEqual([2000, 5000]);
+  });
 });

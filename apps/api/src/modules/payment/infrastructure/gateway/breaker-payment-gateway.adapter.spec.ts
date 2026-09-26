@@ -20,6 +20,7 @@ function build(breaker: OutboundCall) {
     createSession: vi.fn().mockResolvedValue(SESSION),
     verifyAndParseEvent: vi.fn().mockReturnValue({ kind: 'valid', providerEventId: 'evt_1', type: 'x', payload: {} }),
     getPaymentStatus: vi.fn().mockResolvedValue({ status: 'PAID', intentId: 'pi_1' }),
+    retrieveSession: vi.fn().mockResolvedValue({ status: 'PENDING', redirectUrl: SESSION.redirectUrl }),
     expireSession: vi.fn().mockResolvedValue(undefined),
   } satisfies PaymentGatewayPort;
   return { inner, gateway: new BreakerPaymentGateway(inner, breaker) };
@@ -45,9 +46,12 @@ describe('BreakerPaymentGateway', () => {
     const { inner, gateway } = build(refusing);
 
     const errors = await Promise.all(
-      [gateway.createSession(CHECKOUT), gateway.getPaymentStatus('cs_test_1'), gateway.expireSession('cs_test_1')].map(
-        (call) => call.catch((e: unknown) => e),
-      ),
+      [
+        gateway.createSession(CHECKOUT),
+        gateway.getPaymentStatus('cs_test_1'),
+        gateway.retrieveSession('cs_test_1'),
+        gateway.expireSession('cs_test_1'),
+      ].map((call) => call.catch((e: unknown) => e)),
     );
 
     for (const error of errors) {
@@ -56,6 +60,7 @@ describe('BreakerPaymentGateway', () => {
     }
     expect(inner.createSession).not.toHaveBeenCalled();
     expect(inner.getPaymentStatus).not.toHaveBeenCalled();
+    expect(inner.retrieveSession).not.toHaveBeenCalled();
     expect(inner.expireSession).not.toHaveBeenCalled();
   });
 

@@ -19,11 +19,12 @@ export type WebhookProcessResult =
   | { outcome: 'rejected'; reason: 'invalid_signature' | 'expired_timestamp' }
   | { outcome: 'duplicate'; providerEventId: string; eventType: string }
   | { outcome: 'ignored'; providerEventId: string; eventType: string }
-  // The reason separates the harmless (a late notice, a session still clearing) from the two that
-  // need a human: a success landing on a payment we already closed, and a charge that isn't ours.
+  // The reason separates the harmless (a late notice, a session already at rest on the outcome this
+  // event reports, one still clearing) from the two that need a human: an outcome landing on a payment
+  // already closed on a DIFFERENT one, and a charge that isn't ours.
   | {
       outcome: 'skipped';
-      reason: 'payment_not_found' | 'conflict' | 'awaiting_payment' | 'amount_mismatch';
+      reason: 'payment_not_found' | 'conflict' | 'awaiting_payment' | 'amount_mismatch' | 'already_settled';
       providerEventId: string;
       eventType: string;
       conflict?: { orderId: string; from: PaymentStatus; to: PaymentStatus };
@@ -111,6 +112,13 @@ export class ProcessWebhookEventUseCase {
             actualCurrency: facts.currency,
           },
         };
+      }
+
+      // The outcome this payment already settled to (reconcile got there first): a no-op, not a
+      // conflict that books a refund.
+      if (payment.status === target) {
+        await this.webhookEvents.markSkipped(eventId, tx);
+        return { outcome: 'skipped', reason: 'already_settled', ...delivery };
       }
 
       // Out-of-order or terminal-state event: refuse it in the domain rather than clobber a settled

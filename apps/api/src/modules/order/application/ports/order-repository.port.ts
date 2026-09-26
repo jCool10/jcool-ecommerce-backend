@@ -1,8 +1,21 @@
+import { DomainError } from '@jcool/kernel';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { Order } from '../../domain/order.entity';
 import type { OrderStatus } from '../../domain/order-status';
+import { MAX_PENDING_ORDERS_PER_USER } from '../../order.constants';
 
 export const ORDER_REPOSITORY = Symbol('ORDER_REPOSITORY');
+
+/** Thrown by `createCheckout` before any stock hold, so a refusal leaves no order and no reservation. */
+export class TooManyPendingOrdersError extends DomainError {
+  constructor(
+    public readonly userId: string,
+    public readonly pendingCount: number,
+  ) {
+    super(`User ${userId} already has ${pendingCount} pending orders (max ${MAX_PENDING_ORDERS_PER_USER})`);
+    this.name = 'TooManyPendingOrdersError';
+  }
+}
 
 export interface CheckoutPersistResult {
   orderId: string;
@@ -38,6 +51,8 @@ export interface OrderRepositoryPort {
    * transaction. An existing order under the same key returns `created: false` and runs none of the
    * callbacks; the unique `orders.idempotency_key` still backstops a race that slips past that
    * check. `appendEvent` runs only for a genuinely new order — a reclaim heal re-emits nothing.
+   * Serializes per user with `pg_advisory_xact_lock` before counting this user's PENDING orders,
+   * throwing `TooManyPendingOrdersError` at the cap instead of opening a new hold.
    */
   createCheckout(
     order: Order,

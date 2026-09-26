@@ -18,7 +18,7 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — six b
 
 | | |
 | --- | --- |
-| **Scale** | api: 6 bounded contexts · 437 TypeScript files · 17 tables · 26 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
+| **Scale** | api: 6 bounded contexts · 437 TypeScript files · 17 tables · 27 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
 | **Tests** | The claims above are pinned on real Postgres, Redis, MinIO, Elasticsearch and SMTP (Testcontainers), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
 | **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
@@ -209,8 +209,8 @@ The parts worth reading the code for. Each row names the file to open.
 | **Oversell under contention** | Two interchangeable strategies behind one port, picked by `INVENTORY_LOCK_STRATEGY`: pessimistic `SELECT … FOR UPDATE`, or a version CAS with bounded retry. Both run **inside the caller's transaction**, so the hold commits with the order. Three `CHECK` constraints (`ck_stock_on_hand_nonneg`, `ck_stock_reserved_nonneg`, `ck_stock_no_oversell`) make the database the final authority | `modules/inventory/infrastructure/stock.repository.ts` |
 | **Checkout atomicity** | One transaction inserts the placed order and its price-snapshot lines, takes the stock hold, appends the `order.placed` outbox row, and flips the idempotency key to `COMPLETED`. A stock shortfall rolls back all four — no order, no event, no key blocking the retry | `modules/order/application/use-cases/checkout-order.use-case.ts` |
 | **Exactly-once settlement** | Every path that settles an order (webhook, queue consumer, reconcile sweep, buyer cancel, admin cancel) funnels through one `FinalizeOrderUseCase`: `SELECT … FOR UPDATE` on the order row plus a terminal-status guard. No distributed lock. It can **join** a caller's transaction so a consumer's inbox claim and the settlement commit together | `modules/order/application/use-cases/finalize-order.use-case.ts` |
-| **Duplicate checkout requests** | Two layers: a per-`(scope, key)` idempotency entry gate that replays the first response body and status, and a `UNIQUE (user_id, idempotency_key)` index on `orders` as the backstop. A key reused with a different request body is `422`, not a silent replay | `modules/order/application/ports/idempotency-store.port.ts` |
-| **Refresh-token theft** | Rotation runs in one `FOR UPDATE` transaction. Presenting a token that was already replaced or revoked revokes the **entire family**, not just that token — and revocation is checked before expiry, so a retired token still reads as reuse rather than as an expiry | `apps/user-service/src/modules/user/infrastructure/drizzle-refresh-token.repository.ts` |
+| **Duplicate checkout requests** | Two layers: a per-`(scope, key)` idempotency entry gate that replays the first response body and status, and a `UNIQUE (user_id, idempotency_key)` index on `orders` as the backstop. A key reused with a different request body is `422`, not a silent replay. A key left `IN_PROGRESS` by a crashed request is reclaimable after a 30 s lease; a reclaim racing a request that is still alive is safe, because checkout also takes a per-user advisory lock and the unique index still decides | `modules/order/application/ports/idempotency-store.port.ts` |
+| **Refresh-token theft** | Rotation runs in one `FOR UPDATE` transaction. Presenting a token that was already replaced or revoked revokes the **entire family**, not just that token — and revocation is checked before expiry, so a retired token still reads as reuse rather than as an expiry. Only a replay that finds live tokens counts as theft and bumps the session epoch, so an old token replayed again cannot keep logging the owner out. Rotation holds a shared per-user advisory lock and logout-all / session revoke take it exclusively, so a revoke never misses a successor inserted by a rotation already in flight | `apps/user-service/src/modules/user/infrastructure/drizzle-refresh-token.repository.ts` |
 
 ### Distributed systems
 
@@ -219,7 +219,7 @@ The parts worth reading the code for. Each row names the file to open.
 | **The dual-write problem** | Events are rows written by the same transaction as the change they describe. A relay polls `published_at IS NULL` with `FOR UPDATE SKIP LOCKED`, publishes to BullMQ and marks the row published in one transaction — at-least-once, safe on every replica, no leader election | `shared/messaging/outbox/outbox-relay.ts` |
 | **At-least-once → exactly-once** | The consumer claims `message_id = outbox.id` in an `inbox` table (`UNIQUE (consumer, message_id)`) and applies the handler's effect **in that same transaction** (anything slow, such as a call to another service, is prepared before it opens). A redelivery loses the claim and does nothing; a handler that throws takes its claim down with it, so the redelivery does the work | `shared/messaging/queue/domain-event.processor.ts` |
 | **Sweeping the inbox safely** | Inbox claims are swept on a schedule (`RETENTION_INBOX_DAYS`, default 30d), and the app **refuses to boot** if that retention is shorter than the queue's failed-job horizon — deleting a claim while its message can still be redelivered would apply the effect twice | `shared/messaging/inbox/sweep-inbox.ts` |
-| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery; `order.paid`, which waits on the user-service, gets 15 with a capped backoff), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
+| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery; `order.paid`, which waits on the user-service, gets 15 with a capped backoff, as do `order.expired` and `order.cancelled`, which close the Stripe session and so must outlive its 32-minute lifetime), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
 | **Search index consistency** | No transaction reaches the engine, so the index follows Postgres through the outbox. Every catalog write bumps `products.search_version` and appends its event in the same transaction; the worker re-reads the product and writes it with `version_type: external`, so the engine refuses a stale, repeated or reordered delivery. An archived product stays as a versioned tombstone, so a late write cannot bring it back. A rebuild fills a fresh index behind a second alias and swaps atomically ([ADR](./docs/adr-search-index-consistency.md)) | `modules/catalog/application/services/product-search-sync.service.ts`, `modules/catalog/infrastructure/search/elasticsearch-catalog-search.adapter.ts` |
 | **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts` |
 | **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `packages/platform/src/observability/tracing/propagation.ts` |
@@ -296,7 +296,7 @@ Full stack in-network, behind the gateway as on Railway: `docker compose up -d -
 
 ## Configuration
 
-Environment is validated **once at startup** and the process refuses to boot on anything invalid — a missing secret is a crash, not a runtime surprise. `.env.example` is the complete, commented reference for all ~105 variables; these are the ones without a default:
+Environment is validated **once at startup** and the process refuses to boot on anything invalid — a missing secret is a crash, not a runtime surprise. Validation is as strict as the loaders that read the values afterwards: integers must be plain decimal (`6e4` is refused rather than loaded as `6`), and booleans must be exactly `true` or `false` (`1` is refused rather than loaded as off). `.env.example` is the complete, commented reference for all ~105 variables; these are the ones without a default:
 
 | Variable | Notes |
 | --- | --- |
@@ -354,7 +354,7 @@ none of those paths itself.
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/cart` | Items + subtotal, priced **live** from Catalog |
-| `POST` | `/cart/items` | Add `{ skuId, quantity }`; a repeat SKU accumulates (`404` on an unknown SKU) |
+| `POST` | `/cart/items` | Add `{ skuId, quantity }`; a repeat SKU accumulates, clamped at 10 per line (`404` on an unknown SKU) |
 | `PATCH` | `/cart/items/:skuId` | Set an absolute quantity (`404` if not in the cart) |
 | `DELETE` | `/cart/items/:skuId` · `/cart` | Remove one line (idempotent) · clear |
 
@@ -364,9 +364,9 @@ The cart is scratch space, not a transaction: prices are never snapshotted, and 
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| `POST` | `/orders` | Bearer + `Idempotency-Key` | Checkout the cart. `400` empty cart or missing key, `409` key in progress or insufficient stock, `422` key reused with a different body |
+| `POST` | `/orders` | Bearer + `Idempotency-Key` | Checkout the cart. `400` empty cart or missing key, `409` key in progress, insufficient stock (the available count is never disclosed) or 3 orders already `PENDING`, `422` key reused with a different body or a line above 10 units |
 | `GET` | `/orders` · `/orders/:id` | Bearer | List (paginated, `pageSize ≤ 100`) · detail (`404` if another user's) |
-| `POST` | `/orders/:id/pay` | Bearer | Open a gateway checkout session (`409` if not `PENDING` or a payment is already active) |
+| `POST` | `/orders/:id/pay` | Bearer | Open a gateway checkout session. Paying again while a session is still open hands back that same session; one the gateway confirms dead is replaced. `409` if the order is not `PENDING`, the gateway already recorded the payment, or it cannot confirm the old session is dead |
 | `POST` | `/orders/:id/cancel` | Bearer | Cancel a `PENDING` order and release its stock. Re-cancelling answers `200` — no idempotency key needed |
 | `GET` `POST` | `/admin/orders`, `/admin/orders/:id`, `/admin/orders/:id/cancel` | `ADMIN` | Any buyer's orders, plus force-cancel through the identical use case |
 
@@ -380,7 +380,7 @@ An admin cannot reach an outcome a buyer's own cancel could not — only the aud
 | --- | --- | --- | --- |
 | `POST` | `/webhooks/payment` | HMAC signature | Gateway event sink. `200` with `{ status: processed \| duplicate \| skipped \| ignored }`; `401` on a bad signature or a timestamp outside the tolerance window |
 
-Cancelling deliberately does **not** call the gateway — that transaction holds an order row lock. Payment closes the checkout session by consuming the `order.cancelled` event instead. Until that lands, a buyer with the hosted page still open can pay for stock already released; the money then has to be refunded by hand, and both the log line and `payment_refund_owed_total` say so. **Automatic refunds are out of scope.**
+Cancelling deliberately does **not** call the gateway — that transaction holds an order row lock. Payment closes the checkout session by consuming the `order.cancelled` event instead, retrying for longer than the session could stay open anyway. Until that lands, a buyer with the hosted page still open can pay for stock already released; the money then has to be refunded by hand, and both the log line and `payment_refund_owed_total` say so. **Automatic refunds are out of scope.**
 
 ### Inventory, Media, Health
 
@@ -402,9 +402,9 @@ A rejected `complete` leaves the asset `PENDING` on purpose — the sweep alread
 Two tiers, kept separate on purpose.
 
 ```bash
-pnpm test           # 706 unit tests, 181 files across every workspace; hermetic, no Docker
+pnpm test           # 756 unit tests, 186 files across every workspace; hermetic, no Docker
 pnpm test:cov       # same, with the coverage floors CI enforces
-pnpm test:e2e       # 94 integration suites (api 63, user-service 24, id-service 7); requires Docker
+pnpm test:e2e       # 98 integration suites (api 64, user-service 26, id-service 8); requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.

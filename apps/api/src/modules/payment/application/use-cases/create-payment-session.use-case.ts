@@ -16,16 +16,12 @@ import {
   PaymentGatewayError,
   type GatewaySession,
   type PaymentGatewayPort,
+  type RetrievedSession,
 } from '../ports/payment-gateway.port';
 
 // The order status that may start a payment. Compared as a string literal on purpose: Payment must
 // not import Order's domain enum (cross-context boundary), and only needs to know this one value.
 const ORDER_STATUS_PENDING = 'PENDING';
-
-// A payment in one of these states already owns the order's charge; a second session would risk a
-// double charge, so creating one is refused (409). FAILED/EXPIRED are terminal misses — a retry may
-// open a fresh session.
-const ACTIVE_PAYMENT_STATUSES: readonly PaymentStatus[] = [PaymentStatus.PENDING, PaymentStatus.SUCCEEDED];
 
 const LOG_CONTEXT = 'CreatePaymentSession';
 
@@ -60,8 +56,15 @@ export class CreatePaymentSessionUseCase {
     }
 
     const existing = await this.payments.findByOrderId(orderId);
-    if (existing && ACTIVE_PAYMENT_STATUSES.includes(existing.status)) {
+    if (existing && existing.status === PaymentStatus.SUCCEEDED) {
+      // Already owns the order's charge; a second session would risk a double charge.
       throw new ConflictException(`Order already has an active payment (${existing.status})`);
+    }
+    if (existing && existing.status === PaymentStatus.PENDING) {
+      const reused = await this.reuseOrRetireExisting(existing);
+      if (reused) return reused;
+      // Fell through: the old session is confirmed dead at the gateway and its row is now FAILED, so
+      // opening a fresh one below is exactly the retry-after-FAILED path.
     }
 
     // Amount is the order's frozen total, never a client-supplied figure (anti price-tampering).
@@ -129,6 +132,52 @@ export class CreatePaymentSessionUseCase {
       redirectUrl: session.redirectUrl,
       clientSecret: session.clientSecret,
     };
+  }
+
+  /**
+   * Reuses the session while the gateway says it is still open, so Pay pressed again gets the same
+   * page. Retires it only on a definite "not open"; UNKNOWN is not proof enough, as in reconcile.
+   */
+  private async reuseOrRetireExisting(existing: Payment): Promise<CreatePaymentSessionResult | null> {
+    let probe: RetrievedSession;
+    try {
+      probe = await this.gateway.retrieveSession(existing.providerSessionId);
+    } catch (error) {
+      this.metrics.recordSagaStep('payment_session', 'failed');
+      if (error instanceof PaymentGatewayError) {
+        this.logger.error({ orderId: existing.orderId, err: error }, 'gateway retrieveSession failed');
+        throw new BadGatewayException('Payment provider is temporarily unavailable', { cause: error });
+      }
+      throw error;
+    }
+
+    if (probe.status === 'PENDING') {
+      this.metrics.recordSagaStep('payment_session', 'success');
+      return {
+        paymentId: existing.id as string,
+        providerSessionId: existing.providerSessionId,
+        redirectUrl: probe.redirectUrl,
+        clientSecret: probe.clientSecret,
+      };
+    }
+    if (probe.status !== 'FAILED') {
+      // PAID: money already moved on a row we still call PENDING (a webhook or the sweep has not
+      // caught up) — opening a second session here would risk two payable sessions on one order.
+      // UNKNOWN: no proof the old session is dead, so the same refusal is the safe default.
+      throw new ConflictException(`Order already has an active payment (${existing.status})`);
+    }
+
+    // A definite "not open" answer, so the row is stale — close it out like a reconcile settlement
+    // would, and the one-active-payment index no longer blocks the fresh session about to open.
+    const written = await this.payments.updateStatus(existing.id as string, existing.markFailed().status, {
+      expectedStatus: PaymentStatus.PENDING,
+    });
+    if (written === null) {
+      // A webhook or the sweep settled it in the gap between the probe above and this write; it owns
+      // the outcome now, so refuse rather than race it.
+      throw new ConflictException(`Order already has an active payment (${existing.status})`);
+    }
+    return null;
   }
 
   /**

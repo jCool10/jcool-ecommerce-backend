@@ -1,5 +1,5 @@
-import { Type } from 'class-transformer';
-import { IsBooleanString, IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsStrictBoolean, StrictInt } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
 export enum NodeEnv {
@@ -14,20 +14,20 @@ export function AppEnv<TBase extends EnvBase>(Base: TBase) {
     NODE_ENV!: NodeEnv;
 
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(1)
     @Max(65535)
     PORT?: number;
 
     @IsOptional()
-    @Type(() => Number)
+    @StrictInt()
     @IsInt()
     @Min(0)
     SHUTDOWN_GRACE_PERIOD_MS?: number;
 
     @IsOptional()
-    @IsBooleanString()
+    @IsStrictBoolean()
     SWAGGER_ENABLED?: string;
 
     // Plain string, not @IsUrl, so localhost and other non-TLD hosts validate.
@@ -37,7 +37,7 @@ export function AppEnv<TBase extends EnvBase>(Base: TBase) {
     APP_PUBLIC_URL?: string;
 
     @IsOptional()
-    @IsBooleanString()
+    @IsStrictBoolean()
     COOKIE_SECURE?: string;
 
     @IsOptional()

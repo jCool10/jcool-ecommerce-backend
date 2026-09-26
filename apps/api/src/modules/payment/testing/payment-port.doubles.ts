@@ -26,6 +26,7 @@ export function fakePaymentGateway(overrides: Partial<PaymentGatewayPort> = {}):
     createSession: vi.fn(),
     verifyAndParseEvent: vi.fn(),
     getPaymentStatus: vi.fn(),
+    retrieveSession: vi.fn(),
     expireSession: vi.fn(),
     ...overrides,
   };

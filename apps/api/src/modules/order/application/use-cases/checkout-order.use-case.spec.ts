@@ -13,7 +13,11 @@ import type { CartSnapshotReaderPort, OrderCartLine } from '../ports/cart-snapsh
 import type { CatalogQueryPort, OrderSkuView } from '../ports/catalog-query.port';
 import type { InventoryReservationPort } from '../ports/inventory-reservation.port';
 import type { IdempotencyStorePort } from '../ports/idempotency-store.port';
-import type { CheckoutPersistResult, OrderRepositoryPort } from '../ports/order-repository.port';
+import {
+  TooManyPendingOrdersError,
+  type CheckoutPersistResult,
+  type OrderRepositoryPort,
+} from '../ports/order-repository.port';
 import { CheckoutOrderUseCase } from './checkout-order.use-case';
 
 const SKU = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -180,14 +184,32 @@ describe('CheckoutOrderUseCase', () => {
     expect(spies.createCheckout).not.toHaveBeenCalled();
   });
 
-  it('answers a stock shortfall with 409 and counts the reserve step as failed', async () => {
+  it('answers a stock shortfall with a generic 409 that hides the available count', async () => {
     const { useCase, metrics } = build({
-      checkout: () => Promise.reject(new StockReservationError('Insufficient stock', 'OUT_OF_STOCK')),
+      checkout: () =>
+        Promise.reject(
+          new StockReservationError('Insufficient stock for sku-1: requested 5, available 2', 'OUT_OF_STOCK'),
+        ),
     });
 
-    await expect(useCase.execute('u1')).rejects.toBeInstanceOf(ConflictException);
+    const error: unknown = await useCase.execute('u1').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).message).toBe('Insufficient stock');
     expect(metrics.recordOrderCreated).not.toHaveBeenCalled();
     expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith('reserve', 'failed');
+  });
+
+  it('answers a pending-order cap breach with 409', async () => {
+    const { useCase, metrics } = build({
+      checkout: () => Promise.reject(new TooManyPendingOrdersError('u1', 3)),
+    });
+
+    const error: unknown = await useCase.execute('u1').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).message).toContain('Too many pending orders');
+    expect(metrics.recordOrderCreated).not.toHaveBeenCalled();
   });
 
   it('replays the order a reclaimed key already placed, without a second reserve', async () => {

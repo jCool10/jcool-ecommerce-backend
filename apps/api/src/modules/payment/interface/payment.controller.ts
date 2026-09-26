@@ -31,6 +31,7 @@ export class PaymentController {
   @Throttle(PAYMENT_SESSION_THROTTLE)
   @UseGuards(UserThrottlerGuard)
   @ApiParam({ name: 'id', format: 'uuid', description: 'Order id to pay' })
+  // Also 201 when a still-open session is handed back, as an idempotent replay would answer.
   @ApiCreatedResponse({ type: CreatePaymentSessionResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found (or not owned by the caller)' })
   @ApiConflictResponse({ description: 'Order is not PENDING, or already has an active payment' })

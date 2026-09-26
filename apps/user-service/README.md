@@ -14,6 +14,11 @@ The gateway sends `/auth` and `/.well-known/jwks.json` here; the api serves ever
 | `GET /internal/v1/users/:id/summary` | `{ id, email, role }`, `404` for an unknown id. |
 | `GET /internal/v1/sessions/:userId/epoch` | `{ epoch }` from Postgres, after raising `auth:epoch:{userId}` to it. `404` for an unknown user. |
 | `GET /health/live`, `GET /health/ready` | As in the api. |
+| `GET /auth/verify-email?token=` | The link in the verification mail. Verifies through the same use case as the JSON `POST`, then answers an HTML page; `400` page for an invalid or expired token. |
+| `GET /auth/reset-password?token=` | The link in the reset mail. Changes nothing: renders a no-JavaScript form carrying the token. |
+| `POST /auth/reset-password/form` | That form's urlencoded submit. Same validation and use case as the JSON `POST /auth/reset-password`; answers an HTML page. |
+
+The three link pages are left out of the OpenAPI document, take the same throttle as their JSON siblings, and answer with `Content-Security-Policy: default-src 'none'; form-action 'self'`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer` (the token is in the URL) and `X-Robots-Tag: noindex`.
 
 `/internal/*` takes `Authorization: Bearer <INTERNAL_API_TOKEN>` (or `INTERNAL_API_TOKEN_PREVIOUS` while rotating). It is unthrottled, left out of the OpenAPI document, and answered with 404 by the gateway.
 

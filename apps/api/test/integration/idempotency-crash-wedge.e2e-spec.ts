@@ -18,10 +18,11 @@ import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
 const STOCK = 50;
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const CLOCK_TOLERANCE_MS = 5_000;
+// Mirrors IdempotencyInterceptor's IN_PROGRESS_LEASE_MS.
+const LEASE_MS = 30 * 1000;
 
-// A SIGKILLed pod runs no cleanup, so it leaves the lease the interceptor wrote, not a backdated one.
+// A SIGKILLed pod runs no cleanup, so it leaves the row exactly as the interceptor's own insert wrote
+// it — no backdating, until the test ages it past the lease itself.
 describe('Idempotency after a crash mid-checkout (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -72,10 +73,7 @@ describe('Idempotency after a crash mid-checkout (integration, real Postgres)', 
     vi.restoreAllMocks();
   }
 
-  // Known defect. Intended: a key whose owner died is reclaimable within a window a client can wait
-  // out, and the 409 says how long. Actual: IdempotencyInterceptor leases IN_PROGRESS for the 24h
-  // IDEMPOTENCY_TTL_MS replay window, and its 409 carries no Retry-After or reason code.
-  it('wedges a key for a full day when the pod dies mid-checkout, and never says so', async () => {
+  it('reclaims a key wedged by a mid-checkout crash once its lease passes, with no double order', async () => {
     const token = await buyerWithCart(app, sku.variantId, 1);
     const key = randomUUID();
 
@@ -83,20 +81,25 @@ describe('Idempotency after a crash mid-checkout (integration, real Postgres)', 
 
     const wedged = await keyRow(key);
     expect(wedged.status).toBe('IN_PROGRESS');
-    expect(wedged.expiresAt.getTime() - Date.now()).toBeGreaterThan(ONE_DAY_MS - CLOCK_TOLERANCE_MS);
 
-    const retry = await postOrder(token, key).expect(409);
-    expect(retry.body.message).toBe('A request with this Idempotency-Key is already in progress');
-    expect(retry.headers['retry-after']).toBeUndefined();
-    expect(retry.body).not.toHaveProperty('code');
-
-    // A retry does not renew the lease.
-    expect((await keyRow(key)).expiresAt.getTime()).toBe(wedged.expiresAt.getTime());
+    // Immediately after the crash the row is still inside its lease: a retry cannot tell a dead
+    // owner from one that is simply still running, so it 409s rather than racing it.
+    const tooSoon = await postOrder(token, key).expect(409);
+    expect(tooSoon.body.message).toBe('A request with this Idempotency-Key is already in progress');
     expect(await ordersOf(token)).toHaveLength(0);
 
-    // The cart is untouched, so a new key still buys the order.
-    const fresh = await postOrder(token, randomUUID()).expect(201);
-    expect(fresh.body.id).toBeDefined();
+    // Age the row past the lease without a real wait — the crash left no cleanup to race against.
+    await db
+      .update(schema.idempotencyKeys)
+      .set({ createdAt: new Date(Date.now() - LEASE_MS - 1_000) })
+      .where(eq(schema.idempotencyKeys.key, key));
+
+    const retry = await postOrder(token, key).expect(201);
+    expect(retry.body.id).toBeDefined();
     expect(await ordersOf(token)).toHaveLength(1);
+
+    const healed = await keyRow(key);
+    expect(healed.status).toBe('COMPLETED');
+    expect(healed.orderId).toBe(retry.body.id);
   });
 });

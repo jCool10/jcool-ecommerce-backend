@@ -1,10 +1,11 @@
-import { IsBooleanString, IsOptional } from 'class-validator';
+import { IsOptional } from 'class-validator';
+import { IsStrictBoolean } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
 export function ThrottleEnv<TBase extends EnvBase>(Base: TBase) {
   class ThrottleEnv extends Base {
     @IsOptional()
-    @IsBooleanString()
+    @IsStrictBoolean()
     THROTTLE_ENABLED?: string;
   }
   return ThrottleEnv;

@@ -16,15 +16,32 @@ interface AcquiredRow extends Record<string, unknown> {
 // One rounding for every lease end, so the value a holder is told and the one its successor reads match.
 const epochMs = (column: SQL) => sql`(extract(epoch FROM ${column}) * 1000)::bigint`;
 
+// Turns a claim or a re-adopt row into the same grant shape, since both hand a holder a lease it can
+// mint under.
+function toGrant(row: AcquiredRow): LeaseGrant {
+  return {
+    nodeId: row.node_id,
+    generation: Number(row.generation),
+    floorMs: row.max_ts_ms === null ? null : Number(row.max_ts_ms),
+    prevUntilMs: Number(row.prev_until_ms),
+    leaseUntilMs: Number(row.lease_until_ms),
+    dbNowMs: Number(row.db_now_ms),
+  };
+}
+
 /**
- * Each operation is a single statement: the claim's row lock only lasts as long as its own statement,
- * so splitting select and update would let two replicas claim one node.
+ * The claim itself is one statement: the candidate row's lock only lasts as long as it, so splitting
+ * select and update would let two replicas claim one node. Acquire runs a re-adopt read first, which
+ * needs no lock of its own: it is scoped to this exact holder string, which nothing else can match.
  */
 @Injectable()
 export class PostgresLeaseStore implements LeaseStore {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDBOf<typeof schema>) {}
 
   async acquire(request: { holder: string; ttlMs: number; quarantineMs: number }): Promise<LeaseGrant | null> {
+    const reclaimed = await this.reclaimOwn(request.holder);
+    if (reclaimed !== null) return reclaimed;
+
     // The candidate's row is locked, so the lease end read here is the one being replaced. The expiry
     // test is repeated on the UPDATE so the claim stays safe if the candidate query is ever widened.
     const { rows } = await this.db.execute<AcquiredRow>(sql`
@@ -39,6 +56,7 @@ export class PostgresLeaseStore implements LeaseStore {
       SET holder = ${request.holder},
           generation = n.generation + 1,
           lease_until = now() + ${request.ttlMs}::int * interval '1 millisecond',
+          prior_lease_until = c.prev_until,
           acquired_at = now(),
           renewed_at = now()
       FROM candidate c
@@ -50,15 +68,28 @@ export class PostgresLeaseStore implements LeaseStore {
         ${epochMs(sql`now()`)} AS db_now_ms
     `);
     const row = rows[0];
-    if (row === undefined) return null;
-    return {
-      nodeId: row.node_id,
-      generation: Number(row.generation),
-      floorMs: row.max_ts_ms === null ? null : Number(row.max_ts_ms),
-      prevUntilMs: Number(row.prev_until_ms),
-      leaseUntilMs: Number(row.lease_until_ms),
-      dbNowMs: Number(row.db_now_ms),
-    };
+    return row === undefined ? null : toGrant(row);
+  }
+
+  // A claim can commit here after its caller's query_timeout has already given up on the statement
+  // client-side; the caller then retries not knowing whether it holds a node. This re-reads whatever
+  // this exact holder already has an unexpired lease on, so the retry picks that row back up instead
+  // of claiming a second node and stranding the first for a full TTL plus quarantine. `prior_lease_until`
+  // stands in for the candidate's pre-claim `lease_until`, which the earlier, uncollected claim already
+  // overwrote; it falls back to the current `lease_until` for a row claimed before this column existed.
+  private async reclaimOwn(holder: string): Promise<LeaseGrant | null> {
+    const { rows } = await this.db.execute<AcquiredRow>(sql`
+      SELECT node_id, generation, max_ts_ms,
+        ${epochMs(sql`COALESCE(prior_lease_until, lease_until)`)} AS prev_until_ms,
+        ${epochMs(sql`lease_until`)} AS lease_until_ms,
+        ${epochMs(sql`now()`)} AS db_now_ms
+      FROM node_leases
+      WHERE holder = ${holder} AND lease_until > now()
+      ORDER BY lease_until DESC
+      LIMIT 1
+    `);
+    const row = rows[0];
+    return row === undefined ? null : toGrant(row);
   }
 
   async renew(request: {
