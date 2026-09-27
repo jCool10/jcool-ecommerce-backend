@@ -120,9 +120,11 @@ psql_q "
          round(mean_exec_time::numeric, 3) as mean_ms,
          round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 1) as pct,
          rows,
-         round(coalesce(shared_blk_read_time, 0)::numeric, 1) as read_ms,
+         -- PG17 renamed blk_read_time to shared_blk_read_time; read whichever this server has.
+         round(coalesce((to_jsonb(s) ->> 'shared_blk_read_time')::numeric,
+                        (to_jsonb(s) ->> 'blk_read_time')::numeric, 0), 1) as read_ms,
          left(regexp_replace(query, '\s+', ' ', 'g'), 200) as query
-  from pg_stat_statements
+  from pg_stat_statements s
   order by total_exec_time desc
   limit 25;" > "$OUT/pgss.tsv"
 

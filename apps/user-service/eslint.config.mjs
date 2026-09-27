@@ -4,7 +4,7 @@ import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended'
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
-// One logger, one call shape. See docs/logging-conventions.md.
+// One logger, one call shape. See docs/code-standards.md#logging.
 const nestLoggerBan = {
   name: '@nestjs/common',
   importNames: ['Logger', 'ConsoleLogger'],

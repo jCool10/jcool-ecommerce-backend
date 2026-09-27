@@ -31,7 +31,7 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
       'prettier/prettier': 'error',
-      // Nest's Logger bypasses the pino pipeline and its request/job/trace correlation. See docs/logging-conventions.md.
+      // Nest's Logger bypasses the pino pipeline and its request/job/trace correlation. See docs/code-standards.md#logging.
       'no-restricted-imports': [
         'error',
         {

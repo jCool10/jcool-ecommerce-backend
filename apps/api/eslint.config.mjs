@@ -4,7 +4,7 @@ import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended'
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
-// One logger, one call shape. See docs/logging-conventions.md.
+// One logger, one call shape. See docs/code-standards.md#logging.
 //
 // `Logger` from @nestjs/common writes outside the pino pipeline: no requestId, no job/trace
 // correlation, no `context` unless it is hand-passed, and the only way to carry a value is to

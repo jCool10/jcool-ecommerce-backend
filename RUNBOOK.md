@@ -145,7 +145,7 @@ Consequences to plan for:
 
 ## Rebuild the search index
 
-`/products/search` reads a **derived** index. Postgres is the source of truth, so the index can always be thrown away and rebuilt — it is never restored from a backup. Live writes keep it current through the outbox ([ADR](./docs/adr-search-index-consistency.md)). Rebuild when one of these happened:
+`/products/search` reads a **derived** index. Postgres is the source of truth, so the index can always be thrown away and rebuilt — it is never restored from a backup. Live writes keep it current through the outbox ([decision record](./docs/system-architecture.md#search-index-consistency)). Rebuild when one of these happened:
 
 - **A deploy changed the index definition** (`index-settings.ts`) other than by adding a field. Boot adds new fields to the live index and nothing else. A changed field type or analyzer name fails there and logs `search index provisioning failed`; a changed setting (the analyzer's filters, `max_result_window`) is not applied at all, and nothing says so. Rebuild right after that deploy, within the retry horizon (about 33 minutes), while any writes the old mapping refuses are still retrying.
 - **`SEARCH_ENABLED` was turned on** in an environment that ran with it off. Catalog events consumed meanwhile changed nothing.
@@ -608,7 +608,7 @@ Each service goes back to stdout only on its next deploy.
 
 `elasticsearch` is a Railway service declared in `.railway/railway.ts`, built from `infra/elasticsearch/`,
 with its data on the `elasticsearch-data` volume. It holds only the catalog search index, which is
-derived from the api's Postgres ([ADR](./docs/adr-search-index-consistency.md)), so losing the volume
+derived from the api's Postgres ([decision record](./docs/system-architecture.md#search-index-consistency)), so losing the volume
 costs a [rebuild](#rebuild-the-search-index), not data. Like the monitoring stack it is outside
 `cd.yml`: a config change is `railway up --ci --service elasticsearch`. A service with a volume never
 runs two deployments at once, so each redeploy takes search away for a minute or two; meanwhile
