@@ -16,12 +16,13 @@ import {
 } from '../../src/modules/inventory/application/ports/stock-repository.port';
 import { readStock } from '../setup/fixtures/order-flow.fixture';
 import { releaseOnceBlocked, seedStock } from '../setup/fixtures/inventory.fixture';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-const SKU = '44444444-4444-4444-8444-444444444444';
+const SKU = testId();
 // One order id for both contenders: a duplicate submission, not two orders competing for stock.
-const ORDER = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const ORDER = testId();
 const STOCK = 10;
 const QUANTITY = 1;
 

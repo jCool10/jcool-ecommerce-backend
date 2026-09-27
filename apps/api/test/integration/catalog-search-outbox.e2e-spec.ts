@@ -9,8 +9,9 @@ import { authHeader } from '../setup/bearer.helper';
 import { createTestCategory, createTestProduct, type TestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdminPrincipal, type TestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
-const ABSENT_UUID = '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f';
+const ABSENT_ID = testId();
 const RACE_ROUNDS = 5;
 
 const PRODUCT_CHANGED = { aggregateType: 'Product', eventType: 'catalog.product.changed', payload: {} };
@@ -149,8 +150,8 @@ describe('Catalog search outbox emission (integration, real Postgres)', () => {
       await send('patch', `/admin/skus/${product.variantId}`, { name: 'Known variant' }).expect(200);
       expect(await db.select().from(schema.outbox)).toHaveLength(1);
 
-      await send('patch', `/admin/skus/${ABSENT_UUID}`, { name: 'Nobody' }).expect(404);
-      await send('delete', `/admin/skus/${ABSENT_UUID}`).expect(404);
+      await send('patch', `/admin/skus/${ABSENT_ID}`, { name: 'Nobody' }).expect(404);
+      await send('delete', `/admin/skus/${ABSENT_ID}`).expect(404);
 
       expect(await db.select().from(schema.outbox)).toHaveLength(1);
       expect(await trail(product.productId)).toEqual({ events: 1, version: 1 });
@@ -241,6 +242,7 @@ describe('Catalog search outbox emission (integration, real Postgres)', () => {
       const [row] = await db
         .insert(schema.mediaAssets)
         .values({
+          id: testId(),
           storageKey: `media/${crypto.randomUUID()}.png`,
           contentType: 'image/png',
           sizeBytes: 100,

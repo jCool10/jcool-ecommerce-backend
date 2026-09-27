@@ -11,11 +11,12 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { readStock, reservationsFor } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
-const SKU_A = '11111111-1111-4111-8111-111111111111';
-const SKU_B = '22222222-2222-4222-8222-222222222222';
-const ORDER_1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const ORDER_2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const SKU_A = testId();
+const SKU_B = testId();
+const ORDER_1 = testId();
+const ORDER_2 = testId();
 
 // Single-caller contract of both strategies. Races live in checkout-oversell and the
 // inventory-optimistic-* and inventory-mixed-strategy suites.

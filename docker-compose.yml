@@ -173,6 +173,8 @@ services:
       JWT_AUDIENCE: jcool-api
       USER_SERVICE_INTERNAL_URL: http://user-service:3000
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
+      # Every row id is minted there, so no write succeeds without it.
+      ID_SERVICE_URL: http://gateway:4000
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -185,6 +187,8 @@ services:
       # thing that creates it.
       minio-init:
         condition: service_completed_successfully
+      gateway:
+        condition: service_started
     # Probes with node (present in the image) because alpine has no curl/wget.
     healthcheck:
       test:

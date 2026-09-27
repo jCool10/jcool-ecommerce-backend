@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import type { InitiateUploadResult } from '../../application/use-cases/initiate-upload.use-case';
 
 export class UploadTicketResponseDto {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ example: '137465797020397179' })
   assetId!: string;
 
   @ApiProperty({ description: 'PUT the bytes here directly. They never pass through this API.' })

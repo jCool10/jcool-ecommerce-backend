@@ -17,6 +17,9 @@ import 'dotenv/config';
 import { and, eq, inArray, like, notInArray, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import { bucketOf } from '@jcool/id-codec';
+import { UNOWNED_BUCKET } from '../src/shared/identity/id-generator.port';
+import { type ScriptsMint, withScriptsMintLock } from '../src/shared/infrastructure/database/scripts-mint-lock';
 import {
   categories,
   prices,
@@ -110,8 +113,9 @@ function priceFor(i: number): number {
   return 50_000 + (i % 500) * 1_000;
 }
 
-async function seedCategories(db: Db): Promise<Map<string, string>> {
+async function seedCategories(db: Db, mint: ScriptsMint): Promise<Map<string, string>> {
   const rows = Array.from({ length: CATEGORY_COUNT }, (_, i) => ({
+    id: mint(UNOWNED_BUCKET),
     name: `Perf Category ${i}`,
     slug: `${CATEGORY_SLUG_PREFIX}${i}`,
     archivedAt: i < ARCHIVED_CATEGORIES ? new Date() : null,
@@ -125,13 +129,19 @@ async function seedCategories(db: Db): Promise<Map<string, string>> {
   return new Map(stored.map((c) => [c.slug, c.id]));
 }
 
-async function seedProducts(db: Db, scale: number, categoryIds: Map<string, string>): Promise<Map<string, string>> {
+async function seedProducts(
+  db: Db,
+  mint: ScriptsMint,
+  scale: number,
+  categoryIds: Map<string, string>,
+): Promise<Map<string, string>> {
   const epoch = Date.now();
   const rows = Array.from({ length: scale }, (_, i) => {
     const categorySlug = `${CATEGORY_SLUG_PREFIX}${i % CATEGORY_COUNT}`;
     const categoryId = categoryIds.get(categorySlug);
     if (!categoryId) throw new Error(`Seed precondition failed: category ${categorySlug} not found`);
     return {
+      id: mint(UNOWNED_BUCKET),
       name: `Perf Product ${i}`,
       slug: `${PRODUCT_SLUG_PREFIX}${i}`,
       description: `Synthetic catalog row ${i} for database performance measurement.`,
@@ -152,13 +162,23 @@ async function seedProducts(db: Db, scale: number, categoryIds: Map<string, stri
   return new Map(stored.map((p) => [p.slug, p.id]));
 }
 
-async function seedVariants(db: Db, scale: number, productIds: Map<string, string>): Promise<string[]> {
-  const rows: { sku: string; name: string; productId: string }[] = [];
+async function seedVariants(
+  db: Db,
+  mint: ScriptsMint,
+  scale: number,
+  productIds: Map<string, string>,
+): Promise<string[]> {
+  const rows: { id: string; sku: string; name: string; productId: string }[] = [];
   for (let i = 0; i < scale; i++) {
     const productId = productIds.get(`${PRODUCT_SLUG_PREFIX}${i}`);
     if (!productId) throw new Error(`Seed precondition failed: product ${PRODUCT_SLUG_PREFIX}${i} not found`);
     for (let v = 0; v < variantCountFor(i); v++) {
-      rows.push({ sku: `${SKU_PREFIX}${i}-${v}`, name: `Perf Product ${i} / Variant ${v}`, productId });
+      rows.push({
+        id: mint(UNOWNED_BUCKET),
+        sku: `${SKU_PREFIX}${i}-${v}`,
+        name: `Perf Product ${i} / Variant ${v}`,
+        productId,
+      });
     }
   }
 
@@ -176,8 +196,9 @@ async function seedVariants(db: Db, scale: number, productIds: Map<string, strin
   return stored.map((v) => v.id);
 }
 
-async function seedPricesAndStock(db: Db, variantIds: readonly string[]): Promise<void> {
+async function seedPricesAndStock(db: Db, mint: ScriptsMint, variantIds: readonly string[]): Promise<void> {
   const priceRows = variantIds.map((variantId, i) => ({
+    id: mint(UNOWNED_BUCKET),
     variantId,
     currency: CURRENCY,
     amountMinor: priceFor(i),
@@ -186,17 +207,28 @@ async function seedPricesAndStock(db: Db, variantIds: readonly string[]): Promis
     await db.insert(prices).values(chunk).onConflictDoNothing();
   }
 
-  const stockRows = variantIds.map((variantId) => ({ variantId, quantityOnHand: STOCK_ON_HAND }));
+  const stockRows = variantIds.map((variantId) => ({
+    id: mint(UNOWNED_BUCKET),
+    variantId,
+    quantityOnHand: STOCK_ON_HAND,
+  }));
   for (const chunk of chunks(stockRows, CHUNK)) {
     await db.insert(stockLevels).values(chunk).onConflictDoNothing();
   }
 }
 
 // The cart is deliberately fat, so `GET /cart` shows the per-line SKU fan-out.
-async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: string; lines: number }> {
+async function seedPerfUserCart(
+  db: Db,
+  mint: ScriptsMint,
+  cartLines: number,
+): Promise<{ userId: string; lines: number }> {
   const userId = await perfUserId();
 
-  await db.insert(carts).values({ userId }).onConflictDoNothing();
+  await db
+    .insert(carts)
+    .values({ id: mint(bucketOf(userId)), userId })
+    .onConflictDoNothing();
   const [cart] = await db.select({ id: carts.id }).from(carts).where(eq(carts.userId, userId));
   if (!cart) throw new Error(`Seed precondition failed: cart for ${PERF_USER_EMAIL} not found`);
 
@@ -216,7 +248,7 @@ async function seedPerfUserCart(db: Db, cartLines: number): Promise<{ userId: st
 
   const wanted = lineSkus.map((sku) => sku.id);
   for (const chunk of chunks(
-    wanted.map((skuId, i) => ({ cartId: cart.id, skuId, quantity: (i % 3) + 1 })),
+    wanted.map((skuId, i) => ({ id: mint(bucketOf(cart.id)), cartId: cart.id, skuId, quantity: (i % 3) + 1 })),
     CHUNK,
   )) {
     await db.insert(cartItems).values(chunk).onConflictDoNothing();
@@ -287,15 +319,17 @@ async function main(): Promise<void> {
     const cartLines = intEnv('CART_LINES', 30, 10_000);
     const startedAt = Date.now();
 
-    const categoryIds = await seedCategories(db);
-    console.log(`  categories: ${categoryIds.size}`);
-    const productIds = await seedProducts(db, scale, categoryIds);
-    console.log(`  products:   ${productIds.size}`);
-    const variantIds = await seedVariants(db, scale, productIds);
-    console.log(`  variants:   ${variantIds.length}`);
-    await seedPricesAndStock(db, variantIds);
-    console.log(`  prices + stock levels: ${variantIds.length} each`);
-    const cart = await seedPerfUserCart(db, cartLines);
+    const cart = await withScriptsMintLock(pool, async (mint) => {
+      const categoryIds = await seedCategories(db, mint);
+      console.log(`  categories: ${categoryIds.size}`);
+      const productIds = await seedProducts(db, mint, scale, categoryIds);
+      console.log(`  products:   ${productIds.size}`);
+      const variantIds = await seedVariants(db, mint, scale, productIds);
+      console.log(`  variants:   ${variantIds.length}`);
+      await seedPricesAndStock(db, mint, variantIds);
+      console.log(`  prices + stock levels: ${variantIds.length} each`);
+      return seedPerfUserCart(db, mint, cartLines);
+    });
     console.log(`  cart:       ${cart.lines} lines for ${PERF_USER_EMAIL} (user ${cart.userId})`);
 
     // Autovacuum has not run yet, so without this the planner still describes the pre-seed table

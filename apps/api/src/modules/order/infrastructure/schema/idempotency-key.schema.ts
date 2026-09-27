@@ -1,12 +1,10 @@
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const idempotencyStatus = pgEnum('idempotency_status', ['IN_PROGRESS', 'COMPLETED']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: the id carries the caller's bucket, which only the writer knows.
+const id = () => snowflakeId('id').primaryKey();
 
 export const idempotencyKeys = pgTable(
   'idempotency_keys',
@@ -28,7 +26,7 @@ export const idempotencyKeys = pgTable(
     responseBody: jsonb('response_body'),
     // No FK: the row is inserted IN_PROGRESS before the order exists, so the link stays a
     // defensive back-reference rather than a hard dependency.
-    orderId: uuid('order_id'),
+    orderId: snowflakeId('order_id'),
     method: text('method').notNull(),
     path: text('path').notNull(),
     // Application sets this to created_at + TTL on insert (kept in app so the TTL stays
@@ -37,6 +35,8 @@ export const idempotencyKeys = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    routableIdCheck('ck_idempotency_keys_id_routable', t.id),
+    routableIdCheck('ck_idempotency_keys_order_id_routable', t.orderId),
     // The concurrency backstop: of two requests racing the same (scope, key), exactly one INSERT
     // wins and the loser sees the conflict instead of double-creating.
     uniqueIndex('uq_idempotency_scope_key').on(t.scope, t.key),

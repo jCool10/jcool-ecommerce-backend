@@ -1,15 +1,12 @@
-import { integer, pgTable, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { integer, pgTable, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // By design there is NO cross-context FK (userId → users, skuId → product_variants): the boundary
 // is kept at the application layer (reads go through Catalog's published port), so the DB does not
 // couple Cart to another context's tables.
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: a cart id carries its owner's bucket, which only the writer knows.
+const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -26,20 +23,25 @@ export const carts = pgTable(
     userId: snowflakeId('user_id').notNull().unique(),
     ...stamps,
   },
-  (t) => [routableIdCheck('ck_carts_user_id_routable', t.userId)],
+  (t) => [routableIdCheck('ck_carts_id_routable', t.id), routableIdCheck('ck_carts_user_id_routable', t.userId)],
 );
 
 export const cartItems = pgTable(
   'cart_items',
   {
     id: id(),
-    cartId: uuid('cart_id')
+    cartId: snowflakeId('cart_id')
       .notNull()
       .references(() => carts.id, { onDelete: 'cascade' }),
-    skuId: uuid('sku_id').notNull(),
+    skuId: snowflakeId('sku_id').notNull(),
     // Always >= 1, enforced at the DTO edge rather than by a DB CHECK.
     quantity: integer('quantity').notNull(),
     ...stamps,
   },
-  (t) => [uniqueIndex('uq_cart_items_cart_sku').on(t.cartId, t.skuId)],
+  (t) => [
+    routableIdCheck('ck_cart_items_id_routable', t.id),
+    routableIdCheck('ck_cart_items_cart_id_routable', t.cartId),
+    routableIdCheck('ck_cart_items_sku_id_routable', t.skuId),
+    uniqueIndex('uq_cart_items_cart_sku').on(t.cartId, t.skuId),
+  ],
 );

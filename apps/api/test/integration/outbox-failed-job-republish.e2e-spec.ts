@@ -8,7 +8,7 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
 import {
   DOMAIN_EVENTS_CONSUMER,
   DOMAIN_EVENTS_DLQ_QUEUE,
@@ -17,18 +17,18 @@ import {
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
+import { testId } from '../setup/id-service-stub';
 
 // One attempt, so a rejected dispatch reaches the failed set on the first delivery.
 const ATTEMPTS = '1';
 const BACKOFF_MS = '50';
 
-const aggregateId = (n: number) => `0198f0d8-4444-7000-8000-${n.toString(16).padStart(12, '0')}`;
-
-const seedRow = (n: number) => ({
+const seedRow = (orderId = testId()) => ({
+  id: testId(),
   aggregateType: 'Order',
-  aggregateId: aggregateId(n),
+  aggregateId: orderId,
   eventType: 'order.placed',
-  payload: { orderId: aggregateId(n), totalAmountMinor: 150_000 },
+  payload: { orderId, totalAmountMinor: 150_000 },
 });
 
 // BullMQ dedups `add` on whether the job key exists, not on whether the event was applied.
@@ -72,7 +72,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
   const seed = (count: number) =>
     db
       .insert(schema.outbox)
-      .values(Array.from({ length: count }, (_, i) => seedRow(i + 1)))
+      .values(Array.from({ length: count }, () => seedRow()))
       .returning();
 
   const unpublished = () => db.select().from(schema.outbox).where(isNull(schema.outbox.publishedAt));
@@ -84,13 +84,13 @@ describe('Outbox relay against a job the queue already remembers (integration, r
       .where(and(eq(schema.inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(schema.inbox.messageId, messageId)));
 
   const stateOf = async (id: string): Promise<string> => {
-    const job = await Job.fromId<DomainEventJob>(queue, id);
+    const job = await Job.fromId<DomainEventJob>(queue, jobIdFor(id));
     return job ? job.getState() : 'missing';
   };
 
   const deadLettersFor = async (id: string): Promise<Job<DeadLetterJob>[]> => {
     const jobs = (await dlq.getJobs(['waiting', 'prioritized'])) as Job<DeadLetterJob>[];
-    return jobs.filter((job) => job.id === id);
+    return jobs.filter((job) => job.id === jobIdFor(id));
   };
 
   const waitForState = (id: string, state: string) =>
@@ -134,7 +134,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     const [poison] = await seed(1);
     const add = queue.add.bind(queue);
     vi.spyOn(queue, 'add').mockImplementation((name: string, data: DomainEventJob, opts?: JobsOptions) =>
-      opts?.jobId === poison.id
+      opts?.jobId === jobIdFor(poison.id)
         ? Promise.reject(new Error('payload exceeds the maximum job size'))
         : add(name, data, opts),
     );
@@ -143,7 +143,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     // past any plausible escalation threshold, so adding one turns this test red.
     const TICKS_PAST_ANY_PLAUSIBLE_THRESHOLD = 12;
     for (let tick = 0; tick < TICKS_PAST_ANY_PLAUSIBLE_THRESHOLD; tick += 1) {
-      await db.insert(schema.outbox).values(seedRow(tick + 2));
+      await db.insert(schema.outbox).values(seedRow());
       await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 1 });
     }
 

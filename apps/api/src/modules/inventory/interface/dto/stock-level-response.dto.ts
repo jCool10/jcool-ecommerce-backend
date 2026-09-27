@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import type { StockView } from '../../application/ports/stock-admin.port';
 
 export class StockLevelResponseDto {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ example: '137465797020397179' })
   variantId!: string;
 
   @ApiProperty({ example: 40 })

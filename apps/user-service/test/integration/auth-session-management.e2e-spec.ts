@@ -3,6 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { encode } from '@jcool/id-codec';
 import { authHeader, loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
@@ -161,11 +162,15 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
       const { user } = await createTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
 
-      await request(app.getHttpServer())
-        .delete(`/auth/sessions/${randomUUID()}`)
-        .set(authHeader(a.accessToken))
-        .expect(404);
-      await request(app.getHttpServer()).delete('/auth/sessions/not-a-uuid').set(authHeader(a.accessToken)).expect(400);
+      const unknown = encode({ tsMs: Date.now(), bucket: 0, nodeId: 1, sequence: 0 });
+
+      await request(app.getHttpServer()).delete(`/auth/sessions/${unknown}`).set(authHeader(a.accessToken)).expect(404);
+      for (const malformed of ['not-an-id', randomUUID()]) {
+        await request(app.getHttpServer())
+          .delete(`/auth/sessions/${malformed}`)
+          .set(authHeader(a.accessToken))
+          .expect(400);
+      }
     });
   });
 

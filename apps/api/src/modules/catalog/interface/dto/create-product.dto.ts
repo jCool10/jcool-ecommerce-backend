@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsSnowflakeId } from '@jcool/platform/interface';
 import { PRODUCT_STATUSES, type ProductStatus } from '../../domain/entities';
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
 
@@ -22,11 +23,8 @@ export class CreateProductDto {
   @MaxLength(2000)
   description?: string;
 
-  @ApiProperty({
-    example: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f',
-    description: 'Category id (UUID v7) — must exist and be active',
-  })
-  @IsUUID()
+  @ApiProperty({ example: '137465797020397179', description: 'Category id — must exist and be active' })
+  @IsSnowflakeId()
   categoryId!: string;
 
   @ApiPropertyOptional({

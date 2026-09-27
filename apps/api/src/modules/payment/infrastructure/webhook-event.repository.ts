@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne, UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
 import { WebhookEvent } from '../domain/webhook-event.entity';
 import { WebhookEventStatus } from '../domain/webhook-event-status';
 import type {
@@ -14,13 +15,17 @@ type WebhookEventRow = typeof webhookEvents.$inferSelect;
 
 @Injectable()
 export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+  ) {}
 
   async insertIfNew(input: NewWebhookEvent, tx?: DrizzleTx): Promise<InsertWebhookEventResult> {
     const executor = tx ?? this.db;
     const [inserted] = await executor
       .insert(webhookEvents)
       .values({
+        id: await mintOne(this.ids, UNOWNED_BUCKET),
         provider: input.provider,
         providerEventId: input.providerEventId,
         type: input.type,

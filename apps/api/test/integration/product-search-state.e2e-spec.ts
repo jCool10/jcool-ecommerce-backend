@@ -15,8 +15,9 @@ import {
   type TestProduct,
 } from '../setup/fixtures/catalog.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
-const ABSENT_UUID = '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f';
+const ABSENT_ID = testId();
 
 type HydrateActive = (tx: unknown, ids: string[]) => Promise<Map<string, Product>>;
 
@@ -43,7 +44,7 @@ describe('Product search state (integration, real Postgres)', () => {
     const product = await createTestProduct(app);
     await db
       .insert(schema.productImages)
-      .values({ productId: product.productId, assetId: crypto.randomUUID(), position: 0 });
+      .values({ id: testId(), productId: product.productId, assetId: testId(), position: 0 });
     await setVersion(product.productId, 7);
 
     const [found] = await state.findByIds([product.productId]);
@@ -105,12 +106,12 @@ describe('Product search state (integration, real Postgres)', () => {
     const active = await createTestProduct(app);
     const draft = await createTestProduct(app, { status: 'DRAFT' });
 
-    const found = await state.findByIds([active.productId, ABSENT_UUID, draft.productId]);
+    const found = await state.findByIds([active.productId, ABSENT_ID, draft.productId]);
 
     expect(found.map((entry) => entry.id).sort()).toEqual([active.productId, draft.productId].sort());
     expect(found.find((entry) => entry.id === active.productId)?.product?.id).toBe(active.productId);
     expect(found.find((entry) => entry.id === draft.productId)?.product).toBeNull();
-    expect(found.some((entry) => entry.id === ABSENT_UUID)).toBe(false);
+    expect(found.some((entry) => entry.id === ABSENT_ID)).toBe(false);
   });
 
   describe('bumpCategoryProducts', () => {
@@ -123,7 +124,7 @@ describe('Product search state (integration, real Postgres)', () => {
     }
 
     const ascendingIds = (howMany: number): string[] =>
-      Array.from({ length: howMany }, () => crypto.randomUUID()).sort();
+      Array.from({ length: howMany }, () => testId()).sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : 1));
 
     // Stored in the order given. The cases give the highest id first, so storage order runs against
     // id order and only the ORDER BY yields ascending pages.

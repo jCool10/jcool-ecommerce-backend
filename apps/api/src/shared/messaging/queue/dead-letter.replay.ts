@@ -1,6 +1,6 @@
 import type { Job, JobsOptions, Queue } from 'bullmq';
 import type { DeadLetterJob } from './dead-letter';
-import { envelopeFields, isWellFormedEnvelope, type DomainEventJob } from './domain-event.job';
+import { envelopeFields, isWellFormedEnvelope, jobIdFor, type DomainEventJob } from './domain-event.job';
 
 export interface ReplayOutcome {
   messageId: string;
@@ -134,7 +134,8 @@ async function replayOne(
 
   // The failed job still holds this id in the main queue (kept for a week), and `add` with an
   // existing jobId is ignored rather than rejected — without this the replay is a silent no-op.
-  const stale = await main.getJob(messageId);
+  const jobId = jobIdFor(messageId);
+  const stale = await main.getJob(jobId);
   if (stale) {
     try {
       await stale.remove();
@@ -147,14 +148,14 @@ async function replayOne(
 
   const { failedReason: _reason, attemptsMade: _attempts, failedAt: _at, ...envelope } = job.data;
   await main.add(envelope.eventType, envelope satisfies DomainEventJob, {
-    jobId: messageId,
+    jobId,
     ...jobOptionsFor(envelope.eventType),
   });
 
   // Only after the re-publish landed — the reverse order would lose the message outright. Re-read
   // rather than reuse the handle: if it poisoned again meanwhile, the router has replaced this entry
   // with a fresher diagnosis and deleting that would hide the failure.
-  const current = (await dlq.getJob(messageId)) as Job<DeadLetterJob> | undefined;
+  const current = (await dlq.getJob(jobId)) as Job<DeadLetterJob> | undefined;
   if (current && current.data?.failedAt === job.data.failedAt) await current.remove();
 
   outcome.status = 'replayed';

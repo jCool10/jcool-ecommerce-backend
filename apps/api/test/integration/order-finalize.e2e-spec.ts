@@ -16,10 +16,11 @@ import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { readOrder, readReservation, readStock } from '../setup/fixtures/order-flow.fixture';
 import { mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
 const USER_ID = mintTestUserId('owner@test.local');
-const SKU = '11111111-1111-4111-8111-111111111111';
-const SKU_B = '22222222-2222-4222-8222-222222222222';
+const SKU = testId();
+const SKU_B = testId();
 
 // The order status flip and the stock resolution share one transaction.
 describe('Order finalization (integration, real Postgres)', () => {
@@ -41,6 +42,7 @@ describe('Order finalization (integration, real Postgres)', () => {
     const [row] = await db
       .insert(schema.orders)
       .values({
+        id: testId(),
         userId: USER_ID,
         status,
         currency: 'VND',
@@ -215,7 +217,7 @@ describe('Order finalization (integration, real Postgres)', () => {
     const orderId = await seedOrder();
     // A HELD line larger than the tracked reserved count: releasing it trips ck_stock_reserved_nonneg.
     await seedStock(app, SKU, 10, 2);
-    await db.insert(schema.reservations).values({ orderId, variantId: SKU, quantity: 5, status: 'HELD' });
+    await db.insert(schema.reservations).values({ id: testId(), orderId, variantId: SKU, quantity: 5, status: 'HELD' });
 
     await expect(finalize.execute({ orderId, outcome: 'FAILED', reason: 'webhook:failed' })).rejects.toThrow();
 

@@ -63,6 +63,11 @@ export default () => ({
     // Sits on the request path whenever an epoch misses Redis.
     timeoutMs: parseIntOr(process.env.USER_SERVICE_TIMEOUT_MS, 500),
   },
+  idService: {
+    url: process.env.ID_SERVICE_URL,
+    // Covers the gateway's retries across replicas, not one attempt.
+    timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
+  },
   userDirectory: {
     notFoundGrace: process.env.USER_DIRECTORY_NOT_FOUND_GRACE ?? '10m',
   },

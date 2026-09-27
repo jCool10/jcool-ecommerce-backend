@@ -7,9 +7,10 @@ import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { buyerWithCart, checkout, readStock, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 
-const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ID = testId();
 
 // The check constraints decide what a level may become; the endpoint reports a violation as 409.
 describe('Admin inventory (integration, real Postgres)', () => {
@@ -139,8 +140,8 @@ describe('Admin inventory (integration, real Postgres)', () => {
     });
 
     it('answers 404 for a SKU with no stock row, and 400 for a malformed id', async () => {
-      await getStock(ABSENT_UUID).expect(404);
-      await request(server()).get('/admin/inventory/not-a-uuid').set(authHeader(adminToken)).expect(400);
+      await getStock(ABSENT_ID).expect(404);
+      await request(server()).get('/admin/inventory/not-an-id').set(authHeader(adminToken)).expect(400);
     });
   });
 });

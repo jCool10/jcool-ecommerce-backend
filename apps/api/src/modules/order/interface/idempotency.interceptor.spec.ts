@@ -79,7 +79,7 @@ describe('IdempotencyInterceptor', () => {
   it('reclaims a row once its in-progress lease has passed', async () => {
     const store = makeStore();
     const stale = { ...record(), createdAt: new Date(Date.now() - 60_000) };
-    store.tryInsertInProgress.mockResolvedValueOnce(null).mockResolvedValueOnce(stale);
+    store.tryInsertInProgress.mockResolvedValue(stale);
     store.findByScopeAndKey.mockResolvedValue(stale);
     const { interceptor } = build(store);
     const handle = vi.fn(() => of({ ok: true }));
@@ -90,6 +90,26 @@ describe('IdempotencyInterceptor', () => {
     await expect(firstValueFrom(obs)).resolves.toEqual({ ok: true });
     expect(store.deleteExpiredInProgress).toHaveBeenCalledExactlyOnceWith(SCOPE, KEY, expect.any(Date));
     expect(handle).toHaveBeenCalledOnce();
+  });
+
+  // Claiming a key mints an id, so a replay must not depend on the id service being up.
+  it('replays a completed request without claiming the key again', async () => {
+    const store = makeStore();
+    store.tryInsertInProgress.mockRejectedValue(new Error('id service unavailable'));
+    store.findByScopeAndKey.mockResolvedValue({
+      ...record(),
+      status: 'COMPLETED',
+      responseStatus: 201,
+      responseBody: { id: 'order-1' },
+    });
+    const { interceptor } = build(store);
+    const handle = vi.fn(() => of({}));
+
+    const obs = await interceptor.intercept(context(), { handle });
+
+    await expect(firstValueFrom(obs)).resolves.toEqual({ id: 'order-1' });
+    expect(store.tryInsertInProgress).not.toHaveBeenCalled();
+    expect(handle).not.toHaveBeenCalled();
   });
 
   it('returns 409 when the row vanished between the failed insert and the read', async () => {

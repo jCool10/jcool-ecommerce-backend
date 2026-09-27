@@ -1,15 +1,4 @@
-import {
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  ParseUUIDPipe,
-  Post,
-  Query,
-  UseGuards,
-  UseInterceptors,
-} from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -26,6 +15,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { ORDER_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
 import { CurrentUser, type AuthenticatedUser } from '@jcool/platform/rbac';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { CancelOrderUseCase, CheckoutOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -85,24 +75,24 @@ export class OrderController {
   @Throttle(ORDER_THROTTLE)
   @UseGuards(UserThrottlerGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'id', example: '137465797020397179' })
   @ApiOkResponse({ type: OrderResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found, or not yours' })
   @ApiConflictResponse({ description: 'Order has already settled and can no longer be cancelled' })
   async cancel(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id', ParseSnowflakeIdPipe) id: string,
   ): Promise<OrderResponseDto> {
     return OrderResponseDto.fromView(await this.cancelOrder.cancelOwn(id, user.userId));
   }
 
   @Get(':id')
-  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'id', example: '137465797020397179' })
   @ApiOkResponse({ type: OrderResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found' })
   async getOne(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id', ParseSnowflakeIdPipe) id: string,
   ): Promise<OrderResponseDto> {
     return OrderResponseDto.fromView(await this.orderQuery.getOne(user.userId, id));
   }

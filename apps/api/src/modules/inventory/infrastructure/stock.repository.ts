@@ -1,8 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, eq, lt, sql } from 'drizzle-orm';
+import { bucketOf } from '@jcool/id-codec';
 import { durationToMs } from '@jcool/kernel';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
+import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
 import { ReservationStatus } from '../domain/reservation-status';
@@ -22,16 +24,23 @@ export class StockRepository implements StockRepositoryPort {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
     config: ConfigService,
   ) {
     this.reservationTtlMs = durationToMs(config.getOrThrow<string>('inventory.reservationTtl'));
     this.maxRetries = config.getOrThrow<number>('inventory.optimisticMaxRetries');
   }
 
+  // Minted before the first stock row lock, so no checkout queues behind an id-service call.
+  private mintReservationIds(orderId: string, lines: ReserveLine[]): Promise<string[]> {
+    return this.ids.mint(bucketOf(orderId), lines.length);
+  }
+
   async reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
+    const ids = await this.mintReservationIds(orderId, lines);
     // Lock rows in a deterministic order so two orders holding the same SKUs can't deadlock.
     const ordered = [...lines].sort((a, b) => a.variantId.localeCompare(b.variantId));
-    for (const { variantId, quantity } of ordered) {
+    for (const [index, { variantId, quantity }] of ordered.entries()) {
       const [stock] = await tx.select().from(stockLevels).where(eq(stockLevels.variantId, variantId)).for('update');
       if (!stock) {
         throw new InsufficientStockError(variantId, quantity, 0);
@@ -61,18 +70,16 @@ export class StockRepository implements StockRepositoryPort {
         })
         .where(eq(stockLevels.id, stock.id));
 
-      await tx
-        .insert(reservations)
-        .values({ orderId, variantId, quantity, status: ReservationStatus.HELD, expiresAt: this.computeExpiry() })
-        .onConflictDoNothing({ target: [reservations.orderId, reservations.variantId] });
+      await this.insertHold(tx, ids[index], orderId, variantId, quantity);
     }
   }
 
   async reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
+    const ids = await this.mintReservationIds(orderId, lines);
     // A successful UPDATE still holds a row write-lock until the tx ends, so keep the same
     // deterministic order as the pessimistic path to rule out a cross-order deadlock.
     const ordered = [...lines].sort((a, b) => a.variantId.localeCompare(b.variantId));
-    for (const { variantId, quantity } of ordered) {
+    for (const [index, { variantId, quantity }] of ordered.entries()) {
       // Idempotent for a sequential repeat of the same (order, SKU). This read isn't
       // lock-guarded (optimistic holds no row lock here), so a concurrent same-order
       // submit isn't deduped — see the port doc; callers single-flight order submission.
@@ -87,11 +94,21 @@ export class StockRepository implements StockRepositoryPort {
 
       await this.casReserve(tx, variantId, quantity);
 
-      await tx
-        .insert(reservations)
-        .values({ orderId, variantId, quantity, status: ReservationStatus.HELD, expiresAt: this.computeExpiry() })
-        .onConflictDoNothing({ target: [reservations.orderId, reservations.variantId] });
+      await this.insertHold(tx, ids[index], orderId, variantId, quantity);
     }
+  }
+
+  private async insertHold(
+    tx: DrizzleTx,
+    id: string,
+    orderId: string,
+    variantId: string,
+    quantity: number,
+  ): Promise<void> {
+    await tx
+      .insert(reservations)
+      .values({ id, orderId, variantId, quantity, status: ReservationStatus.HELD, expiresAt: this.computeExpiry() })
+      .onConflictDoNothing({ target: [reservations.orderId, reservations.variantId] });
   }
 
   // Hold one SKU via compare-and-swap: read the current version unlocked, then UPDATE only
@@ -175,7 +192,7 @@ export class StockRepository implements StockRepositoryPort {
       return { applied: false, alreadyResolved: false, count: 0 };
     }
     // Sort in JS with the exact comparator reservePessimistic/reserveOptimistic use, so the lock order is
-    // identical to reserve regardless of DB collation (not the SQL sort, which may order UUIDs differently).
+    // identical to reserve (the SQL sort orders bigint ids numerically, not as this string compare does).
     const held = rows
       .filter((r) => r.status === ReservationStatus.HELD)
       .sort((a, b) => a.variantId.localeCompare(b.variantId));

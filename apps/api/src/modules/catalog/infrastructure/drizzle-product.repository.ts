@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { isRoutableId } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
 import type { Product, ProductStatus } from '../domain/entities';
@@ -74,11 +75,6 @@ function toSkuView(row: SkuViewRow): SkuView {
 function escapeLike(input: string): string {
   return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
-
-// A product id is a UUID; a slug never is. Probe the uuid `id` column only for
-// UUID-shaped input — comparing it against a slug throws on Postgres' text→uuid cast.
-// Exported because the cache keys must normalise exactly the tokens this treats as ids.
-export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // A separate keyed read rather than a fourth join: images multiply against variants and prices, and
 // every price would then be counted once per image.
@@ -203,8 +199,9 @@ export class DrizzleProductRepository implements ProductRepositoryPort, ProductS
       .set({ searchVersion: sql`${products.searchVersion} + 1` })
       .where(inArray(products.id, page))
       .returning({ id: products.id });
-    // RETURNING follows no order, and the caller resumes after the last id.
-    return rows.map((row) => row.id).sort();
+    // RETURNING follows no order, and the caller resumes after the last id. Decimal ids differ in
+    // length, so a plain string sort could put the wrong one last.
+    return rows.map((row) => row.id).sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
   }
 
   private readSearchStates(
@@ -243,7 +240,9 @@ export class DrizzleProductRepository implements ProductRepositoryPort, ProductS
   }
 
   async findActiveByIdOrSlug(idOrSlug: string): Promise<Product | null> {
-    const byId = UUID_PATTERN.test(idOrSlug);
+    // Probe the bigint `id` column only for a canonical id: anything else would fail the cast. A
+    // digit-only slug can also look like one, hence the slug match alongside it.
+    const byId = isRoutableId(idOrSlug);
     const rows = await this.db
       .select(flatColumns)
       .from(products)
@@ -257,7 +256,7 @@ export class DrizzleProductRepository implements ProductRepositoryPort, ProductS
           byId ? or(eq(products.id, idOrSlug), eq(products.slug, idOrSlug)) : eq(products.slug, idOrSlug),
         ),
       )
-      // Id-precedence: when the input is a UUID and one product's slug equals another's
+      // Id-precedence: when the input is an id and one product's slug equals another's
       // id, the exact id match sorts first so assembleProducts()[0] is the id winner.
       .orderBy(
         ...(byId ? [sql`case when ${products.id} = ${idOrSlug} then 0 else 1 end`] : []),

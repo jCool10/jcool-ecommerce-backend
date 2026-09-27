@@ -7,6 +7,7 @@ import { ORDER_THROTTLE, USER_THROTTLER } from '@jcool/platform/throttler';
 import { authHeader } from '../setup/bearer.helper';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
@@ -14,7 +15,7 @@ import { resetDatabase } from '../setup/reset-database';
 // Read from the shipped config, so retuning the limit retunes the suite instead of breaking it.
 const USER_LIMIT = ORDER_THROTTLE[USER_THROTTLER].limit;
 // Syntactically valid so the route's ParseUUIDPipe passes it through to a real 404.
-const ABSENT_ORDER_ID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ORDER_ID = testId();
 
 // Rate limiting is off in the default harness, so this suite opts in explicitly with its own app.
 describe('Rate limiting on sensitive endpoints (integration, real Redis)', () => {

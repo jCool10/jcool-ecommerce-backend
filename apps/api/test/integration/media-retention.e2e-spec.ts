@@ -17,6 +17,7 @@ import { createTestAppWithObjectStorage } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetDatabase } from '../setup/reset-database';
+import { testId } from '../setup/id-service-stub';
 
 // A SWEEPING claim older than the per-sweep timeout is assumed dead.
 const SWEEP_TIMEOUT_MS = 60_000;
@@ -71,6 +72,7 @@ describe('Media retention sweep (integration, real MinIO + Postgres)', () => {
     const [row] = await db
       .insert(schema.mediaAssets)
       .values({
+        id: testId(),
         storageKey: `media/${crypto.randomUUID()}.png`,
         contentType: 'image/png',
         sizeBytes: overrides.sizeBytes ?? 100,

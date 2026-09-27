@@ -20,6 +20,7 @@ import {
   signOutcome,
 } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
 const WEBHOOK_SECRET = 'whsec_e2e_outbox_secret_0123456789';
 const STOCK = 5;
@@ -94,11 +95,12 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
     // only test that can catch `append` opening a transaction of its own: such a writer would commit
     // this row independently, and the outbox would carry an event for work that never happened.
     const writer = app.get<OutboxWriterPort>(OUTBOX_WRITER);
+    const orderId = testId();
     const record: OutboxRecord = {
       aggregateType: 'Order',
-      aggregateId: '01a03000-0000-7000-8000-0000000000ff',
+      aggregateId: orderId,
       eventType: 'order.placed',
-      payload: { orderId: '01a03000-0000-7000-8000-0000000000ff' },
+      payload: { orderId },
     };
 
     await expect(

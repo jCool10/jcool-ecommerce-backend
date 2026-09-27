@@ -23,7 +23,13 @@ function isolateEnv(keys: readonly string[]): void {
 }
 
 describe('configuration', () => {
-  isolateEnv(['INVENTORY_OPTIMISTIC_MAX_RETRIES', 'STRIPE_SUCCESS_URL']);
+  isolateEnv(['INVENTORY_OPTIMISTIC_MAX_RETRIES', 'STRIPE_SUCCESS_URL', 'ID_SERVICE_URL', 'ID_SERVICE_TIMEOUT_MS']);
+
+  it('reads the id-service address and gives the call the gateway retries 2s by default', () => {
+    process.env.ID_SERVICE_URL = 'http://gateway:4000';
+
+    expect(configuration().idService).toEqual({ url: 'http://gateway:4000', timeoutMs: 2_000 });
+  });
 
   // `attempt >= NaN` is always false, so a NaN budget would leave the CAS loop unbounded.
   it('falls back to the default reserve retry budget for a blank env value', () => {

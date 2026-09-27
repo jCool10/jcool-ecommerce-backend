@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsSnowflakeId } from '@jcool/platform/interface';
 
 // Shared by category and product slugs; uniqueness is enforced by the DB, not by this pattern.
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -18,8 +19,8 @@ export class CreateCategoryDto {
   @Matches(SLUG_PATTERN, { message: SLUG_MESSAGE })
   slug!: string;
 
-  @ApiPropertyOptional({ description: 'Parent category id (UUID v7) for nesting' })
+  @ApiPropertyOptional({ example: '137465797020397179', description: 'Parent category id for nesting' })
   @IsOptional()
-  @IsUUID()
+  @IsSnowflakeId()
   parentId?: string;
 }

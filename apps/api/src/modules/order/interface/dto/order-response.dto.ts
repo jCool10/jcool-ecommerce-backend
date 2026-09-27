@@ -3,7 +3,7 @@ import { ORDER_STATUSES, OrderStatus } from '../../domain/order-status';
 import type { OrderView } from '../../application/order-view.mapper';
 
 export class OrderItemResponseDto {
-  @ApiProperty({ format: 'uuid', description: 'Product-variant id (SKU)' })
+  @ApiProperty({ example: '137465797020397179', description: 'Product-variant id (SKU)' })
   skuId!: string;
 
   @ApiProperty({ example: 'Wireless Headphones / Black', description: 'Name snapshotted at creation' })
@@ -20,7 +20,7 @@ export class OrderItemResponseDto {
 }
 
 export class OrderResponseDto {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ example: '137465797020397179' })
   id!: string;
 
   @ApiProperty({ enum: ORDER_STATUSES, example: OrderStatus.DRAFT })

@@ -12,14 +12,15 @@ import { ReservationConflictError } from '../../src/modules/inventory/domain/err
 import { countHeldReservations, releaseOnceBlocked, seedStock } from '../setup/fixtures/inventory.fixture';
 import { readStock } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
 // The two optimistic branches a single-thread test can't reach: they only fire when a CAS actually
 // loses a version race, which `forceCasMiss` below makes deterministic. Stock is seeded well above
 // demand so a miss can never be mistaken for out-of-stock; the shortfall branch (real out-of-stock,
 // no retry) is the single-thread case in inventory-reserve.e2e-spec.ts.
-const SKU = '33333333-3333-4333-8333-333333333333';
-const ORDER_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const ORDER_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const SKU = testId();
+const ORDER_A = testId();
+const ORDER_B = testId();
 
 interface Contenders {
   db: DrizzleDB;

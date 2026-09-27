@@ -12,8 +12,9 @@ import { createTestAppWithObjectStorage } from '../setup/harness';
 import { startObjectStorage, type StartedObjectStorage } from '../setup/object-storage';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
+import { testId } from '../setup/id-service-stub';
 
-const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ID = testId();
 
 // Catalog stores asset ids; the URL is resolved after the cache, so a cached product can carry a
 // short-lived signed URL.
@@ -51,6 +52,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     const [row] = await db
       .insert(schema.mediaAssets)
       .values({
+        id: testId(),
         storageKey: `media/${crypto.randomUUID()}.png`,
         contentType: 'image/png',
         sizeBytes: 100,
@@ -114,7 +116,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     const assetId = await seedAsset();
 
     await request(server())
-      .post(`/admin/products/${ABSENT_UUID}/images`)
+      .post(`/admin/products/${ABSENT_ID}/images`)
       .set(authHeader(adminToken))
       .send({ assetId })
       .expect(404);
@@ -149,7 +151,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
 
   it('404s a detach for an image that is not on that product', async () => {
     await request(server())
-      .delete(`/admin/products/${product.productId}/images/${ABSENT_UUID}`)
+      .delete(`/admin/products/${product.productId}/images/${ABSENT_ID}`)
       .set(authHeader(adminToken))
       .expect(404);
   });
@@ -187,7 +189,7 @@ describe('Product images (integration, real MinIO + Postgres + Redis)', () => {
     await request(server())
       .patch(`/admin/products/${product.productId}/images`)
       .set(authHeader(adminToken))
-      .send({ imageIds: [mine, ABSENT_UUID] })
+      .send({ imageIds: [mine, ABSENT_ID] })
       .expect(409);
   });
 

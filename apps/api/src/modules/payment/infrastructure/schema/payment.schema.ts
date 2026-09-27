@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { bigint, index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { bigint, index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure only, never imported by domain. No cross-context FK: order_id → orders stays an
 // app-layer boundary (Payment reads the order through a port, never its table), matching
@@ -9,10 +9,8 @@ import { v7 as uuidv7 } from 'uuid';
 export const paymentStatus = pgEnum('payment_status', ['PENDING', 'SUCCEEDED', 'FAILED', 'EXPIRED']);
 export const webhookStatus = pgEnum('webhook_status', ['RECEIVED', 'PROCESSED', 'SKIPPED', 'FAILED']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: a payment id carries its order's bucket, which only the writer knows.
+const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -28,7 +26,7 @@ export const payments = pgTable(
   'payments',
   {
     id: id(),
-    orderId: uuid('order_id').notNull(),
+    orderId: snowflakeId('order_id').notNull(),
     // Text, not an enum: a row records which gateway actually took the money, and old rows must stay
     // readable after the app stops offering that gateway — which a pgEnum could not do without
     // rewriting history.
@@ -42,6 +40,8 @@ export const payments = pgTable(
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_payments_id_routable', t.id),
+    routableIdCheck('ck_payments_order_id_routable', t.orderId),
     index('idx_payments_order').on(t.orderId),
     // At most one live payment per order — the DB backstop for "never double-charge". Partial so a
     // FAILED/EXPIRED attempt never blocks a legitimate retry. The app pre-checks too; this closes the
@@ -67,6 +67,7 @@ export const webhookEvents = pgTable(
     processedAt: timestamp('processed_at', { withTimezone: true }),
   },
   (t) => [
+    routableIdCheck('ck_webhook_events_id_routable', t.id),
     uniqueIndex('uq_webhook_provider_event').on(t.provider, t.providerEventId),
     // The retention sweep's predicate. The unique index above is on the identity pair, which says
     // nothing about age, so without this the sweep would scan every event ever received.

@@ -1,19 +1,23 @@
 import { createHash } from 'node:crypto';
+import { bucketOf, encode } from '@jcool/id-codec';
 import { useFakeClock } from '@jcool/testing/fake-clock';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { User } from '../../domain/entities/user.entity';
 import { EchoAccessTokenSigner, claimsOf } from '../../testing/access-token-signer.double';
+import { RecordingIdGenerator } from '../../testing/id-generator.double';
 import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
 import { AuthTokensService } from './auth-tokens.service';
+import { IdentityService } from './identity.service';
 
 const NOW = new Date('2026-09-24T08:00:00.000Z');
 const SEVEN_DAYS_MS = 7 * 86_400_000;
+const USER_ID = encode({ tsMs: NOW.getTime(), bucket: 42, nodeId: 1, sequence: 0 });
 
 describe('AuthTokensService', () => {
   useFakeClock(NOW);
 
   const user = User.create({
-    id: 'u1',
+    id: USER_ID,
     email: 'user@example.com',
     passwordHash: '$argon2id$hash',
     role: 'CUSTOMER',
@@ -22,21 +26,36 @@ describe('AuthTokensService', () => {
     tokenEpoch: 5,
   });
   let repo: FakeRefreshTokenRepository;
+  let ids: RecordingIdGenerator;
   let service: AuthTokensService;
 
   beforeEach(() => {
     repo = new FakeRefreshTokenRepository();
+    ids = new RecordingIdGenerator();
     service = new AuthTokensService(
       new EchoAccessTokenSigner(),
       fakeConfigService({ 'auth.refreshTokenTtl': '7d' }),
       repo,
+      new IdentityService(ids, 'k'.repeat(32)),
     );
   });
 
   it("signs the user's id, role and current session epoch under a fresh jti", async () => {
     const { accessToken } = await service.issuePair(user);
 
-    expect(claimsOf(accessToken)).toEqual({ sub: 'u1', role: 'CUSTOMER', jti: expect.any(String) as string, epoch: 5 });
+    expect(claimsOf(accessToken)).toEqual({
+      sub: USER_ID,
+      role: 'CUSTOMER',
+      jti: expect.any(String) as string,
+      epoch: 5,
+    });
+  });
+
+  it("names the new session with an id minted in the user's bucket", async () => {
+    await service.issuePair(user);
+
+    expect(ids.buckets).toEqual([42]);
+    expect(bucketOf(repo.created[0].familyId)).toBe(42);
   });
 
   it('hands out the raw refresh token and persists only its sha256 hash', async () => {
@@ -46,7 +65,7 @@ describe('AuthTokensService', () => {
     expect(refreshToken).toHaveLength(64);
     expect(repo.created).toEqual([
       {
-        userId: 'u1',
+        userId: USER_ID,
         tokenHash: createHash('sha256').update(refreshToken).digest('hex'),
         familyId: expect.any(String) as string,
         expiresAt: new Date(NOW.getTime() + SEVEN_DAYS_MS),

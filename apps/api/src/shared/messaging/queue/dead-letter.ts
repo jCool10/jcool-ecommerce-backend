@@ -4,7 +4,7 @@ import { PinoLogger } from 'nestjs-pino';
 import { toError } from '@jcool/kernel';
 import { METRICS, type DeadLetterReason, type MetricsPort } from '@jcool/metrics-port';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
-import type { DomainEventJob } from './domain-event.job';
+import { type DomainEventJob, jobIdFor } from './domain-event.job';
 import { DOMAIN_EVENTS_DLQ_QUEUE } from './queue.constants';
 
 const LOG_CONTEXT = 'DeadLetterRouter';
@@ -62,8 +62,9 @@ export class DeadLetterRouter {
       // The remove is what makes that slot hold the LATEST diagnosis: `add` on an existing jobId is
       // silently ignored, so without it an operator would debug the first failure. Safe to lose the
       // entry in between — the main queue holds this job in its failed set for a week either way.
-      if (messageId) await this.dlq.remove(messageId);
-      await this.dlq.add(job.name, dead, { jobId: messageId });
+      const slot = job.data?.outboxId ? jobIdFor(job.data.outboxId) : job.id;
+      if (slot) await this.dlq.remove(slot);
+      await this.dlq.add(job.name, dead, { jobId: slot });
       this.metrics.recordDeadLetter(eventType, reason);
       this.logger.error(
         { err: error, eventType: job.name, messageId, attemptsMade: job.attemptsMade, reason },

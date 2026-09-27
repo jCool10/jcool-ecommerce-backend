@@ -13,6 +13,7 @@ const BASE_ENV = {
   JWT_AUDIENCE: 'jcool',
   USER_SERVICE_INTERNAL_URL: 'http://user-service.railway.internal:3000',
   INTERNAL_API_TOKEN: 'internal-api-token-not-a-real-secret-0000',
+  ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
 };
 
 describe('env validation', () => {
@@ -38,6 +39,19 @@ describe('env validation', () => {
 
       expect(() => validate(without), key).toThrow(new RegExp(key));
     }
+  });
+
+  it('refuses to boot without an http id-service address', () => {
+    const { ID_SERVICE_URL: _, ...without } = BASE_ENV;
+
+    expect(() => validate(without)).toThrow(/ID_SERVICE_URL/);
+    expect(() => validate({ ...BASE_ENV, ID_SERVICE_URL: 'gateway:4000' })).toThrow(/ID_SERVICE_URL/);
+  });
+
+  it('bounds the id-service timeout', () => {
+    expect(() => validate({ ...BASE_ENV, ID_SERVICE_TIMEOUT_MS: '99' })).toThrow(/ID_SERVICE_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, ID_SERVICE_TIMEOUT_MS: '2e3' })).toThrow(/ID_SERVICE_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, ID_SERVICE_TIMEOUT_MS: '2000' })).not.toThrow();
   });
 
   it('refuses a short internal token', () => {

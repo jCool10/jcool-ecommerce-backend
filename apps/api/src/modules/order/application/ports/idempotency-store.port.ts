@@ -22,6 +22,8 @@ export interface IdempotencyRecord {
 }
 
 export interface InsertInProgressInput {
+  /** The caller the scope belongs to; the row's id carries their bucket. */
+  ownerId: string;
   scope: string;
   key: string;
   requestHash: string;

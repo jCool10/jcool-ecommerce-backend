@@ -1,14 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const orderStatus = pgEnum('order_status', ['DRAFT', 'PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: an order id carries its buyer's bucket, which only the writer knows.
+const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -22,8 +19,7 @@ export const orders = pgTable(
   'orders',
   {
     id: id(),
-    // No FK — cross-context boundary kept at the application layer. Minted by the id service, so
-    // this column holds its layout, not the uuids the rows around it use.
+    // No FK — cross-context boundary kept at the application layer.
     userId: snowflakeId('user_id').notNull(),
     status: orderStatus('status').notNull().default('DRAFT'),
     currency: text('currency').notNull(),
@@ -48,6 +44,7 @@ export const orders = pgTable(
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_orders_id_routable', t.id),
     routableIdCheck('ck_orders_user_id_routable', t.userId),
     index('idx_orders_user').on(t.userId),
     // Per-user idempotency, matching the store's (scope, key) scope: at most one order per
@@ -66,16 +63,21 @@ export const orderItems = pgTable(
   'order_items',
   {
     id: id(),
-    orderId: uuid('order_id')
+    orderId: snowflakeId('order_id')
       .notNull()
       .references(() => orders.id, { onDelete: 'cascade' }),
     // Product-variant id (SKU). No FK to catalog — cross-context boundary.
-    skuId: uuid('sku_id').notNull(),
+    skuId: snowflakeId('sku_id').notNull(),
     // Name + price SNAPSHOT at creation time (transactional truth, not live).
     productName: text('product_name').notNull(),
     unitPrice: integer('unit_price').notNull(),
     quantity: integer('quantity').notNull(),
     ...stamps,
   },
-  (t) => [index('idx_order_items_order').on(t.orderId)],
+  (t) => [
+    routableIdCheck('ck_order_items_id_routable', t.id),
+    routableIdCheck('ck_order_items_order_id_routable', t.orderId),
+    routableIdCheck('ck_order_items_sku_id_routable', t.skuId),
+    index('idx_order_items_order').on(t.orderId),
+  ],
 );

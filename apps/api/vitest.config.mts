@@ -21,6 +21,7 @@ export default defineConfig({
       JWT_AUDIENCE: 'jcool-api',
       USER_SERVICE_INTERNAL_URL: 'http://127.0.0.1:1',
       INTERNAL_API_TOKEN: 'unit-internal-api-token-not-a-real-secret',
+      ID_SERVICE_URL: 'http://127.0.0.1:1',
     },
     // Workspace packages resolve outside node_modules, so Vitest would inline their dist and mint a
     // second copy of a token such as METRICS next to the one natively loaded packages hold.

@@ -1,16 +1,20 @@
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { encode } from '@jcool/id-codec';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { User } from '../../domain/entities/user.entity';
 import { EchoAccessTokenSigner, claimsOf } from '../../testing/access-token-signer.double';
+import { RecordingIdGenerator } from '../../testing/id-generator.double';
 import { PlainPasswordHasher } from '../../testing/plain-password-hasher.double';
 import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
 import { FakeUserRepository } from '../../testing/user-repository.double';
-import { AuthTokensService } from '../services';
+import { AuthTokensService, IdentityService } from '../services';
 import { LoginUserUseCase } from './login-user.use-case';
+
+const USER_ID = encode({ tsMs: Date.UTC(2026, 8, 1), bucket: 9, nodeId: 1, sequence: 0 });
 
 function makeUser(emailVerifiedAt: Date | null = null): User {
   return new User(
-    'u1',
+    USER_ID,
     'user@example.com',
     'hashed:correct-password',
     'CUSTOMER',
@@ -33,6 +37,7 @@ describe('LoginUserUseCase', () => {
         new EchoAccessTokenSigner(),
         fakeConfigService({ 'auth.refreshTokenTtl': '7d' }),
         refreshTokens,
+        new IdentityService(new RecordingIdGenerator(), 'k'.repeat(32)),
       ),
       fakeConfigService({ 'auth.requireVerifiedEmail': requireVerifiedEmail }),
     );
@@ -54,8 +59,8 @@ describe('LoginUserUseCase', () => {
     const tokens = await loginUseCase(false).execute({ email: '  User@Example.COM ', password: 'correct-password' });
 
     expect(users.lastFindEmail).toBe('user@example.com');
-    expect(claimsOf(tokens.accessToken).sub).toBe('u1');
-    expect(refreshTokens.created.map((token) => token.userId)).toEqual(['u1']);
+    expect(claimsOf(tokens.accessToken).sub).toBe(USER_ID);
+    expect(refreshTokens.created.map((token) => token.userId)).toEqual([USER_ID]);
   });
 
   it('throws 401 on a wrong password and issues no tokens', async () => {

@@ -1,6 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { bigint, index, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { bigint, index, pgEnum, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure, never imported by domain. No FK to products: the reference points the other way,
@@ -8,10 +7,8 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const mediaAssetStatus = pgEnum('media_asset_status', ['PENDING', 'READY', 'ATTACHED', 'DETACHED', 'SWEEPING']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: an asset id carries its uploader's bucket, which only the writer knows.
+const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -39,6 +36,7 @@ export const mediaAssets = pgTable(
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_media_assets_id_routable', t.id),
     routableIdCheck('ck_media_assets_uploaded_by_routable', t.uploadedBy),
     // Serves the expiry branch of the sweep's claim — keep this status set identical to
     // `RECLAIMABLE_STATUSES`, whose literals here are invisible to a grep for that constant. Partial,

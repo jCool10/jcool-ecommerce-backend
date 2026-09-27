@@ -1,22 +1,17 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { index, integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // Deliberately NOT owned by a bounded context: it carries events from any context, written inside
 // that context's own transaction.
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
-
 export const outbox = pgTable(
   'outbox',
   {
-    id: id(),
+    id: snowflakeId('id').primaryKey(),
     aggregateType: text('aggregate_type').notNull(),
     // No FK — the outbox outlives and out-scopes any single context's tables.
-    aggregateId: uuid('aggregate_id').notNull(),
+    aggregateId: snowflakeId('aggregate_id').notNull(),
     eventType: text('event_type').notNull(),
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     // W3C traceparent captured at insert, so a consumer can continue the producer's trace across
@@ -27,12 +22,15 @@ export const outbox = pgTable(
     // `now()` is TRANSACTION start time, not statement time: two events from one transaction share a
     // timestamp, and a slow transaction can commit a row whose `created_at` predates rows already
     // committed. Safe for a relay that polls `published_at IS NULL`; a watermark relay would skip
-    // rows. Order by `(created_at, id)` — the UUIDv7 id breaks ties monotonically.
+    // rows. Order by `(created_at, id)`: ids minted on one id-service node rise with time, but two
+    // nodes interleave, so the id only makes the order deterministic.
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     // NULL = not yet published. The relay's entire work queue.
     publishedAt: timestamp('published_at', { withTimezone: true }),
   },
   (t) => [
+    routableIdCheck('ck_outbox_id_routable', t.id),
+    routableIdCheck('ck_outbox_aggregate_id_routable', t.aggregateId),
     // Partial so the index tracks the unpublished backlog rather than every event ever emitted.
     index('idx_outbox_unpublished')
       .on(t.createdAt)

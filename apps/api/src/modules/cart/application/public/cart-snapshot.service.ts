@@ -10,7 +10,8 @@ export class CartSnapshotService implements CartSnapshotReader {
   ) {}
 
   async getLines(userId: string): Promise<CartSnapshotLine[]> {
-    const cartId = await this.repo.ensureCartId(userId);
+    const cartId = await this.repo.findCartId(userId);
+    if (!cartId) return [];
     const items = await this.repo.findItems(cartId);
     return items.map((item) => ({ skuId: item.skuId, quantity: item.quantity }));
   }

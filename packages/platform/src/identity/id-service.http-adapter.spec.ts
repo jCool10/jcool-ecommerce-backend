@@ -2,11 +2,11 @@ import { type IncomingHttpHeaders, type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ServiceUnavailableException } from '@nestjs/common';
 import type { ClsService } from 'nestjs-cls';
-import { bucketOf, encode } from '@jcool/id-codec';
-import { CircuitBreakerFactory, type OutboundCall } from '@jcool/platform/resilience';
+import { SEQUENCE_COUNT, bucketOf, encode } from '@jcool/id-codec';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
+import { CircuitBreakerFactory, type OutboundCall } from '../resilience';
 import { ID_SERVICE_BREAKER, IdServiceHttpAdapter, isIdServiceFault } from './id-service.http-adapter';
 
 interface Received {
@@ -18,7 +18,8 @@ interface Received {
 
 type Reply = { status: number; body: unknown } | 'hang';
 
-const idIn = (bucket: number, sequence = 0): string => encode({ tsMs: Date.now(), bucket, nodeId: 1, sequence });
+const idIn = (bucket: number, sequence = 0): string =>
+  encode({ tsMs: Date.now(), bucket, nodeId: 1, sequence: sequence % SEQUENCE_COUNT });
 
 class FakeIdService {
   readonly received: Received[] = [];
@@ -79,8 +80,11 @@ describe('IdServiceHttpAdapter', () => {
 
   afterEach(() => idService.stop());
 
+  const adapterFor = (caller: string, timeoutMs = 1_000): IdServiceHttpAdapter =>
+    new IdServiceHttpAdapter({ url, timeoutMs, caller }, passThrough, inRequest());
+
   it('asks for ids in a bucket and names itself as the caller', async () => {
-    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, passThrough, inRequest());
+    const adapter = adapterFor('user-service');
 
     const ids = await adapter.mint(42, 2);
 
@@ -100,9 +104,31 @@ describe('IdServiceHttpAdapter', () => {
     ]);
   });
 
+  it('splits a batch above the per-request cap into several requests', async () => {
+    const adapter = adapterFor('api');
+
+    const ids = await adapter.mint(7, SEQUENCE_COUNT * 2 + 1);
+
+    expect(ids).toHaveLength(SEQUENCE_COUNT * 2 + 1);
+    expect(new Set(ids.map(bucketOf))).toEqual(new Set([7]));
+    expect(idService.received.map((request) => request.body)).toEqual([
+      { bucket: 7, count: SEQUENCE_COUNT },
+      { bucket: 7, count: SEQUENCE_COUNT },
+      { bucket: 7, count: 1 },
+    ]);
+    expect(idService.received.map((request) => request.headers['x-caller'])).toEqual(['api', 'api', 'api']);
+  });
+
+  it('asks for nothing when no ids are wanted', async () => {
+    const adapter = adapterFor('api');
+
+    await expect(adapter.mint(7, 0)).resolves.toEqual([]);
+    expect(idService.received).toEqual([]);
+  });
+
   /** Asks for two ids in bucket 1 against each reply, recording the answer and how many requests it took. */
   async function answersTo(replies: Record<string, Reply>): Promise<Record<string, string>> {
-    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, passThrough, inRequest());
+    const adapter = adapterFor('user-service');
     const answers: Record<string, string> = {};
     for (const [name, reply] of Object.entries(replies)) {
       idService.reply = () => reply;
@@ -151,7 +177,7 @@ describe('IdServiceHttpAdapter', () => {
 
   it('answers 503 once the timeout runs out', async () => {
     idService.reply = () => 'hang';
-    const adapter = new IdServiceHttpAdapter({ url, timeoutMs: 100 }, passThrough, inRequest());
+    const adapter = adapterFor('user-service', 100);
 
     await expect(adapter.mint(1)).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
@@ -159,7 +185,7 @@ describe('IdServiceHttpAdapter', () => {
   describe('behind the breaker', () => {
     function adapterBehindBreaker(): IdServiceHttpAdapter {
       const breaker = breakerFactory().create(ID_SERVICE_BREAKER, { isDownstreamFault: isIdServiceFault });
-      return new IdServiceHttpAdapter({ url, timeoutMs: 1_000 }, breaker, inRequest());
+      return new IdServiceHttpAdapter({ url, timeoutMs: 1_000, caller: 'user-service' }, breaker, inRequest());
     }
 
     it('keeps the circuit closed through LEASE_NOT_HELD answers', async () => {

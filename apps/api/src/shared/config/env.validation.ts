@@ -390,6 +390,16 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(100)
   USER_SERVICE_TIMEOUT_MS?: number;
 
+  // The gateway's internal load balancer, never a single replica. Every write mints its ids here.
+  @IsUrl(HTTP_URL)
+  ID_SERVICE_URL!: string;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  ID_SERVICE_TIMEOUT_MS?: number;
+
   // Duration form. How long after an order is paid a user the directory does not know is still
   // worth waiting for.
   @IsOptional()

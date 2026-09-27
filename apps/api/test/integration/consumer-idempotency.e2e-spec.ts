@@ -10,9 +10,10 @@ import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.c
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
-const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
-const ORDER_ID = '0198f0d8-1111-7000-8000-000000000001';
+const MESSAGE_ID = testId();
+const ORDER_ID = testId();
 
 // Deliveries are driven by hand; the queue worker is off in e2e.
 describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
@@ -100,9 +101,8 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     // order.paid resolves the buyer's address from `userId`, as the producers emit it.
     const { user } = await createTestPrincipal(app);
     const payload = { orderId: ORDER_ID, userId: user.id, totalAmountMinor: 150_000 };
-    for (const [index, eventType] of ['order.placed', 'order.paid', 'order.failed', 'order.expired'].entries()) {
-      const outboxId = `0198f0d8-0000-7000-8000-00000000000${index + 1}`;
-      await expect(processor.process(job({ outboxId, eventType, payload }))).resolves.toBe('processed');
+    for (const eventType of ['order.placed', 'order.paid', 'order.failed', 'order.expired']) {
+      await expect(processor.process(job({ outboxId: testId(), eventType, payload }))).resolves.toBe('processed');
     }
 
     expect((await inboxRows()).map((row) => row.eventType).sort()).toEqual([

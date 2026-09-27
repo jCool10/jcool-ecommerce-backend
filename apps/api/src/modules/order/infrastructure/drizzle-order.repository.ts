@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
+import { bucketOf } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
+import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
 import { Order } from '../domain/order.entity';
 import { OrderStatus } from '../domain/order-status';
 import { OrderItem } from '../domain/order-item.entity';
@@ -21,7 +23,10 @@ type OrderItemRow = typeof orderItems.$inferSelect;
 
 @Injectable()
 export class DrizzleOrderRepository implements OrderRepositoryPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+  ) {}
 
   async createCheckout(
     order: Order,
@@ -30,6 +35,8 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult> {
+    // Before the transaction, so no lock waits on the id service. A replayed key wastes them.
+    const [orderId, ...itemIds] = await this.ids.mint(bucketOf(order.userId), 1 + order.items.length);
     return this.db.transaction(async (tx) => {
       // One checkout per user at a time, so the pending count below is race-safe. Taken before any
       // stock row lock, so it cannot cycle with them.
@@ -58,21 +65,19 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
         throw new TooManyPendingOrdersError(order.userId, pendingCount);
       }
 
-      const [row] = await tx
-        .insert(orders)
-        .values({
-          userId: order.userId,
-          status: order.status,
-          currency: order.currency,
-          totalAmount: order.totalAmountMinor,
-          idempotencyKey,
-          placedAt: order.placedAt,
-        })
-        .returning({ id: orders.id });
-      const orderId = row.id;
+      await tx.insert(orders).values({
+        id: orderId,
+        userId: order.userId,
+        status: order.status,
+        currency: order.currency,
+        totalAmount: order.totalAmountMinor,
+        idempotencyKey,
+        placedAt: order.placedAt,
+      });
 
       await tx.insert(orderItems).values(
-        order.items.map((item) => ({
+        order.items.map((item, index) => ({
+          id: itemIds[index],
           orderId,
           skuId: item.skuId,
           productName: item.productName,
@@ -82,10 +87,11 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
       );
 
       // Same tx as the insert above, so there can be no placed order without its event and no event
-      // for an order that never committed. `complete` is last: any earlier failure aborts before the
-      // idempotency key is marked COMPLETED.
-      await reserve(tx, orderId);
+      // for an order that never committed. The event goes first because appending mints an id, and
+      // `reserve` takes the stock row locks every other checkout queues on. `complete` is last: any
+      // earlier failure aborts before the idempotency key is marked COMPLETED.
       await appendEvent(tx, orderId);
+      await reserve(tx, orderId);
       await complete(tx, orderId);
       return { orderId, created: true };
     });

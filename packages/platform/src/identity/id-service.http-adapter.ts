@@ -1,9 +1,8 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import type { ClsService } from 'nestjs-cls';
-import { bucketOf } from '@jcool/id-codec';
-import { correlationHeaders } from '@jcool/platform/observability';
-import type { OutboundCall } from '@jcool/platform/resilience';
-import type { IdGeneratorPort } from '../application/ports';
+import { SEQUENCE_COUNT, bucketOf } from '@jcool/id-codec';
+import { correlationHeaders } from '../observability';
+import type { OutboundCall } from '../resilience';
 
 export const ID_SERVICE_BREAKER = 'id-service';
 
@@ -46,10 +45,15 @@ function isIdList(value: unknown, count: number, bucket: number): value is strin
 export interface IdServiceOptions {
   url: string;
   timeoutMs: number;
+  /** Sent as `x-caller`, which labels the id service's mint counter. */
+  caller: string;
 }
 
+// The id service's per-request cap: one node-millisecond.
+const MAX_IDS_PER_REQUEST = SEQUENCE_COUNT;
+
 /** No retry here: the gateway in front of the replicas holds the only retry budget. */
-export class IdServiceHttpAdapter implements IdGeneratorPort {
+export class IdServiceHttpAdapter {
   constructor(
     private readonly options: IdServiceOptions,
     private readonly breaker: OutboundCall,
@@ -57,6 +61,14 @@ export class IdServiceHttpAdapter implements IdGeneratorPort {
   ) {}
 
   async mint(bucket: number, count = 1): Promise<string[]> {
+    const ids: string[] = [];
+    for (let left = count; left > 0; left -= MAX_IDS_PER_REQUEST) {
+      ids.push(...(await this.mintBatch(bucket, Math.min(left, MAX_IDS_PER_REQUEST))));
+    }
+    return ids;
+  }
+
+  private async mintBatch(bucket: number, count: number): Promise<string[]> {
     try {
       return await this.breaker.run(() => this.request(bucket, count));
     } catch (error) {
@@ -68,7 +80,11 @@ export class IdServiceHttpAdapter implements IdGeneratorPort {
   private async request(bucket: number, count: number): Promise<string[]> {
     const response = await fetch(new URL('/v1/ids', this.options.url), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-caller': 'user-service', ...correlationHeaders(this.cls) },
+      headers: {
+        'content-type': 'application/json',
+        'x-caller': this.options.caller,
+        ...correlationHeaders(this.cls),
+      },
       body: JSON.stringify({ bucket, count }),
       // The breaker stops waiting at the same point; this also frees the socket.
       signal: AbortSignal.timeout(this.options.timeoutMs),

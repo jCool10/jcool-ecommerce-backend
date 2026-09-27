@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne, UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
 import { inbox } from './schema/inbox.schema';
 
 export interface InboxEntry {
@@ -16,6 +17,8 @@ export interface InboxEntry {
  */
 @Injectable()
 export class InboxStore {
+  constructor(@Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort) {}
+
   /**
    * True when this delivery won the row and owns the effect. Two concurrent deliveries do not race:
    * the loser BLOCKS on the unique index until the winner's transaction ends, then either sees the
@@ -24,7 +27,7 @@ export class InboxStore {
   async claim(tx: DrizzleTx, entry: InboxEntry): Promise<boolean> {
     const claimed = await tx
       .insert(inbox)
-      .values(entry)
+      .values({ id: await mintOne(this.ids, UNOWNED_BUCKET), ...entry })
       .onConflictDoNothing({ target: [inbox.consumer, inbox.messageId] })
       .returning({ id: inbox.id });
 

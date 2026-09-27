@@ -1,6 +1,7 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import { DRIZZLE, isCheckViolation, type DrizzleDB } from '@shared/infrastructure/database';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne, UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
 import type { StockAdminPort, StockView } from '../application/ports/stock-admin.port';
 import { stockLevels } from './schema/inventory.schema';
 
@@ -14,13 +15,15 @@ const ON_HAND_NONNEG = 'ck_stock_on_hand_nonneg';
  * CAS in stock.repository.ts, which raises `quantity_reserved` under no lock these statements take
  * part in.
  *
- * Written through Drizzle, not raw SQL: `id` has no database default (it is minted by `$defaultFn`
- * in the schema) and `updated_at` moves via `$onUpdate`, so a raw INSERT would fail on a null id and
- * a raw UPDATE would leave the stamp behind.
+ * Written through Drizzle, not raw SQL: `updated_at` moves via `$onUpdate`, so a raw UPDATE would
+ * leave the stamp behind.
  */
 @Injectable()
 export class StockAdminRepository implements StockAdminPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+  ) {}
 
   async getLevel(variantId: string): Promise<StockView | null> {
     const [row] = await this.db
@@ -32,10 +35,12 @@ export class StockAdminRepository implements StockAdminPort {
   }
 
   async setOnHand(variantId: string, quantity: number): Promise<StockView> {
+    // Wasted when the row already exists; minting only on a miss would need a second round trip.
+    const id = await mintOne(this.ids, UNOWNED_BUCKET);
     const [row] = await this.guardChecks(() =>
       this.db
         .insert(stockLevels)
-        .values({ variantId, quantityOnHand: quantity })
+        .values({ id, variantId, quantityOnHand: quantity })
         .onConflictDoUpdate({
           target: stockLevels.variantId,
           set: {

@@ -8,14 +8,15 @@ import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-eve
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { startMailServer, UNREACHABLE_SMTP_URL, type StartedMailServer } from '../setup/mail-server';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
 const MAIL_FROM = 'no-reply@jcool.test';
-const MESSAGE_ID = '0198f0d8-4444-7000-8000-000000000001';
-const ORDER_ID = '0198f0d8-5555-7000-8000-000000000001';
+const MESSAGE_ID = testId();
+const ORDER_ID = testId();
 // Above the shipped 10s: a cold container's first SMTP connection can outlast it.
 const MAIL_TIMEOUT_MS = '20000';
 // Past the directory's grace window, where an unknown user reads as gone rather than not yet copied.

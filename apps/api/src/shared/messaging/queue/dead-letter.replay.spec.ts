@@ -1,10 +1,13 @@
 import type { Queue } from 'bullmq';
 import { describe, expect, it, vi } from 'vitest';
+import { sampleId } from '@shared/testing/id-generator.double';
 import type { DeadLetterJob } from './dead-letter';
 import { replayDeadLetters, type ReplayOptions } from './dead-letter.replay';
+import { jobIdFor } from './domain-event.job';
 
-const ID_A = '0198f0d8-0000-7000-8000-00000000000a';
-const ID_B = '0198f0d8-0000-7000-8000-00000000000b';
+const ID_A = sampleId(10);
+const ID_B = sampleId(11);
+const ORDER_ID = sampleId(1, 7);
 
 const DAY_MS = 86_400_000;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -19,9 +22,9 @@ const guards: Pick<ReplayOptions, 'inboxLookup' | 'inboxRetentionMs' | 'jobOptio
 const dead = (overrides: Partial<DeadLetterJob> = {}): DeadLetterJob => ({
   outboxId: ID_A,
   aggregateType: 'Order',
-  aggregateId: '0198f0d8-1111-7000-8000-000000000001',
+  aggregateId: ORDER_ID,
   eventType: 'order.placed',
-  payload: { orderId: '0198f0d8-1111-7000-8000-000000000001' },
+  payload: { orderId: ORDER_ID },
   // Relative, so the suite never crosses the retention horizon on a calendar date.
   occurredAt: ago(60_000),
   traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
@@ -37,7 +40,7 @@ interface FakeJob {
   remove: ReturnType<typeof vi.fn>;
 }
 
-const entry = (data: Partial<DeadLetterJob>, id = data.outboxId): FakeJob => ({
+const entry = (data: Partial<DeadLetterJob>, id = data.outboxId && jobIdFor(data.outboxId)): FakeJob => ({
   id,
   data,
   remove: vi.fn().mockResolvedValue(undefined),
@@ -72,7 +75,7 @@ describe('replayDeadLetters', () => {
   it('frees the message id, then re-publishes the bare envelope on its ladder', async () => {
     const dlqJob = entry(dead({ eventType: 'order.paid' }));
     const stale = entry(dead());
-    const { main, dlq, add } = build({ entries: [dlqJob], mainJobs: new Map([[ID_A, stale]]) });
+    const { main, dlq, add } = build({ entries: [dlqJob], mainJobs: new Map([[jobIdFor(ID_A), stale]]) });
 
     const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
 
@@ -81,7 +84,7 @@ describe('replayDeadLetters', () => {
     expect(add).toHaveBeenCalledOnce();
     const [name, published, opts] = add.mock.calls[0] as [string, Record<string, unknown>, unknown];
     expect(name).toBe('order.paid');
-    expect(opts).toEqual({ jobId: ID_A, attempts: 15 });
+    expect(opts).toEqual({ jobId: jobIdFor(ID_A), attempts: 15 });
     expect(Object.keys(published).sort()).toEqual(
       ['aggregateId', 'aggregateType', 'eventType', 'occurredAt', 'outboxId', 'payload', 'traceparent'].sort(),
     );
@@ -111,7 +114,7 @@ describe('replayDeadLetters', () => {
     const dlqJob = entry(dead());
     const locked = entry(dead());
     locked.remove.mockRejectedValue(new Error('Job A could not be removed because it is locked by another worker'));
-    const { main, dlq, add } = build({ entries: [dlqJob], mainJobs: new Map([[ID_A, locked]]) });
+    const { main, dlq, add } = build({ entries: [dlqJob], mainJobs: new Map([[jobIdFor(ID_A), locked]]) });
 
     const summary = await replayDeadLetters(main, dlq, { ...guards, dryRun: false });
 
@@ -147,11 +150,11 @@ describe('replayDeadLetters', () => {
 
   it('reports the rest of the batch when one message fails', async () => {
     const bad = entry(dead());
-    const good = entry(dead({ outboxId: ID_B }), ID_B);
+    const good = entry(dead({ outboxId: ID_B }));
     const { main, dlq } = build({
       entries: [bad, good],
       mainGetJob: (id) =>
-        id === ID_A
+        id === jobIdFor(ID_A)
           ? Promise.reject(new Error('ERR Lua redis lib command arguments must be strings or integers'))
           : Promise.resolve(undefined),
     });
@@ -166,8 +169,8 @@ describe('replayDeadLetters', () => {
 
   // A dry run that ignored the guard would promise a replay the apply run then refuses.
   it('runs the inbox guard on a dry run too', async () => {
-    const claimed = entry(dead(), ID_A);
-    const forced = entry(dead({ outboxId: ID_B, occurredAt: ago(31 * DAY_MS) }), ID_B);
+    const claimed = entry(dead());
+    const forced = entry(dead({ outboxId: ID_B, occurredAt: ago(31 * DAY_MS) }));
     const { main, dlq } = build({ entries: [claimed, forced] });
 
     const summary = await replayDeadLetters(main, dlq, {

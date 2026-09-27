@@ -9,6 +9,7 @@ import { expect } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
+import { idServiceStub } from './id-service-stub';
 import { waitForRedisReady } from './redis-ready';
 import { userServiceStub } from './user-service-stub';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
@@ -58,6 +59,7 @@ export async function createTestApp(
   const userService = await userServiceStub();
   process.env.AUTH_JWKS_URL = userService.jwksUrl;
   process.env.USER_SERVICE_INTERNAL_URL = userService.url;
+  process.env.ID_SERVICE_URL = (await idServiceStub()).url;
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
   // a file that leaves jobs waiting hands them to the next file that boots a worker, which then
   // applies events its own test never published. Same value for every app in a file, because a

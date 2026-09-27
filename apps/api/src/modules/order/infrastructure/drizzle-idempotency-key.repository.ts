@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, inArray, lt } from 'drizzle-orm';
+import { bucketOf } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import type {
   IdempotencyRecord,
   IdempotencyStorePort,
@@ -13,12 +15,16 @@ type Row = typeof idempotencyKeys.$inferSelect;
 
 @Injectable()
 export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+  ) {}
 
   async tryInsertInProgress(input: InsertInProgressInput): Promise<IdempotencyRecord | null> {
     const [row] = await this.db
       .insert(idempotencyKeys)
       .values({
+        id: await mintOne(this.ids, bucketOf(input.ownerId)),
         scope: input.scope,
         key: input.key,
         requestHash: input.requestHash,

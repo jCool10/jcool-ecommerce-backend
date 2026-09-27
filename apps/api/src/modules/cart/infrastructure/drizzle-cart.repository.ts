@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
+import { bucketOf } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { CartItem } from '../domain/cart-item.entity';
 import type { CartRepositoryPort } from '../application/ports/cart-repository.port';
 import { MAX_LINE_QUANTITY } from '../cart.constants';
@@ -10,32 +12,34 @@ import { cartItems, carts } from './schema/cart.schema';
 // read-modify-write.
 @Injectable()
 export class DrizzleCartRepository implements CartRepositoryPort {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+  ) {}
 
   async ensureCartId(userId: string): Promise<string> {
-    // Read-first so a plain GET /cart never mutates the DB; only a first-time user reaches the
-    // INSERT. Still race-safe — a lost insert race (DO NOTHING returns no row) falls through to
-    // the re-read.
-    const found = await this.selectCartId(userId);
+    // Read-first so only a first-time user reaches the INSERT. Still race-safe — a lost insert race
+    // (DO NOTHING returns no row) falls through to the re-read.
+    const found = await this.findCartId(userId);
     if (found) {
       return found;
     }
     const [created] = await this.db
       .insert(carts)
-      .values({ userId })
+      .values({ id: await mintOne(this.ids, bucketOf(userId)), userId })
       .onConflictDoNothing({ target: carts.userId })
       .returning({ id: carts.id });
     if (created) {
       return created.id;
     }
-    const existing = await this.selectCartId(userId);
+    const existing = await this.findCartId(userId);
     if (!existing) {
       throw new Error(`Cart could not be ensured for user ${userId}`);
     }
     return existing;
   }
 
-  private async selectCartId(userId: string): Promise<string | null> {
+  async findCartId(userId: string): Promise<string | null> {
     const [row] = await this.db.select({ id: carts.id }).from(carts).where(eq(carts.userId, userId)).limit(1);
     return row?.id ?? null;
   }
@@ -52,7 +56,7 @@ export class DrizzleCartRepository implements CartRepositoryPort {
   async addItem(cartId: string, skuId: string, quantity: number): Promise<void> {
     await this.db
       .insert(cartItems)
-      .values({ cartId, skuId, quantity })
+      .values({ id: await mintOne(this.ids, bucketOf(cartId)), cartId, skuId, quantity })
       // $onUpdate doesn't fire on a conflict SET, so bump updated_at by hand. LEAST applies the
       // MAX_LINE_QUANTITY ceiling inside the same statement, so the cap stays race-safe.
       .onConflictDoUpdate({

@@ -12,10 +12,11 @@ import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 
 // A syntactically-valid UUID no fixture creates, so probing it exercises "absent" and not a cast error.
-const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ID = testId();
 
 // Cart and Order price a whole cart through Catalog's published port in one read. The response body
 // alone cannot show that the read is one query, or that per-line semantics survive the fold.
@@ -74,7 +75,7 @@ describe('Batch SKU view (integration, real Postgres + Redis)', () => {
     it('omits an id Catalog does not know instead of padding the result', async () => {
       const { variantId } = await createTestProduct(app);
 
-      const views = await repo.findManySkuViews([variantId, ABSENT_UUID]);
+      const views = await repo.findManySkuViews([variantId, ABSENT_ID]);
 
       expect(views).toHaveLength(1);
       expect(views[0].skuId).toBe(variantId);

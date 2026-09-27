@@ -1,15 +1,13 @@
 import { sql } from 'drizzle-orm';
-import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { v7 as uuidv7 } from 'uuid';
+import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure only — the domain layer must never import this module.
 
 export const productStatus = pgEnum('product_status', ['DRAFT', 'ACTIVE', 'ARCHIVED']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: every insert site mints its id through the id service, or fails to compile.
+const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -22,15 +20,22 @@ const stamps = {
 // Soft-delete marker (null = active). Products use status='ARCHIVED' instead, hence no column there.
 const archivedAt = () => timestamp('archived_at', { withTimezone: true });
 
-export const categories = pgTable('categories', {
-  id: id(),
-  name: text('name').notNull(),
-  slug: text('slug').notNull().unique(),
-  // Self-reference for nested categories; deliberately no FK yet.
-  parentId: uuid('parent_id'),
-  archivedAt: archivedAt(),
-  ...stamps,
-});
+export const categories = pgTable(
+  'categories',
+  {
+    id: id(),
+    name: text('name').notNull(),
+    slug: text('slug').notNull().unique(),
+    // Self-reference for nested categories; deliberately no FK yet.
+    parentId: snowflakeId('parent_id'),
+    archivedAt: archivedAt(),
+    ...stamps,
+  },
+  (t) => [
+    routableIdCheck('ck_categories_id_routable', t.id),
+    routableIdCheck('ck_categories_parent_id_routable', t.parentId),
+  ],
+);
 
 export const products = pgTable(
   'products',
@@ -40,7 +45,7 @@ export const products = pgTable(
     slug: text('slug').notNull().unique(),
     description: text('description'),
     status: productStatus('status').notNull().default('DRAFT'),
-    categoryId: uuid('category_id')
+    categoryId: snowflakeId('category_id')
       .notNull()
       .references(() => categories.id),
     // Bumped under the product row lock by every write that changes the search document, so it
@@ -49,6 +54,8 @@ export const products = pgTable(
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_products_id_routable', t.id),
+    routableIdCheck('ck_products_category_id_routable', t.categoryId),
     index('idx_products_category').on(t.categoryId),
     index('idx_products_status').on(t.status),
     // `nullsFirst` is load-bearing: a query's `desc()` means DESC NULLS FIRST, which a NULLS LAST
@@ -74,13 +81,17 @@ export const productVariants = pgTable(
     id: id(),
     sku: text('sku').notNull().unique(),
     name: text('name').notNull(),
-    productId: uuid('product_id')
+    productId: snowflakeId('product_id')
       .notNull()
       .references(() => products.id),
     archivedAt: archivedAt(),
     ...stamps,
   },
-  (t) => [index('idx_variants_product').on(t.productId)],
+  (t) => [
+    routableIdCheck('ck_product_variants_id_routable', t.id),
+    routableIdCheck('ck_product_variants_product_id_routable', t.productId),
+    index('idx_variants_product').on(t.productId),
+  ],
 );
 
 // `assetId` deliberately carries NO foreign key to Media's table: cross-context references are
@@ -90,15 +101,18 @@ export const productImages = pgTable(
   'product_images',
   {
     id: id(),
-    productId: uuid('product_id')
+    productId: snowflakeId('product_id')
       .notNull()
       .references(() => products.id),
-    assetId: uuid('asset_id').notNull(),
+    assetId: snowflakeId('asset_id').notNull(),
     position: integer('position').notNull().default(0),
     alt: text('alt'),
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_product_images_id_routable', t.id),
+    routableIdCheck('ck_product_images_product_id_routable', t.productId),
+    routableIdCheck('ck_product_images_asset_id_routable', t.assetId),
     index('idx_product_images_product_position').on(t.productId, t.position),
     // One asset appears at most once on a product: a second row would attach an already-ATTACHED
     // asset, which the state machine refuses anyway — this makes the database say so too.
@@ -110,12 +124,16 @@ export const prices = pgTable(
   'prices',
   {
     id: id(),
-    variantId: uuid('variant_id')
+    variantId: snowflakeId('variant_id')
       .notNull()
       .references(() => productVariants.id),
     currency: text('currency').notNull().default('VND'),
     amountMinor: integer('amount_minor').notNull(),
     ...stamps,
   },
-  (t) => [uniqueIndex('uq_prices_variant_currency').on(t.variantId, t.currency)],
+  (t) => [
+    routableIdCheck('ck_prices_id_routable', t.id),
+    routableIdCheck('ck_prices_variant_id_routable', t.variantId),
+    uniqueIndex('uq_prices_variant_currency').on(t.variantId, t.currency),
+  ],
 );

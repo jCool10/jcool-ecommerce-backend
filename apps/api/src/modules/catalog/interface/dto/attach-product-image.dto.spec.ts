@@ -1,8 +1,9 @@
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
+import { sampleId } from '@shared/testing/id-generator.double';
 import { AttachProductImageDto } from './attach-product-image.dto';
 
-const ASSET_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+const ASSET_ID = sampleId();
 
 function failedProperties(raw: Record<string, unknown>): string[] {
   const dto = plainToInstance(AttachProductImageDto, raw, { enableImplicitConversion: false });

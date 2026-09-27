@@ -24,6 +24,10 @@
       "types": "./dist/health/index.d.ts",
       "default": "./dist/health/index.js"
     },
+    "./identity": {
+      "types": "./dist/identity/index.d.ts",
+      "default": "./dist/identity/index.js"
+    },
     "./interface": {
       "types": "./dist/interface/index.d.ts",
       "default": "./dist/interface/index.js"

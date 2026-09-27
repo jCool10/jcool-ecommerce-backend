@@ -7,10 +7,11 @@ import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, checkout, readOrder, readStock, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 
 const STOCK = 40;
-const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ID = testId();
 
 describe('Admin orders (integration, real Postgres)', () => {
   let app: INestApplication;
@@ -82,7 +83,7 @@ describe('Admin orders (integration, real Postgres)', () => {
     it('rejects an unknown status, an oversized page or a malformed user id', async () => {
       await asAdmin('/admin/orders?status=SHIPPED').expect(400);
       await asAdmin('/admin/orders?pageSize=500').expect(400);
-      await asAdmin('/admin/orders?userId=not-a-uuid').expect(400);
+      await asAdmin('/admin/orders?userId=not-an-id').expect(400);
     });
   });
 
@@ -97,7 +98,7 @@ describe('Admin orders (integration, real Postgres)', () => {
     });
 
     it('answers 404 for an unknown order', async () => {
-      await asAdmin(`/admin/orders/${ABSENT_UUID}`).expect(404);
+      await asAdmin(`/admin/orders/${ABSENT_ID}`).expect(404);
     });
   });
 
@@ -115,7 +116,7 @@ describe('Admin orders (integration, real Postgres)', () => {
       expect(order.status).toBe(OrderStatus.CANCELLED);
       expect(order.finalizeReason).toBe('admin:cancel');
       expect((await readStock(app, variantId)).quantityReserved).toBe(0);
-      await request(server()).post(`/admin/orders/${ABSENT_UUID}/cancel`).set(authHeader(adminToken)).expect(404);
+      await request(server()).post(`/admin/orders/${ABSENT_ID}/cancel`).set(authHeader(adminToken)).expect(404);
     });
   });
 });

@@ -6,9 +6,10 @@ import { MAX_LINE_QUANTITY } from '../../src/modules/cart/cart.constants';
 import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
+import { testId } from '../setup/id-service-stub';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 
-const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ID = testId();
 
 describe('Cart (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -123,7 +124,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
       const res = await request(server())
         .post('/cart/items')
         .set(authHeader(token))
-        .send({ skuId: ABSENT_UUID, quantity: 1 });
+        .send({ skuId: ABSENT_ID, quantity: 1 });
 
       expect(res.status).toBe(404);
     });
@@ -173,7 +174,7 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     it('answers 200 when deleting a line that is not there', async () => {
       const token = await newPrincipalToken(app);
 
-      const res = await request(server()).delete(`/cart/items/${ABSENT_UUID}`).set(authHeader(token));
+      const res = await request(server()).delete(`/cart/items/${ABSENT_ID}`).set(authHeader(token));
 
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(0);

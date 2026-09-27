@@ -445,6 +445,17 @@ Postgres has no cast from `uuid` to `bigint`, so an `ALTER COLUMN … SET DATA T
 
 Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, add a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`). They validate the rows already there, so either one fails on a database holding an id below 2^22. No app writer produces such an id; a row like that was written by hand.
 
+Two more move every remaining id to `bigint`, and these **delete data rather than fail**:
+
+| Service | Migration | What it does |
+| --- | --- | --- |
+| api | `0027_snowflake_ids.sql` | `TRUNCATE`s all 17 api tables — catalog, carts, orders, stock, payments, webhook events, media, outbox, inbox — then converts every id and reference column and adds its `CHECK` |
+| user-service | `0002_refresh_token_family_snowflake.sql` | deletes every refresh token, so every user signs in again, then converts `family_id` |
+
+**Back up both databases before deploying them** ([Backup and restore](#backup-and-restore)). The api's rows cannot be carried across: a uuid has no bigint form, and nothing maps the old ids to new ones. Objects already in the media bucket outlive their rows, so [reconcile the bucket](#reconcile-the-bucket-against-media_assets) afterwards, and [rebuild the search index](#rebuild-the-search-index), which still names the old product ids.
+
+**Scale the api and the user-service to zero before this deploy.** The migrations run in the pre-deploy step while the previous deployment still serves, and that code writes uuids into what are now bigint columns: every api write and every user-service sign-in answers 500, and the old workers dead-letter each event the new relay publishes. Let the new deployment come up alone. Jobs the old code left in Redis carry uuid ids; the new workers dead-letter them as malformed and the replay CLI skips them. They name rows the migration deleted, so leave them to expire.
+
 So on a development or staging database that still holds rows, recreate it rather than migrating it:
 
 ```bash
@@ -960,6 +971,11 @@ each as a reference so the two cannot drift.
 | `AUTH_JWKS_URL` | the user-service's JWKS. The only key source: without it every request is refused |
 | `JWT_ISSUER`, `JWT_AUDIENCE` | what the user-service signs |
 | `USER_SERVICE_INTERNAL_URL`, `INTERNAL_API_TOKEN` | its internal API: session epochs on a Redis miss, the buyer's address for `order.paid` |
+
+It also depends on the id-service for every write: `ID_SERVICE_URL` is the gateway's internal
+listener (port 4000), the same one the user-service calls. The api mints each row id there, with
+`x-caller: api`, and answers 503 without writing anything when no id can be minted. Reads keep
+working, and so does replaying a checkout whose `Idempotency-Key` already completed.
 
 Session epochs come from the keys the user-service publishes to the shared Redis. A missing key
 costs a call to the user-service on the request path; if that call fails the request answers 503 —

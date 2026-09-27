@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { check, index, integer, pgEnum, pgTable, smallint, text, timestamp } from 'drizzle-orm/pg-core';
 import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // Infrastructure only: nothing in the domain layer may import this file.
@@ -96,9 +96,7 @@ export const refreshTokens = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull().unique(),
-    // Not minted by the id service: a family groups one login session and is only ever read
-    // alongside its owner's id, so it needs no routing bucket and no round trip to mint.
-    familyId: uuid('family_id').notNull(),
+    familyId: snowflakeId('family_id').notNull(),
     replacedByTokenId: snowflakeId('replaced_by_token_id').unique(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
@@ -124,6 +122,7 @@ export const refreshTokens = pgTable(
     routableIdCheck('ck_refresh_tokens_id_routable', t.id),
     routableIdCheck('ck_refresh_tokens_user_id_routable', t.userId),
     routableIdCheck('ck_refresh_tokens_replaced_by_token_id_routable', t.replacedByTokenId),
+    routableIdCheck('ck_refresh_tokens_family_id_routable', t.familyId),
   ],
 );
 

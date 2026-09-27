@@ -1,16 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  ParseUUIDPipe,
-  Patch,
-  Post,
-  Put,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -24,6 +12,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Role, Roles } from '@jcool/platform/rbac';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { CatalogAdminService } from '../application/services/catalog-admin.service';
 import {
   AdminCategoryResponseDto,
@@ -47,7 +36,7 @@ import {
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
 @ApiForbiddenResponse({ description: 'Authenticated but not an admin' })
-@ApiBadRequestResponse({ description: 'Malformed id (not a UUID) or invalid body' })
+@ApiBadRequestResponse({ description: 'Malformed id or invalid body' })
 @Roles(Role.Admin)
 @Controller('admin')
 export class AdminCatalogController {
@@ -65,7 +54,7 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'Category not found' })
   @ApiConflictResponse({ description: 'Slug already exists' })
   async updateCategory(
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id', ParseSnowflakeIdPipe) id: string,
     @Body() dto: UpdateCategoryDto,
   ): Promise<AdminCategoryResponseDto> {
     return AdminCategoryResponseDto.fromEntity(await this.admin.updateCategory(id, dto));
@@ -76,7 +65,7 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminCategoryResponseDto, description: 'Category archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'Category not found' })
   @ApiConflictResponse({ description: 'Category still has active products' })
-  async deleteCategory(@Param('id', ParseUUIDPipe) id: string): Promise<AdminCategoryResponseDto> {
+  async deleteCategory(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<AdminCategoryResponseDto> {
     return AdminCategoryResponseDto.fromEntity(await this.admin.archiveCategory(id));
   }
 
@@ -93,7 +82,7 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'Product or referenced category not found' })
   @ApiConflictResponse({ description: 'Slug already exists' })
   async updateProduct(
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id', ParseSnowflakeIdPipe) id: string,
     @Body() dto: UpdateProductDto,
   ): Promise<AdminProductResponseDto> {
     return AdminProductResponseDto.fromEntity(await this.admin.updateProduct(id, dto));
@@ -103,7 +92,7 @@ export class AdminCatalogController {
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: AdminProductResponseDto, description: 'Product archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'Product not found' })
-  async deleteProduct(@Param('id', ParseUUIDPipe) id: string): Promise<AdminProductResponseDto> {
+  async deleteProduct(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<AdminProductResponseDto> {
     return AdminProductResponseDto.fromEntity(await this.admin.archiveProduct(id));
   }
 
@@ -112,7 +101,7 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'Product not found' })
   @ApiConflictResponse({ description: 'SKU code already exists' })
   async createSku(
-    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('productId', ParseSnowflakeIdPipe) productId: string,
     @Body() dto: CreateSkuDto,
   ): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.createSku(productId, dto));
@@ -122,7 +111,10 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminSkuResponseDto })
   @ApiNotFoundResponse({ description: 'SKU not found' })
   @ApiConflictResponse({ description: 'SKU code already exists' })
-  async updateSku(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSkuDto): Promise<AdminSkuResponseDto> {
+  async updateSku(
+    @Param('id', ParseSnowflakeIdPipe) id: string,
+    @Body() dto: UpdateSkuDto,
+  ): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.updateSku(id, dto));
   }
 
@@ -130,7 +122,7 @@ export class AdminCatalogController {
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: AdminSkuResponseDto, description: 'SKU archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'SKU not found' })
-  async deleteSku(@Param('id', ParseUUIDPipe) id: string): Promise<AdminSkuResponseDto> {
+  async deleteSku(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<AdminSkuResponseDto> {
     return AdminSkuResponseDto.fromEntity(await this.admin.archiveSku(id));
   }
 
@@ -138,7 +130,7 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: [AdminProductImageResponseDto] })
   @ApiNotFoundResponse({ description: 'Product not found' })
   async listProductImages(
-    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('productId', ParseSnowflakeIdPipe) productId: string,
   ): Promise<AdminProductImageResponseDto[]> {
     const images = await this.admin.listProductImages(productId);
     return images.map((image) => AdminProductImageResponseDto.fromEntity(image));
@@ -149,7 +141,7 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'Product not found' })
   @ApiConflictResponse({ description: 'Asset already attached, or not in a state that can be attached' })
   async attachProductImage(
-    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('productId', ParseSnowflakeIdPipe) productId: string,
     @Body() dto: AttachProductImageDto,
   ): Promise<AdminProductImageResponseDto> {
     return AdminProductImageResponseDto.fromEntity(await this.admin.attachProductImage(productId, dto));
@@ -162,8 +154,8 @@ export class AdminCatalogController {
   @ApiNoContentResponse({ description: 'Image detached; the asset becomes reclaimable' })
   @ApiNotFoundResponse({ description: 'Image not found on that product' })
   async detachProductImage(
-    @Param('productId', ParseUUIDPipe) productId: string,
-    @Param('imageId', ParseUUIDPipe) imageId: string,
+    @Param('productId', ParseSnowflakeIdPipe) productId: string,
+    @Param('imageId', ParseSnowflakeIdPipe) imageId: string,
   ): Promise<void> {
     await this.admin.detachProductImage(productId, imageId);
   }
@@ -173,7 +165,7 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'Product not found' })
   @ApiConflictResponse({ description: 'The order must list every image on the product exactly once' })
   async reorderProductImages(
-    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('productId', ParseSnowflakeIdPipe) productId: string,
     @Body() dto: ReorderProductImagesDto,
   ): Promise<AdminProductImageResponseDto[]> {
     const images = await this.admin.reorderProductImages(productId, dto.imageIds);
@@ -184,7 +176,7 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminPriceResponseDto, description: 'Price set or replaced (upsert per currency)' })
   @ApiNotFoundResponse({ description: 'SKU not found' })
   async setPrice(
-    @Param('skuId', ParseUUIDPipe) skuId: string,
+    @Param('skuId', ParseSnowflakeIdPipe) skuId: string,
     @Body() dto: SetPriceDto,
   ): Promise<AdminPriceResponseDto> {
     return AdminPriceResponseDto.fromEntity(await this.admin.setPrice(skuId, dto));

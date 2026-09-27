@@ -11,6 +11,7 @@ import {
 } from '../../src/shared/messaging/queue/queue.constants';
 import { QueueLifecycle } from '../../src/shared/messaging/queue/queue.lifecycle';
 import { closeAppAfterAll, obliterateQueueBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { createTestApp } from '../setup/test-app.factory';
 
 // The lifecycle tests boot their own app because each breaks or closes its connection.
@@ -21,7 +22,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   let prefix: string;
 
   // Stand-in for the envelope the relay publishes; this suite only proves the transport.
-  const job = { outboxId: '0198f0d8-0000-7000-8000-000000000001', occurredAt: '2026-08-24T00:00:00.000Z' };
+  const job = { outboxId: testId(), occurredAt: '2026-08-24T00:00:00.000Z' };
 
   beforeAll(async () => {
     app = await createTestApp({ QUEUE_CONSUMER_ATTEMPTS: '5', QUEUE_CONSUMER_BACKOFF_MS: '250' });

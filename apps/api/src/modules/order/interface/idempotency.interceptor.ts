@@ -68,6 +68,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const scope = `user:${user.userId}`;
     const requestHash = computeRequestHash(request.method, request.path, scope, request.body);
     const insertInput = {
+      ownerId: user.userId,
       scope,
       key,
       requestHash,
@@ -76,12 +77,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
       expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS),
     };
 
-    const inserted = await this.store.tryInsertInProgress(insertInput);
-    if (inserted) {
-      return this.runHandler(scope, key, next);
+    // Looked up before claiming: a claim mints an id, and a replay must not need the id service.
+    let existing = await this.store.findByScopeAndKey(scope, key);
+    if (!existing) {
+      const inserted = await this.store.tryInsertInProgress(insertInput);
+      if (inserted) {
+        return this.runHandler(scope, key, next);
+      }
+      existing = await this.store.findByScopeAndKey(scope, key);
     }
-
-    const existing = await this.store.findByScopeAndKey(scope, key);
     if (!existing) {
       // Row vanished between the failed insert and this read (a sibling cleaned up its own failed
       // attempt). Transient — have the client retry.

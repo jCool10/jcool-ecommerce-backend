@@ -25,6 +25,7 @@ import {
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 
 const WEBHOOK_SECRET = 'whsec_e2e_saga_events_0123456789';
@@ -180,9 +181,9 @@ describe('Payment settlement events driving the order saga (integration, real Po
     // A settlement Payment refused (its own state machine rejects SUCCEEDED→FAILED), replayed here
     // straight at the consumer: out-of-order delivery is the transport's to produce, not Payment's.
     const late: DomainEventJob = {
-      outboxId: '0198f0d8-9999-7000-8000-000000000001',
+      outboxId: testId(),
       aggregateType: 'Payment',
-      aggregateId: '0198f0d8-8888-7000-8000-000000000001',
+      aggregateId: testId(),
       eventType: 'payment.failed',
       payload: { orderId: order.orderId, paymentRef: null },
       occurredAt: new Date().toISOString(),
@@ -201,11 +202,11 @@ describe('Payment settlement events driving the order saga (integration, real Po
     const refundOwed = vi.spyOn(app.get<MetricsPort>(METRICS), 'recordRefundOwed');
 
     const orphan: DomainEventJob = {
-      outboxId: '0198f0d8-9999-7000-8000-000000000002',
+      outboxId: testId(),
       aggregateType: 'Payment',
-      aggregateId: '0198f0d8-8888-7000-8000-000000000002',
+      aggregateId: testId(),
       eventType: 'payment.succeeded',
-      payload: { orderId: '0198f0d8-7777-7000-8000-000000000002', paymentRef: 'pi_orphan' },
+      payload: { orderId: testId(), paymentRef: 'pi_orphan' },
       occurredAt: new Date().toISOString(),
       traceparent: null,
     };
@@ -216,9 +217,9 @@ describe('Payment settlement events driving the order saga (integration, real Po
 
   it('sends an unreadable settlement to the dead-letter path without retrying', async () => {
     const malformed: DomainEventJob = {
-      outboxId: '0198f0d8-9999-7000-8000-000000000003',
+      outboxId: testId(),
       aggregateType: 'Payment',
-      aggregateId: '0198f0d8-8888-7000-8000-000000000003',
+      aggregateId: testId(),
       eventType: 'payment.succeeded',
       payload: { paymentRef: 'pi_no_order' },
       occurredAt: new Date().toISOString(),

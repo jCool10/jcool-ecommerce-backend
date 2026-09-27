@@ -7,7 +7,6 @@ import {
   HttpStatus,
   NotFoundException,
   Param,
-  ParseUUIDPipe,
   Post,
 } from '@nestjs/common';
 import {
@@ -23,6 +22,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { type AuthenticatedUser, CurrentUser, Role, Roles } from '@jcool/platform/rbac';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { UnsupportedContentTypeError } from '../domain/asset-content-type';
 import { AssetTransitionError } from '../domain/asset-state-machine';
 import { MediaAssetNotFoundError } from '../domain/errors/media-asset-not-found.error';
@@ -80,13 +80,13 @@ export class MediaController {
 
   @Post('uploads/:assetId/complete')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiParam({ name: 'assetId', format: 'uuid' })
+  @ApiParam({ name: 'assetId', example: '137465797020397179' })
   @ApiNoContentResponse({ description: 'The upload is confirmed and the asset can now be attached' })
   @ApiNotFoundResponse({ description: 'No such asset' })
   @ApiConflictResponse({
     description: 'Nothing was uploaded, the object is over the size limit, or the asset has already moved on',
   })
-  async completeUpload(@Param('assetId', ParseUUIDPipe) assetId: string): Promise<void> {
+  async completeUpload(@Param('assetId', ParseSnowflakeIdPipe) assetId: string): Promise<void> {
     try {
       await this.complete.execute(assetId);
     } catch (error) {

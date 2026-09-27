@@ -10,7 +10,7 @@ import { toError } from '@jcool/kernel';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { extractTraceContext, injectTraceContext, withSpan } from '@jcool/platform/observability';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
-import type { DomainEventJob } from '../queue/domain-event.job';
+import { type DomainEventJob, jobIdFor } from '../queue/domain-event.job';
 import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION, jobOptionsFor } from '../queue/queue.constants';
 import { outbox } from './schema/outbox.schema';
 
@@ -60,7 +60,7 @@ export class OutboxRelay {
         .select()
         .from(outbox)
         .where(isNull(outbox.publishedAt))
-        // The UUIDv7 id breaks `created_at` ties, which are routine.
+        // The id breaks `created_at` ties, which are routine.
         .orderBy(asc(outbox.createdAt), asc(outbox.id))
         .limit(batchSize)
         // Rows another instance holds are skipped, not waited on: multi-instance safety and
@@ -140,7 +140,7 @@ export class OutboxRelay {
         // Republishing a row BullMQ still remembers is a no-op instead of a second job — best effort
         // only, since a completed job eventually ages out of retention and frees the id again.
         await this.queue.add(row.eventType, job, {
-          jobId: row.id,
+          jobId: jobIdFor(row.id),
           ...jobOptionsFor(row.eventType, this.orderPaidAttempts),
         });
       }),

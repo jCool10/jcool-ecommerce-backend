@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayNotEmpty, IsArray, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsSnowflakeId } from '@jcool/platform/interface';
 
 // A display slot, not the int4 ceiling `product_images.position` could hold: an omitted position is
 // derived as `max(position) + 1`, so a slot at the column's own limit would overflow on the next
@@ -8,8 +9,8 @@ const MAX_POSITION = 10_000;
 
 /** The asset must already be uploaded (READY) via `POST /admin/media/uploads`; this only records where it belongs. */
 export class AttachProductImageDto {
-  @ApiProperty({ description: 'Media asset id from a completed upload' })
-  @IsUUID()
+  @ApiProperty({ example: '137465797020397179', description: 'Media asset id from a completed upload' })
+  @IsSnowflakeId()
   assetId!: string;
 
   @ApiPropertyOptional({
@@ -35,6 +36,6 @@ export class ReorderProductImagesDto {
   @ApiProperty({ type: [String], description: 'Image ids in the desired display order' })
   @IsArray()
   @ArrayNotEmpty()
-  @IsUUID(undefined, { each: true })
+  @IsSnowflakeId({ each: true })
   imageIds!: string[];
 }

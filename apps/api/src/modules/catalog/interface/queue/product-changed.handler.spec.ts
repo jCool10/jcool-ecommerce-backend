@@ -5,13 +5,14 @@ import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
 import type { CatalogSearchPort, ProductSearchStatePort } from '../../application/ports';
 import { ProductSearchSyncService } from '../../application/services/product-search-sync.service';
 import { fakeCatalogSearch, fakeProductSearchState } from '../../testing/catalog-port.doubles';
+import { sampleId } from '@shared/testing/id-generator.double';
 import { ProductChangedHandler } from './product-changed.handler';
 
-const PRODUCT_ID = '0198f0d8-4444-7000-8000-000000000001';
+const PRODUCT_ID = sampleId(1);
 
 function job(aggregateId: string): DomainEventJob {
   return {
-    outboxId: '0198f0d8-0000-7000-8000-000000000002',
+    outboxId: sampleId(2),
     aggregateType: 'Product',
     aggregateId,
     eventType: 'catalog.product.changed',
@@ -48,7 +49,7 @@ describe('ProductChangedHandler', () => {
   it('refuses a malformed product id as permanent before reading anything', async () => {
     const { handler, findByIds } = build();
 
-    for (const aggregateId of ['', 'not-a-uuid', `${PRODUCT_ID}' OR '1'='1`]) {
+    for (const aggregateId of ['', 'not-an-id', '0198f0d8-4444-7000-8000-000000000001', `${PRODUCT_ID}' OR '1'='1`]) {
       await expect(handler.apply(job(aggregateId))).rejects.toBeInstanceOf(PermanentError);
     }
     expect(findByIds).not.toHaveBeenCalled();

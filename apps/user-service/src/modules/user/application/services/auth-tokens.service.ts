@@ -11,6 +11,7 @@ import {
   REFRESH_TOKEN_REPOSITORY,
   type RefreshTokenRepositoryPort,
 } from '../ports';
+import { IdentityService } from './identity.service';
 
 export interface AuthTokens {
   /** Signed JWT (ES256). */
@@ -38,6 +39,7 @@ export class AuthTokensService {
     config: ConfigService,
     @Inject(REFRESH_TOKEN_REPOSITORY)
     private readonly refreshTokens: RefreshTokenRepositoryPort,
+    private readonly identity: IdentityService,
   ) {
     this.refreshTtlMs = durationToMs(config.getOrThrow<string>('auth.refreshTokenTtl'));
   }
@@ -65,7 +67,7 @@ export class AuthTokensService {
     await this.refreshTokens.create({
       userId: user.id,
       tokenHash: refresh.hash,
-      familyId: uuidv7(),
+      familyId: await this.identity.mintOwnedBy(user.id),
       expiresAt: refresh.expiresAt,
     });
 

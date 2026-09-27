@@ -14,6 +14,7 @@ import { countHeldReservations, getStockView, seedStock } from '../setup/fixture
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
 // A replay is also a 201, so the order and hold counts are the verdict. Ample stock lets a duplicate
 // order show up as a second row instead of a shortfall 409.
@@ -161,6 +162,7 @@ describe('Idempotent checkout (integration, real Postgres)', () => {
     // stays the normal 24h out, since the row's overall replay window is untouched by the lease.
     const body = { marker: true };
     await db.insert(schema.idempotencyKeys).values({
+      id: testId(),
       scope,
       key,
       requestHash: computeRequestHash('POST', '/orders', scope, body),

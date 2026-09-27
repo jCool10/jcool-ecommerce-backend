@@ -1,4 +1,4 @@
-import { Controller, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { Controller, Param, Post, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiConflictResponse,
@@ -11,6 +11,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { PAYMENT_SESSION_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
 import { CurrentUser, type AuthenticatedUser } from '@jcool/platform/rbac';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { CreatePaymentSessionUseCase } from '../application/use-cases';
 import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
 
@@ -30,14 +31,14 @@ export class PaymentController {
   // well as per IP — one account can't turn a retry loop into outbound load we pay for.
   @Throttle(PAYMENT_SESSION_THROTTLE)
   @UseGuards(UserThrottlerGuard)
-  @ApiParam({ name: 'id', format: 'uuid', description: 'Order id to pay' })
+  @ApiParam({ name: 'id', example: '137465797020397179', description: 'Order id to pay' })
   // Also 201 when a still-open session is handed back, as an idempotent replay would answer.
   @ApiCreatedResponse({ type: CreatePaymentSessionResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found (or not owned by the caller)' })
   @ApiConflictResponse({ description: 'Order is not PENDING, or already has an active payment' })
   async pay(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) orderId: string,
+    @Param('id', ParseSnowflakeIdPipe) orderId: string,
   ): Promise<CreatePaymentSessionResponseDto> {
     return CreatePaymentSessionResponseDto.from(await this.createSession.execute(orderId, user.userId));
   }

@@ -1,3 +1,5 @@
+import { isRoutableId } from '@jcool/id-codec';
+
 // The envelope on the wire: change a field here and the producer, the consumer, and every job
 // already sitting in Redis are all affected.
 
@@ -20,15 +22,21 @@ export interface DomainEventJob {
  */
 export type PostCommitEffect = () => Promise<void>;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The envelope arrives as JSON from Redis, so its declared type is a claim, not a guarantee. Called
  * wherever `outboxId` is about to be used as a key, so a bad value surfaces here rather than as a
  * Postgres cast error deep inside a transaction.
  */
 export function isWellFormedEnvelope(job: DomainEventJob | undefined): boolean {
-  return UUID.test(job?.outboxId ?? '') && Boolean(job?.eventType);
+  return isRoutableId(job?.outboxId) && Boolean(job?.eventType);
+}
+
+/**
+ * The BullMQ job id a message is queued under, in both the main queue and the dead-letter queue.
+ * BullMQ refuses a custom id that reads back as an integer, and an outbox id is all digits.
+ */
+export function jobIdFor(outboxId: string): string {
+  return `msg-${outboxId}`;
 }
 
 /** Field names only: the payload can carry customer data, and this string ends up in logs. */

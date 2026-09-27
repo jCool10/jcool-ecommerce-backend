@@ -2,14 +2,15 @@ import { context, propagation, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import type { Queue } from 'bullmq';
+import type { JobsOptions, Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@jcool/metrics-port';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import type { DomainEventJob } from '../queue/domain-event.job';
+import { sampleId } from '@shared/testing/id-generator.double';
+import { type DomainEventJob, jobIdFor } from '../queue/domain-event.job';
 import { dispatcherWith } from '../testing/domain-event-dispatcher.double';
 import { OutboxRelay } from './outbox-relay';
 import type { outbox } from './schema/outbox.schema';
@@ -19,14 +20,15 @@ type OutboxRow = typeof outbox.$inferSelect;
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const PRODUCER_SPAN_ID = '00f067aa0ba902b7';
 
+const ORDER_ID = sampleId(0, 7);
 let nextId = 1;
 function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
   return {
-    id: `0198f0d8-0000-7000-8000-${String(nextId++).padStart(12, '0')}`,
+    id: sampleId(nextId++),
     aggregateType: 'Order',
-    aggregateId: '0198f0d8-1111-7000-8000-000000000001',
+    aggregateId: ORDER_ID,
     eventType: 'order.placed',
-    payload: { orderId: '0198f0d8-1111-7000-8000-000000000001' },
+    payload: { orderId: ORDER_ID },
     traceparent: null,
     attempts: 0,
     createdAt: new Date('2026-08-24T00:00:00.000Z'),
@@ -81,6 +83,20 @@ describe('OutboxRelay', () => {
     context.disable();
     trace.disable();
     propagation.disable();
+  });
+
+  // The job id is what makes a republish of the same row a no-op instead of a second delivery.
+  it('publishes each row under a job id derived from the row id', async () => {
+    const rows = [row(), row()];
+    const t = build(rows);
+
+    await t.relay.runOnce(10);
+
+    const published = t.add.mock.calls.map(([, job, opts]) => [
+      (job as DomainEventJob).outboxId,
+      (opts as JobsOptions).jobId,
+    ]);
+    expect(published).toEqual(rows.map((r) => [r.id, jobIdFor(r.id)]));
   });
 
   // Each refusal can cost a full command timeout while the batch's row locks stay held.

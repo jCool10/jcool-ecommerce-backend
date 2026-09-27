@@ -5,18 +5,20 @@ import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { UnhandledEventError } from '../errors';
 import type { InboxStore } from '../inbox/inbox.store';
 import { dispatcherWith, type DispatcherHandlerDoubles } from '../testing/domain-event-dispatcher.double';
+import { sampleId } from '@shared/testing/id-generator.double';
 import type { DomainEventJob } from './domain-event.job';
 import { DomainEventProcessor } from './domain-event.processor';
 
-const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
+const MESSAGE_ID = sampleId(1);
+const ORDER_ID = sampleId(2, 7);
 
 function job(overrides: Partial<DomainEventJob> = {}): DomainEventJob {
   return {
     outboxId: MESSAGE_ID,
     aggregateType: 'Order',
-    aggregateId: '0198f0d8-1111-7000-8000-000000000001',
+    aggregateId: ORDER_ID,
     eventType: 'order.paid',
-    payload: { orderId: '0198f0d8-1111-7000-8000-000000000001' },
+    payload: { orderId: ORDER_ID },
     occurredAt: '2026-08-24T00:00:00.000Z',
     traceparent: null,
     ...overrides,
@@ -32,7 +34,7 @@ interface BuildOptions {
 // Atomicity of the claim is the database's job and the e2e suite's; this fake only remembers ids.
 function build({ handlers = {}, alreadyClaimed = false, trace = [] }: BuildOptions = {}) {
   const claims = new Set<string>(alreadyClaimed ? [MESSAGE_ID] : []);
-  const inbox: InboxStore = {
+  const inbox: Pick<InboxStore, 'claim'> = {
     claim: (_tx, { messageId }) => {
       if (claims.has(messageId)) return Promise.resolve(false);
       claims.add(messageId);
@@ -50,7 +52,7 @@ function build({ handlers = {}, alreadyClaimed = false, trace = [] }: BuildOptio
   const processor = new DomainEventProcessor(
     { transaction } as unknown as DrizzleDB,
     { recordEventConsumed } as unknown as MetricsPort,
-    inbox,
+    inbox as InboxStore,
     dispatcherWith(handlers),
     fakePinoLogger(),
   );
@@ -92,7 +94,7 @@ describe('DomainEventProcessor', () => {
 
     await expect(processor.process(job({ eventType: 'order.expired' }))).rejects.toThrow('handler exploded');
     // A new id, because this fake keeps the claim a real rollback would release.
-    const unknownEvent = job({ outboxId: '0198f0d8-0000-7000-8000-000000000002', eventType: 'order.whatever' });
+    const unknownEvent = job({ outboxId: sampleId(3), eventType: 'order.whatever' });
     await expect(processor.process(unknownEvent)).rejects.toBeInstanceOf(UnhandledEventError);
 
     expect(recordEventConsumed.mock.calls).toEqual([

@@ -9,6 +9,7 @@ import { AuthVerifierModule } from '@jcool/auth-verifier';
 import { ConfigModule } from '@shared/config';
 import { authVerifierOptions } from '@shared/auth/auth-verifier-options.factory';
 import { SessionStateModule } from '@shared/auth/session-state.module';
+import { IdentityModule } from '@shared/identity/identity.module';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import * as schema from '@shared/infrastructure/database/schema';
 import { RedisDurabilityCheck, RedisModule } from '@jcool/platform/redis';
@@ -39,6 +40,7 @@ import { PaymentModule } from '@modules/payment/payment.module';
     SentryModule.forRoot(),
     DrizzleModule.forRoot({ schema }),
     RedisModule,
+    IdentityModule,
     // @Global, so position is readability only: a complete sweep roster is guaranteed by
     // registration happening in onModuleInit while the scheduler waits for onApplicationBootstrap.
     RetentionModule,

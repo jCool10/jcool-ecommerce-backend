@@ -15,6 +15,7 @@ function skuView(overrides: Partial<CartSkuView> = {}): CartSkuView {
 function build(items: CartItem[], views: CartSkuView[]): CartService {
   const repo: CartRepositoryPort = {
     ensureCartId: () => Promise.resolve('cart-1'),
+    findCartId: () => Promise.resolve('cart-1'),
     findItems: () => Promise.resolve(items),
     addItem: vi.fn(),
     setItemQuantity: vi.fn(),
@@ -26,6 +27,27 @@ function build(items: CartItem[], views: CartSkuView[]): CartService {
 }
 
 describe('CartService.view', () => {
+  // Creating a cart mints an id, so a read must not depend on the id service being up.
+  it('shows an empty cart to a user who has none without creating one', async () => {
+    const ensureCartId = vi.fn().mockRejectedValue(new Error('id service unavailable'));
+    const service = new CartService(
+      {
+        ensureCartId,
+        findCartId: () => Promise.resolve(null),
+        findItems: vi.fn(),
+        addItem: vi.fn(),
+        setItemQuantity: vi.fn(),
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+      },
+      { getSkuView: vi.fn(), getSkuViews: () => Promise.resolve([]) },
+      fakeMetricsPort(),
+    );
+
+    await expect(service.view('u1')).resolves.toEqual({ items: [], subtotalMinor: 0, currency: 'VND' });
+    expect(ensureCartId).not.toHaveBeenCalled();
+  });
+
   it('prices each line from its own SKU whatever order the batch read returns', async () => {
     const service = build(
       [CartItem.of(SKU, 1), CartItem.of(OTHER_SKU, 2)],

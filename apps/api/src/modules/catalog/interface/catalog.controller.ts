@@ -63,7 +63,7 @@ export class CatalogController {
 
   @Public()
   @Get(':idOrSlug')
-  @ApiParam({ name: 'idOrSlug', description: 'Product id (UUID v7) or slug' })
+  @ApiParam({ name: 'idOrSlug', description: 'Product id (decimal string) or slug' })
   @ApiOkResponse({ type: ProductResponseDto })
   @ApiNotFoundResponse({ description: 'Product not found or not ACTIVE' })
   async detail(@Param('idOrSlug') idOrSlug: string): Promise<ProductResponseDto> {

@@ -11,7 +11,6 @@ import {
   Ip,
   NotFoundException,
   Param,
-  ParseUUIDPipe,
   Post,
   Res,
   UnauthorizedException,
@@ -34,6 +33,7 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { LOGIN_THROTTLE, REFRESH_THROTTLE, REGISTER_THROTTLE } from '@jcool/platform/throttler';
 import { AUTH_AUDIT, type AuthAuditPort } from '../application/ports';
 import { EmailVerificationService, PasswordResetService, SessionService } from '../application/services';
@@ -250,7 +250,7 @@ export class AuthController {
   @ApiNotFoundResponse({ description: 'No such session for this user' })
   async revokeSession(
     @CurrentUser() current: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id', ParseSnowflakeIdPipe) id: string,
     @Ip() ip: string,
     @Headers('user-agent') userAgent?: string,
   ): Promise<void> {

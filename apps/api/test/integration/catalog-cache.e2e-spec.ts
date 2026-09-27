@@ -13,6 +13,7 @@ import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { withRedisDown } from '../setup/redis-outage';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
+import { testId } from '../setup/id-service-stub';
 
 // Skips the admin path that bumps the cache generation, so an unchanged read came from Redis.
 async function renameBehindTheCache(app: INestApplication, productId: string, name: string): Promise<void> {
@@ -216,7 +217,7 @@ describe('Catalog cache-aside (integration, real Postgres + Redis)', () => {
       const hitsBefore = await readCacheCounter(app, 'hit_fresh');
 
       await request(app.getHttpServer())
-        .patch('/admin/products/0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f')
+        .patch(`/admin/products/${testId()}`)
         .set(authHeader(token))
         .send({ name: 'Nothing To Rename' })
         .expect(404);

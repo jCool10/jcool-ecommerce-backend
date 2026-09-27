@@ -1,10 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsUUID, Max, Min } from 'class-validator';
+import { IsInt, Max, Min } from 'class-validator';
+import { IsSnowflakeId } from '@jcool/platform/interface';
 import { MAX_LINE_QUANTITY } from '../../cart.constants';
 
 export class AddCartItemDto {
-  @ApiProperty({ format: 'uuid', description: 'Product-variant id (SKU) to add' })
-  @IsUUID()
+  @ApiProperty({ example: '137465797020397179', description: 'Product-variant id (SKU) to add' })
+  @IsSnowflakeId()
   skuId!: string;
 
   @ApiProperty({

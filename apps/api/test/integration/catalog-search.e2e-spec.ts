@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { Client } from '@elastic/elasticsearch';
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
@@ -29,6 +28,7 @@ import { drainDomainEvents } from '../setup/domain-events';
 import { archiveTestCategory, createTestCategory, createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 import {
   UNREACHABLE_SEARCH_URL,
@@ -58,7 +58,7 @@ const INITIAL_INDEX = `${PRODUCTS_INDEX_PREFIX}0`;
 const hitIds = (body: { items: { id: string }[] }): string[] => body.items.map((hit) => hit.id);
 
 function doc(overrides: Partial<SearchableProduct> = {}): SearchableProduct {
-  const id = randomUUID();
+  const id = testId();
   return {
     id,
     name: 'Contract Lantern',

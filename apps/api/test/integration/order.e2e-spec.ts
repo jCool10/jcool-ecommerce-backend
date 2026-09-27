@@ -9,8 +9,9 @@ import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal, newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
-const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ID = testId();
 
 describe('Order (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -159,7 +160,7 @@ describe('Order (integration, real Postgres + Redis)', () => {
     const orderId = created.body.id;
 
     const getByB = await request(server()).get(`/orders/${orderId}`).set(authHeader(tokenB));
-    const unknown = await request(server()).get(`/orders/${ABSENT_UUID}`).set(authHeader(tokenB));
+    const unknown = await request(server()).get(`/orders/${ABSENT_ID}`).set(authHeader(tokenB));
     const listB = await request(server()).get('/orders').set(authHeader(tokenB));
 
     expect(getByB.status).toBe(404);

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { isUUID } from 'class-validator';
+import { isRoutableId } from '@jcool/id-codec';
 import { PinoLogger } from 'nestjs-pino';
 import { PermanentError } from '@shared/messaging/errors';
 import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
@@ -18,7 +18,7 @@ export class CategoryRenamedHandler {
 
   /** An engine failure throws through, so the delivery goes back on its retry ladder. */
   async apply(job: DomainEventJob): Promise<void> {
-    if (!isUUID(job.aggregateId)) {
+    if (!isRoutableId(job.aggregateId)) {
       throw new PermanentError(`catalog.category.renamed without a usable category id (message ${job.outboxId})`);
     }
     const products = await this.sync.syncCategory(job.aggregateId);

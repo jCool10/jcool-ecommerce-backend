@@ -10,7 +10,7 @@ import { PermanentError } from '../../src/shared/messaging/errors';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
 import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
 import { replayDeadLetters } from '../../src/shared/messaging/queue/dead-letter.replay';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import {
   DOMAIN_EVENTS_CONSUMER,
@@ -24,13 +24,16 @@ import {
   resetDatabaseBeforeEach,
 } from '../setup/harness';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
+import { testId } from '../setup/id-service-stub';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 
 const ATTEMPTS = 3;
 // Collapsed from the shipped 1s so a whole budget elapses inside a test: 100ms, then 200ms.
 const BACKOFF_MS = '100';
 
-const messageId = (n: number) => `0198f0d8-2222-7000-8000-00000000000${n}`;
+const MESSAGE_IDS = [testId(), testId(), testId()];
+const messageId = (n: number) => MESSAGE_IDS[n];
+const ORDER_ID = testId();
 
 // A real BullMQ worker; assertions read where the message ended up.
 describe('Retry, backoff and dead-letter queue (integration, real Postgres + Redis)', () => {
@@ -45,9 +48,9 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   const job = (overrides: Partial<DomainEventJob> = {}): DomainEventJob => ({
     outboxId: messageId(1),
     aggregateType: 'Order',
-    aggregateId: '0198f0d8-3333-7000-8000-000000000001',
+    aggregateId: ORDER_ID,
     eventType: 'order.placed',
-    payload: { orderId: '0198f0d8-3333-7000-8000-000000000001', totalAmountMinor: 150_000 },
+    payload: { orderId: ORDER_ID, totalAmountMinor: 150_000 },
     // Relative: a fixed date would drift past the replay guard's inbox horizon.
     occurredAt: new Date().toISOString(),
     traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
@@ -69,7 +72,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   // None of these events retries on a ladder of its own.
   const replayGuards = { inboxLookup, inboxRetentionMs: 30 * 86_400_000, jobOptionsFor: () => ({}) };
 
-  const publish = (data: DomainEventJob) => queue.add(data.eventType, data, { jobId: data.outboxId });
+  const publish = (data: DomainEventJob) => queue.add(data.eventType, data, { jobId: jobIdFor(data.outboxId) });
 
   const waitForDeadLetter = async (count = 1): Promise<Job<DeadLetterJob>[]> => {
     let jobs: Job<DeadLetterJob>[] = [];
@@ -111,7 +114,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
 
     const [dead] = await waitForDeadLetter();
     expect(effect).toHaveBeenCalledTimes(ATTEMPTS);
-    expect(dead.id).toBe(original.outboxId);
+    expect(dead.id).toBe(jobIdFor(original.outboxId));
     expect(dead.data).toMatchObject({
       outboxId: original.outboxId,
       aggregateType: 'Order',

@@ -5,10 +5,12 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DrizzleIdempotencyKeyRepository } from '../../src/modules/order/infrastructure/drizzle-idempotency-key.repository';
+import { ID_GENERATOR, type IdGeneratorPort } from '../../src/shared/identity/id-generator.port';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
-const USER_A = '11111111-1111-4111-8111-111111111111';
-const USER_B = '22222222-2222-4222-8222-222222222222';
+const USER_A = testId();
+const USER_B = testId();
 const KEY = '9f8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const REQUEST_HASH = 'a'.repeat(64);
 
@@ -23,7 +25,8 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
 
   const insertInput = (
     overrides: Partial<Parameters<DrizzleIdempotencyKeyRepository['tryInsertInProgress']>[0]> = {},
-  ) => ({
+  ): Parameters<DrizzleIdempotencyKeyRepository['tryInsertInProgress']>[0] => ({
+    ownerId: testId(),
     scope: scopeOf(USER_A),
     key: KEY,
     requestHash: REQUEST_HASH,
@@ -43,7 +46,8 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
 
   beforeAll(async () => {
     ({ app, pool, db } = await createTestAppWithPool());
-    repo = new DrizzleIdempotencyKeyRepository(db);
+    const ids = app.get<IdGeneratorPort>(ID_GENERATOR);
+    repo = new DrizzleIdempotencyKeyRepository(db, ids);
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);

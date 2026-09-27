@@ -102,6 +102,8 @@ export default defineRailway(() => {
       INTERNAL_API_TOKEN: '${{user-service.INTERNAL_API_TOKEN}}',
       USER_SERVICE_INTERNAL_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
       AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
+      // Every row id is minted there, through the gateway's internal load balancer.
+      ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
       LOKI_URL,
       // A user limited to products* (RUNBOOK); its password lives on the elasticsearch service.
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,

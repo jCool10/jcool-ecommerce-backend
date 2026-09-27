@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import type { ActiveSession } from '../../application/ports';
 
 export class SessionResponseDto {
-  @ApiProperty({ example: '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f', description: 'Session id (token family, UUID).' })
+  @ApiProperty({ example: '137465797020397179', description: 'Session id (token family), a decimal string.' })
   id!: string;
 
   @ApiProperty({ description: 'When the session token was last issued (advances on refresh).', format: 'date-time' })

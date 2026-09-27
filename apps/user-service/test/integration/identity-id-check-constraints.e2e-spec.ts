@@ -7,7 +7,6 @@ import { resetDatabase } from '../setup/reset-database';
 import { workerDatabaseUrl } from '../setup/worker-resources';
 
 const CHECK_VIOLATION = '23514';
-const FAMILY_ID = '00000000-0000-4000-8000-000000000000';
 
 const TOKEN_TABLES = ['email_verification_tokens', 'password_reset_tokens', 'refresh_tokens'] as const;
 type TokenTable = (typeof TOKEN_TABLES)[number];
@@ -20,6 +19,7 @@ const TOKEN_ID_COLUMNS: [TokenTable, string][] = [
   ['refresh_tokens', 'id'],
   ['refresh_tokens', 'user_id'],
   ['refresh_tokens', 'replaced_by_token_id'],
+  ['refresh_tokens', 'family_id'],
 ];
 
 // Raw SQL on purpose: the column type already refuses these on a Drizzle write, and the database is
@@ -45,7 +45,7 @@ describe('Routable id CHECK constraints (integration)', () => {
       user_id: overrides.user_id === undefined ? await mintedUser() : overrides.user_id,
       token_hash: `id-check-hash-${tokenSeq++}`,
       expires_at: new Date(Date.now() + 3_600_000),
-      ...(table === 'refresh_tokens' ? { family_id: FAMILY_ID } : {}),
+      ...(table === 'refresh_tokens' ? { family_id: generator.generate(0) } : {}),
       ...overrides,
     };
     const columns = Object.keys(row);

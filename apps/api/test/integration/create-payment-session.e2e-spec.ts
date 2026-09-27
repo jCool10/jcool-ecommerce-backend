@@ -15,6 +15,7 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, checkout, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
+import { testId } from '../setup/id-service-stub';
 import {
   closeAppAfterAll,
   createTestAppWithFakeGateway,
@@ -22,7 +23,7 @@ import {
   resetDatabaseBeforeEach,
 } from '../setup/harness';
 
-const ABSENT_ORDER_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ORDER_ID = testId();
 const CONCURRENT_PAYS = 8;
 const WEBHOOK_SECRET = 'whsec_e2e_create_session_reuse_secret_01';
 
@@ -75,7 +76,7 @@ describe('Create payment session (integration, real Postgres)', () => {
     const stranger = await newPrincipalToken(app);
 
     await pay(orderId, stranger).expect(404);
-    await pay(ABSENT_ORDER_UUID, stranger).expect(404);
+    await pay(ABSENT_ORDER_ID, stranger).expect(404);
 
     expect(await paymentsFor(orderId)).toHaveLength(0);
   });

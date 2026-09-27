@@ -190,6 +190,12 @@ importers:
       '@jcool/auth-verifier':
         specifier: workspace:*
         version: link:../../packages/auth-verifier
+      '@jcool/id-codec':
+        specifier: workspace:*
+        version: link:../../packages/id-codec
+      '@jcool/id-generator':
+        specifier: workspace:*
+        version: link:../../packages/id-generator
       '@jcool/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
@@ -305,12 +311,6 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.9.1(supports-color@8.1.1))
-      '@jcool/id-codec':
-        specifier: workspace:*
-        version: link:../../packages/id-codec
-      '@jcool/id-generator':
-        specifier: workspace:*
-        version: link:../../packages/id-generator
       '@jcool/testing':
         specifier: workspace:*
         version: link:../../packages/testing

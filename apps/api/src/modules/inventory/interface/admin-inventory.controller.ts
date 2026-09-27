@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -11,6 +11,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Role, Roles } from '@jcool/platform/rbac';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { AdjustStockUseCase } from '../application/adjust-stock.use-case';
 import { AdjustStockDto, SetStockDto, StockLevelResponseDto } from './dto';
 
@@ -24,26 +25,26 @@ import { AdjustStockDto, SetStockDto, StockLevelResponseDto } from './dto';
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
 @ApiForbiddenResponse({ description: 'Authenticated but not an admin' })
-@ApiBadRequestResponse({ description: 'Malformed variant id (not a UUID) or invalid body' })
+@ApiBadRequestResponse({ description: 'Malformed variant id or invalid body' })
 @Roles(Role.Admin)
 @Controller('admin/inventory')
 export class AdminInventoryController {
   constructor(private readonly stock: AdjustStockUseCase) {}
 
   @Get(':variantId')
-  @ApiParam({ name: 'variantId', format: 'uuid' })
+  @ApiParam({ name: 'variantId', example: '137465797020397179' })
   @ApiOkResponse({ type: StockLevelResponseDto })
   @ApiNotFoundResponse({ description: 'This SKU has no stock level yet' })
-  async getLevel(@Param('variantId', ParseUUIDPipe) variantId: string): Promise<StockLevelResponseDto> {
+  async getLevel(@Param('variantId', ParseSnowflakeIdPipe) variantId: string): Promise<StockLevelResponseDto> {
     return StockLevelResponseDto.fromView(variantId, await this.stock.getLevel(variantId));
   }
 
   @Put(':variantId')
-  @ApiParam({ name: 'variantId', format: 'uuid' })
+  @ApiParam({ name: 'variantId', example: '137465797020397179' })
   @ApiOkResponse({ type: StockLevelResponseDto })
   @ApiConflictResponse({ description: 'The new level is below the quantity currently reserved' })
   async setOnHand(
-    @Param('variantId', ParseUUIDPipe) variantId: string,
+    @Param('variantId', ParseSnowflakeIdPipe) variantId: string,
     @Body() dto: SetStockDto,
   ): Promise<StockLevelResponseDto> {
     return StockLevelResponseDto.fromView(variantId, await this.stock.setOnHand(variantId, dto.quantityOnHand));
@@ -53,12 +54,12 @@ export class AdminInventoryController {
   // A POST that mutates an existing level rather than creating a resource — 200 with the new level,
   // not 201 with nothing to point at.
   @HttpCode(HttpStatus.OK)
-  @ApiParam({ name: 'variantId', format: 'uuid' })
+  @ApiParam({ name: 'variantId', example: '137465797020397179' })
   @ApiOkResponse({ type: StockLevelResponseDto })
   @ApiNotFoundResponse({ description: 'This SKU has no stock level to adjust — set one first' })
   @ApiConflictResponse({ description: 'The adjustment would push stock below zero or below what is reserved' })
   async adjust(
-    @Param('variantId', ParseUUIDPipe) variantId: string,
+    @Param('variantId', ParseSnowflakeIdPipe) variantId: string,
     @Body() dto: AdjustStockDto,
   ): Promise<StockLevelResponseDto> {
     return StockLevelResponseDto.fromView(variantId, await this.stock.adjust(variantId, dto.delta));

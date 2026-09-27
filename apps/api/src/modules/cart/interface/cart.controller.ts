@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiNotFoundResponse,
@@ -8,6 +8,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { CurrentUser, type AuthenticatedUser } from '@jcool/platform/rbac';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { CartService } from '../application/cart.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { CartResponseDto } from './dto/cart-response.dto';
@@ -39,23 +40,23 @@ export class CartController {
   }
 
   @Patch('items/:skuId')
-  @ApiParam({ name: 'skuId', format: 'uuid', description: 'Product-variant id (SKU)' })
+  @ApiParam({ name: 'skuId', example: '137465797020397179', description: 'Product-variant id (SKU)' })
   @ApiOkResponse({ type: CartResponseDto })
   @ApiNotFoundResponse({ description: 'SKU is not in the cart' })
   async setItemQuantity(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('skuId', ParseUUIDPipe) skuId: string,
+    @Param('skuId', ParseSnowflakeIdPipe) skuId: string,
     @Body() dto: UpdateCartItemDto,
   ): Promise<CartResponseDto> {
     return CartResponseDto.fromView(await this.cart.setItemQuantity(user.userId, skuId, dto.quantity));
   }
 
   @Delete('items/:skuId')
-  @ApiParam({ name: 'skuId', format: 'uuid', description: 'Product-variant id (SKU)' })
+  @ApiParam({ name: 'skuId', example: '137465797020397179', description: 'Product-variant id (SKU)' })
   @ApiOkResponse({ type: CartResponseDto })
   async removeItem(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('skuId', ParseUUIDPipe) skuId: string,
+    @Param('skuId', ParseSnowflakeIdPipe) skuId: string,
   ): Promise<CartResponseDto> {
     return CartResponseDto.fromView(await this.cart.removeItem(user.userId, skuId));
   }

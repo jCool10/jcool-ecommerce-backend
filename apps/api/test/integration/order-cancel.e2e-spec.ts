@@ -27,12 +27,13 @@ import {
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 
 const WEBHOOK_SECRET = 'whsec_e2e_order_cancel_secret_01234';
 const STOCK = 10;
 const QUANTITY = 2;
-const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
+const ABSENT_ID = testId();
 
 /**
  * The order half settles synchronously under a row lock; the money half rides the outbox to Payment.
@@ -145,7 +146,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       const { accessToken: stranger } = await createTestPrincipal(app);
 
       await cancel(stranger, orderId).expect(404);
-      await cancel(stranger, ABSENT_UUID).expect(404);
+      await cancel(stranger, ABSENT_ID).expect(404);
 
       expect((await readOrder(app, orderId)).status).toBe(OrderStatus.PENDING);
     });

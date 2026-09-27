@@ -1,4 +1,4 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -13,6 +13,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { ORDER_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
 import { Role, Roles } from '@jcool/platform/rbac';
+import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { CancelOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
 import { ListAdminOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -25,7 +26,7 @@ import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto'
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
 @ApiForbiddenResponse({ description: 'Authenticated but not an admin' })
-@ApiBadRequestResponse({ description: 'Malformed id (not a UUID) or invalid query' })
+@ApiBadRequestResponse({ description: 'Malformed id or invalid query' })
 @Roles(Role.Admin)
 @Controller('admin/orders')
 export class AdminOrderController {
@@ -48,10 +49,10 @@ export class AdminOrderController {
   }
 
   @Get(':id')
-  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'id', example: '137465797020397179' })
   @ApiOkResponse({ type: OrderResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found' })
-  async getOne(@Param('id', ParseUUIDPipe) id: string): Promise<OrderResponseDto> {
+  async getOne(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<OrderResponseDto> {
     return OrderResponseDto.fromView(await this.orderQuery.adminGetOne(id));
   }
 
@@ -62,11 +63,11 @@ export class AdminOrderController {
   @Throttle(ORDER_THROTTLE)
   @UseGuards(UserThrottlerGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'id', example: '137465797020397179' })
   @ApiOkResponse({ type: OrderResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found' })
   @ApiConflictResponse({ description: 'Order has already settled and can no longer be cancelled' })
-  async cancel(@Param('id', ParseUUIDPipe) id: string): Promise<OrderResponseDto> {
+  async cancel(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<OrderResponseDto> {
     return OrderResponseDto.fromView(await this.cancelOrder.cancelAsAdmin(id));
   }
 }

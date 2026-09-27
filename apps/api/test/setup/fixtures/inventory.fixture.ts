@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
+import { testId } from '../id-service-stub';
 import { sleep } from '../sleep';
 
 const LOCK_POLL_MS = 20;
@@ -29,7 +30,7 @@ export async function seedStock(
   const db = app.get<DrizzleDB>(DRIZZLE);
   await db
     .insert(schema.stockLevels)
-    .values({ variantId, quantityOnHand: onHand, quantityReserved: reserved })
+    .values({ id: testId(), variantId, quantityOnHand: onHand, quantityReserved: reserved })
     .onConflictDoUpdate({
       target: schema.stockLevels.variantId,
       set: { quantityOnHand: onHand, quantityReserved: reserved },

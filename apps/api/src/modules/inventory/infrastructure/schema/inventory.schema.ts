@@ -1,16 +1,14 @@
-import { check, index, integer, pgEnum, pgTable, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { check, index, integer, pgEnum, pgTable, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { v7 as uuidv7 } from 'uuid';
+import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 // No cross-context FK (variantId → product_variants, orderId → orders): the boundary is kept at the
 // app layer. Stock is held (reserved) at placement, never subtracted from on-hand until commit.
 
 export const reservationStatus = pgEnum('reservation_status', ['HELD', 'RELEASED', 'COMMITTED']);
 
-const id = () =>
-  uuid('id')
-    .primaryKey()
-    .$defaultFn(() => uuidv7());
+// No default: a reservation id carries its order's bucket, which only the writer knows.
+const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -25,7 +23,7 @@ export const stockLevels = pgTable(
   'stock_levels',
   {
     id: id(),
-    variantId: uuid('variant_id').notNull().unique(),
+    variantId: snowflakeId('variant_id').notNull().unique(),
     quantityOnHand: integer('quantity_on_hand').notNull().default(0),
     quantityReserved: integer('quantity_reserved').notNull().default(0),
     // Optimistic-lock counter — CAS target for the version+retry strategy.
@@ -33,6 +31,8 @@ export const stockLevels = pgTable(
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_stock_levels_id_routable', t.id),
+    routableIdCheck('ck_stock_levels_variant_id_routable', t.variantId),
     check('ck_stock_on_hand_nonneg', sql`${t.quantityOnHand} >= 0`),
     check('ck_stock_reserved_nonneg', sql`${t.quantityReserved} >= 0`),
     // Oversell invariant enforced at the data layer — Postgres refuses to commit
@@ -45,14 +45,17 @@ export const reservations = pgTable(
   'reservations',
   {
     id: id(),
-    orderId: uuid('order_id').notNull(),
-    variantId: uuid('variant_id').notNull(),
+    orderId: snowflakeId('order_id').notNull(),
+    variantId: snowflakeId('variant_id').notNull(),
     quantity: integer('quantity').notNull(),
     status: reservationStatus('status').notNull().default('HELD'),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     ...stamps,
   },
   (t) => [
+    routableIdCheck('ck_reservations_id_routable', t.id),
+    routableIdCheck('ck_reservations_order_id_routable', t.orderId),
+    routableIdCheck('ck_reservations_variant_id_routable', t.variantId),
     index('idx_reservations_variant_status').on(t.variantId, t.status),
     // One hold per (order, SKU); its left-most prefix also serves WHERE order_id = ?.
     uniqueIndex('uq_reservations_order_variant').on(t.orderId, t.variantId),

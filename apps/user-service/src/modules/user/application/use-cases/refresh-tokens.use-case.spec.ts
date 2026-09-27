@@ -47,10 +47,11 @@ describe('RefreshTokensUseCase', () => {
     audit = new RecordingAuthAudit();
     epochs = new FakeSessionEpoch();
     warn = vi.fn();
+    const identity = new IdentityService(ids, 'k'.repeat(32));
     useCase = new RefreshTokensUseCase(
       refreshTokens,
-      new IdentityService(ids, 'k'.repeat(32)),
-      new AuthTokensService(signer, fakeConfigService({ 'auth.refreshTokenTtl': '7d' }), refreshTokens),
+      identity,
+      new AuthTokensService(signer, fakeConfigService({ 'auth.refreshTokenTtl': '7d' }), refreshTokens, identity),
       audit,
       epochs,
       fakePinoLogger({ warn }),

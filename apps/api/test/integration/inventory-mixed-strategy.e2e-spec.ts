@@ -12,12 +12,13 @@ import {
   releaseOnceBlocked,
   seedStock,
 } from '../setup/fixtures/inventory.fixture';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 
-const SKU = '55555555-5555-4555-8555-555555555555';
-const ORDER_A = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
-const ORDER_B = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const SKU = testId();
+const ORDER_A = testId();
+const ORDER_B = testId();
 // On the last unit a blind write shows up as an oversell rather than an extra hold.
 const LAST_UNIT = 1;
 

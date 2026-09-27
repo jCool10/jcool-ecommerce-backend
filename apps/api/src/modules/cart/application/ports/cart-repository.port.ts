@@ -7,6 +7,9 @@ export interface CartRepositoryPort {
   /** The user's cart id, creating an empty cart if none exists (idempotent, race-safe). */
   ensureCartId(userId: string): Promise<string>;
 
+  /** The user's cart id, or null when the user has none yet. Never creates one. */
+  findCartId(userId: string): Promise<string | null>;
+
   findItems(cartId: string): Promise<CartItem[]>;
 
   /**

@@ -39,8 +39,7 @@ export class CartService {
   ) {}
 
   async view(userId: string): Promise<CartView> {
-    const cartId = await this.repo.ensureCartId(userId);
-    return this.buildView(cartId);
+    return this.buildView(await this.repo.findCartId(userId));
   }
 
   async addItem(userId: string, skuId: string, quantity: number): Promise<CartView> {
@@ -78,8 +77,8 @@ export class CartService {
     return this.buildView(cartId);
   }
 
-  private async buildView(cartId: string): Promise<CartView> {
-    const items = await this.repo.findItems(cartId);
+  private async buildView(cartId: string | null): Promise<CartView> {
+    const items = cartId ? await this.repo.findItems(cartId) : [];
     const views = await this.catalog.getSkuViews(items.map((item) => item.skuId));
     const viewBySku = new Map<string, CartSkuView>(views.map((view) => [view.skuId, view]));
 

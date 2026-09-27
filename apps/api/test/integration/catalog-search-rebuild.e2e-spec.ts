@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { Client } from '@elastic/elasticsearch';
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
@@ -25,6 +24,7 @@ import { drainDomainEvents } from '../setup/domain-events';
 import { createTestCategory, type TestCategory } from '../setup/fixtures/catalog.fixture';
 import { createTestAdminPrincipal, type TestPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 import { resetDatabase } from '../setup/reset-database';
 import {
   readAliasTargets,
@@ -45,7 +45,7 @@ let seq = 0;
 const uniq = (): string => `${Date.now()}-${seq++}`;
 
 function doc(name: string): SearchableProduct {
-  const id = randomUUID();
+  const id = testId();
   return {
     id,
     name,

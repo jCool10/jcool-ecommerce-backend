@@ -17,10 +17,11 @@ export default defineConfig({
       LOG_LEVEL: 'warn',
       DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
       REDIS_URL: 'redis://127.0.0.1:6379',
-      // Placeholders for the import-time validation; createTestApp points both at the user-service
-      // stub once its port is known.
+      // Placeholders for the import-time validation; createTestApp points them at the user-service
+      // and id-service stubs once their ports are known.
       AUTH_JWKS_URL: 'http://127.0.0.1:1/.well-known/jwks.json',
       USER_SERVICE_INTERNAL_URL: 'http://127.0.0.1:1',
+      ID_SERVICE_URL: 'http://127.0.0.1:1',
       INTERNAL_API_TOKEN: 'e2e-internal-api-token-not-a-real-secret-0',
       JWT_ISSUER: 'https://users.jcool.test',
       JWT_AUDIENCE: 'jcool-api',

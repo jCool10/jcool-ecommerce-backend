@@ -103,11 +103,12 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     // replay back into a successful refresh.
     it('auth-tokens:refresh keeps a revoked token far longer than an expired one', async () => {
       const userId = await insertUser('refresh-retention@example.com');
+      const familyId = await identity.mintOwnedBy(userId);
       const row = async (suffix: string, expiresAt: Date, revokedAt: Date | null = null) => ({
         id: await identity.mintOwnedBy(userId),
         userId,
         tokenHash: `${suffix}-${'0'.repeat(40)}`,
-        familyId: '0198f0d8-5555-7000-8000-000000000001',
+        familyId,
         expiresAt,
         revokedAt,
       });

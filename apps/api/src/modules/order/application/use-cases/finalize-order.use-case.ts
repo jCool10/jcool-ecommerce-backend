@@ -98,6 +98,13 @@ export class FinalizeOrderUseCase {
         const finalized = order.finalize(outcome, { now: new Date(), reason, paymentRef });
         await this.repo.persistFinalization(finalized, tx);
 
+        // Same tx again: the settlement event cannot outlive a rolled-back finalize, and a committed
+        // finalize cannot lose its event. Only this branch emits — a duplicate or conflicting outcome
+        // already returned above, so the terminal guard doubles as the event's dedup. Appended before
+        // the stock rows are locked, because appending mints an id over the network.
+        const event = finalized.toFinalizedEvent();
+        await this.outbox.append(tx, toFinalizedOutboxRecord(event));
+
         // Same tx as the status flip, so there is no window where an order is PAID but its stock is not.
         const resolution =
           outcome === OrderStatus.PAID
@@ -107,12 +114,6 @@ export class FinalizeOrderUseCase {
           // Not fatal, but it breaks the money = stock = status invariant, so a human has to look.
           this.logger.warn({ orderId, outcome }, 'finalized order had no reservation to resolve');
         }
-
-        // Same tx again: the settlement event cannot outlive a rolled-back finalize, and a committed
-        // finalize cannot lose its event. Only this branch emits — a duplicate or conflicting outcome
-        // already returned above, so the terminal guard doubles as the event's dedup.
-        const event = finalized.toFinalizedEvent();
-        await this.outbox.append(tx, toFinalizedOutboxRecord(event));
 
         return { status: 'finalized', order: finalized, event };
       }, join);

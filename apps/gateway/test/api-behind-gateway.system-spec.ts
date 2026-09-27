@@ -25,6 +25,8 @@ const API_ENV = {
   JWT_AUDIENCE: 'jcool-system-test',
   USER_SERVICE_INTERNAL_URL: 'http://user-service.invalid',
   INTERNAL_API_TOKEN: randomBytes(32).toString('hex'),
+  // Nothing listens there either: no case here reaches a write.
+  ID_SERVICE_URL: 'http://id-service.invalid',
   PAYMENT_WEBHOOK_SECRET: randomBytes(16).toString('hex'),
   SMTP_URL: 'smtp://smtp.invalid:587',
   MAIL_FROM: 'system-test@example.invalid',

@@ -7,6 +7,7 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
+import { jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
 import {
   DOMAIN_EVENTS_DLQ_QUEUE,
   DOMAIN_EVENTS_QUEUE,
@@ -19,10 +20,11 @@ import { startMailServer, type StartedMailServer } from '../setup/mail-server';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { type UserServiceStub, userServiceStub } from '../setup/user-service-stub';
+import { testId } from '../setup/id-service-stub';
 
 const MAIL_FROM = 'no-reply@jcool.test';
 const MAIL_TIMEOUT_MS = '20000';
-const ORDER_ID = '0198f0d8-7777-7000-8000-000000000001';
+const ORDER_ID = testId();
 
 // Scaled down from ~2 min against ~33 min. The order is what production relies on: the default
 // ladder is spent well inside order.paid's.
@@ -58,6 +60,7 @@ describe('Order confirmation mail against the user directory (integration, real 
     const [row] = await db
       .insert(schema.outbox)
       .values({
+        id: testId(),
         aggregateType: 'Order',
         aggregateId: ORDER_ID,
         eventType: 'order.paid',
@@ -65,7 +68,7 @@ describe('Order confirmation mail against the user directory (integration, real 
       })
       .returning();
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
-    return row.id;
+    return jobIdFor(row.id);
   };
 
   const waitForFailedAttempts = (jobId: string, count: number) =>

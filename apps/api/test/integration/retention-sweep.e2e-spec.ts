@@ -7,11 +7,16 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { RetentionScheduler, RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
+import { testId } from '../setup/id-service-stub';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 const daysAgo = (days: number) => new Date(Date.now() - days * DAY_MS);
 const hoursFromNow = (hours: number) => new Date(Date.now() + hours * HOUR_MS);
+const ORDER_ID = testId();
+const USER_ID = testId();
+const STALE_MESSAGE_ID = testId();
+const YOUNG_MESSAGE_ID = testId();
 
 // Chosen so every boundary below can be crossed with a row a few days either side of it, and every
 // one is at or above the floor `env.validation.ts` enforces.
@@ -39,14 +44,16 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   };
 
   const outboxRow = (overrides: Partial<typeof schema.outbox.$inferInsert> = {}) => ({
+    id: testId(),
     aggregateType: 'Order',
-    aggregateId: '0198f0d8-3333-7000-8000-000000000001',
+    aggregateId: ORDER_ID,
     eventType: 'order.placed',
-    payload: { orderId: '0198f0d8-3333-7000-8000-000000000001' },
+    payload: { orderId: ORDER_ID },
     ...overrides,
   });
 
   const webhookRow = (providerEventId: string, receivedAt: Date) => ({
+    id: testId(),
     provider: 'stripe',
     providerEventId,
     type: 'payment_intent.succeeded',
@@ -55,7 +62,8 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   });
 
   const idempotencyRow = (key: string, expiresAt: Date, status: 'IN_PROGRESS' | 'COMPLETED' = 'IN_PROGRESS') => ({
-    scope: 'user:0198f0d8-3333-7000-8000-000000000001',
+    id: testId(),
+    scope: `user:${USER_ID}`,
     key,
     requestHash: 'a'.repeat(64),
     status,
@@ -112,14 +120,16 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     it('keeps a claim young enough for its message to still come back', async () => {
       await db.insert(schema.inbox).values([
         {
+          id: testId(),
           consumer: 'domain-events',
-          messageId: '0198f0d8-4444-7000-8000-000000000001',
+          messageId: STALE_MESSAGE_ID,
           eventType: 'order.placed',
           processedAt: daysAgo(8),
         },
         {
+          id: testId(),
           consumer: 'domain-events',
-          messageId: '0198f0d8-4444-7000-8000-000000000002',
+          messageId: YOUNG_MESSAGE_ID,
           eventType: 'order.placed',
           processedAt: daysAgo(6),
         },
@@ -129,7 +139,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
       expect(deleted).toBe(1);
       const left = await db.select({ messageId: schema.inbox.messageId }).from(schema.inbox);
-      expect(left).toEqual([{ messageId: '0198f0d8-4444-7000-8000-000000000002' }]);
+      expect(left).toEqual([{ messageId: YOUNG_MESSAGE_ID }]);
     });
   });
 

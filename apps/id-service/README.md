@@ -23,7 +23,7 @@ The service never receives an email and never logs the ids it mints.
 
 ## The node lease
 
-`node_leases` has one row per node id from 1 to 30; 0 and 31 stay reserved for the api and scripts. The table is seeded by migration. Every claim, renew and release is a single SQL statement, and every time comparison uses the database clock.
+`node_leases` has one row per node id from 1 to 30; 0 and 31 are never leased. Seed scripts mint on 31 under an advisory lock; 0 is unused, since the api and the user-service both mint through this service. The table is seeded by migration. Every claim, renew and release is a single SQL statement, and every time comparison uses the database clock.
 
 - **Acquire** claims the node that expired longest ago, and only after the quarantine has passed. It uses `FOR UPDATE SKIP LOCKED` and bumps `generation`. A holder is identified by its generation, never by its name. Before claiming, acquire re-adopts any unexpired lease already recorded under this replica's own holder name, with the floor saved in `prior_lease_until`. A claim can commit on the server after the client-side `DB_QUERY_TIMEOUT_MS` has already given up on it, and without the re-adopt the retry would claim a second node and strand the first for TTL + quarantine.
 - **Renew** runs every `ID_LEASE_RENEW_EVERY_MS` and records the last timestamp minted in `max_ts_ms`. If the lease has already expired, renew returns *lost*: minting stops immediately and the replica claims another node.

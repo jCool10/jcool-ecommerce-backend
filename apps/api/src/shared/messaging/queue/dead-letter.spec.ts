@@ -5,17 +5,19 @@ import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { UnhandledEventError } from '../errors';
 import { dispatcherWith } from '../testing/domain-event-dispatcher.double';
 import { DeadLetterRouter, type DeadLetterJob } from './dead-letter';
-import type { DomainEventJob } from './domain-event.job';
+import { sampleId } from '@shared/testing/id-generator.double';
+import { type DomainEventJob, jobIdFor } from './domain-event.job';
 
-const MESSAGE_ID = '0198f0d8-0000-7000-8000-000000000001';
+const MESSAGE_ID = sampleId(1);
+const ORDER_ID = sampleId(2, 7);
 const FINISHED = 1_700_000_000_000;
 
 const envelope: DomainEventJob = {
   outboxId: MESSAGE_ID,
   aggregateType: 'Order',
-  aggregateId: '0198f0d8-1111-7000-8000-000000000001',
+  aggregateId: ORDER_ID,
   eventType: 'order.placed',
-  payload: { orderId: '0198f0d8-1111-7000-8000-000000000001' },
+  payload: { orderId: ORDER_ID },
   occurredAt: '2026-08-24T00:00:00.000Z',
   traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
 };
@@ -75,8 +77,8 @@ describe('DeadLetterRouter', () => {
     await router.route(finishedJob(), new Error('first reason'));
     await router.route(finishedJob(), new Error('second, different reason'));
 
-    expect([...stored.keys()]).toEqual([MESSAGE_ID]);
-    expect(stored.get(MESSAGE_ID)?.failedReason).toBe('second, different reason');
+    expect([...stored.keys()]).toEqual([jobIdFor(MESSAGE_ID)]);
+    expect(stored.get(jobIdFor(MESSAGE_ID))?.failedReason).toBe('second, different reason');
   });
 
   it('falls back to the delivery id when the envelope carries none', async () => {

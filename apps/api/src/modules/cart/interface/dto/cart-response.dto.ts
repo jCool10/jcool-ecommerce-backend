@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import type { CartView } from '../../application/cart.service';
 
 export class CartLineResponseDto {
-  @ApiProperty({ format: 'uuid', description: 'Product-variant id (SKU)' })
+  @ApiProperty({ example: '137465797020397179', description: 'Product-variant id (SKU)' })
   skuId!: string;
 
   @ApiProperty({ example: 'Wireless Headphones / Black' })

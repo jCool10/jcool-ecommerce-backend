@@ -4,20 +4,22 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { MIN_ROUTABLE_ID } from '@jcool/id-codec';
 import { mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
 const COLUMNS = [
   {
     column: 'carts.user_id',
     constraint: 'ck_carts_user_id_routable',
     insert: (pool: Pool, userId: string) =>
-      pool.query(`INSERT INTO carts (id, user_id) VALUES (gen_random_uuid(), $1)`, [userId]),
+      pool.query(`INSERT INTO carts (id, user_id) VALUES ($2, $1)`, [userId, testId()]),
   },
   {
     column: 'orders.user_id',
     constraint: 'ck_orders_user_id_routable',
     insert: (pool: Pool, userId: string) =>
-      pool.query(`INSERT INTO orders (id, user_id, currency, total_amount) VALUES (gen_random_uuid(), $1, 'VND', 0)`, [
+      pool.query(`INSERT INTO orders (id, user_id, currency, total_amount) VALUES ($2, $1, 'VND', 0)`, [
         userId,
+        testId(),
       ]),
   },
   {
@@ -26,8 +28,8 @@ const COLUMNS = [
     insert: (pool: Pool, userId: string) =>
       pool.query(
         `INSERT INTO media_assets (id, storage_key, content_type, uploaded_by)
-         VALUES (gen_random_uuid(), gen_random_uuid()::text, 'image/png', $1)`,
-        [userId],
+         VALUES ($2, gen_random_uuid()::text, 'image/png', $1)`,
+        [userId, testId()],
       ),
   },
 ];

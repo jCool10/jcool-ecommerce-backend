@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
 import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../../src/shared/messaging/queue/queue.constants';
 import {
   closeAppAfterAll,
@@ -17,14 +17,16 @@ import {
 } from '../setup/harness';
 import { withClientDown } from '../setup/redis-outage';
 import { createTestApp } from '../setup/test-app.factory';
+import { testId } from '../setup/id-service-stub';
 
 const TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 
-const seedRow = (index: number, overrides: Record<string, unknown> = {}) => ({
+const seedRow = (overrides: Record<string, unknown> = {}, orderId = testId()) => ({
+  id: testId(),
   aggregateType: 'Order',
-  aggregateId: `0198f0d8-1111-7000-8000-${String(index).padStart(12, '0')}`,
+  aggregateId: orderId,
   eventType: 'order.placed',
-  payload: { orderId: `0198f0d8-1111-7000-8000-${String(index).padStart(12, '0')}`, totalAmountMinor: 150_000 },
+  payload: { orderId, totalAmountMinor: 150_000 },
   ...overrides,
 });
 
@@ -54,7 +56,7 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
   const seed = (count: number, overrides: Record<string, unknown> = {}) =>
     db
       .insert(schema.outbox)
-      .values(Array.from({ length: count }, (_, i) => seedRow(i + 1, overrides)))
+      .values(Array.from({ length: count }, () => seedRow(overrides)))
       .returning();
 
   const unpublished = () => db.select().from(schema.outbox).where(isNull(schema.outbox.publishedAt));
@@ -66,7 +68,7 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 3, failed: 0 });
 
     const jobs = await queue.getJobs(['waiting']);
-    expect(jobs.map((job) => job.id).sort()).toEqual(rows.map((row) => row.id).sort());
+    expect(jobs.map((job) => job.id).sort()).toEqual(rows.map((row) => jobIdFor(row.id)).sort());
     expect(await unpublished()).toHaveLength(0);
 
     // A published row is off the work queue for good: the partial index no longer sees it.
@@ -80,7 +82,7 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     await relay.runOnce(10);
 
     const [job] = await queue.getJobs(['waiting']);
-    expect(job.id).toBe(row.id);
+    expect(job.id).toBe(jobIdFor(row.id));
     expect(job.name).toBe('order.placed');
     expect(job.data as DomainEventJob).toEqual({
       outboxId: row.id,
@@ -191,7 +193,7 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
   it('drains the backlog on its own once the interval elapses', async () => {
     const scheduled = await createTestApp({ OUTBOX_RELAY_ENABLED: 'true', OUTBOX_POLL_MS: '100' });
     try {
-      await db.insert(schema.outbox).values(seedRow(1));
+      await db.insert(schema.outbox).values(seedRow());
 
       // The job is queued inside the tick's transaction, so the mark can land a moment later.
       await vi.waitFor(

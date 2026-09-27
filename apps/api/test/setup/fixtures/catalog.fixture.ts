@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
+import { testId } from '../id-service-stub';
 
 // Direct inserts (mirroring seed.ts) so a fixture doesn't depend on the write API.
 let seq = 0;
@@ -40,7 +41,7 @@ export async function createTestCategory(app: INestApplication, name = 'Test Cat
   const suffix = uniq();
   const [category] = await db
     .insert(schema.categories)
-    .values({ name: `${name} ${suffix}`, slug: `test-category-${suffix}` })
+    .values({ id: testId(), name: `${name} ${suffix}`, slug: `test-category-${suffix}` })
     .returning();
   return { id: category.id, slug: category.slug };
 }
@@ -62,6 +63,7 @@ export async function createTestProduct(app: INestApplication, options: TestProd
   const [product] = await db
     .insert(schema.products)
     .values({
+      id: testId(),
       name: options.name ?? `Test Product ${suffix}`,
       slug: `test-product-${suffix}`,
       description: options.description ?? 'Fixture product',
@@ -73,6 +75,7 @@ export async function createTestProduct(app: INestApplication, options: TestProd
   const [variant] = await db
     .insert(schema.productVariants)
     .values({
+      id: testId(),
       sku: options.sku ?? `TEST-SKU-${suffix}`,
       name: `Test Variant ${suffix}`,
       productId: product.id,
@@ -81,7 +84,7 @@ export async function createTestProduct(app: INestApplication, options: TestProd
 
   const [price] = await db
     .insert(schema.prices)
-    .values({ variantId: variant.id, currency: options.currency ?? 'VND', amountMinor: priceMinor })
+    .values({ id: testId(), variantId: variant.id, currency: options.currency ?? 'VND', amountMinor: priceMinor })
     .returning();
 
   return {
@@ -128,6 +131,7 @@ export async function seedProducts(
   const status = options.status ?? 'ACTIVE';
 
   const values = Array.from({ length: count }, (_, i) => ({
+    id: testId(),
     name: `Seed Product ${suffix} ${i}`,
     slug: `seed-product-${suffix}-${i}`,
     description: null,

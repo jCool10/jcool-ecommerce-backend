@@ -4,8 +4,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { authHeader } from '../setup/bearer.helper';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
+import { testId } from '../setup/id-service-stub';
 
-const ID = '00000000-0000-4000-8000-000000000000';
+const ID = testId();
 
 type Route = readonly [method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string];
 

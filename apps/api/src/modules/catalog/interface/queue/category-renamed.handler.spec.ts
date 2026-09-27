@@ -5,14 +5,15 @@ import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
 import type { CatalogSearchPort, ProductSearchStatePort } from '../../application/ports';
 import { ProductSearchSyncService } from '../../application/services/product-search-sync.service';
 import { fakeCatalogSearch, fakeProductSearchState } from '../../testing/catalog-port.doubles';
+import { sampleId } from '@shared/testing/id-generator.double';
 import { CategoryRenamedHandler } from './category-renamed.handler';
 
-const CATEGORY_ID = '0198f0d8-5555-7000-8000-000000000001';
-const PRODUCT_ID = '0198f0d8-5555-7000-8000-000000000002';
+const CATEGORY_ID = sampleId(1);
+const PRODUCT_ID = sampleId(2);
 
 function job(aggregateId: string): DomainEventJob {
   return {
-    outboxId: '0198f0d8-0000-7000-8000-000000000003',
+    outboxId: sampleId(3),
     aggregateType: 'Category',
     aggregateId,
     eventType: 'catalog.category.renamed',
@@ -54,7 +55,7 @@ describe('CategoryRenamedHandler', () => {
   it('refuses a malformed category id as permanent before touching any product', async () => {
     const { handler, bumpCategoryProducts } = build();
 
-    for (const aggregateId of ['', 'not-a-uuid', `${CATEGORY_ID}' OR '1'='1`]) {
+    for (const aggregateId of ['', 'not-an-id', '0198f0d8-5555-7000-8000-000000000001', `${CATEGORY_ID}' OR '1'='1`]) {
       await expect(handler.apply(job(aggregateId))).rejects.toBeInstanceOf(PermanentError);
     }
     expect(bumpCategoryProducts).not.toHaveBeenCalled();

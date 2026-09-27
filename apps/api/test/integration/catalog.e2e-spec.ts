@@ -13,8 +13,9 @@ import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { resetDatabase } from '../setup/reset-database';
+import { testId } from '../setup/id-service-stub';
 
-const ABSENT_UUID = '0197c8f4-3a1b-7c2d-8e4f-1a2b3c4d5e6f';
+const ABSENT_ID = testId();
 
 describe('Catalog (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -151,7 +152,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     });
 
     it('returns 404 for an unknown id and an unknown slug', async () => {
-      await request(app.getHttpServer()).get(`/products/${ABSENT_UUID}`).expect(404);
+      await request(app.getHttpServer()).get(`/products/${ABSENT_ID}`).expect(404);
       await request(app.getHttpServer()).get('/products/no-such-slug').expect(404);
     });
   });
@@ -162,7 +163,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       const res = await request(app.getHttpServer())
         .post('/admin/products')
         .set(authHeader(accessToken))
-        .send({ slug: 'no-name', categoryId: ABSENT_UUID });
+        .send({ slug: 'no-name', categoryId: ABSENT_ID });
 
       expect(res.status).toBe(400);
     });
@@ -170,7 +171,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     it('rejects a malformed product id with 400', async () => {
       const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
-        .patch('/admin/products/not-a-uuid')
+        .patch('/admin/products/not-an-id')
         .set(authHeader(accessToken))
         .send({ name: 'x' });
 
@@ -180,7 +181,7 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
     it('rejects a negative price with 400', async () => {
       const { accessToken } = await createTestAdminPrincipal(app);
       const res = await request(app.getHttpServer())
-        .put(`/admin/skus/${ABSENT_UUID}/price`)
+        .put(`/admin/skus/${ABSENT_ID}/price`)
         .set(authHeader(accessToken))
         .send({ amountMinor: -1, currency: 'VND' });
 

@@ -1,6 +1,7 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, eq, inArray, max, ne, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
+import { ID_GENERATOR, type IdGeneratorPort, UNOWNED_BUCKET, mintOne } from '@shared/identity/id-generator.port';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { Money } from '@jcool/kernel';
 import { MEDIA_FACADE, type MediaFacade } from '@modules/media/application/public/media-facade.port';
@@ -44,7 +45,13 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     @Inject(MEDIA_FACADE) private readonly media: MediaFacade,
     @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
   ) {}
+
+  // Minted before a transaction opens, so no lock is held across the call.
+  private mintId(): Promise<string> {
+    return mintOne(this.ids, UNOWNED_BUCKET);
+  }
 
   private async guardUnique<T>(op: () => Promise<T>, conflictMessage: string): Promise<T> {
     try {
@@ -63,11 +70,12 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   async createCategory(data: CreateCategoryData): Promise<Category> {
+    const id = await this.mintId();
     const [row] = await this.guardUnique(
       () =>
         this.db
           .insert(categories)
-          .values({ name: data.name, slug: data.slug, parentId: data.parentId ?? null })
+          .values({ id, name: data.name, slug: data.slug, parentId: data.parentId ?? null })
           .returning(),
       'Category slug already exists',
     );
@@ -179,6 +187,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   async createProduct(data: CreateProductData): Promise<AdminProduct> {
+    const id = await this.mintId();
     return this.db.transaction(async (tx) => {
       await this.lockLiveCategory(tx, data.categoryId);
       const [row] = await this.guardUnique(
@@ -186,6 +195,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
           tx
             .insert(products)
             .values({
+              id,
               name: data.name,
               slug: data.slug,
               description: data.description ?? null,
@@ -253,10 +263,11 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   async createSku(productId: string, data: CreateSkuData): Promise<Sku> {
+    const id = await this.mintId();
     return this.db.transaction(async (tx) => {
       await this.markProductChanged(tx, productId);
       const [row] = await this.guardUnique(
-        () => tx.insert(productVariants).values({ sku: data.sku, name: data.name, productId }).returning(),
+        () => tx.insert(productVariants).values({ id, sku: data.sku, name: data.name, productId }).returning(),
         'SKU code already exists',
       );
       return toSku(row);
@@ -304,13 +315,14 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   // image operations — `product_images` before `media_assets` — so two concurrent edits of the same
   // asset cannot deadlock on each other's locks.
   async attachImage(productId: string, data: AttachImageData): Promise<ProductImage> {
+    const id = await this.mintId();
     return this.db.transaction(async (tx) => {
       const position = data.position ?? (await this.nextPosition(tx, productId));
       const [row] = await this.guardUnique(
         () =>
           tx
             .insert(productImages)
-            .values({ productId, assetId: data.assetId, position, alt: data.alt ?? null })
+            .values({ id, productId, assetId: data.assetId, position, alt: data.alt ?? null })
             .returning(),
         'Image already attached to this product',
       );
@@ -384,11 +396,12 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     // Re-check the Money invariant at the write boundary so a malformed price can never persist and
     // later 500 the read path, which parses the same row back through Money.
     const money = Money.of(data.amountMinor, data.currency);
+    const id = await this.mintId();
     return this.db.transaction(async (tx) => {
       await this.markSkuProductChanged(tx, variantId);
       const [row] = await tx
         .insert(prices)
-        .values({ variantId, currency: money.currency, amountMinor: money.amountMinor })
+        .values({ id, variantId, currency: money.currency, amountMinor: money.amountMinor })
         // $onUpdate doesn't fire on a conflict SET — bump updated_at by hand.
         .onConflictDoUpdate({
           target: [prices.variantId, prices.currency],

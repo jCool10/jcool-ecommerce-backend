@@ -27,12 +27,14 @@ import {
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
+import { testId } from '../setup/id-service-stub';
 
-const seedRow = (index: number, overrides: Record<string, unknown> = {}) => ({
+const seedRow = (overrides: Record<string, unknown> = {}, orderId = testId()) => ({
+  id: testId(),
   aggregateType: 'Order',
-  aggregateId: `0198f0d8-4444-7000-8000-${String(index).padStart(12, '0')}`,
+  aggregateId: orderId,
   eventType: 'order.placed',
-  payload: { orderId: `0198f0d8-4444-7000-8000-${String(index).padStart(12, '0')}`, totalAmountMinor: 150_000 },
+  payload: { orderId, totalAmountMinor: 150_000 },
   ...overrides,
 });
 
@@ -75,7 +77,7 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
   const seed = (count: number, overrides: Record<string, unknown> = {}) =>
     db
       .insert(schema.outbox)
-      .values(Array.from({ length: count }, (_, i) => seedRow(i + 1, overrides)))
+      .values(Array.from({ length: count }, () => seedRow(overrides)))
       .returning();
 
   beforeAll(async () => {
@@ -248,12 +250,13 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
       // test is the hop it cannot make: an async one through Redis.
       await withSpan('order.place', async (span) => {
         producerTraceId = span.spanContext().traceId;
+        const orderId = testId();
         await db.transaction((tx) =>
           writer.append(tx, {
             aggregateType: 'Order',
-            aggregateId: '0198f0d8-4444-7000-8000-000000000009',
+            aggregateId: orderId,
             eventType: 'order.placed',
-            payload: { orderId: '0198f0d8-4444-7000-8000-000000000009', totalAmountMinor: 150_000 },
+            payload: { orderId, totalAmountMinor: 150_000 },
           }),
         );
       });

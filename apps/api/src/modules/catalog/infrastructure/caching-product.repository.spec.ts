@@ -27,7 +27,7 @@ const HARD_TTL_MS = 90_000;
 // code under test calls would hold for any implementation of it. `lookup` is what the key generator
 // should already have normalised (uuids folded to lower case).
 function detailKey(version: number, lookup: string): string {
-  return `catalog:v2:${version}:product:${createHash('sha256').update(lookup).digest('hex').slice(0, 32)}`;
+  return `catalog:v3:${version}:product:${createHash('sha256').update(lookup).digest('hex').slice(0, 32)}`;
 }
 
 function buildProduct(slug = 'headphones'): Product {
@@ -137,21 +137,15 @@ describe('CachingProductRepository', () => {
     expect(ctx.cache.writeMs).toHaveBeenCalled();
   });
 
-  // Postgres compares a uuid case-insensitively but a slug as text, where case picks the product.
-  it('folds uuid case into one key but keeps slug case distinct', async () => {
-    const id = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+  // A slug compares as text, where case picks the product, so folding it could serve the wrong one.
+  it('keeps slug case distinct', async () => {
     ctx.source.findActiveByIdOrSlug.mockResolvedValue(buildProduct());
 
-    for (const lookup of [id.toUpperCase(), id, 'Headphones', 'headphones']) {
+    for (const lookup of ['Headphones', 'headphones']) {
       await ctx.repo.findActiveByIdOrSlug(lookup);
     }
 
-    expect(ctx.writtenKeys()).toEqual([
-      detailKey(0, id),
-      detailKey(0, id),
-      detailKey(0, 'Headphones'),
-      detailKey(0, 'headphones'),
-    ]);
+    expect(ctx.writtenKeys()).toEqual([detailKey(0, 'Headphones'), detailKey(0, 'headphones')]);
   });
 
   // The segment comes straight off the URL, and the single-flight lock appends `:lock` to whatever
