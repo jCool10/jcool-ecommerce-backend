@@ -132,7 +132,7 @@ describe('gateway: public site', () => {
 
   it('never reaches the id-service load balancer from the public listener', async () => {
     const echo = await echoOf(
-      direct('/v1/ids', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"bucket":0}' }),
+      direct('/v1/ids', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"count":1}' }),
     );
 
     expect(echo.upstream).toBe('api');

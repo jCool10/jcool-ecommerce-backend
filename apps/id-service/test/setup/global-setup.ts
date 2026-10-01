@@ -9,7 +9,10 @@ export default async function setup({
 }: {
   provide: (key: 'PG_ADMIN_URL', value: string) => void;
 }): Promise<() => Promise<void>> {
-  const postgres = await new PostgreSqlContainer(POSTGRES_IMAGE).start();
+  // The contention spec holds one connection per leasable node at once, past the default of 100.
+  const postgres = await new PostgreSqlContainer(POSTGRES_IMAGE)
+    .withCommand(['postgres', '-c', 'max_connections=400'])
+    .start();
   try {
     const adminUrl = postgres.getConnectionUri();
     const admin = new Client({ connectionString: adminUrl });

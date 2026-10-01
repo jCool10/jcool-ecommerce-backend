@@ -38,16 +38,16 @@ const logCallShape = [
   },
 ];
 
-// An id from a general-purpose generator carries no routing bucket, and nothing notices until a
-// shard split. Not a global ban: `jti`/`familyId` have no bucket and stay on uuidv7, and specs must
-// be able to mint a non-snowflake (e.g. uuid) id to prove it is rejected. `scripts/` is in because
-// it inserts over raw SQL.
-const bucketedIdMessage =
-  'User-context ids must be minted through IdentityService so they carry a routing bucket.';
-const uuidImportBan = { group: ['uuid', 'uuid/*'], message: bucketedIdMessage };
+// An id from a general-purpose generator is not a snowflake id: it does not fit the `bigint` id
+// columns or pass the `ck_*_routable` checks, and the failure only shows at insert time. Not a
+// global ban: specs must be able to mint a non-snowflake (e.g. uuid) id to prove it is rejected. `scripts/` is in because it inserts over
+// raw SQL.
+const rowIdMessage =
+  'Row ids must be minted through ID_GENERATOR: a uuid does not fit the bigint id columns or the routable-id checks.';
+const uuidImportBan = { group: ['uuid', 'uuid/*'], message: rowIdMessage };
 const randomUuidBan = [
-  { selector: "ImportSpecifier[imported.name='randomUUID']", message: bucketedIdMessage },
-  { selector: "MemberExpression[property.name='randomUUID']", message: bucketedIdMessage },
+  { selector: "ImportSpecifier[imported.name='randomUUID']", message: rowIdMessage },
+  { selector: "MemberExpression[property.name='randomUUID']", message: rowIdMessage },
 ];
 
 const domainImportBan = {

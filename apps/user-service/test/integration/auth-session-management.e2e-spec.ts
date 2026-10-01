@@ -162,7 +162,7 @@ describe('Auth session management (integration, real Postgres + Redis)', () => {
       const { user } = await createTestUser(app, { password });
       const a = await loginAs(app, { email: user.email, password });
 
-      const unknown = encode({ tsMs: Date.now(), bucket: 0, nodeId: 1, sequence: 0 });
+      const unknown = encode({ tsMs: Date.now(), nodeId: 1, sequence: 0 });
 
       await request(app.getHttpServer()).delete(`/auth/sessions/${unknown}`).set(authHeader(a.accessToken)).expect(404);
       for (const malformed of ['not-an-id', randomUUID()]) {

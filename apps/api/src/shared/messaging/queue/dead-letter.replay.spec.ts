@@ -7,7 +7,7 @@ import { jobIdFor } from './domain-event.job';
 
 const ID_A = sampleId(10);
 const ID_B = sampleId(11);
-const ORDER_ID = sampleId(1, 7);
+const ORDER_ID = sampleId(1);
 
 const DAY_MS = 86_400_000;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();

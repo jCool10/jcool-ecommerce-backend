@@ -67,7 +67,7 @@ export class AuthTokensService {
     await this.refreshTokens.create({
       userId: user.id,
       tokenHash: refresh.hash,
-      familyId: await this.identity.mintOwnedBy(user.id),
+      familyId: await this.identity.mintId(),
       expiresAt: refresh.expiresAt,
     });
 

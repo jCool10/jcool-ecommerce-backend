@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { ID_GENERATOR, type IdGeneratorPort, mintOne, UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { injectTraceContext } from '@jcool/platform/observability';
 import type { OutboxRecord, OutboxWriterPort } from './outbox-writer.port';
 import { outbox } from './schema/outbox.schema';
@@ -16,7 +16,7 @@ export class DrizzleOutboxWriter implements OutboxWriterPort {
   async append(tx: DrizzleTx, record: OutboxRecord): Promise<void> {
     const { traceparent } = injectTraceContext();
     await tx.insert(outbox).values({
-      id: await mintOne(this.ids, UNOWNED_BUCKET),
+      id: await mintOne(this.ids),
       aggregateType: record.aggregateType,
       aggregateId: record.aggregateId,
       eventType: record.eventType,

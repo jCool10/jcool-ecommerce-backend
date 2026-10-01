@@ -110,9 +110,9 @@ export class NodeLease {
     return this.held?.generator ?? null;
   }
 
-  generate(bucket: number): string {
+  generate(): string {
     if (this.held === null || this.fenced()) throw new LeaseNotHeldError(this.state);
-    const id = this.held.generator.generate(bucket);
+    const id = this.held.generator.generate();
     // Again after stamping: a freeze between the check and the generator's clock read would
     // otherwise hand out an id from past the lease.
     if (this.fenced()) throw new LeaseNotHeldError(this.state);

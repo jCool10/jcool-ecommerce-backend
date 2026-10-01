@@ -20,7 +20,7 @@ type OutboxRow = typeof outbox.$inferSelect;
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const PRODUCER_SPAN_ID = '00f067aa0ba902b7';
 
-const ORDER_ID = sampleId(0, 7);
+const ORDER_ID = sampleId(0);
 let nextId = 1;
 function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
   return {

@@ -2,11 +2,11 @@ import { execFileSync } from 'node:child_process';
 import type { StartedTestContainer } from 'testcontainers';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { decode } from '@jcool/id-codec';
-import { MAX_IDS_PER_REQUEST } from '../../src/mint/mint.request';
 import { sleep } from '../setup/eventually';
 import {
   buildImages,
   collisions,
+  IDS_PER_REQUEST,
   type MintRun,
   mintTimes,
   mintUntil,
@@ -21,8 +21,7 @@ import {
 // Past the gateway's DNS refresh, so it has seen whatever the step changed.
 const DNS_SETTLE_MS = 6_000;
 
-// A request buys one node-millisecond, so the load arrives as many small batches rather than a few
-// large ones; the total is what the collision check needs.
+// What the collision check needs.
 const TOTAL_IDS = 100_000;
 
 beforeAll(buildImages);
@@ -37,7 +36,7 @@ describe('id-service replicas behind the gateway', () => {
   afterEach(() => stopStack(stack));
 
   it('mints 100k ids across three replicas with no id or (ts, node, seq) repeated', async () => {
-    const run = await mintTimes(stack!.lbUrl, TOTAL_IDS / MAX_IDS_PER_REQUEST, 10, MAX_IDS_PER_REQUEST);
+    const run = await mintTimes(stack!.lbUrl, TOTAL_IDS / IDS_PER_REQUEST, 10, IDS_PER_REQUEST);
 
     expect(run.failures).toEqual([]);
     expect(run.ids).toHaveLength(TOTAL_IDS);

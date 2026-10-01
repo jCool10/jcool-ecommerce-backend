@@ -5,7 +5,7 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 // is kept at the application layer (reads go through Catalog's published port), so the DB does not
 // couple Cart to another context's tables.
 
-// No default: a cart id carries its owner's bucket, which only the writer knows.
+// No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {

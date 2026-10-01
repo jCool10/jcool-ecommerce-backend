@@ -29,7 +29,7 @@ describe('an exhausted node pool', () => {
   });
 
   it('refuses to mint with LEASE_NOT_HELD', async () => {
-    const res = await request(app.getHttpServer()).post('/v1/ids').send({ bucket: 0 }).expect(503);
+    const res = await request(app.getHttpServer()).post('/v1/ids').send({}).expect(503);
     expect(res.body).toMatchObject({ statusCode: 503, code: 'LEASE_NOT_HELD' });
     expect(res.body.requestId).toEqual(expect.any(String));
   });
@@ -41,7 +41,7 @@ describe('an exhausted node pool', () => {
       const res = await request(app.getHttpServer()).get('/health/ready');
       return res.status === 200 ? res : undefined;
     });
-    const res = await request(app.getHttpServer()).post('/v1/ids').send({ bucket: 0 }).expect(200);
+    const res = await request(app.getHttpServer()).post('/v1/ids').send({}).expect(200);
     expect(decode((res.body.ids as string[])[0] ?? '').nodeId).toBe(7);
   });
 });

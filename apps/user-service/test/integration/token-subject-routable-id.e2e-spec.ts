@@ -29,7 +29,7 @@ describe('Access token subject (integration)', () => {
   });
 
   it('refuses a routable subject it does not hold', async () => {
-    const [unknownUserId] = await inProcessIdGenerator.mint(7);
+    const [unknownUserId] = await inProcessIdGenerator.mint();
 
     expect((await me(await tokenFor(unknownUserId))).status).toBe(401);
   });

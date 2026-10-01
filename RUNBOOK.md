@@ -11,7 +11,8 @@ Conventions used below:
 
 ## Contents
 
-- [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key)
+- [The id layout is permanent](#the-id-layout-is-permanent)
+- [Changing the id layout](#changing-the-id-layout)
 - [Backup and restore](#backup-and-restore)
 - [Rebuild the search index](#rebuild-the-search-index)
 - [Reconcile the bucket against `media_assets`](#reconcile-the-bucket-against-media_assets)
@@ -31,61 +32,72 @@ Conventions used below:
 
 ---
 
-## Never rotate `IDENTITY_BUCKET_KEY`
+## The id layout is permanent
 
 **This is not a policy, it is a one-way door.**
 
-Every user-context id embeds a 12-bit routing bucket derived by HMAC from the account's normalized email, under this key. The bucket is what a future `users` shard split routes on. Rotating the key does not invalidate anything visibly — it mints *new* ids into buckets their emails no longer hash to, and nothing reads a bucket until the split. The damage would surface years after the key that caused it was lost.
+An id is a 63-bit integer laid out `45 ts_ms │ 8 node │ 10 seq` over an epoch of `2026-01-01T00:00:00Z` (`packages/id-codec/src/snowflake.codec.ts`). The epoch and the field widths are permanent: moving either is silent, since a new epoch makes every stored id decode to a different timestamp and a new width makes it decode into different fields, and ids minted under a wider timestamp sort below the ones already stored.
 
-The key and the pin live in the **user-service** and its database; the api holds neither. The
-user-service defends this on every boot, in two layers
-(`apps/user-service/src/modules/user/infrastructure/identity-bucket-key.verifier.ts`):
+The user-service's database pins `LAYOUT_VERSION` in `identity_key_pin.layout_version`, and `IdentityLayoutPinVerifier` (`apps/user-service/src/modules/user/infrastructure/identity-layout-pin.verifier.ts`) compares it on every boot. It **fails open** if the database is unreachable (no id is minted while it is down) and **fails closed** only on a disagreement actually read back. The api and the id-service hold no pin.
 
-1. **Row canary** — re-derives the bucket for the newest user row's email and compares it against the bucket in that row's id. Cannot catch a key that was wrong from row 1 (both sides then use the same wrong key).
-2. **Key pin** — a fingerprint of the key, and the id layout version, stored in the database. Holds on a zero-row database, and survives a restore into an environment carrying a different key. It is read and compared *before* the canary, so a changed layout is reported as one instead of being misread as a key fault, but **written** only after the canary passes: pinning first on a database that has rows but no pin would record a wrong key as the reference every later boot is held to.
-
-Both **fail open** if the database is unreachable (no id is minted while it is down) and **fail closed** only on a disagreement actually read back.
-
-The first boot against an empty database logs the line that matters:
+The pin is **written** only when it is absent, `IDENTITY_PIN_BOOTSTRAP=true`, and the `users` table is empty: rows minted before any pin carry a layout this boot cannot read back, and pinning the running one would make a guess the reference every later boot is held to. The boot that writes it logs:
 
 ```
-identity bucket key pinned — no key was pinned here before   (fields: fingerprint, layoutVersion)
+id layout pinned — no layout was pinned here before
 ```
 
-**Record that fingerprint with the key.** It prints only on the boot that *writes* the pin; a boot against an already-pinned database is silent.
+A boot asked to write the pin that reads an empty `users` table but cannot finish the write **refuses to start** with `id layout pin not written: …`, and the next boot retries: once a first user lands unpinned, no later boot can pin. Leave `IDENTITY_PIN_BOOTSTRAP` unset against a database that already holds the pin.
 
 ### If a boot is refused
-
-```
-IDENTITY_BUCKET_KEY does not match the key this database was built with (pinned X, current Y)
-```
-
-There are exactly two correct responses:
-
-- **Restore the original key** from the secret manager or the backup that holds it, and redeploy.
-- **Reset the database**, if and only if it holds nothing worth keeping.
-
-There is no third option. Do not delete the pin row to make the message go away: that removes the only evidence of which key the existing ids were minted under, and the canary alone cannot rebuild it.
-
-### The id layout is the same kind of one-way door
 
 ```
 The id layout does not match the one this database was built with (pinned X, current Y)
 ```
 
-An id is a 63-bit integer laid out `41 ts_ms │ 12 bucket │ 5 node │ 5 seq` over an epoch of `2026-01-01T00:00:00Z` (`packages/id-codec/src/snowflake.codec.ts`). The epoch and the field widths are **permanent in the same way the key is**, and moving either is silent: a new epoch makes every stored id decode to a different timestamp, and a new width makes it decode into different fields, the bucket among them once the change reaches past `node │ seq`. `identity_key_pin.layout_version` is what makes that loud — a build carrying a different `LAYOUT_VERSION` refuses to boot against this database.
+There are exactly two correct responses:
 
-The two correct responses are the same two: restore the original build, or reset the database if it holds nothing worth keeping. Changing the layout deliberately is a data migration that rewrites every id and the pinned version, shipped with a `LAYOUT_VERSION` bump. The bump alone only makes every existing database refuse to boot.
+- **Restore the original build**, the one whose `LAYOUT_VERSION` is the pinned one, and redeploy.
+- **Reset the database**, if and only if it holds nothing worth keeping.
+
+There is no third option. Do not edit or delete the pin row to make the message go away: it is the only evidence of which layout the existing ids were minted under, and nothing can rebuild it. The same holds for the api's and the id-service's databases, which carry no pin but hold ids and node leases from the same layout.
+
+---
+
+## Changing the id layout
+
+A layout change bumps `LAYOUT_VERSION` and rewrites the meaning of every stored id. The codec spec pins the layout beside `LAYOUT_VERSION`, so the change fails CI until that expectation is rewritten. Nothing maps old ids to new ones, so a change ships as a reset, not a migration. Layout 2 replaced layout 1 (`41 ts_ms │ 12 bucket │ 5 node │ 5 seq`) this way: it dropped the email-derived routing bucket, widened the timestamp to 45 bits, and gave the freed bits to `node` and `seq`. The reasoning is in the [decision record](./docs/system-architecture.md#63-bit-snowflake-layout-45-ts_ms--8-node--10-seq).
+
+CD deploys one service at a time (id-service → api → gateway → user-service) and runs each one's migrations in its pre-deploy step, so everything below up to the merge happens while the services are stopped. The layout-2 rollout, in order:
+
+1. **Stop** the api, the user-service and the id-service, and keep them stopped for longer than the user-service's `JWT_ACCESS_TTL`, so no access token naming a layout-1 user id is still live when they return.
+2. **Close open checkouts.** Every `PENDING` payment (`SELECT id, order_id, provider_session_id FROM payments WHERE status = 'PENDING'`) has a hosted checkout page that can still take money for an order the reset deletes. Expire each session in the payment gateway's dashboard and refund any that already read `paid`, as in [A refund is owed](#a-refund-is-owed).
+3. **Back up, then reset** the api's and the user-service's databases to empty ([Backup and restore](#backup-and-restore)); a layout-2 build cannot serve the dumps. The api's `0028_snowflake_layout_v2_id_floor.sql` and the user-service's `0003_snowflake_layout_v2_pin_and_id_floor.sql` refuse to run while any of their tables holds a row (`id layout 2 needs a reset database: table … is not empty`), so a database that was missed stops the deploy at its pre-deploy step.
+4. **Flush the shared Redis** (`railway connect <redis service>`, then `FLUSHALL`). Its queued and dead-lettered jobs, its `auth:epoch:*` and `auth:denylist:*` keys and its cached catalog pages all name layout-1 ids, and a `queue:replay-dlq --apply` would put those jobs back on the queues.
+5. **Remove `IDENTITY_BUCKET_KEY`** now: `.railway/railway.ts` no longer lists it, so CD's apply would stop at the delete. From this change's checkout, run `railway config plan` (the only destroy must be that variable), then `railway config apply --confirm-destructive` ([Change Railway service config](#change-railway-service-config)). Keep its value with the step-3 dumps: a rollback needs it back.
+6. **Set `IDENTITY_PIN_BOOTSTRAP=true`** on the user-service, so its first boot pins the empty database at layout 2.
+7. **Merge.** The id-service's `0004_widen_node_pool.sql` widens the leasable node pool to `1..254`; `0028` and `0003` move every `ck_<table>_<column>_routable` floor to `>= 262144` (2^18), and `0003` drops the old pin fingerprint.
+8. **Check the pin** before anything writes a user: the user-service logs `id layout pinned — no layout was pinned here before`, and `SELECT layout_version FROM identity_key_pin` returns `2`. Then unset `IDENTITY_PIN_BOOTSTRAP`.
+9. **Re-seed** (`pnpm db:seed`), only once the pin is there: a seed run that inserts users first leaves the database unpinnable. Then [reconcile the media bucket](#reconcile-the-bucket-against-media_assets) and [rebuild the search index](#rebuild-the-search-index), which still name the old ids.
+
+Nothing but those two migrations checks for the reset. The api holds no pin, and every layout-1 id clears the new floor, so a layout-1 row left behind would sit beside layout-2 ones unnoticed. A user-service database that already holds a pin refuses a build of another layout with the mismatch error above. An old caller sending `bucket` to `POST /v1/ids` gets `400`: the body is `{ "count"?: 1..1024 }`.
+
+**There is no rolling back one service.** An old build cannot read layout-2 ids, and an old id-service replica claims the new nodes above 30 first: node 31 was layout 1's scripts node, and on any higher one the replica never becomes ready. Rolling back repeats the steps above for the old builds: stop, restore the step-3 dumps into empty databases, flush Redis, shrink the id-service's node pool back, put `IDENTITY_BUCKET_KEY` back with its old value, and deploy the old builds.
+
+```sql
+-- psql against id-service's DATABASE_URL, every replica stopped
+DELETE FROM node_leases WHERE node_id > 30;
+ALTER TABLE node_leases DROP CONSTRAINT node_leases_node_id_range;
+ALTER TABLE node_leases ADD CONSTRAINT node_leases_node_id_range CHECK (node_id BETWEEN 1 AND 30);
+```
 
 ---
 
 ## Backup and restore
 
 Each service owns one database and is backed up on its own: the api's (catalog, cart, orders,
-payments, inventory, media, messaging), the user-service's (accounts, tokens, the key pin), and the
+payments, inventory, media, messaging), the user-service's (accounts, tokens, the layout pin), and the
 id-service's (node leases). They share no foreign keys, so there is no cross-database consistency to
-preserve — but the **user-service's** dump and its `IDENTITY_BUCKET_KEY` are one artifact. Back them
-up together; that dump without its key is a dump you cannot serve.
+preserve.
 
 ### Back up
 
@@ -93,11 +105,6 @@ up together; that dump without its key is a dump you cannot serve.
 # local — against whatever DATABASE_URL points at, one service at a time
 pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" > backup-$(date +%Y%m%d-%H%M).dump
 ```
-
-For the user-service's dump, record alongside it:
-
-- the `IDENTITY_BUCKET_KEY` fingerprint (`SELECT fingerprint FROM identity_key_pin WHERE id = 1;`),
-- which secret-manager entry holds the key itself.
 
 ### Restore
 
@@ -107,22 +114,21 @@ createdb jcool_restore
 pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges backup-….dump
 ```
 
-A user-service dump then needs the service booted against it **with the key that dump was taken
-under**; the api's and the id-service's carry no key.
+A user-service dump then needs the service booted against it by a build with the **id layout that dump was taken under**; the api's and the id-service's carry no pin.
 
 After restoring the api's database, [rebuild the search index](#rebuild-the-search-index) before
 catalog writes resume. A restore rewinds `products.search_version`, so the engine holds versions the
 database no longer reaches and would ignore every later write to those products until they caught up.
 
-### Restoring into an environment with a different key
+### Restoring a dump taken under a different layout
 
-The user-service's dump carries the `identity_key_pin` row, so the restored database still remembers the original key's fingerprint. Booting the user-service against it under a different `IDENTITY_BUCKET_KEY` **refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not a restore problem.
+The user-service's dump carries the `identity_key_pin` row, so the restored database still remembers the layout it was built under. Booting a build with another `LAYOUT_VERSION` against it **refuses to start** with the mismatch error above. That is the designed outcome — it is the check working, not a restore problem.
 
 Consequences to plan for:
 
-- Restoring production data into staging requires **production's key** in staging, which usually means you should not be doing that. Prefer a seeded staging database.
+- A layout-1 dump cannot be served by a layout-2 build, and its ids do not decode under layout 2. Restore it only under the build that took it.
 - A dump restored into a database that already has a *different* pin row will fail on the primary key of `identity_key_pin` during `pg_restore`, not at boot. Restore into an empty database.
-- Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the pinned key; changing the pin makes the database lie about its own history.
+- Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the pinned layout; changing the pin makes the database lie about its own history.
 
 ### Restoring or recreating the id-service database
 
@@ -443,7 +449,7 @@ Three migrations moved user ids from `uuid` to `bigint`, and they are written to
 
 Postgres has no cast from `uuid` to `bigint`, so an `ALTER COLUMN … SET DATA TYPE` would be refused outright. `ADD COLUMN … NOT NULL` with no default succeeds on an empty table — every new environment and every CI run — and fails on a populated one. That failure is the correct outcome, not an obstacle: those rows point at user ids that no longer exist anywhere, and there is no mapping back.
 
-Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, add a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`). They validate the rows already there, so either one fails on a database holding an id below 2^22. No app writer produces such an id; a row like that was written by hand.
+Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, added a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`), a floor of 2^22 under layout 1. They validate the rows already there, so either one fails on a database holding an id below that floor. No app writer produces such an id; a row like that was written by hand. Layout 2 lowers the floor to 2^18 (`>= 262144`) in api `0028_snowflake_layout_v2_id_floor.sql` and user-service `0003_snowflake_layout_v2_pin_and_id_floor.sql`, and the id-service's `0004_widen_node_pool.sql` widens `node_leases` to `1..254`; see [Changing the id layout](#changing-the-id-layout). The api and user-service ones refuse to run while any of their tables holds a row, since they assume the reset described there.
 
 Two more move every remaining id to `bigint`, and these **delete data rather than fail**:
 
@@ -909,12 +915,11 @@ Locally, `docker-compose.yml` starts Redis with `--appendonly yes`. If the `redi
 ### Rebuilding the service from scratch
 
 `railway config plan && railway config apply --yes` creates `user-postgres` and `user-service`, but
-the service will not boot until its variables have values. Two of them are one-way doors:
+the service will not boot until its variables have values. One of them is a one-way door:
 
-- `IDENTITY_BUCKET_KEY` — the key the existing ids were minted under, never a fresh one. See
-  [Never rotate `IDENTITY_BUCKET_KEY`](#never-rotate-identity_bucket_key). Leave
-  `IDENTITY_PIN_BOOTSTRAP` unset against a database that already holds the pin.
 - `CSRF_SECRET` — changing it invalidates every CSRF cookie in circulation.
+
+Set `IDENTITY_PIN_BOOTSTRAP=true` only for the first boot against an empty database, and leave it unset against one that already holds the pin. See [The id layout is permanent](#the-id-layout-is-permanent).
 
 `REDIS_URL` is a reference to the api's instance (`auth:*` lives there). `JWT_ISSUER` is the public
 URL and `JWT_AUDIENCE` is `jcool-api`; the api references both, so pick them once.

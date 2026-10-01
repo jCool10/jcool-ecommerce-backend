@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq } from 'drizzle-orm';
-import { bucketOf } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx, isUniqueViolation } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { Payment } from '../domain/payment.entity';
@@ -25,7 +24,7 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
 
   async create(payment: Payment, tx?: DrizzleTx): Promise<Payment> {
     const executor = tx ?? this.db;
-    const id = await mintOne(this.ids, bucketOf(payment.orderId));
+    const id = await mintOne(this.ids);
     try {
       const [row] = await executor
         .insert(payments)

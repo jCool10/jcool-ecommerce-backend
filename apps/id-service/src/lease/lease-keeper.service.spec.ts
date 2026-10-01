@@ -88,7 +88,7 @@ describe('LeaseKeeper', () => {
     expect(await valueOf(counters.renewFailures)).toBe(2);
     // One warning per failure streak, not one per retry.
     expect(log.warn).toHaveBeenCalledTimes(1);
-    expect(lease.generate(1)).toEqual(expect.any(String));
+    expect(lease.generate()).toEqual(expect.any(String));
 
     await vi.advanceTimersByTimeAsync(LEASE.ttlMs - LEASE.fenceMarginMs - LEASE.renewEveryMs - RETRY_MS);
     expect(lease.state).toBe('fenced');

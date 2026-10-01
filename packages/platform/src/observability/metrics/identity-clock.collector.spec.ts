@@ -39,8 +39,8 @@ async function scrape(name: string): Promise<number | undefined> {
 
 function stall(generator: SnowflakeGenerator): void {
   // One mint per sequence value at a frozen millisecond; the next one has nowhere left to go.
-  for (let i = 0; i < SEQUENCE_COUNT; i++) generator.generate(0);
-  expect(() => generator.generate(0)).toThrow(ClockStalledError);
+  for (let i = 0; i < SEQUENCE_COUNT; i++) generator.generate();
+  expect(() => generator.generate()).toThrow(ClockStalledError);
 }
 
 describe('identity clock collector', () => {
@@ -56,7 +56,7 @@ describe('identity clock collector', () => {
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBe(0);
 
     fake.stepWall(40_000);
-    generator.generate(0);
+    generator.generate();
 
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBe(40_000);
   });
@@ -83,7 +83,7 @@ describe('identity clock collector', () => {
     bindIdentityClockMetrics(later);
 
     second.stepWall(1_500);
-    later.generate(0);
+    later.generate();
 
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBe(1_500);
   });
@@ -115,7 +115,7 @@ describe('identity clock collector', () => {
     const live = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: current.clock });
     bindIdentityClockMetrics(live);
     current.stepWall(700);
-    live.generate(0);
+    live.generate();
 
     unbindIdentityClockMetrics(superseded);
     await expect(scrape(ID_CLOCK_DRIFT_MS)).resolves.toBe(700);

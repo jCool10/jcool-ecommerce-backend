@@ -28,7 +28,7 @@ export interface TestAppOptions {
 const generator = SnowflakeGenerator.create({ nodeId: SCRIPTS_NODE_ID });
 
 export const inProcessIdGenerator: IdGeneratorPort = {
-  mint: (bucket, count = 1) => Promise.resolve(Array.from({ length: count }, () => generator.generate(bucket))),
+  mint: (count = 1) => Promise.resolve(Array.from({ length: count }, () => generator.generate())),
 };
 
 // Config is read when the module compiles, so overrides are applied before compile and restored

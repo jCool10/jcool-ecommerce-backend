@@ -7,7 +7,7 @@ export class UserResponseDto {
   @ApiProperty({
     example: '137465797020397179',
     description:
-      'User id — a 63-bit integer carrying the routing bucket, sent as a decimal string because it exceeds what a JSON number holds exactly.',
+      'User id — a 63-bit integer, sent as a decimal string because it can exceed what a JSON number holds exactly.',
   })
   id!: string;
 

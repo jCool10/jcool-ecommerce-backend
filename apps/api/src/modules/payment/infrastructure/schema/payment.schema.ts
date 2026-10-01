@@ -9,7 +9,7 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 export const paymentStatus = pgEnum('payment_status', ['PENDING', 'SUCCEEDED', 'FAILED', 'EXPIRED']);
 export const webhookStatus = pgEnum('webhook_status', ['RECEIVED', 'PROCESSED', 'SKIPPED', 'FAILED']);
 
-// No default: a payment id carries its order's bucket, which only the writer knows.
+// No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {

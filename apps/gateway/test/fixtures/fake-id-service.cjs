@@ -3,7 +3,7 @@
 const http = require('node:http');
 const { hostname } = require('node:os');
 
-const EXPECTED_BODY = JSON.stringify({ bucket: 0 });
+const EXPECTED_BODY = JSON.stringify({ count: 1 });
 
 let mode = 'ok';
 let hits = 0;

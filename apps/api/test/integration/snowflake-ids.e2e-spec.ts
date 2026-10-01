@@ -3,14 +3,12 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { bucketOf, isRoutableId } from '@jcool/id-codec';
+import { decode } from '@jcool/id-codec';
 import { authHeader } from '../setup/bearer.helper';
 import { addToCart, checkout, openSession, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithFakeGateway, closeAppAfterAll, resetDatabaseBeforeEach } from '../setup/harness';
-import { idServiceStub, testId } from '../setup/id-service-stub';
-
-const UNOWNED = 0;
+import { STUB_NODE_ID, idServiceStub, testId } from '../setup/id-service-stub';
 
 describe('Snowflake ids (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -23,34 +21,33 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
   resetDatabaseBeforeEach(() => pool);
   afterEach(async () => (await idServiceStub()).reset());
 
-  const bucketsOf = async (sql: string, params: unknown[] = []): Promise<number[]> => {
+  // The stub's node, not just a routable id: an id minted anywhere but the id-service fails here.
+  const expectMintedIds = async (sql: string, params: unknown[] = []): Promise<void> => {
     const { rows } = await pool.query<{ id: string }>(sql, params);
     expect(rows.length).toBeGreaterThan(0);
-    for (const { id } of rows) expect(isRoutableId(id), id).toBe(true);
-    return [...new Set(rows.map(({ id }) => bucketOf(id)))];
+    for (const { id } of rows) expect(decode(id).nodeId, id).toBe(STUB_NODE_ID);
   };
 
-  it("keeps a buyer's cart, order and everything under the order in the buyer's bucket", async () => {
+  it('mints the cart, order and everything under the order through the id-service', async () => {
     const sku = await seedSellableSku(app, { onHand: 5 });
-    const { user, accessToken } = await createTestPrincipal(app);
-    const buyer = bucketOf(user.id);
+    const { accessToken } = await createTestPrincipal(app);
 
     await addToCart(app, accessToken, sku.variantId, 2);
     const order = await checkout(app, accessToken).expect(201);
     const orderId = order.body.id as string;
     await openSession(app, accessToken, orderId).expect(201);
 
-    expect(bucketOf(orderId)).toBe(buyer);
-    expect(await bucketsOf('SELECT id FROM carts')).toEqual([buyer]);
-    expect(await bucketsOf('SELECT id FROM cart_items')).toEqual([buyer]);
-    expect(await bucketsOf('SELECT id FROM order_items WHERE order_id = $1', [orderId])).toEqual([buyer]);
-    expect(await bucketsOf('SELECT id FROM reservations WHERE order_id = $1', [orderId])).toEqual([buyer]);
-    expect(await bucketsOf('SELECT id FROM payments WHERE order_id = $1', [orderId])).toEqual([buyer]);
-    expect(await bucketsOf('SELECT id FROM idempotency_keys')).toEqual([buyer]);
-    expect(await bucketsOf('SELECT id FROM outbox')).toEqual([UNOWNED]);
+    expect(decode(orderId).nodeId, orderId).toBe(STUB_NODE_ID);
+    await expectMintedIds('SELECT id FROM carts');
+    await expectMintedIds('SELECT id FROM cart_items');
+    await expectMintedIds('SELECT id FROM order_items WHERE order_id = $1', [orderId]);
+    await expectMintedIds('SELECT id FROM reservations WHERE order_id = $1', [orderId]);
+    await expectMintedIds('SELECT id FROM payments WHERE order_id = $1', [orderId]);
+    await expectMintedIds('SELECT id FROM idempotency_keys');
+    await expectMintedIds('SELECT id FROM outbox');
   });
 
-  it('mints catalog and stock ids in the unowned bucket', async () => {
+  it('mints catalog and stock ids through the id-service', async () => {
     const admin = await createTestAdminPrincipal(app);
     const http = () => request(app.getHttpServer());
     const auth = authHeader(admin.accessToken);
@@ -70,7 +67,7 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
     await http().put(`/admin/inventory/${sku.body.id}`).set(auth).send({ quantityOnHand: 3 }).expect(200);
 
     for (const table of ['categories', 'products', 'product_variants', 'prices', 'stock_levels', 'outbox']) {
-      expect(await bucketsOf(`SELECT id FROM ${table}`), table).toEqual([UNOWNED]);
+      await expectMintedIds(`SELECT id FROM ${table}`);
     }
   });
 

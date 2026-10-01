@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
-import { ID_GENERATOR, type IdGeneratorPort, mintOne, UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { WebhookEvent } from '../domain/webhook-event.entity';
 import { WebhookEventStatus } from '../domain/webhook-event-status';
 import type {
@@ -25,7 +25,7 @@ export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort
     const [inserted] = await executor
       .insert(webhookEvents)
       .values({
-        id: await mintOne(this.ids, UNOWNED_BUCKET),
+        id: await mintOne(this.ids),
         provider: input.provider,
         providerEventId: input.providerEventId,
         type: input.type,

@@ -7,7 +7,7 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const reservationStatus = pgEnum('reservation_status', ['HELD', 'RELEASED', 'COMMITTED']);
 
-// No default: a reservation id carries its order's bucket, which only the writer knows.
+// No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {

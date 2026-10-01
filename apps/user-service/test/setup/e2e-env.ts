@@ -1,6 +1,5 @@
 // Side-effect free: the Vitest config imports this too, because AppModule validates env on import.
 
-export const E2E_IDENTITY_BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secret-000';
 export const E2E_JWT_ISSUER = 'https://auth.jcool.test';
 export const E2E_JWT_AUDIENCE = 'jcool';
 export const E2E_ES256_KID = 'e2e-es256';
@@ -10,7 +9,6 @@ export const E2E_INTERNAL_API_TOKEN = 'e2e-internal-api-token-not-a-real-secret-
 export const E2E_ID_SERVICE_URL = 'http://127.0.0.1:1';
 
 export const E2E_BASE_ENV: Record<string, string> = {
-  IDENTITY_BUCKET_KEY: E2E_IDENTITY_BUCKET_KEY,
   JWT_ES256_ACTIVE_KID: E2E_ES256_KID,
   JWT_ISSUER: E2E_JWT_ISSUER,
   JWT_AUDIENCE: E2E_JWT_AUDIENCE,

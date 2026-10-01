@@ -12,12 +12,11 @@ import type { IdGeneratorPort } from '../ports';
 import { AuthTokensService, IdentityService } from '../services';
 import { RefreshTokensUseCase } from './refresh-tokens.use-case';
 
-const OWNER = encode({ tsMs: EPOCH_MS + 1, bucket: 77, nodeId: 1, sequence: 0 });
+const OWNER = encode({ tsMs: EPOCH_MS + 1, nodeId: 1, sequence: 0 });
 const PRESENTED = 'presented-raw-refresh-token';
 
 describe('RefreshTokensUseCase', () => {
   let log: string[];
-  let mintedInBuckets: number[];
   let refreshTokens: FakeRefreshTokenRepository;
   let signer: EchoAccessTokenSigner;
   let audit: RecordingAuthAudit;
@@ -33,12 +32,10 @@ describe('RefreshTokensUseCase', () => {
 
   beforeEach(() => {
     log = [];
-    mintedInBuckets = [];
     const ids: IdGeneratorPort = {
-      mint: (bucket) => {
+      mint: () => {
         log.push('mint');
-        mintedInBuckets.push(bucket);
-        return Promise.resolve([`successor-in-${bucket}`]);
+        return Promise.resolve(['successor']);
       },
     };
     refreshTokens = new FakeRefreshTokenRepository(log);
@@ -47,7 +44,7 @@ describe('RefreshTokensUseCase', () => {
     audit = new RecordingAuthAudit();
     epochs = new FakeSessionEpoch();
     warn = vi.fn();
-    const identity = new IdentityService(ids, 'k'.repeat(32));
+    const identity = new IdentityService(ids);
     useCase = new RefreshTokensUseCase(
       refreshTokens,
       identity,
@@ -67,7 +64,7 @@ describe('RefreshTokensUseCase', () => {
       {
         presentedTokenHash: hashRefreshToken(PRESENTED),
         expectedUserId: OWNER,
-        successorId: 'successor-in-77',
+        successorId: 'successor',
         newTokenHash: hashRefreshToken(result.refreshToken),
         newExpiresAt: expect.any(Date) as Date,
       },
@@ -76,13 +73,12 @@ describe('RefreshTokensUseCase', () => {
     expect(result).toMatchObject({ userId: OWNER, expiresIn: signer.expiresIn });
   });
 
-  it("mints the successor's id in its owner's bucket before the row lock is taken", async () => {
+  it("mints the successor's id before the row lock is taken", async () => {
     refreshTokens.outcome = { status: 'rotated', userId: OWNER, role: 'CUSTOMER', tokenEpoch: 0 };
 
     await useCase.execute(PRESENTED);
 
     expect(log).toEqual(['findOwner', 'mint', 'rotate']);
-    expect(mintedInBuckets).toEqual([77]);
   });
 
   it('answers an unknown token with 401 without minting or locking anything', async () => {

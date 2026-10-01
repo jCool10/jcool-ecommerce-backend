@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
-import { bucketOf } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { CartItem } from '../domain/cart-item.entity';
@@ -26,7 +25,7 @@ export class DrizzleCartRepository implements CartRepositoryPort {
     }
     const [created] = await this.db
       .insert(carts)
-      .values({ id: await mintOne(this.ids, bucketOf(userId)), userId })
+      .values({ id: await mintOne(this.ids), userId })
       .onConflictDoNothing({ target: carts.userId })
       .returning({ id: carts.id });
     if (created) {
@@ -56,7 +55,7 @@ export class DrizzleCartRepository implements CartRepositoryPort {
   async addItem(cartId: string, skuId: string, quantity: number): Promise<void> {
     await this.db
       .insert(cartItems)
-      .values({ id: await mintOne(this.ids, bucketOf(cartId)), cartId, skuId, quantity })
+      .values({ id: await mintOne(this.ids), cartId, skuId, quantity })
       // $onUpdate doesn't fire on a conflict SET, so bump updated_at by hand. LEAST applies the
       // MAX_LINE_QUANTITY ceiling inside the same statement, so the cap stays race-safe.
       .onConflictDoUpdate({

@@ -104,7 +104,7 @@ describe('lease expiry', () => {
     );
 
     app = await createTestApp(url, { ID_LEASE_QUARANTINE_MS: '0' });
-    const res = await request(app.getHttpServer()).post('/v1/ids').send({ bucket: 1, count: 20 }).expect(200);
+    const res = await request(app.getHttpServer()).post('/v1/ids').send({ count: 20 }).expect(200);
 
     for (const id of res.body.ids as string[]) {
       const fields = decode(id);

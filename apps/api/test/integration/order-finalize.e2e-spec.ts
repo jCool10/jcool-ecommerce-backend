@@ -18,7 +18,7 @@ import { mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 
-const USER_ID = mintTestUserId('owner@test.local');
+const USER_ID = mintTestUserId();
 const SKU = testId();
 const SKU_B = testId();
 

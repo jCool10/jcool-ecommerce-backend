@@ -5,7 +5,6 @@ const BASE = {
   NODE_ENV: 'test',
   DATABASE_URL: 'postgresql://u:p@localhost:5432/users',
   REDIS_URL: 'redis://localhost:6379',
-  IDENTITY_BUCKET_KEY: 'k'.repeat(64),
   JWT_ES256_PRIVATE_KEYS: 'k1:pem',
   JWT_ES256_ACTIVE_KID: 'k1',
   JWT_ISSUER: 'https://users.test.invalid',
@@ -27,14 +26,7 @@ function refusal(env: Record<string, unknown>): string | null {
 
 describe('validate', () => {
   it('accepts the minimal set and names each required variable that is missing', () => {
-    const required = [
-      'CSRF_SECRET',
-      'INTERNAL_API_TOKEN',
-      'ID_SERVICE_URL',
-      'JWT_ISSUER',
-      'JWT_AUDIENCE',
-      'IDENTITY_BUCKET_KEY',
-    ];
+    const required = ['CSRF_SECRET', 'INTERNAL_API_TOKEN', 'ID_SERVICE_URL', 'JWT_ISSUER', 'JWT_AUDIENCE'];
 
     expect(refusal(BASE)).toBeNull();
     expect(required.filter((name) => refusal({ ...BASE, [name]: undefined })?.includes(name))).toEqual(required);

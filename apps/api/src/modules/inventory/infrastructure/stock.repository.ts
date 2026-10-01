@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, eq, lt, sql } from 'drizzle-orm';
-import { bucketOf } from '@jcool/id-codec';
 import { durationToMs } from '@jcool/kernel';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
@@ -32,12 +31,12 @@ export class StockRepository implements StockRepositoryPort {
   }
 
   // Minted before the first stock row lock, so no checkout queues behind an id-service call.
-  private mintReservationIds(orderId: string, lines: ReserveLine[]): Promise<string[]> {
-    return this.ids.mint(bucketOf(orderId), lines.length);
+  private mintReservationIds(lines: ReserveLine[]): Promise<string[]> {
+    return this.ids.mint(lines.length);
   }
 
   async reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
-    const ids = await this.mintReservationIds(orderId, lines);
+    const ids = await this.mintReservationIds(lines);
     // Lock rows in a deterministic order so two orders holding the same SKUs can't deadlock.
     const ordered = [...lines].sort((a, b) => a.variantId.localeCompare(b.variantId));
     for (const [index, { variantId, quantity }] of ordered.entries()) {
@@ -75,7 +74,7 @@ export class StockRepository implements StockRepositoryPort {
   }
 
   async reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
-    const ids = await this.mintReservationIds(orderId, lines);
+    const ids = await this.mintReservationIds(lines);
     // A successful UPDATE still holds a row write-lock until the tx ends, so keep the same
     // deterministic order as the pessimistic path to rule out a cross-order deadlock.
     const ordered = [...lines].sort((a, b) => a.variantId.localeCompare(b.variantId));

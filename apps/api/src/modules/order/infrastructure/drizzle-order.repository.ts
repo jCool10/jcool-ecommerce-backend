@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
-import { bucketOf } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
 import { Order } from '../domain/order.entity';
@@ -36,7 +35,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult> {
     // Before the transaction, so no lock waits on the id service. A replayed key wastes them.
-    const [orderId, ...itemIds] = await this.ids.mint(bucketOf(order.userId), 1 + order.items.length);
+    const [orderId, ...itemIds] = await this.ids.mint(1 + order.items.length);
     return this.db.transaction(async (tx) => {
       // One checkout per user at a time, so the pending count below is race-safe. Taken before any
       // stock row lock, so it cannot cycle with them.

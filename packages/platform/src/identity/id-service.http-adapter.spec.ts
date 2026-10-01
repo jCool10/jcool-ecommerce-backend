@@ -2,7 +2,7 @@ import { type IncomingHttpHeaders, type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ServiceUnavailableException } from '@nestjs/common';
 import type { ClsService } from 'nestjs-cls';
-import { SEQUENCE_COUNT, bucketOf, encode } from '@jcool/id-codec';
+import { SEQUENCE_COUNT, encode, isRoutableId } from '@jcool/id-codec';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
@@ -18,14 +18,13 @@ interface Received {
 
 type Reply = { status: number; body: unknown } | 'hang';
 
-const idIn = (bucket: number, sequence = 0): string =>
-  encode({ tsMs: Date.now(), bucket, nodeId: 1, sequence: sequence % SEQUENCE_COUNT });
+const anId = (sequence = 0): string => encode({ tsMs: Date.now(), nodeId: 1, sequence: sequence % SEQUENCE_COUNT });
 
 class FakeIdService {
   readonly received: Received[] = [];
   reply: (request: Received) => Reply = (request) => {
-    const { bucket, count } = request.body as { bucket: number; count: number };
-    return { status: 200, body: { ids: Array.from({ length: count }, (_, i) => idIn(bucket, i)) } };
+    const { count } = request.body as { count: number };
+    return { status: 200, body: { ids: Array.from({ length: count }, (_, i) => anId(i)) } };
   };
   private server!: Server;
 
@@ -83,12 +82,12 @@ describe('IdServiceHttpAdapter', () => {
   const adapterFor = (caller: string, timeoutMs = 1_000): IdServiceHttpAdapter =>
     new IdServiceHttpAdapter({ url, timeoutMs, caller }, passThrough, inRequest());
 
-  it('asks for ids in a bucket and names itself as the caller', async () => {
+  it('asks for ids and names itself as the caller', async () => {
     const adapter = adapterFor('user-service');
 
-    const ids = await adapter.mint(42, 2);
+    const ids = await adapter.mint(2);
 
-    expect(ids.map(bucketOf)).toEqual([42, 42]);
+    expect(ids.map(isRoutableId)).toEqual([true, true]);
     expect(idService.received).toEqual([
       expect.objectContaining({
         method: 'POST',
@@ -99,7 +98,7 @@ describe('IdServiceHttpAdapter', () => {
           // The id service logs the caller's id rather than minting one, so both hops read as one request.
           'x-request-id': 'req-uuid',
         }) as IncomingHttpHeaders,
-        body: { bucket: 42, count: 2 },
+        body: { count: 2 },
       }),
     ]);
   });
@@ -107,14 +106,13 @@ describe('IdServiceHttpAdapter', () => {
   it('splits a batch above the per-request cap into several requests', async () => {
     const adapter = adapterFor('api');
 
-    const ids = await adapter.mint(7, SEQUENCE_COUNT * 2 + 1);
+    const ids = await adapter.mint(SEQUENCE_COUNT * 2 + 1);
 
     expect(ids).toHaveLength(SEQUENCE_COUNT * 2 + 1);
-    expect(new Set(ids.map(bucketOf))).toEqual(new Set([7]));
     expect(idService.received.map((request) => request.body)).toEqual([
-      { bucket: 7, count: SEQUENCE_COUNT },
-      { bucket: 7, count: SEQUENCE_COUNT },
-      { bucket: 7, count: 1 },
+      { count: SEQUENCE_COUNT },
+      { count: SEQUENCE_COUNT },
+      { count: 1 },
     ]);
     expect(idService.received.map((request) => request.headers['x-caller'])).toEqual(['api', 'api', 'api']);
   });
@@ -122,18 +120,18 @@ describe('IdServiceHttpAdapter', () => {
   it('asks for nothing when no ids are wanted', async () => {
     const adapter = adapterFor('api');
 
-    await expect(adapter.mint(7, 0)).resolves.toEqual([]);
+    await expect(adapter.mint(0)).resolves.toEqual([]);
     expect(idService.received).toEqual([]);
   });
 
-  /** Asks for two ids in bucket 1 against each reply, recording the answer and how many requests it took. */
+  /** Asks for two ids against each reply, recording the answer and how many requests it took. */
   async function answersTo(replies: Record<string, Reply>): Promise<Record<string, string>> {
     const adapter = adapterFor('user-service');
     const answers: Record<string, string> = {};
     for (const [name, reply] of Object.entries(replies)) {
       idService.reply = () => reply;
       const before = idService.received.length;
-      const answer = await adapter.mint(1, 2).then(
+      const answer = await adapter.mint(2).then(
         () => 'ids',
         (error: unknown) => (error instanceof ServiceUnavailableException ? '503' : String(error)),
       );
@@ -160,10 +158,9 @@ describe('IdServiceHttpAdapter', () => {
   it('answers 503 after one request for a reply that is not the ids it asked for', async () => {
     const answers = await answersTo({
       'a body without ids': { status: 200, body: {} },
-      'fewer ids than asked for': { status: 200, body: { ids: [idIn(1)] } },
+      'fewer ids than asked for': { status: 200, body: { ids: [anId()] } },
       'ids that are not strings': { status: 200, body: { ids: [1, 2] } },
       'ids that are not routable': { status: 200, body: { ids: [crypto.randomUUID(), crypto.randomUUID()] } },
-      'ids from another bucket': { status: 200, body: { ids: [idIn(1), idIn(2)] } },
     });
 
     expect(answers).toEqual({
@@ -171,7 +168,6 @@ describe('IdServiceHttpAdapter', () => {
       'fewer ids than asked for': '503 after 1 request',
       'ids that are not strings': '503 after 1 request',
       'ids that are not routable': '503 after 1 request',
-      'ids from another bucket': '503 after 1 request',
     });
   });
 
@@ -179,7 +175,7 @@ describe('IdServiceHttpAdapter', () => {
     idService.reply = () => 'hang';
     const adapter = adapterFor('user-service', 100);
 
-    await expect(adapter.mint(1)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(adapter.mint()).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   describe('behind the breaker', () => {
@@ -191,22 +187,22 @@ describe('IdServiceHttpAdapter', () => {
     it('keeps the circuit closed through LEASE_NOT_HELD answers', async () => {
       const adapter = adapterBehindBreaker();
       idService.reply = () => leaseNotHeld;
-      for (let i = 0; i < 5; i++) await adapter.mint(1).catch(() => undefined);
+      for (let i = 0; i < 5; i++) await adapter.mint().catch(() => undefined);
 
-      const fresh = idIn(1);
+      const fresh = anId();
       idService.reply = () => ({ status: 200, body: { ids: [fresh] } });
 
-      await expect(adapter.mint(1)).resolves.toEqual([fresh]);
+      await expect(adapter.mint()).resolves.toEqual([fresh]);
       expect(idService.received).toHaveLength(6);
     });
 
     it('opens the circuit on server errors and stops calling', async () => {
       const adapter = adapterBehindBreaker();
       idService.reply = () => ({ status: 500, body: {} });
-      for (let i = 0; i < 5; i++) await adapter.mint(1).catch(() => undefined);
+      for (let i = 0; i < 5; i++) await adapter.mint().catch(() => undefined);
       const reached = idService.received.length;
 
-      await expect(adapter.mint(1)).rejects.toBeInstanceOf(ServiceUnavailableException);
+      await expect(adapter.mint()).rejects.toBeInstanceOf(ServiceUnavailableException);
       expect(idService.received).toHaveLength(reached);
     });
   });

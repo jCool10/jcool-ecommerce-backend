@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, inArray, lt } from 'drizzle-orm';
-import { bucketOf } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import type {
@@ -24,7 +23,7 @@ export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
     const [row] = await this.db
       .insert(idempotencyKeys)
       .values({
-        id: await mintOne(this.ids, bucketOf(input.ownerId)),
+        id: await mintOne(this.ids),
         scope: input.scope,
         key: input.key,
         requestHash: input.requestHash,

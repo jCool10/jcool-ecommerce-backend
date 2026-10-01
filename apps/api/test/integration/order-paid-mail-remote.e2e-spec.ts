@@ -151,7 +151,7 @@ describe('Order confirmation mail against the user directory (integration, real 
 
   it('retries a buyer the directory has not copied yet, then confirms', async () => {
     const email = `late-${Date.now()}@test.local`;
-    const user = { id: mintTestUserId(email), email, role: 'CUSTOMER' as const };
+    const user = { id: mintTestUserId(), email, role: 'CUSTOMER' as const };
 
     const jobId = await publishPaid(user.id);
     await waitForFailedAttempts(jobId, 2);

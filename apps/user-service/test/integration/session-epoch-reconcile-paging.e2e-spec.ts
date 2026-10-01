@@ -10,7 +10,6 @@ import {
 import { SessionEpochReconciler } from '../../src/modules/user/application/services/session-epoch-reconciler';
 import { users } from '../../src/modules/user/infrastructure/schema/user.schema';
 import { closeAppAfterAll, createTestAppWithPool, redisOf, resetDatabaseBeforeEach } from '../setup/harness';
-import { bucketForTestEmail } from '../setup/identity.helper';
 import { publishedEpoch } from '../setup/session-epoch.helper';
 import { inProcessIdGenerator } from '../setup/test-app.factory';
 
@@ -31,9 +30,8 @@ describe('Session epoch reconcile paging (integration, real Postgres)', () => {
   async function seedUsers(count: number, updatedAt: Date): Promise<string[]> {
     const rows = [];
     for (let i = 0; i < count; i++) {
-      const email = `paging-${i}@test.local`;
-      const [id] = await inProcessIdGenerator.mint(bucketForTestEmail(email));
-      rows.push({ id, email, passwordHash: 'not-a-real-hash', updatedAt });
+      const [id] = await inProcessIdGenerator.mint();
+      rows.push({ id, email: `paging-${i}@test.local`, passwordHash: 'not-a-real-hash', updatedAt });
     }
     await db.insert(users).values(rows);
     return rows.map((row) => row.id);

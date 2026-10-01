@@ -1,7 +1,7 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import { DRIZZLE, isCheckViolation, type DrizzleDB } from '@shared/infrastructure/database';
-import { ID_GENERATOR, type IdGeneratorPort, mintOne, UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import type { StockAdminPort, StockView } from '../application/ports/stock-admin.port';
 import { stockLevels } from './schema/inventory.schema';
 
@@ -36,7 +36,7 @@ export class StockAdminRepository implements StockAdminPort {
 
   async setOnHand(variantId: string, quantity: number): Promise<StockView> {
     // Wasted when the row already exists; minting only on a miss would need a second round trip.
-    const id = await mintOne(this.ids, UNOWNED_BUCKET);
+    const id = await mintOne(this.ids);
     const [row] = await this.guardChecks(() =>
       this.db
         .insert(stockLevels)

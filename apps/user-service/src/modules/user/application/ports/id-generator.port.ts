@@ -5,6 +5,5 @@ export const ID_GENERATOR = Symbol('ID_GENERATOR');
  * fallback, because a second generator on this process's node would collide with the fleet's.
  */
 export interface IdGeneratorPort {
-  /** `count` ids, each carrying `bucket`. */
-  mint(bucket: number, count?: number): Promise<string[]>;
+  mint(count?: number): Promise<string[]>;
 }

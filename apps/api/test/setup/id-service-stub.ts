@@ -2,23 +2,22 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import type { AddressInfo } from 'node:net';
 import { NODE_COUNT } from '@jcool/id-codec';
 import { SnowflakeGenerator } from '@jcool/id-generator';
-import { UNOWNED_BUCKET } from '../../src/shared/identity/id-generator.port';
 import { currentWorkerId } from './worker-resources';
 
 /** `hang` never answers, so the caller's timeout is what ends the call. */
 export type IdServiceFault = number | 'hang';
 
 // One node per worker: the Elasticsearch container is shared across workers.
-const generator = SnowflakeGenerator.create({ nodeId: currentWorkerId() % NODE_COUNT });
+export const STUB_NODE_ID = currentWorkerId() % NODE_COUNT;
+const generator = SnowflakeGenerator.create({ nodeId: STUB_NODE_ID });
 
 /** For rows a spec writes straight to the database. Same generator as the stub, so ids never collide. */
-export function testId(bucket = UNOWNED_BUCKET): string {
-  return generator.generate(bucket);
+export function testId(): string {
+  return generator.generate();
 }
 
 /** Stands in for the id-service load balancer on `POST /v1/ids`. One per worker process. */
 export class IdServiceStub {
-  readonly buckets: number[] = [];
   private fault: IdServiceFault | undefined;
   private readonly hanging = new Set<ServerResponse>();
   private readonly server: Server = createServer((req, res) => this.handle(req, res));
@@ -40,7 +39,6 @@ export class IdServiceStub {
 
   reset(): void {
     this.fault = undefined;
-    this.buckets.length = 0;
     for (const res of this.hanging) res.destroy();
     this.hanging.clear();
   }
@@ -53,9 +51,8 @@ export class IdServiceStub {
       if (this.fault === 'hang') return void this.hanging.add(res);
       if (this.fault !== undefined) return void reply(res, this.fault, {});
 
-      const { bucket, count = 1 } = JSON.parse(raw) as { bucket: number; count?: number };
-      this.buckets.push(bucket);
-      reply(res, 200, { ids: Array.from({ length: count }, () => generator.generate(bucket)) });
+      const { count = 1 } = JSON.parse(raw) as { count?: number };
+      reply(res, 200, { ids: Array.from({ length: count }, () => generator.generate()) });
     });
   }
 }

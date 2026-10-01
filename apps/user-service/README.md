@@ -45,9 +45,9 @@ The service refuses to boot, and so does the api that reads these keys, unless R
 
 Every id is a 63-bit integer minted by the id-service through the gateway's internal load balancer (`ID_SERVICE_URL`), with a `x-caller: user-service` header. There is no local generator in `src/`, and dependency-cruiser keeps it that way. The call has one overall timeout and a circuit breaker, and is not retried here: the gateway already retries across replicas. When no id can be minted, the request answers `503` and writes nothing. A refresh mints its successor id only after the presented token proved rotatable, so an expired, revoked or replayed token is refused without calling the id-service.
 
-The columns are `bigint` and the JSON is a decimal string: 63 bits is more than a JSON number carries exactly, so `"id": "137465797020397179"` is a string on purpose and a client must not parse it as a number. `family_id`, which groups a login session and is the `:id` of `DELETE /auth/sessions/:id`, is minted there too, in its owner's bucket. Only opaque tokens stay random: a token's `jti` and the secrets themselves.
+The columns are `bigint` and the JSON is a decimal string: 63 bits is more than a JSON number carries exactly, so `"id": "137465797020397179"` is a string on purpose and a client must not parse it as a number. `family_id`, which groups a login session and is the `:id` of `DELETE /auth/sessions/:id`, is minted there too. Only opaque tokens stay random: a token's `jti` and the secrets themselves.
 
-Two things travel with the database rather than the environment, both pinned in `identity_key_pin` on first boot and compared on every boot after: the `IDENTITY_BUCKET_KEY` fingerprint, and the id layout version. A restore into an environment holding a different key, or a build running a different bit layout, refuses to boot instead of quietly minting ids the existing rows disagree with.
+The id layout version travels with the database rather than the environment: it is pinned in `identity_key_pin` and compared on every boot by `IdentityLayoutPinVerifier`. A build running a different layout refuses to boot instead of quietly minting ids the existing rows disagree with. The pin is written only when it is absent, `IDENTITY_PIN_BOOTSTRAP=true`, and `users` is empty. See [RUNBOOK.md](../../RUNBOOK.md#the-id-layout-is-permanent).
 
 ## Configuration
 
@@ -55,8 +55,7 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 
 | Variable | Default | |
 | --- | --- | --- |
-| `IDENTITY_BUCKET_KEY` | required | The key every existing user id was minted under. Permanent. |
-| `IDENTITY_PIN_BOOTSTRAP` | `false` | `true` writes the key and layout pin on an empty database. Off, the boot only compares. |
+| `IDENTITY_PIN_BOOTSTRAP` | `false` | `true` writes the layout pin when it is absent and `users` is empty. Off, the boot only compares. |
 | `JWT_ES256_PRIVATE_KEYS` | required | `kid:pem[,kid:pem]`, P-256 only; `\n` escapes are accepted in the PEM. |
 | `JWT_ES256_ACTIVE_KID` | required | The kid that signs. It must be in the list. |
 | `JWT_ISSUER`, `JWT_AUDIENCE` | required | Stamped on every token and pinned by verifiers. |
@@ -80,7 +79,6 @@ Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`.
 
 | Script | |
 | --- | --- |
-| `identity:verify` | Check the key and id layout pinned in the database, then scan every user row for an id that does not route to its email's bucket. Exits non-zero on a finding. |
 | `db:seed:perf-user` | The verified load-test account; `--clean` removes it. Run before the api's `db:seed:perf`. |
 | `seed:users:bulk` | Synthetic users for the register-uniqueness benchmark; `--clean` removes them. |
 | `db:metrics:users` | Size, cache-hit and vacuum readings for `users`. |
@@ -88,7 +86,7 @@ Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`.
 ## Local
 
 ```bash
-cp apps/user-service/.env.example apps/user-service/.env      # then fill IDENTITY_BUCKET_KEY and a key pair
+cp apps/user-service/.env.example apps/user-service/.env      # then fill a key pair
 docker compose --profile user-service up -d --build user-service   # user-postgres, a one-shot migrate, the service
 curl -s http://127.0.0.1:3002/.well-known/jwks.json
 pnpm --filter @jcool/user-service test                        # unit

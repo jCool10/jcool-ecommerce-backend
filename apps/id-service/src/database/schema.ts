@@ -24,7 +24,7 @@ export const nodeLeases = pgTable(
     renewedAt: timestamp('renewed_at', { withTimezone: true }),
   },
   (table) => [
-    // Nodes 0 and 31 stay reserved for the api and the scripts; a lease must never hand either out.
+    // The top and bottom nodes (0 and 255) stay reserved for the api and the scripts; a lease must never hand either out.
     check(
       'node_leases_node_id_range',
       sql`${table.nodeId} BETWEEN ${sql.raw(String(LEASED_NODE_MIN))} AND ${sql.raw(String(LEASED_NODE_MAX))}`,

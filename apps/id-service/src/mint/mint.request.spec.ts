@@ -11,20 +11,19 @@ const parse = (body: object) => {
 
 describe('MintRequest', () => {
   it('defaults count to a single id', () => {
-    const { request, errors } = parse({ bucket: 0 });
+    const { request, errors } = parse({});
     expect(request.count).toBe(1);
     expect(errors).toEqual([]);
   });
 
-  it('accepts the edges of both ranges', () => {
-    expect(parse({ bucket: 4095, count: MAX_IDS_PER_REQUEST }).errors).toEqual([]);
+  it('accepts the edges of the count range', () => {
+    expect(parse({ count: 1 }).errors).toEqual([]);
+    expect(parse({ count: MAX_IDS_PER_REQUEST }).errors).toEqual([]);
   });
 
   it.each([
-    [{ bucket: 4096 }, 'bucket'],
-    [{ bucket: -1 }, 'bucket'],
-    [{ bucket: 0, count: MAX_IDS_PER_REQUEST + 1 }, 'count'],
-    [{ bucket: 0, count: 0 }, 'count'],
+    [{ count: MAX_IDS_PER_REQUEST + 1 }, 'count'],
+    [{ count: 0 }, 'count'],
   ])('refuses %o', (body, property) => {
     expect(parse(body).errors).toEqual([property]);
   });

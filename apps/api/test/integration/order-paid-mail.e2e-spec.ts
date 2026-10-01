@@ -80,9 +80,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   });
 
   it('refuses permanently when the event names a user that no longer exists', async () => {
-    await expect(
-      processor.process(paidJob(mintTestUserId('gone@test.local'), { occurredAt: LONG_AGO })),
-    ).rejects.toThrow(/no longer exists/);
+    await expect(processor.process(paidJob(mintTestUserId(), { occurredAt: LONG_AGO }))).rejects.toThrow(
+      /no longer exists/,
+    );
 
     expect(await inboxRows()).toHaveLength(0);
   });

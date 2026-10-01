@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { bucketOf, encode } from '@jcool/id-codec';
+import { encode, isRoutableId } from '@jcool/id-codec';
 import { useFakeClock } from '@jcool/testing/fake-clock';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { User } from '../../domain/entities/user.entity';
@@ -11,7 +11,7 @@ import { IdentityService } from './identity.service';
 
 const NOW = new Date('2026-09-24T08:00:00.000Z');
 const SEVEN_DAYS_MS = 7 * 86_400_000;
-const USER_ID = encode({ tsMs: NOW.getTime(), bucket: 42, nodeId: 1, sequence: 0 });
+const USER_ID = encode({ tsMs: NOW.getTime(), nodeId: 1, sequence: 0 });
 
 describe('AuthTokensService', () => {
   useFakeClock(NOW);
@@ -36,7 +36,7 @@ describe('AuthTokensService', () => {
       new EchoAccessTokenSigner(),
       fakeConfigService({ 'auth.refreshTokenTtl': '7d' }),
       repo,
-      new IdentityService(ids, 'k'.repeat(32)),
+      new IdentityService(ids),
     );
   });
 
@@ -51,11 +51,11 @@ describe('AuthTokensService', () => {
     });
   });
 
-  it("names the new session with an id minted in the user's bucket", async () => {
+  it('names the new session with a freshly minted id', async () => {
     await service.issuePair(user);
 
-    expect(ids.buckets).toEqual([42]);
-    expect(bucketOf(repo.created[0].familyId)).toBe(42);
+    expect(ids.requests).toEqual([1]);
+    expect(isRoutableId(repo.created[0].familyId)).toBe(true);
   });
 
   it('hands out the raw refresh token and persists only its sha256 hash', async () => {

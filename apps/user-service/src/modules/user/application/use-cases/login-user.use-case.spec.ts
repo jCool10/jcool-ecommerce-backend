@@ -10,7 +10,7 @@ import { FakeUserRepository } from '../../testing/user-repository.double';
 import { AuthTokensService, IdentityService } from '../services';
 import { LoginUserUseCase } from './login-user.use-case';
 
-const USER_ID = encode({ tsMs: Date.UTC(2026, 8, 1), bucket: 9, nodeId: 1, sequence: 0 });
+const USER_ID = encode({ tsMs: Date.UTC(2026, 8, 1), nodeId: 1, sequence: 0 });
 
 function makeUser(emailVerifiedAt: Date | null = null): User {
   return new User(
@@ -37,7 +37,7 @@ describe('LoginUserUseCase', () => {
         new EchoAccessTokenSigner(),
         fakeConfigService({ 'auth.refreshTokenTtl': '7d' }),
         refreshTokens,
-        new IdentityService(new RecordingIdGenerator(), 'k'.repeat(32)),
+        new IdentityService(new RecordingIdGenerator()),
       ),
       fakeConfigService({ 'auth.requireVerifiedEmail': requireVerifiedEmail }),
     );

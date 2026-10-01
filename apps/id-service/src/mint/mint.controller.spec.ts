@@ -16,20 +16,20 @@ async function setup(grant = true) {
 }
 
 describe('MintController', () => {
-  it('mints the requested count, each id carrying the held node and the requested bucket', async () => {
+  it('mints the requested count, each id carrying the held node', async () => {
     const { controller, minted } = await setup();
 
-    const { ids } = controller.mint({ bucket: 4095, count: 3 }, 'api');
+    const { ids } = controller.mint({ count: 3 }, 'api');
 
     expect(new Set(ids).size).toBe(3);
-    for (const id of ids) expect(decode(id)).toMatchObject({ nodeId: 7, bucket: 4095 });
+    for (const id of ids) expect(decode(id)).toMatchObject({ nodeId: 7 });
     expect(minted.inc).toHaveBeenCalledWith({ caller: 'api' }, 3);
   });
 
   it('refuses without a lease and counts nothing', async () => {
     const { controller, minted } = await setup(false);
 
-    expect(() => controller.mint({ bucket: 0, count: 1 }, undefined)).toThrow(LeaseNotHeldError);
+    expect(() => controller.mint({ count: 1 }, undefined)).toThrow(LeaseNotHeldError);
     expect(minted.inc).not.toHaveBeenCalled();
   });
 });

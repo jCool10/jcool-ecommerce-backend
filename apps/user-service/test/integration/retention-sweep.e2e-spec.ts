@@ -2,7 +2,6 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { normalizeEmail } from '@jcool/kernel';
 import { RetentionScheduler, RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import type { DrizzleDB } from '../../src/database';
 import * as schema from '../../src/database/schema';
@@ -41,7 +40,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   };
 
   async function insertUser(email: string): Promise<string> {
-    const id = await identity.mintUserId(normalizeEmail(email));
+    const id = await identity.mintId();
     await db.insert(schema.users).values({ id, email, passwordHash: 'not-a-real-hash' });
     return id;
   }
@@ -74,7 +73,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       ]) {
         const userId = await insertUser(`${name.replace(/[:.]/g, '-')}@example.com`);
         const row = async (suffix: string, expiresAt: Date, consumedAt: Date | null = null) => ({
-          id: await identity.mintOwnedBy(userId),
+          id: await identity.mintId(),
           userId,
           tokenHash: `${suffix}-${'0'.repeat(40)}`,
           expiresAt,
@@ -103,9 +102,9 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     // replay back into a successful refresh.
     it('auth-tokens:refresh keeps a revoked token far longer than an expired one', async () => {
       const userId = await insertUser('refresh-retention@example.com');
-      const familyId = await identity.mintOwnedBy(userId);
+      const familyId = await identity.mintId();
       const row = async (suffix: string, expiresAt: Date, revokedAt: Date | null = null) => ({
-        id: await identity.mintOwnedBy(userId),
+        id: await identity.mintId(),
         userId,
         tokenHash: `${suffix}-${'0'.repeat(40)}`,
         familyId,
@@ -142,7 +141,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       });
       const userId = await insertUser('fault-isolation@example.com');
       await db.insert(schema.emailVerificationTokens).values({
-        id: await identity.mintOwnedBy(userId),
+        id: await identity.mintId(),
         userId,
         tokenHash: `expired-${'0'.repeat(40)}`,
         expiresAt: daysAgo(1),

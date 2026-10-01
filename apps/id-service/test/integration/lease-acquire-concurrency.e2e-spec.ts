@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LEASED_NODE_MAX, LEASED_NODE_MIN } from '@jcool/id-generator';
 import { type LeaseDatabase, openLeaseDatabase } from '../setup/databases';
 
-// The whole pool at once: every node handed out exactly once, and the 5-bit node field leaves no
+// The whole pool at once: every node handed out exactly once, and the 8-bit node field leaves no
 // room to contend with more claimants than there are nodes.
 const CLAIMANTS = LEASED_NODE_MAX - LEASED_NODE_MIN + 1;
 

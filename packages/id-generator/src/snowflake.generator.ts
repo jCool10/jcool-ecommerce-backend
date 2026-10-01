@@ -77,7 +77,7 @@ export class SnowflakeGenerator {
     return this.lastMs;
   }
 
-  generate(bucket: number): string {
+  generate(): string {
     let tsMs = this.now();
 
     // `<=`, not `===`: a regressing clock would otherwise take the fresh-millisecond branch, reset
@@ -95,7 +95,7 @@ export class SnowflakeGenerator {
     }
     this.lastMs = tsMs;
 
-    return encode({ tsMs, bucket, nodeId: this.nodeId, sequence: this.sequence });
+    return encode({ tsMs, nodeId: this.nodeId, sequence: this.sequence });
   }
 
   // Monotonic base plus an offset that only grows, so the result cannot go backwards. The obvious

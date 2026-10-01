@@ -29,7 +29,6 @@ export default () => ({
     audience: process.env.JWT_AUDIENCE,
   },
   identity: {
-    bucketKey: process.env.IDENTITY_BUCKET_KEY,
     pinBootstrap: process.env.IDENTITY_PIN_BOOTSTRAP === 'true',
   },
   idService: {

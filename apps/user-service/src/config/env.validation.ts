@@ -1,5 +1,4 @@
 import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Min, MinLength } from 'class-validator';
-import { MIN_BUCKET_KEY_LENGTH } from '@jcool/id-codec';
 import {
   AppEnv,
   DatabaseEnv,
@@ -22,11 +21,6 @@ const PlatformEnv = RetentionEnv(
 
 /** Bounds only; defaults live in configuration.ts. */
 export class EnvironmentVariables extends PlatformEnv {
-  // Permanent, and the api's value: see the api's env.validation for why it can never rotate.
-  @IsString()
-  @MinLength(MIN_BUCKET_KEY_LENGTH)
-  IDENTITY_BUCKET_KEY!: string;
-
   @IsOptional()
   @IsStrictBoolean()
   IDENTITY_PIN_BOOTSTRAP?: string;

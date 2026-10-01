@@ -2,7 +2,6 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MIN_ROUTABLE_ID } from '@jcool/id-codec';
 import { SCRIPTS_NODE_ID, SnowflakeGenerator } from '@jcool/id-generator';
-import { bucketForTestEmail } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { workerDatabaseUrl } from '../setup/worker-resources';
 
@@ -33,19 +32,18 @@ describe('Routable id CHECK constraints (integration)', () => {
     pool.query(`INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'not-a-real-hash')`, [id, email]);
 
   async function mintedUser(): Promise<string> {
-    const email = `id-check-owner-${tokenSeq}@test.local`;
-    const id = generator.generate(bucketForTestEmail(email));
-    await insertUser(id, email);
+    const id = generator.generate();
+    await insertUser(id, `id-check-owner-${tokenSeq}@test.local`);
     return id;
   }
 
   async function insertToken(table: TokenTable, overrides: Record<string, string | null> = {}): Promise<void> {
     const row: Record<string, unknown> = {
-      id: generator.generate(0),
+      id: generator.generate(),
       user_id: overrides.user_id === undefined ? await mintedUser() : overrides.user_id,
       token_hash: `id-check-hash-${tokenSeq++}`,
       expires_at: new Date(Date.now() + 3_600_000),
-      ...(table === 'refresh_tokens' ? { family_id: generator.generate(0) } : {}),
+      ...(table === 'refresh_tokens' ? { family_id: generator.generate() } : {}),
       ...overrides,
     };
     const columns = Object.keys(row);
@@ -76,7 +74,7 @@ describe('Routable id CHECK constraints (integration)', () => {
 
   it('refuses a users.id below the routable floor', async () => {
     const outcomes: string[] = [];
-    for (const id of ['4194303', '0', '-1']) outcomes.push(await refusal(insertUser(id)));
+    for (const id of [(MIN_ROUTABLE_ID - 1n).toString(), '0', '-1']) outcomes.push(await refusal(insertUser(id)));
 
     expect(outcomes).toEqual(Array(3).fill(`${CHECK_VIOLATION} ck_users_id_routable`));
   });
@@ -101,7 +99,7 @@ describe('Routable id CHECK constraints (integration)', () => {
   // Only a rotated token has a successor; a CHECK lets NULL through.
   it('accepts token rows with minted ids, with or without a successor', async () => {
     for (const table of TOKEN_TABLES) await insertToken(table);
-    await insertToken('refresh_tokens', { replaced_by_token_id: generator.generate(0) });
+    await insertToken('refresh_tokens', { replaced_by_token_id: generator.generate() });
 
     const counts: string[] = [];
     for (const table of TOKEN_TABLES) {

@@ -51,6 +51,6 @@ describe('User id columns (integration, real Postgres)', () => {
       constraint,
     });
     await expect(insert(pool, MIN_ROUTABLE_ID.toString())).resolves.toMatchObject({ rowCount: 1 });
-    await expect(insert(pool, mintTestUserId('owner@test.local'))).resolves.toMatchObject({ rowCount: 1 });
+    await expect(insert(pool, mintTestUserId())).resolves.toMatchObject({ rowCount: 1 });
   });
 });

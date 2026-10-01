@@ -7,8 +7,8 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 // Matches the Role union (@jcool/platform/rbac).
 export const role = pgEnum('role', ['ADMIN', 'CUSTOMER']);
 
-// No default: every id here carries a routing bucket only the writer can compute, so a fallback
-// would mint unroutable rows. Without one, each insert site supplies an id or fails to compile.
+// No default: every id comes from the id service, so a database-side fallback would mint outside the
+// layout. Without one, each insert site supplies an id or fails to compile.
 const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {
@@ -127,21 +127,19 @@ export const refreshTokens = pgTable(
 );
 
 /**
- * Fingerprint of the HMAC key the ids above were minted under, and the id layout they were minted
- * under — written on the first boot against a database, compared on every boot after. Stored here
- * rather than in the environment so it travels with a backup: a restore into an environment holding
- * a different key, or running a different layout, refuses to boot.
+ * The id layout the ids above were minted under — written on the first boot against an empty
+ * database, compared on every boot after. Stored here rather than in the environment so it travels
+ * with a backup: a restore into a build running a different layout refuses to boot.
  */
 export const identityKeyPin = pgTable(
   'identity_key_pin',
   {
     id: smallint('id').primaryKey(),
-    fingerprint: text('fingerprint').notNull(),
     // Literal, not the codec constant: a migration is a snapshot of what the column held on the day
     // it ran, and reading the constant would silently rewrite history on the next bump.
     layoutVersion: smallint('layout_version').notNull().default(1),
     pinnedAt: timestamp('pinned_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  // One database was built under one key; a second row would mean two answers to which one.
+  // One database was built under one layout; a second row would mean two answers to which one.
   (t) => [check('ck_identity_key_pin_singleton', sql`${t.id} = 1`)],
 );

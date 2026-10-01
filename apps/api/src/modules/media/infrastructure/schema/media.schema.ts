@@ -7,7 +7,7 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const mediaAssetStatus = pgEnum('media_asset_status', ['PENDING', 'READY', 'ATTACHED', 'DETACHED', 'SWEEPING']);
 
-// No default: an asset id carries its uploader's bucket, which only the writer knows.
+// No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {

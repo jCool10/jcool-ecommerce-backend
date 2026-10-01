@@ -1,7 +1,7 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, eq, inArray, max, ne, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
-import { ID_GENERATOR, type IdGeneratorPort, UNOWNED_BUCKET, mintOne } from '@shared/identity/id-generator.port';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { Money } from '@jcool/kernel';
 import { MEDIA_FACADE, type MediaFacade } from '@modules/media/application/public/media-facade.port';
@@ -50,7 +50,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
 
   // Minted before a transaction opens, so no lock is held across the call.
   private mintId(): Promise<string> {
-    return mintOne(this.ids, UNOWNED_BUCKET);
+    return mintOne(this.ids);
   }
 
   private async guardUnique<T>(op: () => Promise<T>, conflictMessage: string): Promise<T> {

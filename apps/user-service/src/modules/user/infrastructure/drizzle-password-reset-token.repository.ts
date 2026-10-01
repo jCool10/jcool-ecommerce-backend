@@ -18,7 +18,7 @@ export class DrizzlePasswordResetTokenRepository implements PasswordResetTokenRe
 
   async create(input: CreatePasswordResetTokenInput): Promise<void> {
     await this.db.insert(passwordResetTokens).values({
-      id: await this.identity.mintOwnedBy(input.userId),
+      id: await this.identity.mintId(),
       userId: input.userId,
       tokenHash: input.tokenHash,
       expiresAt: input.expiresAt,

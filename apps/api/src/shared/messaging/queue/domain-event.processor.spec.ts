@@ -10,7 +10,7 @@ import type { DomainEventJob } from './domain-event.job';
 import { DomainEventProcessor } from './domain-event.processor';
 
 const MESSAGE_ID = sampleId(1);
-const ORDER_ID = sampleId(2, 7);
+const ORDER_ID = sampleId(2);
 
 function job(overrides: Partial<DomainEventJob> = {}): DomainEventJob {
   return {

@@ -5,7 +5,7 @@ export * from './drizzle-password-reset-token.repository';
 export * from './drizzle-refresh-token.repository';
 export * from './drizzle-session-epoch.repository';
 export * from './drizzle-user.repository';
-export * from './identity-bucket-key.verifier';
+export * from './identity-layout-pin.verifier';
 export * from './mailer.adapter';
 export * from './redis-token-denylist';
 export * from './user-facade.adapter';

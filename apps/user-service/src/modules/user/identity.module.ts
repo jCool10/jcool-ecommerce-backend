@@ -28,9 +28,8 @@ import { IdentityService } from './application/services/identity.service';
     },
     {
       provide: IdentityService,
-      inject: [ID_GENERATOR, ConfigService],
-      useFactory: (ids: IdGeneratorPort, config: ConfigService) =>
-        new IdentityService(ids, config.getOrThrow<string>('identity.bucketKey')),
+      inject: [ID_GENERATOR],
+      useFactory: (ids: IdGeneratorPort) => new IdentityService(ids),
     },
   ],
   exports: [IdentityService],

@@ -2,13 +2,13 @@ import { Controller, Get, Inject, NotFoundException, Param, UseGuards } from '@n
 import { ConfigService } from '@nestjs/config';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
-import { identityKeyFingerprint } from '@jcool/id-codec';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { Public } from '@jcool/platform/rbac';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@jcool/platform/throttler';
 import { USER_FACADE, type UserFacade, type UserSummary } from '../../application/public/user-facade.port';
 import { FillSessionEpochUseCase } from '../../application/use-cases';
 import { InternalApiTokenGuard } from './internal-api-token.guard';
+import { secretFingerprint } from './secret-fingerprint';
 
 /**
  * Service-to-service only; the gateway answers 404 for `/internal`. Unthrottled because every call
@@ -42,16 +42,14 @@ export class InternalApiController {
   }
 
   /**
-   * What this process actually loaded, as fingerprints. A wrong key fails in ways no smoke test
-   * catches — ids route to the wrong bucket, CSRF cookies stop validating — so the precheck reads
-   * them back instead of trusting that the right values were pasted into a dashboard.
+   * What this process actually loaded, as fingerprints. A wrong secret fails in ways no smoke test
+   * catches — CSRF cookies stop validating — so the precheck reads it back instead of trusting that
+   * the right value was pasted into a dashboard.
    */
   @Get('cutover/digest')
   cutoverDigest(): Record<string, string> {
-    const fingerprint = (key: string) => identityKeyFingerprint(this.config.getOrThrow<string>(key));
     return {
-      identityBucketKey: fingerprint('identity.bucketKey'),
-      csrfSecret: fingerprint('auth.csrfSecret'),
+      csrfSecret: secretFingerprint(this.config.getOrThrow<string>('auth.csrfSecret')),
       accessTtl: this.config.getOrThrow<string>('auth.jwtAccessTtl'),
       issuer: this.config.getOrThrow<string>('auth.issuer'),
       audience: this.config.getOrThrow<string>('auth.audience'),

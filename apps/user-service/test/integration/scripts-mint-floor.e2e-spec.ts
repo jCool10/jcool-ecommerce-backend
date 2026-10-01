@@ -5,7 +5,6 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { decode, encode } from '@jcool/id-codec';
 import { SCRIPTS_NODE_ID } from '@jcool/id-generator';
-import { E2E_IDENTITY_BUCKET_KEY, bucketForTestEmail } from '../setup/identity.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { workerDatabaseUrl } from '../setup/worker-resources';
 
@@ -38,7 +37,7 @@ describe('Seed scripts mint above the newest id on their node (integration)', ()
       { email: 'earlier-run@test.local', tsMs: newestMs },
     ];
     for (const { email, tsMs } of runs) {
-      const id = encode({ tsMs, bucket: bucketForTestEmail(email), nodeId: SCRIPTS_NODE_ID, sequence: 0 });
+      const id = encode({ tsMs, nodeId: SCRIPTS_NODE_ID, sequence: 0 });
       await pool.query(`INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'not-a-real-hash')`, [id, email]);
     }
     return newestMs;
@@ -49,7 +48,7 @@ describe('Seed scripts mint above the newest id on their node (integration)', ()
       await execFileAsync(join(packageRoot, 'node_modules/.bin/tsx'), [join('scripts', script), ...args], {
         cwd: packageRoot,
         timeout: SCRIPT_TIMEOUT_MS,
-        env: { ...process.env, DATABASE_URL: workerDatabaseUrl(), IDENTITY_BUCKET_KEY: E2E_IDENTITY_BUCKET_KEY },
+        env: { ...process.env, DATABASE_URL: workerDatabaseUrl() },
       });
     } catch (error) {
       const { stdout = '', stderr = '' } = error as { stdout?: string; stderr?: string };

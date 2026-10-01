@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { ID_GENERATOR, type IdGeneratorPort, mintOne, UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { inbox } from './schema/inbox.schema';
 
 export interface InboxEntry {
@@ -27,7 +27,7 @@ export class InboxStore {
   async claim(tx: DrizzleTx, entry: InboxEntry): Promise<boolean> {
     const claimed = await tx
       .insert(inbox)
-      .values({ id: await mintOne(this.ids, UNOWNED_BUCKET), ...entry })
+      .values({ id: await mintOne(this.ids), ...entry })
       .onConflictDoNothing({ target: [inbox.consumer, inbox.messageId] })
       .returning({ id: inbox.id });
 

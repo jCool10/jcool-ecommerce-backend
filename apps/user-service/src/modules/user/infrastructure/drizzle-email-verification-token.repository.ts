@@ -18,7 +18,7 @@ export class DrizzleEmailVerificationTokenRepository implements EmailVerificatio
 
   async create(input: CreateEmailVerificationTokenInput): Promise<void> {
     await this.db.insert(emailVerificationTokens).values({
-      id: await this.identity.mintOwnedBy(input.userId),
+      id: await this.identity.mintId(),
       userId: input.userId,
       tokenHash: input.tokenHash,
       expiresAt: input.expiresAt,

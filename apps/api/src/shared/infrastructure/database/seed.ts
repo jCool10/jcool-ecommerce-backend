@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { UNOWNED_BUCKET } from '@shared/identity/id-generator.port';
 import * as schema from './schema';
 import { withScriptsMintLock } from './scripts-mint-lock';
 
@@ -22,7 +21,7 @@ async function seed(): Promise<void> {
   const db = drizzle(pool, { schema });
 
   try {
-    await withScriptsMintLock(pool, (mint) => seedCatalog(db, () => mint(UNOWNED_BUCKET)));
+    await withScriptsMintLock(pool, (mint) => seedCatalog(db, mint));
   } finally {
     await pool.end();
   }

@@ -9,7 +9,6 @@ const TTL_MS = 300_000;
 const FENCE_MARGIN_MS = 15_000;
 const QUARANTINE_MS = 10_000;
 const HOLDER = 'replica-a/host/1';
-const BUCKET = 42;
 
 interface FakeClock {
   clock: IdentityClock;
@@ -129,7 +128,7 @@ async function heldLease(nodeId = 7): Promise<{ lease: NodeLease; store: FakeLea
 }
 
 function expectRefused(lease: NodeLease, state: string): void {
-  expect(() => lease.generate(BUCKET)).toThrow(LeaseNotHeldError);
+  expect(() => lease.generate()).toThrow(LeaseNotHeldError);
   expect(lease.state).toBe(state);
 }
 
@@ -146,7 +145,7 @@ describe('NodeLease', () => {
 
     expect(lease.state).toBe('held');
     expect(lease.nodeId).toBe(7);
-    expect(decode(lease.generate(BUCKET))).toMatchObject({ nodeId: 7, bucket: BUCKET });
+    expect(decode(lease.generate())).toMatchObject({ nodeId: 7 });
   });
 
   it('keeps minting past the first fence deadline after a successful renew', async () => {
@@ -156,14 +155,14 @@ describe('NodeLease', () => {
     await expect(lease.renew()).resolves.toBe('renewed');
     fake.advance(TTL_MS - FENCE_MARGIN_MS - 1);
 
-    expect(() => lease.generate(BUCKET)).not.toThrow();
+    expect(() => lease.generate()).not.toThrow();
     expect(store.renewals).toHaveLength(1);
   });
 
   it('reports the last minted timestamp on renew', async () => {
     const { lease, store, fake } = await heldLease();
     fake.advance(1_000);
-    const { tsMs } = decode(lease.generate(BUCKET));
+    const { tsMs } = decode(lease.generate());
 
     await lease.renew();
 
@@ -178,7 +177,7 @@ describe('NodeLease', () => {
 
     fake.advance(TTL_MS - FENCE_MARGIN_MS - 1);
     await expect(lease.renew()).rejects.toThrow('connection refused');
-    expect(() => lease.generate(BUCKET)).not.toThrow();
+    expect(() => lease.generate()).not.toThrow();
 
     fake.advance(1);
     expectRefused(lease, 'fenced');
@@ -200,7 +199,7 @@ describe('NodeLease', () => {
   it('after a loss, mints on a fresh node above everything it minted before', async () => {
     const { lease, store, fake } = await heldLease(7);
     fake.advance(5);
-    const before = decode(lease.generate(BUCKET));
+    const before = decode(lease.generate());
     store.renewResult = false;
     await lease.renew();
 
@@ -209,7 +208,7 @@ describe('NodeLease', () => {
     fake.stepWallBy(-2_000);
     await expect(lease.acquire()).resolves.toMatchObject({ kind: 'held', nodeId: 9 });
 
-    const after = decode(lease.generate(BUCKET));
+    const after = decode(lease.generate());
     expect(after.nodeId).toBe(9);
     expect(after.tsMs).toBeGreaterThan(before.tsMs);
   });
@@ -221,7 +220,7 @@ describe('NodeLease', () => {
 
     await lease.acquire();
 
-    expect(decode(lease.generate(BUCKET)).tsMs).toBeGreaterThan(floorMs);
+    expect(decode(lease.generate()).tsMs).toBeGreaterThan(floorMs);
   });
 
   // A holder that died between renewals never reported its last ids, and its clock may have run ahead
@@ -237,7 +236,7 @@ describe('NodeLease', () => {
 
     await lease.acquire();
 
-    expect(decode(lease.generate(BUCKET)).tsMs).toBeGreaterThan(prevUntilMs);
+    expect(decode(lease.generate()).tsMs).toBeGreaterThan(prevUntilMs);
   });
 
   it('refuses an id stamped past its lease end, until a renew moves the end on', async () => {
@@ -246,13 +245,13 @@ describe('NodeLease', () => {
     const store = new FakeLeaseStore(() => fake.realMs() - 250_000).grant(7);
     const lease = leaseWith(store, fake);
     await lease.acquire();
-    expect(() => lease.generate(BUCKET)).not.toThrow();
+    expect(() => lease.generate()).not.toThrow();
 
     fake.advance(TTL_MS - 250_000 + 1);
     expectRefused(lease, 'fenced');
 
     await expect(lease.renew()).resolves.toBe('renewed');
-    expect(() => lease.generate(BUCKET)).not.toThrow();
+    expect(() => lease.generate()).not.toThrow();
   });
 
   // A freeze (SIGSTOP, a paused VM) landing between the fence check and the generator's clock read.
@@ -310,7 +309,7 @@ describe('NodeLease', () => {
     expectRefused(lease, 'fenced');
 
     await expect(lease.renew()).resolves.toBe('renewed');
-    expect(() => lease.generate(BUCKET)).not.toThrow();
+    expect(() => lease.generate()).not.toThrow();
   });
 
   it('keeps minting while draining, then releases with the last timestamp and stops', async () => {
@@ -319,7 +318,7 @@ describe('NodeLease', () => {
     lease.drain();
     expect(lease.state).toBe('draining');
     fake.advance(2);
-    const { tsMs } = decode(lease.generate(BUCKET));
+    const { tsMs } = decode(lease.generate());
 
     await lease.release();
 
@@ -373,7 +372,7 @@ describe('NodeLease', () => {
 
     await lease.acquire();
 
-    expect(Math.abs(decode(lease.generate(BUCKET)).tsMs - Date.now())).toBeLessThan(1_000);
+    expect(Math.abs(decode(lease.generate()).tsMs - Date.now())).toBeLessThan(1_000);
   });
 
   it('rejects options that leave no window to mint in', () => {

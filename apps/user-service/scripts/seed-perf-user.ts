@@ -46,7 +46,7 @@ async function main(): Promise<void> {
       db
         .insert(users)
         .values({
-          id: await identity.mintUserId(PERF_USER_EMAIL),
+          id: await identity.mintId(),
           email: PERF_USER_EMAIL,
           passwordHash,
           emailVerifiedAt: new Date(),

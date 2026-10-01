@@ -17,8 +17,6 @@ import 'dotenv/config';
 import { and, eq, inArray, like, notInArray, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { bucketOf } from '@jcool/id-codec';
-import { UNOWNED_BUCKET } from '../src/shared/identity/id-generator.port';
 import { type ScriptsMint, withScriptsMintLock } from '../src/shared/infrastructure/database/scripts-mint-lock';
 import {
   categories,
@@ -115,7 +113,7 @@ function priceFor(i: number): number {
 
 async function seedCategories(db: Db, mint: ScriptsMint): Promise<Map<string, string>> {
   const rows = Array.from({ length: CATEGORY_COUNT }, (_, i) => ({
-    id: mint(UNOWNED_BUCKET),
+    id: mint(),
     name: `Perf Category ${i}`,
     slug: `${CATEGORY_SLUG_PREFIX}${i}`,
     archivedAt: i < ARCHIVED_CATEGORIES ? new Date() : null,
@@ -141,7 +139,7 @@ async function seedProducts(
     const categoryId = categoryIds.get(categorySlug);
     if (!categoryId) throw new Error(`Seed precondition failed: category ${categorySlug} not found`);
     return {
-      id: mint(UNOWNED_BUCKET),
+      id: mint(),
       name: `Perf Product ${i}`,
       slug: `${PRODUCT_SLUG_PREFIX}${i}`,
       description: `Synthetic catalog row ${i} for database performance measurement.`,
@@ -174,7 +172,7 @@ async function seedVariants(
     if (!productId) throw new Error(`Seed precondition failed: product ${PRODUCT_SLUG_PREFIX}${i} not found`);
     for (let v = 0; v < variantCountFor(i); v++) {
       rows.push({
-        id: mint(UNOWNED_BUCKET),
+        id: mint(),
         sku: `${SKU_PREFIX}${i}-${v}`,
         name: `Perf Product ${i} / Variant ${v}`,
         productId,
@@ -198,7 +196,7 @@ async function seedVariants(
 
 async function seedPricesAndStock(db: Db, mint: ScriptsMint, variantIds: readonly string[]): Promise<void> {
   const priceRows = variantIds.map((variantId, i) => ({
-    id: mint(UNOWNED_BUCKET),
+    id: mint(),
     variantId,
     currency: CURRENCY,
     amountMinor: priceFor(i),
@@ -208,7 +206,7 @@ async function seedPricesAndStock(db: Db, mint: ScriptsMint, variantIds: readonl
   }
 
   const stockRows = variantIds.map((variantId) => ({
-    id: mint(UNOWNED_BUCKET),
+    id: mint(),
     variantId,
     quantityOnHand: STOCK_ON_HAND,
   }));
@@ -225,10 +223,7 @@ async function seedPerfUserCart(
 ): Promise<{ userId: string; lines: number }> {
   const userId = await perfUserId();
 
-  await db
-    .insert(carts)
-    .values({ id: mint(bucketOf(userId)), userId })
-    .onConflictDoNothing();
+  await db.insert(carts).values({ id: mint(), userId }).onConflictDoNothing();
   const [cart] = await db.select({ id: carts.id }).from(carts).where(eq(carts.userId, userId));
   if (!cart) throw new Error(`Seed precondition failed: cart for ${PERF_USER_EMAIL} not found`);
 
@@ -248,7 +243,7 @@ async function seedPerfUserCart(
 
   const wanted = lineSkus.map((sku) => sku.id);
   for (const chunk of chunks(
-    wanted.map((skuId, i) => ({ id: mint(bucketOf(cart.id)), cartId: cart.id, skuId, quantity: (i % 3) + 1 })),
+    wanted.map((skuId, i) => ({ id: mint(), cartId: cart.id, skuId, quantity: (i % 3) + 1 })),
     CHUNK,
   )) {
     await db.insert(cartItems).values(chunk).onConflictDoNothing();

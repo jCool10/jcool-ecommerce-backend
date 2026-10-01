@@ -3,7 +3,6 @@ import { ClockStalledError } from './identity.errors';
 import { SnowflakeGenerator } from './snowflake.generator';
 import { MAX_TIMESTAMP_MS, NODE_COUNT, SEQUENCE_COUNT, decode } from '@jcool/id-codec';
 
-const BUCKET = 2731;
 const START_MS = 1_800_000_000_000;
 const FLOOR_MS = START_MS + 5_000;
 
@@ -67,7 +66,7 @@ function fakeClock(startMs = START_MS): FakeClock {
 
 /** Fills one generator's whole per-millisecond sequence, leaving the next mint to spin. */
 function drainSequence(generator: SnowflakeGenerator): void {
-  for (let i = 0; i < SEQUENCE_COUNT; i++) generator.generate(BUCKET);
+  for (let i = 0; i < SEQUENCE_COUNT; i++) generator.generate();
 }
 
 /** Exhausts a sequence against a frozen clock so the next mint must spin, and returns how it gave up. */
@@ -78,7 +77,7 @@ function stallOnExhaustedSequence(elapsedStepNs: bigint): { error: ClockStalledE
   fake.setElapsedStepNs(elapsedStepNs);
 
   try {
-    generator.generate(BUCKET);
+    generator.generate();
   } catch (error) {
     if (error instanceof ClockStalledError) {
       return { error, stallCount: generator.stallCount };
@@ -89,17 +88,16 @@ function stallOnExhaustedSequence(elapsedStepNs: bigint): { error: ClockStalledE
 }
 
 describe('snowflake generator', () => {
-  it('stamps the caller bucket and its own node id', () => {
+  it('stamps its own node id', () => {
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 19, clock: fakeClock().clock });
 
-    const fields = decode(generator.generate(BUCKET));
+    const fields = decode(generator.generate());
 
-    expect(fields.bucket).toBe(BUCKET);
     expect(fields.nodeId).toBe(19);
     expect(generator.nodeId).toBe(19);
   });
 
-  it('rejects a node id outside the 5-bit field at construction, not at the first mint', () => {
+  it('rejects a node id outside the 8-bit field at construction, not at the first mint', () => {
     const clock = fakeClock().clock;
 
     expect(() => SnowflakeGenerator.createWithClock({ nodeId: NODE_COUNT, clock })).toThrow(RangeError);
@@ -121,7 +119,7 @@ describe('snowflake generator', () => {
       if (i % 991 === 0) fake.stepWallBy(-5_000);
       if (i % 1_499 === 0) fake.stepWallBy(8_000);
       const driftBefore = generator.clockDriftMs;
-      const current = BigInt(generator.generate(BUCKET));
+      const current = BigInt(generator.generate());
       if (current <= previous) outOfOrder++;
       if (generator.clockDriftMs > driftBefore) jumpsAhead++;
       previous = current;
@@ -132,18 +130,18 @@ describe('snowflake generator', () => {
     expect(jumpsAhead).toBeGreaterThan(1);
   });
 
-  it('runs the sequence to 31 within a millisecond, then moves to the next', () => {
+  it('runs the sequence to 1023 within a millisecond, then moves to the next', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 3, clock: fake.clock });
 
-    const withinOneMs = Array.from({ length: SEQUENCE_COUNT }, () => decode(generator.generate(BUCKET)));
+    const withinOneMs = Array.from({ length: SEQUENCE_COUNT }, () => decode(generator.generate()));
 
     expect(withinOneMs.map((f) => f.sequence)).toEqual([...Array(SEQUENCE_COUNT).keys()]);
     expect(new Set(withinOneMs.map((f) => f.tsMs)).size).toBe(1);
-    expect(SEQUENCE_COUNT).toBe(32);
+    expect(SEQUENCE_COUNT).toBe(1024);
 
     fake.releaseAfterSpinReads(1, 1);
-    const next = decode(generator.generate(BUCKET));
+    const next = decode(generator.generate());
 
     expect(next.sequence).toBe(0);
     expect(next.tsMs).toBe(withinOneMs[0].tsMs + 1);
@@ -153,12 +151,12 @@ describe('snowflake generator', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 2, clock: fake.clock });
 
-    generator.generate(BUCKET);
+    generator.generate();
     fake.stepWallBy(10_000);
-    const afterJump = decode(generator.generate(BUCKET));
+    const afterJump = decode(generator.generate());
     fake.stepWallBy(-10_000);
     fake.advance(1);
-    const afterCorrection = decode(generator.generate(BUCKET));
+    const afterCorrection = decode(generator.generate());
 
     expect(afterJump.tsMs).toBe(START_MS + 10_000);
     expect(afterCorrection).toMatchObject({ tsMs: afterJump.tsMs + 1, sequence: 0 });
@@ -169,11 +167,11 @@ describe('snowflake generator', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: fake.clock });
 
-    const first = decode(generator.generate(BUCKET));
+    const first = decode(generator.generate());
     fake.advance(10);
-    const second = decode(generator.generate(BUCKET));
+    const second = decode(generator.generate());
     fake.advance(-10);
-    const third = decode(generator.generate(BUCKET));
+    const third = decode(generator.generate());
 
     expect(second.tsMs).toBe(first.tsMs + 10);
     expect(third.tsMs).toBe(second.tsMs);
@@ -184,7 +182,7 @@ describe('snowflake generator', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 11, clock: fake.clock, floorMs: FLOOR_MS });
 
-    const first = decode(generator.generate(BUCKET));
+    const first = decode(generator.generate());
 
     expect(first.tsMs).toBeGreaterThan(FLOOR_MS);
     // The lift is not drift, and must not be reported as such.
@@ -195,9 +193,9 @@ describe('snowflake generator', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 7, clock: fake.clock, floorMs: FLOOR_MS });
 
-    const first = decode(generator.generate(BUCKET));
+    const first = decode(generator.generate());
     fake.stepWallBy(1_000);
-    const second = decode(generator.generate(BUCKET));
+    const second = decode(generator.generate());
 
     expect(second.tsMs).toBe(first.tsMs);
     expect(second.sequence).toBe(first.sequence + 1);
@@ -207,17 +205,17 @@ describe('snowflake generator', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 7, clock: fake.clock, floorMs: FLOOR_MS });
 
-    generator.generate(BUCKET);
+    generator.generate();
     fake.advance(3);
 
-    expect(decode(generator.generate(BUCKET)).tsMs).toBe(FLOOR_MS + 4);
+    expect(decode(generator.generate()).tsMs).toBe(FLOOR_MS + 4);
   });
 
   it('ignores a floorMs already in the past', () => {
     const fake = fakeClock();
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 11, clock: fake.clock, floorMs: START_MS - 60_000 });
 
-    expect(decode(generator.generate(BUCKET)).tsMs).toBe(START_MS);
+    expect(decode(generator.generate()).tsMs).toBe(START_MS);
   });
 
   it('rejects a floor the timestamp field cannot exceed', () => {
@@ -230,7 +228,7 @@ describe('snowflake generator', () => {
       clock: fakeClock().clock,
       floorMs: MAX_TIMESTAMP_MS - 1,
     });
-    expect(decode(lastUsable.generate(BUCKET)).tsMs).toBe(MAX_TIMESTAMP_MS);
+    expect(decode(lastUsable.generate()).tsMs).toBe(MAX_TIMESTAMP_MS);
   });
 
   it('refuses to mint when real time runs on but the clock does not', () => {
@@ -256,7 +254,7 @@ describe('snowflake generator', () => {
     fake.setElapsedStepNs(15n * 1_000_000n);
     fake.releaseAfterSpinReads(2, 1);
 
-    const fields = decode(generator.generate(BUCKET));
+    const fields = decode(generator.generate());
 
     expect(fields.tsMs).toBe(START_MS + 1);
     expect(fields.sequence).toBe(0);
@@ -268,22 +266,22 @@ describe('snowflake generator', () => {
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: fake.clock });
     drainSequence(generator);
 
-    expect(() => generator.generate(BUCKET)).toThrow(ClockStalledError);
+    expect(() => generator.generate()).toThrow(ClockStalledError);
     const firstSpin = fake.spinReadCount();
-    expect(() => generator.generate(BUCKET)).toThrow(ClockStalledError);
+    expect(() => generator.generate()).toThrow(ClockStalledError);
     const secondSpin = fake.spinReadCount() - firstSpin;
 
     expect(generator.stallCount).toBe(2);
     expect(secondSpin * 100).toBeLessThan(firstSpin);
 
     fake.advance(1);
-    expect(decode(generator.generate(BUCKET)).tsMs).toBe(START_MS + 1);
+    expect(decode(generator.generate()).tsMs).toBe(START_MS + 1);
   });
 
   it('refuses to mint on a host whose clock predates the epoch', () => {
     const fake = fakeClock(1_700_000_000_000);
     const generator = SnowflakeGenerator.createWithClock({ nodeId: 0, clock: fake.clock });
 
-    expect(() => generator.generate(BUCKET)).toThrow(RangeError);
+    expect(() => generator.generate()).toThrow(RangeError);
   });
 });

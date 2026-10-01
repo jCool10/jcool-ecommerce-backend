@@ -22,7 +22,7 @@ export interface IdempotencyRecord {
 }
 
 export interface InsertInProgressInput {
-  /** The caller the scope belongs to; the row's id carries their bucket. */
+  /** The caller the scope belongs to. */
   ownerId: string;
   scope: string;
   key: string;

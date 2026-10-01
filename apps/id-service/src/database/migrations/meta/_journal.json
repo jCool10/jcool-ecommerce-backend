@@ -29,6 +29,13 @@
       "when": 1790422075736,
       "tag": "0003_high_sprite",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790661875516,
+      "tag": "0004_widen_node_pool",
+      "breakpoints": true
     }
   ]
 }

@@ -18,8 +18,8 @@ export class MintController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  mint(@Body() { bucket, count }: MintRequest, @Headers('x-caller') caller: string | undefined): MintResponse {
-    const ids = Array.from({ length: count }, () => this.lease.generate(bucket));
+  mint(@Body() { count }: MintRequest, @Headers('x-caller') caller: string | undefined): MintResponse {
+    const ids = Array.from({ length: count }, () => this.lease.generate());
     this.minted.inc({ caller: callerLabel(caller) }, count);
     return { ids };
   }

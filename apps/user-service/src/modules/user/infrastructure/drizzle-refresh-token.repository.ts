@@ -21,7 +21,7 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
 
   async create(input: CreateRefreshTokenInput): Promise<void> {
     await this.db.insert(refreshTokens).values({
-      id: await this.identity.mintOwnedBy(input.userId),
+      id: await this.identity.mintId(),
       userId: input.userId,
       tokenHash: input.tokenHash,
       familyId: input.familyId,
@@ -62,7 +62,6 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
         .where(eq(refreshTokens.tokenHash, input.presentedTokenHash))
         .for('update');
 
-      // The successor id carries the bucket of the owner seen before the lock.
       if (!record || record.userId !== input.expectedUserId) {
         return { status: 'invalid' };
       }

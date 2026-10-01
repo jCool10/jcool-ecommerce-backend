@@ -42,7 +42,7 @@ async function mintBatch(
     const base = r * 3;
     values.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
     const email = emailFor(start + r);
-    params.push(await ids.mintUserId(email), email, hash);
+    params.push(await ids.mintId(), email, hash);
   }
   return {
     sql: `INSERT INTO users (id, email, password_hash) VALUES ${values.join(',')} ON CONFLICT (email) DO NOTHING`,
@@ -50,7 +50,7 @@ async function mintBatch(
   };
 }
 
-// Minting is clock-bound at 32 ids/ms, so batch N+1 is minted while batch N's INSERT runs, with at
+// Minting is clock-bound at 1024 ids/ms, so batch N+1 is minted while batch N's INSERT runs, with at
 // most one INSERT in flight.
 async function insertAll(
   pool: Pool,

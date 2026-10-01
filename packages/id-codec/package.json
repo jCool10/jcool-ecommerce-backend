@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "The 63-bit id layout and the email routing bucket: pure functions every service must agree on",
+  "description": "The 63-bit id layout: pure functions every service must agree on",
   "files": [
     "dist"
   ],
@@ -21,9 +21,6 @@
     "arch:check": "depcruise --config .dependency-cruiser.cjs src",
     "test": "vitest run",
     "test:cov": "vitest run --coverage"
-  },
-  "dependencies": {
-    "@jcool/kernel": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

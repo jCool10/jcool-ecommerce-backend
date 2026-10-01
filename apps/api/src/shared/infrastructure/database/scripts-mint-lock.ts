@@ -9,7 +9,7 @@ const LOCK_KEY = 1;
 // Every table a seed script writes: the next run's floor is read back from them.
 const SEEDED_TABLES = ['categories', 'products', 'product_variants', 'prices', 'stock_levels', 'carts', 'cart_items'];
 
-export type ScriptsMint = (bucket: number) => string;
+export type ScriptsMint = () => string;
 
 /**
  * Seeds mint in process on the node reserved for scripts, so they need no running id service. The
@@ -32,7 +32,7 @@ export async function withScriptsMintLock<T>(pool: Pool, run: (mint: ScriptsMint
         nodeId: SCRIPTS_NODE_ID,
         floorMs: await lastScriptsMintMs(client),
       });
-      return await run((bucket) => generator.generate(bucket));
+      return await run(() => generator.generate());
     } finally {
       await client.query('SELECT pg_advisory_unlock($1, $2)', [LOCK_NAMESPACE, LOCK_KEY]);
     }

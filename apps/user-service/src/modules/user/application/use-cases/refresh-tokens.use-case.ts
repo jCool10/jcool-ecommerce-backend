@@ -39,7 +39,7 @@ export class RefreshTokensUseCase {
 
     // A retired token skips the mint, so theft detection never waits on the id service. An id
     // minted for a rotation that then loses the race is never used, which costs nothing.
-    const successorId = owner.rotatable ? await this.identity.mintOwnedBy(owner.userId) : null;
+    const successorId = owner.rotatable ? await this.identity.mintId() : null;
     const successor = this.authTokens.newRefreshToken();
     const outcome = await this.refreshTokens.rotate({
       presentedTokenHash,

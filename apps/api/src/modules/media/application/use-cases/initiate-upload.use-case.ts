@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PinoLogger } from 'nestjs-pino';
-import { bucketOf } from '@jcool/id-codec';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { OBJECT_STORAGE, type ObjectStoragePort } from '@shared/infrastructure/storage';
 import { assertAllowedContentType, extensionFor } from '../../domain/asset-content-type';
@@ -45,7 +44,7 @@ export class InitiateUploadUseCase {
 
   async execute(input: InitiateUploadInput): Promise<InitiateUploadResult> {
     const contentType = assertAllowedContentType(input.contentType);
-    const assetId = await mintOne(this.ids, bucketOf(input.uploadedBy));
+    const assetId = await mintOne(this.ids);
     const storageKey = `media/${assetId}.${extensionFor(contentType)}`;
 
     await this.repository.insertPending(

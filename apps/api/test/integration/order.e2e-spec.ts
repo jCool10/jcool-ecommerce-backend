@@ -2,6 +2,8 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { encode } from '@jcool/id-codec';
+import { LEASED_NODE_MAX } from '@jcool/id-generator';
 import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
@@ -52,9 +54,12 @@ describe('Order (integration, real Postgres + Redis)', () => {
       });
     });
 
-    // The owner id is past 2^53, so a Number() on the way into Postgres would drop digits.
+    // A live-minted id stays under 2^53 for a while yet, so the owner id is built past it explicitly:
+    // a Number() on the way into Postgres would drop digits.
     it("keeps every digit of the caller's id on the cart and the order it becomes", async () => {
-      const { user, accessToken } = await createTestPrincipal(app);
+      const { user, accessToken } = await createTestPrincipal(app, {
+        id: encode({ tsMs: Date.UTC(2030, 0, 1), nodeId: LEASED_NODE_MAX, sequence: 1 }),
+      });
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await seedStock(app, variantId, 5);
       await addToCart(app, accessToken, variantId, 1);

@@ -1,16 +1,16 @@
 # id-service
 
-Mints 63-bit integer ids (layout in [`@jcool/id-codec`](../../packages/id-codec): `41 ts_ms │ 12 bucket │ 5 node │ 5 seq`) under a 5-bit node id leased from the service's own Postgres. It runs as three or more stateless replicas behind the private load balancer in [`apps/gateway`](../gateway). No id is stamped past its holder's lease end, and the next holder of a node starts above that end, so no id and no `(ts, node, seq)` triple is ever issued twice, whatever the replicas' clocks say.
+Mints 63-bit integer ids (layout in [`@jcool/id-codec`](../../packages/id-codec): `45 ts_ms │ 8 node │ 10 seq`) under an 8-bit node id leased from the service's own Postgres. It runs as three or more stateless replicas behind the private load balancer in [`apps/gateway`](../gateway). No id is stamped past its holder's lease end, and the next holder of a node starts above that end, so no id and no `(ts, node, seq)` triple is ever issued twice, whatever the replicas' clocks say.
 
 The layout carries no random bits, so that lease is the *whole* of the uniqueness argument: a node belongs to one holder at a time, and a new holder is floored past the previous holder's entire lease window rather than past what it last reported minting.
 
-An id is returned as a **decimal string**, not a JSON number. 63 bits outruns the 53 a JSON number holds exactly, about 25 days past the 2026-01-01 epoch, so a client that parses one as a number silently loses its last digits.
+An id is returned as a **decimal string**, not a JSON number. 63 bits outruns the 53 a JSON number holds exactly, about 13 months past the 2026-01-01 epoch, so a client that parses one as a number silently loses its last digits.
 
 ## API
 
 | Route | Answer |
 | --- | --- |
-| `POST /v1/ids` `{ "bucket": 0..4095, "count"?: 1..32 }` | `200 { "ids": [...] }`, decimal strings, each carrying the bucket that was sent. The cap is one node-millisecond: the sequence holds 32 ids per millisecond, so a request busy-waits into the next one at most once, for up to about 1 ms with the event loop blocked. A larger batch would block for a millisecond per 32 ids. `400` for anything outside those ranges or any extra field. `503 { "code": "LEASE_NOT_HELD" }` when this replica holds no usable lease; the gateway retries the request on another replica. |
+| `POST /v1/ids` `{ "count"?: 1..1024 }` | `200 { "ids": [...] }`, decimal strings. The cap is one node-millisecond: the sequence holds 1024 ids per millisecond, so a request busy-waits into the next one at most once; with the stamping itself, a full batch holds the event loop for a few milliseconds. A larger batch would add a millisecond per 1024 ids. `400` for anything outside those ranges or any extra field. `503 { "code": "LEASE_NOT_HELD" }` when this replica holds no usable lease; the gateway retries the request on another replica. |
 | `GET /health/live` | `200` while the process runs. |
 | `GET /health/ready` | `200` while the replica holds an unfenced lease, including while it drains. `503` with the lease state otherwise. |
 | `GET /metrics` | Prometheus, guarded by `METRICS_TOKEN` as in the api. |
@@ -23,7 +23,7 @@ The service never receives an email and never logs the ids it mints.
 
 ## The node lease
 
-`node_leases` has one row per node id from 1 to 30; 0 and 31 are never leased. Seed scripts mint on 31 under an advisory lock; 0 is unused, since the api and the user-service both mint through this service. The table is seeded by migration. Every claim, renew and release is a single SQL statement, and every time comparison uses the database clock.
+`node_leases` has one row per node id from 1 to 254; 0 and 255 are never leased. Seed scripts mint on 255 under an advisory lock; 0 is unused, since the api and the user-service both mint through this service. The table is seeded by migration. Every claim, renew and release is a single SQL statement, and every time comparison uses the database clock.
 
 - **Acquire** claims the node that expired longest ago, and only after the quarantine has passed. It uses `FOR UPDATE SKIP LOCKED` and bumps `generation`. A holder is identified by its generation, never by its name. Before claiming, acquire re-adopts any unexpired lease already recorded under this replica's own holder name, with the floor saved in `prior_lease_until`. A claim can commit on the server after the client-side `DB_QUERY_TIMEOUT_MS` has already given up on it, and without the re-adopt the retry would claim a second node and strand the first for TTL + quarantine.
 - **Renew** runs every `ID_LEASE_RENEW_EVERY_MS` and records the last timestamp minted in `max_ts_ms`. If the lease has already expired, renew returns *lost*: minting stops immediately and the replica claims another node.
@@ -49,7 +49,7 @@ On a rolling deploy, keep `SHUTDOWN_GRACE_PERIOD_MS` < the platform's draining w
 ## Operations
 
 - **Migrate** before starting replicas: `node dist/database/migrate-cli.js` (`MIGRATIONS_DIR=/app/migrations` in the image). It exits non-zero if it finds no migrations at all.
-- **Pool exhausted**: readiness returns `503 {state: "exhausted"}`, the keeper logs one error, and it retries every second. The usual cause is crashed replicas whose leases have not expired yet; they free up after `TTL + quarantine`. A replica that exits without releasing (a crash, an OOM kill, `SIGKILL`) keeps its node for up to that, about 310 s by default, so with 3 replicas holding nodes about 27 such exits inside that window exhaust the 30-node pool. Railway restarts a crashing replica at most 5 times, so one bad deploy locks at most 18.
+- **Pool exhausted**: readiness returns `503 {state: "exhausted"}`, the keeper logs one error, and it retries every second. The usual cause is crashed replicas whose leases have not expired yet; they free up after `TTL + quarantine`. A replica that exits without releasing (a crash, an OOM kill, `SIGKILL`) keeps its node for up to that, about 310 s by default, so with 3 replicas holding nodes about 251 such exits inside that window exhaust the 254-node pool. Railway restarts a crashing replica at most 5 times, so one bad deploy locks at most 18.
 - **Database down**: replicas keep minting until the fence, then answer `LEASE_NOT_HELD`. Once the database is back, they either renew or claim a new node.
 - **Database restored or recreated**: its rows can sit behind ids already minted. Follow the [runbook](../../RUNBOOK.md#restoring-or-recreating-the-id-service-database) before any replica starts.
 

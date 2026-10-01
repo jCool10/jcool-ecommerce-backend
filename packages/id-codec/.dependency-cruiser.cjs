@@ -4,10 +4,10 @@ module.exports = {
       name: 'id-codec-pure',
       severity: 'error',
       comment:
-        'Every service decodes ids and derives buckets with this package, so it may use only node builtins and the kernel.',
+        'Every service encodes and decodes ids with this package, so it may use only node builtins.',
       from: { path: '^src/', pathNot: '\\.spec\\.ts$' },
       to: {
-        pathNot: '^src/|^node_modules/@jcool/kernel/',
+        pathNot: '^src/',
         dependencyTypesNot: ['core'],
       },
     },

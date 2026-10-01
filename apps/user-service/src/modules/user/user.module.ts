@@ -5,7 +5,7 @@ import { IdentityModule } from './identity.module';
 import {
   Argon2PasswordHasher,
   DrizzleUserRepository,
-  IdentityBucketKeyVerifier,
+  IdentityLayoutPinVerifier,
   UserFacadeAdapter,
 } from './infrastructure';
 
@@ -14,8 +14,8 @@ import {
   providers: [
     { provide: USER_REPOSITORY, useClass: DrizzleUserRepository },
     { provide: PASSWORD_HASHER, useClass: Argon2PasswordHasher },
-    // Boot-time check on the key behind those ids; nothing injects it, it only runs.
-    IdentityBucketKeyVerifier,
+    // Boot-time check on the layout behind those ids; nothing injects it, it only runs.
+    IdentityLayoutPinVerifier,
     { provide: USER_FACADE, useClass: UserFacadeAdapter },
   ],
   exports: [USER_REPOSITORY, PASSWORD_HASHER, USER_FACADE],

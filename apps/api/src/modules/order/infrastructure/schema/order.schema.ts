@@ -4,7 +4,7 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const orderStatus = pgEnum('order_status', ['DRAFT', 'PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED']);
 
-// No default: an order id carries its buyer's bucket, which only the writer knows.
+// No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
 
 const stamps = {

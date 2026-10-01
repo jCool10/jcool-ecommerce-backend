@@ -9,7 +9,7 @@ import { sampleId } from '@shared/testing/id-generator.double';
 import { type DomainEventJob, jobIdFor } from './domain-event.job';
 
 const MESSAGE_ID = sampleId(1);
-const ORDER_ID = sampleId(2, 7);
+const ORDER_ID = sampleId(2);
 const FINISHED = 1_700_000_000_000;
 
 const envelope: DomainEventJob = {

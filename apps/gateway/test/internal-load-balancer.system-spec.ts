@@ -54,7 +54,7 @@ describe('gateway: internal load balancer over id-service', () => {
     const res = await fetch(urlOf(gateway, LB_PORT, '/v1/ids'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ bucket: 0 }),
+      body: JSON.stringify({ count: 1 }),
     });
     const body = (await res.json().catch(() => ({}))) as { replica?: string };
     return { status: res.status, replica: body.replica, ms: Date.now() - startedAt };

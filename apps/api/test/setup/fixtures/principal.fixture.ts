@@ -1,27 +1,25 @@
 import type { INestApplication } from '@nestjs/common';
 import { SESSION_EPOCH_KEY_PREFIX } from '@jcool/auth-verifier';
-import { bucketForEmail } from '@jcool/id-codec';
 import { LEASED_NODE_MAX, SnowflakeGenerator } from '@jcool/id-generator';
 import { normalizeEmail } from '@jcool/kernel';
 import type { Role } from '@jcool/platform/rbac';
 import { RedisService } from '@jcool/platform/redis';
 import { type StubUser, userServiceStub } from '../user-service-stub';
 
-// Stands in for the user-service's own generator, which mints on a leased node id. The bucket key is
-// the user-service's now; this one only has to be stable so a user's id and its rows agree.
-const BUCKET_KEY = 'e2e-identity-bucket-key-not-a-real-secret-000';
+// Stands in for the user-service's own generator, which mints on a leased node id.
 const ids = SnowflakeGenerator.create({ nodeId: LEASED_NODE_MAX });
 let seq = 0;
 
 export interface TestPrincipalOptions {
+  /** Overrides the minted id, for a spec that needs one the live generator cannot produce yet. */
+  id?: string;
   email?: string;
   role?: Role;
 }
 
 /** An id the user-service could have minted, for a caller this api is not meant to know yet. */
-export function mintTestUserId(email: string): string {
-  const normalized = normalizeEmail(email);
-  return ids.generate(bucketForEmail(normalized, BUCKET_KEY));
+export function mintTestUserId(): string {
+  return ids.generate();
 }
 
 export interface TestPrincipal {
@@ -40,7 +38,7 @@ export async function createTestPrincipal(
 ): Promise<TestPrincipal> {
   const email = normalizeEmail(options.email ?? `principal-${Date.now()}-${seq++}@test.local`);
   const user: StubUser = {
-    id: mintTestUserId(email),
+    id: options.id ?? mintTestUserId(),
     email,
     role: options.role ?? 'CUSTOMER',
   };

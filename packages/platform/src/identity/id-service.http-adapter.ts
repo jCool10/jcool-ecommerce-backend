@@ -1,6 +1,6 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import type { ClsService } from 'nestjs-cls';
-import { SEQUENCE_COUNT, bucketOf } from '@jcool/id-codec';
+import { SEQUENCE_COUNT, isRoutableId } from '@jcool/id-codec';
 import { correlationHeaders } from '../observability';
 import type { OutboundCall } from '../resilience';
 
@@ -28,18 +28,8 @@ export function isIdServiceFault(error: unknown): boolean {
   return error.code !== LEASE_NOT_HELD && !(error.status >= 400 && error.status < 500);
 }
 
-// A row keyed by an id from another bucket would live on a shard that does not own it.
-function isIdInBucket(id: unknown, bucket: number): boolean {
-  if (typeof id !== 'string') return false;
-  try {
-    return bucketOf(id) === bucket;
-  } catch {
-    return false;
-  }
-}
-
-function isIdList(value: unknown, count: number, bucket: number): value is string[] {
-  return Array.isArray(value) && value.length === count && value.every((id) => isIdInBucket(id, bucket));
+function isIdList(value: unknown, count: number): value is string[] {
+  return Array.isArray(value) && value.length === count && value.every(isRoutableId);
 }
 
 export interface IdServiceOptions {
@@ -60,24 +50,24 @@ export class IdServiceHttpAdapter {
     private readonly cls: ClsService,
   ) {}
 
-  async mint(bucket: number, count = 1): Promise<string[]> {
+  async mint(count = 1): Promise<string[]> {
     const ids: string[] = [];
     for (let left = count; left > 0; left -= MAX_IDS_PER_REQUEST) {
-      ids.push(...(await this.mintBatch(bucket, Math.min(left, MAX_IDS_PER_REQUEST))));
+      ids.push(...(await this.mintBatch(Math.min(left, MAX_IDS_PER_REQUEST))));
     }
     return ids;
   }
 
-  private async mintBatch(bucket: number, count: number): Promise<string[]> {
+  private async mintBatch(count: number): Promise<string[]> {
     try {
-      return await this.breaker.run(() => this.request(bucket, count));
+      return await this.breaker.run(() => this.request(count));
     } catch (error) {
       // No local fallback exists, so every way of not getting ids is the same answer to the client.
       throw new ServiceUnavailableException('Service unavailable', { cause: error });
     }
   }
 
-  private async request(bucket: number, count: number): Promise<string[]> {
+  private async request(count: number): Promise<string[]> {
     const response = await fetch(new URL('/v1/ids', this.options.url), {
       method: 'POST',
       headers: {
@@ -85,7 +75,7 @@ export class IdServiceHttpAdapter {
         'x-caller': this.options.caller,
         ...correlationHeaders(this.cls),
       },
-      body: JSON.stringify({ bucket, count }),
+      body: JSON.stringify({ count }),
       // The breaker stops waiting at the same point; this also frees the socket.
       signal: AbortSignal.timeout(this.options.timeoutMs),
     });
@@ -95,7 +85,7 @@ export class IdServiceHttpAdapter {
       throw new IdServiceRejection(response.status, typeof body?.code === 'string' ? body.code : undefined);
     }
     const ids = body?.ids;
-    if (!isIdList(ids, count, bucket)) {
+    if (!isIdList(ids, count)) {
       throw new IdServiceRejection(response.status, 'MALFORMED_RESPONSE');
     }
     return ids;

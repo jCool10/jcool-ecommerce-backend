@@ -2,15 +2,8 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { identityKeyFingerprint } from '@jcool/id-codec';
 import { authHeader } from '../setup/auth.helper';
-import {
-  E2E_CSRF_SECRET,
-  E2E_IDENTITY_BUCKET_KEY,
-  E2E_INTERNAL_API_TOKEN,
-  E2E_JWT_AUDIENCE,
-  E2E_JWT_ISSUER,
-} from '../setup/e2e-env';
+import { E2E_CSRF_SECRET, E2E_INTERNAL_API_TOKEN, E2E_JWT_AUDIENCE, E2E_JWT_ISSUER } from '../setup/e2e-env';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { createTestAppWithPool, redisOf, resetDatabaseBeforeEach } from '../setup/harness';
 import { publishedEpoch } from '../setup/session-epoch.helper';
@@ -44,7 +37,7 @@ describe('Internal service-to-service API (integration)', () => {
   };
 
   // A real id shape, so the 404 comes from the lookup and not from the id pipe.
-  const unknownUserId = async (): Promise<string> => (await inProcessIdGenerator.mint(7))[0];
+  const unknownUserId = async (): Promise<string> => (await inProcessIdGenerator.mint())[0];
 
   describe('service token', () => {
     it('refuses a call with no token or a wrong one with 401', async () => {
@@ -110,12 +103,12 @@ describe('Internal service-to-service API (integration)', () => {
   });
 
   describe('GET /internal/v1/cutover/digest', () => {
-    it('fingerprints the keys this process loaded', async () => {
+    it('fingerprints the secrets this process loaded', async () => {
       const { body } = await internal('/cutover/digest').expect(200);
 
+      // A literal, so a change to the algorithm cannot pass: digests taken earlier must stay comparable.
       expect(body).toEqual({
-        identityBucketKey: identityKeyFingerprint(E2E_IDENTITY_BUCKET_KEY),
-        csrfSecret: identityKeyFingerprint(E2E_CSRF_SECRET),
+        csrfSecret: '40c24473c563b622',
         accessTtl: '5m',
         issuer: E2E_JWT_ISSUER,
         audience: E2E_JWT_AUDIENCE,
@@ -125,9 +118,7 @@ describe('Internal service-to-service API (integration)', () => {
     it('never answers with a secret itself', async () => {
       const { text } = await internal('/cutover/digest').expect(200);
 
-      for (const secret of [E2E_IDENTITY_BUCKET_KEY, E2E_CSRF_SECRET]) {
-        expect(text).not.toContain(secret);
-      }
+      expect(text).not.toContain(E2E_CSRF_SECRET);
     });
   });
 

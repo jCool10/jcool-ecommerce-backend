@@ -23,7 +23,6 @@ CLIs (each also has a `:prod` twin that runs the compiled `dist/` file — see [
 | storage verify | [`apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts`](../apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts) |
 | id-service migrate | [`apps/id-service/src/database/migrate-cli.ts`](../apps/id-service/src/database/migrate-cli.ts) |
 | user-service migrate | [`apps/user-service/src/database/migrate-cli.ts`](../apps/user-service/src/database/migrate-cli.ts) |
-| identity bucket verify | [`apps/user-service/scripts/verify-identity-buckets.ts`](../apps/user-service/scripts/verify-identity-buckets.ts) |
 
 ## Bounded contexts
 
@@ -89,7 +88,7 @@ CI/CD workflows: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`.g
 | Package | Role | Owner |
 | --- | --- | --- |
 | `@jcool/kernel` | Framework-free DDD building blocks | [`packages/kernel/package.json`](../packages/kernel/package.json) |
-| `@jcool/id-codec` | Snowflake id layout, HMAC email buckets | [`packages/id-codec/package.json`](../packages/id-codec/package.json) |
+| `@jcool/id-codec` | Snowflake id layout | [`packages/id-codec/package.json`](../packages/id-codec/package.json) |
 | `@jcool/id-generator` | Monotonic id generator, node lease | [`packages/id-generator/package.json`](../packages/id-generator/package.json) |
 | `@jcool/auth-verifier` | Access-token verification (every service) | [`packages/auth-verifier/package.json`](../packages/auth-verifier/package.json) |
 | `@jcool/metrics-port` | Metrics seam for domain/application code | [`packages/metrics-port/package.json`](../packages/metrics-port/package.json) |

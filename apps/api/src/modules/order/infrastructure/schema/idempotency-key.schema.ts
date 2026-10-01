@@ -3,7 +3,7 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
 export const idempotencyStatus = pgEnum('idempotency_status', ['IN_PROGRESS', 'COMPLETED']);
 
-// No default: the id carries the caller's bucket, which only the writer knows.
+// No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
 
 export const idempotencyKeys = pgTable(

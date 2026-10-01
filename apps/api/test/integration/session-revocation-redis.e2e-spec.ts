@@ -78,7 +78,7 @@ describe('Session revocation read from Redis (integration, real Redis)', () => {
 
   it('refuses a user the user-service no longer has', async () => {
     const email = 'gone@test.local';
-    const gone = { id: mintTestUserId(email), email, role: 'CUSTOMER' as const };
+    const gone = { id: mintTestUserId(), email, role: 'CUSTOMER' as const };
 
     expect((await cart(await stub.sign(gone))).status).toBe(401);
     expect(stub.calls('epoch')).toBe(1);

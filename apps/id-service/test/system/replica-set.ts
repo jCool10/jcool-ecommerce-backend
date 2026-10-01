@@ -3,7 +3,9 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { Client } from 'pg';
 import { GenericContainer, Network, type StartedNetwork, type StartedTestContainer, Wait } from 'testcontainers';
 import { decode } from '@jcool/id-codec';
-import { MAX_IDS_PER_REQUEST } from '../../src/mint/mint.request';
+
+/** Small, as callers mint, so the load arrives as many concurrent requests rather than a few large ones. */
+export const IDS_PER_REQUEST = 32;
 
 const REPO_ROOT = resolve(__dirname, '../../../..');
 const ID_SERVICE_IMAGE = 'jcool-id-service:system-test';
@@ -131,12 +133,12 @@ export interface MintRun {
   maxLatencyMs: number;
 }
 
-/** `workers` callers minting full batches through the load balancer until `until` resolves. */
+/** `workers` callers minting through the load balancer until `until` resolves. */
 export async function mintUntil(
   lbUrl: string,
   until: Promise<unknown>,
   workers = 8,
-  count = MAX_IDS_PER_REQUEST,
+  count = IDS_PER_REQUEST,
 ): Promise<MintRun> {
   const run: MintRun = { ids: [], failures: [], maxLatencyMs: 0 };
   let done = false;
@@ -168,7 +170,7 @@ async function mintInto(run: MintRun, lbUrl: string, count: number): Promise<voi
   const res = await fetch(`${lbUrl}/v1/ids`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-caller': 'system-test' },
-    body: JSON.stringify({ bucket: 7, count }),
+    body: JSON.stringify({ count }),
   });
   run.maxLatencyMs = Math.max(run.maxLatencyMs, Date.now() - startedAt);
   if (res.status !== 200) {
@@ -179,7 +181,7 @@ async function mintInto(run: MintRun, lbUrl: string, count: number): Promise<voi
 }
 
 /** Repeated (timestamp, node, sequence) triples, and the nodes that minted. A repeated id repeats its
- * triple, and the triple still catches a repeat across buckets, since the sequence runs per node. */
+ * triple. */
 export function collisions(ids: string[]): { duplicates: number; nodes: Set<number> } {
   const triples = new Set<string>();
   const nodes = new Set<number>();

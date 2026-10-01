@@ -35,14 +35,11 @@ describe('POST /v1/ids', () => {
 
   it('rejects every malformed request body with 400', async () => {
     const malformed: [string, object][] = [
-      ['a missing bucket', { count: 1 }],
-      ['a negative bucket', { bucket: -1 }],
-      ['a bucket past 4095', { bucket: 4096 }],
-      ['a fractional bucket', { bucket: 1.5 }],
-      ['a bucket sent as a string', { bucket: '1' }],
-      ['a count of 0', { bucket: 1, count: 0 }],
-      ['a count past the per-request cap', { bucket: 1, count: MAX_IDS_PER_REQUEST + 1 }],
-      ['an unknown field', { bucket: 1, email: 'someone@example.com' }],
+      ['a count of 0', { count: 0 }],
+      ['a fractional count', { count: 1.5 }],
+      ['a count sent as a string', { count: '1' }],
+      ['a count past the per-request cap', { count: MAX_IDS_PER_REQUEST + 1 }],
+      ['an unknown field', { email: 'someone@example.com' }],
     ];
 
     const statuses: Record<string, number> = {};
@@ -52,21 +49,21 @@ describe('POST /v1/ids', () => {
   });
 
   it('mints one id by default', async () => {
-    const res = await mint({ bucket: 9 }).expect(200);
+    const res = await mint({}).expect(200);
     expect(res.body.ids).toHaveLength(1);
   });
 
-  it('mints the requested count, each under the held node and the requested bucket', async () => {
-    const res = await mint({ bucket: 4095, count: MAX_IDS_PER_REQUEST }, 'api').expect(200);
+  it('mints the requested count, each under the held node', async () => {
+    const res = await mint({ count: MAX_IDS_PER_REQUEST }, 'api').expect(200);
     const ids = res.body.ids as string[];
 
     expect(new Set(ids).size).toBe(MAX_IDS_PER_REQUEST);
-    for (const id of ids) expect(decode(id)).toMatchObject({ nodeId, bucket: 4095 });
+    for (const id of ids) expect(decode(id)).toMatchObject({ nodeId });
   });
 
   it('exposes the lease and mint series on /metrics', async () => {
-    await mint({ bucket: 1, count: 3 }, 'user-service').expect(200);
-    await mint({ bucket: 1 }, 'Not A Service').expect(200);
+    await mint({ count: 3 }, 'user-service').expect(200);
+    await mint({}, 'Not A Service').expect(200);
 
     const { text } = await request(app.getHttpServer()).get('/metrics').expect(200);
     expect(text).toContain('id_lease_state{state="held"} 1');
@@ -79,7 +76,7 @@ describe('POST /v1/ids', () => {
   it('keeps minting while draining, then releases the node with its last timestamp', async () => {
     closing = app.close();
     await sleep(GRACE_MS / 5);
-    const res = await mint({ bucket: 2 }).expect(200);
+    const res = await mint({}).expect(200);
     const lastMs = decode((res.body.ids as string[])[0] ?? '').tsMs;
     await closing;
 

@@ -8,8 +8,8 @@ export const USER_REPOSITORY = Symbol('USER_REPOSITORY');
 
 export interface CreateUserInput {
   /**
-   * Branded: these exact bytes are both stored under the unique index and hashed into the row's
-   * routing bucket, so a raw `string` here is a compile error rather than a misrouted row.
+   * Branded: these exact bytes are stored under the unique index, so a raw `string` here is a compile
+   * error rather than a second account under a different case.
    */
   email: NormalizedEmail;
   passwordHash: string;

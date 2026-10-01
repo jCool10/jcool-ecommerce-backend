@@ -48,8 +48,8 @@ describe('Boot checks (integration)', () => {
     }
   }, 120_000);
 
-  // This database is filled by copying the api's, pin included; a pin written first would be wrong.
-  it('writes no key pin on an empty database while IDENTITY_PIN_BOOTSTRAP is off', async () => {
+  // With bootstrap off the pin is only compared, never written.
+  it('writes no layout pin on an empty database while IDENTITY_PIN_BOOTSTRAP is off', async () => {
     const app = await createTestApp({ IDENTITY_PIN_BOOTSTRAP: 'false' });
     try {
       const { rows } = await pool.query(`SELECT 1 FROM identity_key_pin`);
