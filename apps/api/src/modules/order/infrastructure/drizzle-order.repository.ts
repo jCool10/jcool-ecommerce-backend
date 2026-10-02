@@ -24,7 +24,7 @@ type OrderItemRow = typeof orderItems.$inferSelect;
 export class DrizzleOrderRepository implements OrderRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
   async createCheckout(
@@ -35,7 +35,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
   ): Promise<CheckoutPersistResult> {
     // Before the transaction, so no lock waits on the id service. A replayed key wastes them.
-    const [orderId, ...itemIds] = await this.ids.mint(1 + order.items.length);
+    const [orderId, ...itemIds] = await this.idGenerator.mint(1 + order.items.length);
     return this.db.transaction(async (tx) => {
       // One checkout per user at a time, so the pending count below is race-safe. Taken before any
       // stock row lock, so it cannot cycle with them.

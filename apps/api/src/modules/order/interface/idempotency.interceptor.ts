@@ -41,7 +41,7 @@ const IN_PROGRESS_LEASE_MS = 30 * 1000;
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
   constructor(
-    @Inject(IDEMPOTENCY_STORE) private readonly store: IdempotencyStorePort,
+    @Inject(IDEMPOTENCY_STORE) private readonly idempotencyStore: IdempotencyStorePort,
     private readonly cls: ClsService,
     private readonly logger: PinoLogger,
   ) {
@@ -78,13 +78,13 @@ export class IdempotencyInterceptor implements NestInterceptor {
     };
 
     // Looked up before claiming: a claim mints an id, and a replay must not need the id service.
-    let existing = await this.store.findByScopeAndKey(scope, key);
+    let existing = await this.idempotencyStore.findByScopeAndKey(scope, key);
     if (!existing) {
-      const inserted = await this.store.tryInsertInProgress(insertInput);
+      const inserted = await this.idempotencyStore.tryInsertInProgress(insertInput);
       if (inserted) {
         return this.runHandler(scope, key, next);
       }
-      existing = await this.store.findByScopeAndKey(scope, key);
+      existing = await this.idempotencyStore.findByScopeAndKey(scope, key);
     }
     if (!existing) {
       // Row vanished between the failed insert and this read (a sibling cleaned up its own failed
@@ -109,8 +109,8 @@ export class IdempotencyInterceptor implements NestInterceptor {
     // Lease-scoped delete: if a racing reclaimer already refreshed this row, its createdAt is no
     // longer past the cutoff and it survives, so our re-INSERT below loses on the unique index
     // (→ 409) instead of both running.
-    await this.store.deleteExpiredInProgress(scope, key, leaseCutoff);
-    const reclaimed = await this.store.tryInsertInProgress(insertInput);
+    await this.idempotencyStore.deleteExpiredInProgress(scope, key, leaseCutoff);
+    const reclaimed = await this.idempotencyStore.tryInsertInProgress(insertInput);
     if (!reclaimed) {
       // Another request reclaimed first — treat as in-progress.
       throw new ConflictException('A request with this Idempotency-Key is already in progress');
@@ -128,7 +128,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       // committed and the row was never marked COMPLETED. Drop the IN_PROGRESS row so the client can
       // retry. Cleanup failure must not mask the original error.
       catchError((err: unknown) =>
-        from(this.store.deleteInProgress(scope, key)).pipe(
+        from(this.idempotencyStore.deleteInProgress(scope, key)).pipe(
           catchError((cleanupErr: unknown) => {
             // Every retry now 409s until IDEMPOTENCY_TTL_MS reclaims the row.
             this.logger.warn(

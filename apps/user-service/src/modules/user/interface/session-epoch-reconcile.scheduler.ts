@@ -18,7 +18,7 @@ export class SessionEpochReconcileScheduler implements OnApplicationBootstrap, O
   private readonly intervalMs: number;
 
   constructor(
-    private readonly reconciler: SessionEpochReconciler,
+    private readonly sessionEpochReconciler: SessionEpochReconciler,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly cls: ClsService,
@@ -56,7 +56,7 @@ export class SessionEpochReconcileScheduler implements OnApplicationBootstrap, O
     this.running = true;
     try {
       await runInJobContext(this.cls, INTERVAL_NAME, () =>
-        withSpan('session-epoch.reconcile', () => this.reconciler.reconcileOnce()),
+        withSpan('session-epoch.reconcile', () => this.sessionEpochReconciler.reconcileOnce()),
       );
     } catch (error) {
       // A rejection escaping a timer kills the process.

@@ -44,9 +44,9 @@ interface ResetPasswordFormBody {
 @Controller('auth')
 export class AuthLinkPagesController {
   constructor(
-    private readonly emailVerification: EmailVerificationService,
-    private readonly passwordReset: PasswordResetService,
-    @Inject(AUTH_AUDIT) private readonly audit: AuthAuditPort,
+    private readonly emailVerificationService: EmailVerificationService,
+    private readonly passwordResetService: PasswordResetService,
+    @Inject(AUTH_AUDIT) private readonly authAudit: AuthAuditPort,
   ) {}
 
   @Public()
@@ -63,8 +63,8 @@ export class AuthLinkPagesController {
       return;
     }
     try {
-      const { userId } = await this.emailVerification.verify(token);
-      this.audit.record({ event: 'email.verified', outcome: 'success', userId, ip, userAgent });
+      const { userId } = await this.emailVerificationService.verify(token);
+      this.authAudit.record({ event: 'email.verified', outcome: 'success', userId, ip, userAgent });
       sendHtmlPage(res, HttpStatus.OK, verifyEmailSuccessPage());
     } catch (error) {
       if (!(error instanceof BadRequestException)) throw error;
@@ -115,8 +115,8 @@ export class AuthLinkPagesController {
     }
 
     try {
-      const { userId } = await this.passwordReset.reset(token, password);
-      this.audit.record({ event: 'password.reset', outcome: 'success', userId, ip, userAgent });
+      const { userId } = await this.passwordResetService.reset(token, password);
+      this.authAudit.record({ event: 'password.reset', outcome: 'success', userId, ip, userAgent });
       sendHtmlPage(res, HttpStatus.OK, resetPasswordSuccessPage());
     } catch (error) {
       if (!(error instanceof BadRequestException)) throw error;

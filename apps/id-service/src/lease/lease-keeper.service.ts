@@ -36,7 +36,7 @@ export class LeaseKeeper implements OnApplicationBootstrap, BeforeApplicationShu
   private floorRejectionReported = false;
 
   constructor(
-    private readonly lease: NodeLease,
+    private readonly nodeLease: NodeLease,
     config: ConfigService,
     private readonly logger: PinoLogger,
     @InjectMetric(ID_LEASE_RENEW_FAILURES_TOTAL) private readonly renewFailures: Counter,
@@ -55,15 +55,15 @@ export class LeaseKeeper implements OnApplicationBootstrap, BeforeApplicationShu
 
   // Only the first attempt is awaited: a replica that finds no node still boots and reports not ready.
   async onApplicationBootstrap(): Promise<void> {
-    bindLeaseMetrics(this.lease);
+    bindLeaseMetrics(this.nodeLease);
     await this.run(() => this.acquire());
   }
 
   // Renewal carries on while draining, so the node stays ours until release.
   async beforeApplicationShutdown(signal?: string): Promise<void> {
     this.draining = true;
-    this.lease.drain();
-    this.logger.info({ signal, graceMs: this.graceMs, nodeId: this.lease.nodeId }, 'draining; still minting');
+    this.nodeLease.drain();
+    this.logger.info({ signal, graceMs: this.graceMs, nodeId: this.nodeLease.nodeId }, 'draining; still minting');
     if (this.graceMs > 0) await new Promise((resolve) => setTimeout(resolve, this.graceMs));
   }
 
@@ -72,15 +72,15 @@ export class LeaseKeeper implements OnApplicationBootstrap, BeforeApplicationShu
     if (this.timer !== null) clearTimeout(this.timer);
     await this.step;
 
-    const { nodeId, generator } = this.lease;
+    const { nodeId, generator } = this.nodeLease;
     try {
-      await this.lease.release();
+      await this.nodeLease.release();
       if (nodeId !== undefined) this.logger.info({ nodeId }, 'node lease released');
     } catch (err) {
       this.logger.warn({ nodeId, err: toError(err) }, 'node lease release failed; it will expire instead');
     } finally {
       if (generator !== null) unbindIdentityClockMetrics(generator);
-      unbindLeaseMetrics(this.lease);
+      unbindLeaseMetrics(this.nodeLease);
     }
   }
 
@@ -102,7 +102,7 @@ export class LeaseKeeper implements OnApplicationBootstrap, BeforeApplicationShu
     if (this.draining) return;
     let outcome: AcquireOutcome;
     try {
-      outcome = await this.lease.acquire();
+      outcome = await this.nodeLease.acquire();
     } catch (err) {
       this.logger.warn({ err: toError(err) }, 'node lease acquire failed');
       this.schedule(this.retryMs, () => this.acquire());
@@ -113,7 +113,7 @@ export class LeaseKeeper implements OnApplicationBootstrap, BeforeApplicationShu
       case 'held': {
         this.exhaustionReported = false;
         this.floorRejectionReported = false;
-        const { generator } = this.lease;
+        const { generator } = this.nodeLease;
         if (generator !== null) bindIdentityClockMetrics(generator);
         this.logger.info({ nodeId: outcome.nodeId }, 'node lease acquired');
         this.schedule(this.renewEveryMs, () => this.renew());
@@ -139,10 +139,10 @@ export class LeaseKeeper implements OnApplicationBootstrap, BeforeApplicationShu
   }
 
   private async renew(): Promise<void> {
-    const { nodeId, generator } = this.lease;
+    const { nodeId, generator } = this.nodeLease;
     let outcome: RenewOutcome;
     try {
-      outcome = await this.lease.renew();
+      outcome = await this.nodeLease.renew();
     } catch (err) {
       this.renewFailures.inc();
       if (this.renewFailureStreak++ === 0) {

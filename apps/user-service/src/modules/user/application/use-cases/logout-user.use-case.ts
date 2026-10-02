@@ -22,16 +22,16 @@ export interface LogoutInput {
 @Injectable()
 export class LogoutUserUseCase {
   constructor(
-    @Inject(REFRESH_TOKEN_REPOSITORY) private readonly refreshTokens: RefreshTokenRepositoryPort,
-    @Inject(TOKEN_DENYLIST) private readonly denylist: TokenDenylistPort,
+    @Inject(REFRESH_TOKEN_REPOSITORY) private readonly refreshTokenRepo: RefreshTokenRepositoryPort,
+    @Inject(TOKEN_DENYLIST) private readonly tokenDenylist: TokenDenylistPort,
   ) {}
 
   async execute(input: LogoutInput): Promise<void> {
     // Hashed first: a throw here must happen before either write below starts.
     const refreshTokenHash = hashRefreshToken(input.rawRefreshToken);
     await Promise.all([
-      this.denylist.denylist(input.accessJti, new Date(input.accessExp * 1000)),
-      this.refreshTokens.revoke(input.userId, refreshTokenHash),
+      this.tokenDenylist.denylist(input.accessJti, new Date(input.accessExp * 1000)),
+      this.refreshTokenRepo.revoke(input.userId, refreshTokenHash),
     ]);
   }
 }

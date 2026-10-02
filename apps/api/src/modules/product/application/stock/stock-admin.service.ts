@@ -2,7 +2,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { STOCK_ADMIN, type StockAdminPort, type StockView } from './ports/stock-admin.port';
 
-const LOG_CONTEXT = 'AdjustStock';
+const LOG_CONTEXT = 'StockAdminService';
 
 /**
  * `setOnHand` creates the row it cannot find ("this SKU now has 40 units" stands on its own), while
@@ -11,16 +11,16 @@ const LOG_CONTEXT = 'AdjustStock';
  * design, and asking across would be the cross-context read that boundary exists to prevent.
  */
 @Injectable()
-export class AdjustStockUseCase {
+export class StockAdminService {
   constructor(
-    @Inject(STOCK_ADMIN) private readonly stock: StockAdminPort,
+    @Inject(STOCK_ADMIN) private readonly stockAdmin: StockAdminPort,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
   }
 
   async getLevel(variantId: string): Promise<StockView> {
-    const level = await this.stock.getLevel(variantId);
+    const level = await this.stockAdmin.getLevel(variantId);
     if (level === null) {
       throw new NotFoundException(`No stock level for variant: ${variantId}`);
     }
@@ -28,13 +28,13 @@ export class AdjustStockUseCase {
   }
 
   async setOnHand(variantId: string, quantity: number): Promise<StockView> {
-    const level = await this.stock.setOnHand(variantId, quantity);
+    const level = await this.stockAdmin.setOnHand(variantId, quantity);
     this.logger.info({ variantId, quantityOnHand: quantity }, 'stock level set by admin');
     return level;
   }
 
   async adjust(variantId: string, delta: number): Promise<StockView> {
-    const level = await this.stock.adjust(variantId, delta);
+    const level = await this.stockAdmin.adjust(variantId, delta);
     if (level === null) {
       throw new NotFoundException(`No stock level for variant: ${variantId}`);
     }

@@ -17,7 +17,7 @@ type WebhookEventRow = typeof webhookEvents.$inferSelect;
 export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
   async insertIfNew(input: NewWebhookEvent, tx?: DrizzleTx): Promise<InsertWebhookEventResult> {
@@ -25,7 +25,7 @@ export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort
     const [inserted] = await executor
       .insert(webhookEvents)
       .values({
-        id: await mintOne(this.ids),
+        id: await mintOne(this.idGenerator),
         provider: input.provider,
         providerEventId: input.providerEventId,
         type: input.type,

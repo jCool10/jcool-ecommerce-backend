@@ -6,13 +6,13 @@ import { ProductSearchSyncService } from '../../../application/catalog/services/
 
 @Injectable()
 export class ProductChangedHandler {
-  constructor(private readonly sync: ProductSearchSyncService) {}
+  constructor(private readonly productSearchSyncService: ProductSearchSyncService) {}
 
   /** An engine failure throws through, so the delivery goes back on its retry ladder. */
   async apply(job: DomainEventJob): Promise<void> {
     if (!isRoutableId(job.aggregateId)) {
       throw new PermanentError(`catalog.product.changed without a usable product id (message ${job.outboxId})`);
     }
-    await this.sync.syncProduct(job.aggregateId);
+    await this.productSearchSyncService.syncProduct(job.aggregateId);
   }
 }

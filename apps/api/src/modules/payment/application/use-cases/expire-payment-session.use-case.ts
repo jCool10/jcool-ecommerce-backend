@@ -32,8 +32,8 @@ export type ExpireSessionResult =
 @Injectable()
 export class ExpirePaymentSessionUseCase {
   constructor(
-    @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
-    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
+    @Inject(PAYMENT_REPOSITORY) private readonly paymentRepo: PaymentRepositoryPort,
+    @Inject(PAYMENT_GATEWAY) private readonly paymentGateway: PaymentGatewayPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {
@@ -41,7 +41,7 @@ export class ExpirePaymentSessionUseCase {
   }
 
   async execute(orderId: string, tx: DrizzleTx, trigger: ExpireSessionTrigger = 'ttl'): Promise<ExpireSessionResult> {
-    const payment = await this.payments.findByOrderId(orderId, tx);
+    const payment = await this.paymentRepo.findByOrderId(orderId, tx);
     if (payment === null || payment.id === null) return 'no_payment';
 
     if (payment.status !== PaymentStatus.PENDING) {
@@ -56,7 +56,7 @@ export class ExpirePaymentSessionUseCase {
     // Runs inside the consumer's transaction, which by design holds no payment row — what it holds is
     // this message's inbox claim, so a gateway that refuses or cannot be reached rolls the claim back
     // and the queue redelivers, which is the only way the session gets closed once it recovers.
-    const outcome = await this.gateway.expireSession(payment.providerSessionId);
+    const outcome = await this.paymentGateway.expireSession(payment.providerSessionId);
     if (outcome === 'already_completed') {
       // Acknowledged, not retried: no redelivery un-pays a session, and this is the only signal there
       // is if the webhook never arrives. "Submitted", not "paid": an async method can still be
@@ -67,7 +67,7 @@ export class ExpirePaymentSessionUseCase {
     // `already_closed` continues: an unpayable session is what this needed, whether this call closed
     // it or an earlier attempt did before its transaction rolled back.
 
-    const written = await this.payments.updateStatus(payment.id, payment.markExpired().status, {
+    const written = await this.paymentRepo.updateStatus(payment.id, payment.markExpired().status, {
       tx,
       expectedStatus: PaymentStatus.PENDING,
     });

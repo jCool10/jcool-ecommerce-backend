@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   STOCK_REPOSITORY,
-  type ReserveLine,
+  type ReservationLine,
   type StockRepositoryPort,
 } from '../../src/modules/product/application/stock/ports/stock-repository.port';
 import { InsufficientStockError } from '../../src/modules/product/domain/stock/errors/insufficient-stock.error';
@@ -34,7 +34,7 @@ describe('Inventory reserve (integration, real Postgres)', () => {
   resetDatabaseBeforeEach(() => pool);
 
   describe.each(['reservePessimistic', 'reserveOptimistic'] as const)('%s', (method) => {
-    const reserve = (orderId: string, lines: ReserveLine[]): Promise<void> =>
+    const reserve = (orderId: string, lines: ReservationLine[]): Promise<void> =>
       db.transaction((tx) => repo[method](tx, orderId, lines));
 
     it('holds stock for each order and bumps the version once per hold', async () => {

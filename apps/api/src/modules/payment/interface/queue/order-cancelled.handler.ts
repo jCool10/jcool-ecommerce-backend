@@ -11,7 +11,7 @@ import { ExpirePaymentSessionUseCase } from '../../application/use-cases';
  */
 @Injectable()
 export class OrderCancelledHandler {
-  constructor(private readonly expireSession: ExpirePaymentSessionUseCase) {}
+  constructor(private readonly expirePaymentSession: ExpirePaymentSessionUseCase) {}
 
   async close(job: DomainEventJob, tx: DrizzleTx): Promise<void> {
     const orderId = job.payload.orderId;
@@ -21,6 +21,6 @@ export class OrderCancelledHandler {
       throw new PermanentError(`Unusable order cancellation event "${job.eventType}"`);
     }
 
-    await this.expireSession.execute(orderId, tx, 'cancel');
+    await this.expirePaymentSession.execute(orderId, tx, 'cancel');
   }
 }

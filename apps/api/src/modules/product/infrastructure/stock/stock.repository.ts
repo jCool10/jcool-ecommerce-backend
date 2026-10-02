@@ -10,7 +10,7 @@ import { ReservationStatus } from '../../domain/stock/reservation-status';
 import type {
   ExpiredHold,
   ExpiredHoldQuery,
-  ReserveLine,
+  ReservationLine,
   StockRepositoryPort,
   StockResolveResult,
 } from '../../application/stock/ports/stock-repository.port';
@@ -23,7 +23,7 @@ export class StockRepository implements StockRepositoryPort {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
     config: ConfigService,
   ) {
     this.reservationTtlMs = durationToMs(config.getOrThrow<string>('inventory.reservationTtl'));
@@ -31,11 +31,11 @@ export class StockRepository implements StockRepositoryPort {
   }
 
   // Minted before the first stock row lock, so no checkout queues behind an id-service call.
-  private mintReservationIds(lines: ReserveLine[]): Promise<string[]> {
-    return this.ids.mint(lines.length);
+  private mintReservationIds(lines: ReservationLine[]): Promise<string[]> {
+    return this.idGenerator.mint(lines.length);
   }
 
-  async reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
+  async reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void> {
     const ids = await this.mintReservationIds(lines);
     // Lock rows in a deterministic order so two orders holding the same SKUs can't deadlock.
     const ordered = [...lines].sort((a, b) => a.variantId.localeCompare(b.variantId));
@@ -73,7 +73,7 @@ export class StockRepository implements StockRepositoryPort {
     }
   }
 
-  async reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
+  async reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void> {
     const ids = await this.mintReservationIds(lines);
     // A successful UPDATE still holds a row write-lock until the tx ends, so keep the same
     // deterministic order as the pessimistic path to rule out a cross-order deadlock.

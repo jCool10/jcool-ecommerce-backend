@@ -12,12 +12,12 @@ import { Es256SigningKeys } from '../infrastructure/es256-signing-keys';
 @SkipThrottle({ [DEFAULT_THROTTLER]: true, [ACCOUNT_THROTTLER]: true })
 @Controller('.well-known')
 export class JwksController {
-  constructor(private readonly keys: Es256SigningKeys) {}
+  constructor(private readonly signingKeys: Es256SigningKeys) {}
 
   // Short enough that a key added ahead of a rotation reaches verifiers well before it signs.
   @Get('jwks.json')
   @Header('Cache-Control', 'public, max-age=300')
   jwks(): JSONWebKeySet {
-    return this.keys.jwks;
+    return this.signingKeys.jwks;
   }
 }

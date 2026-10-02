@@ -7,7 +7,7 @@ import { RecordingIdGenerator } from '../../testing/id-generator.double';
 import { PlainPasswordHasher } from '../../testing/plain-password-hasher.double';
 import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
 import { FakeUserRepository } from '../../testing/user-repository.double';
-import { AuthTokensService, IdentityService } from '../services';
+import { AuthTokensService, IdGeneratorService } from '../services';
 import { LoginUserUseCase } from './login-user.use-case';
 
 const USER_ID = encode({ tsMs: Date.UTC(2026, 8, 1), nodeId: 1, sequence: 0 });
@@ -37,7 +37,7 @@ describe('LoginUserUseCase', () => {
         new EchoAccessTokenSigner(),
         fakeConfigService({ 'auth.refreshTokenTtl': '7d' }),
         refreshTokens,
-        new IdentityService(new RecordingIdGenerator()),
+        new IdGeneratorService(new RecordingIdGenerator()),
       ),
       fakeConfigService({ 'auth.requireVerifiedEmail': requireVerifiedEmail }),
     );

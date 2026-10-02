@@ -11,8 +11,8 @@ const LOG_CONTEXT = 'ForgotPasswordUseCase';
 @Injectable()
 export class ForgotPasswordUseCase {
   constructor(
-    @Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort,
-    private readonly passwordReset: PasswordResetService,
+    @Inject(USER_REPOSITORY) private readonly userRepo: UserRepositoryPort,
+    private readonly passwordResetService: PasswordResetService,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -20,11 +20,11 @@ export class ForgotPasswordUseCase {
 
   async execute(rawEmail: string): Promise<void> {
     const email = Email.of(rawEmail).value;
-    const user = await this.users.findByEmail(email);
+    const user = await this.userRepo.findByEmail(email);
     // Not awaited: issuing mints an id over the network, and only a known address pays for it, in
     // latency or in a 503.
     if (user) {
-      void this.passwordReset
+      void this.passwordResetService
         .issueAndSend(user)
         .catch((err: unknown) => this.logger.warn({ userId: user.id, err: toError(err) }, 'password reset not issued'));
     }

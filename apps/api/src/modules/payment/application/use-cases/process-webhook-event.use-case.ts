@@ -46,25 +46,25 @@ export type WebhookProcessResult =
 @Injectable()
 export class ProcessWebhookEventUseCase {
   constructor(
-    @Inject(TRANSACTION_RUNNER) private readonly txRunner: TransactionRunnerPort,
-    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
-    @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEvents: WebhookEventRepositoryPort,
-    @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
-    @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
+    @Inject(TRANSACTION_RUNNER) private readonly transactionRunner: TransactionRunnerPort,
+    @Inject(PAYMENT_GATEWAY) private readonly paymentGateway: PaymentGatewayPort,
+    @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEventRepo: WebhookEventRepositoryPort,
+    @Inject(PAYMENT_REPOSITORY) private readonly paymentRepo: PaymentRepositoryPort,
+    @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
   ) {}
 
   async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
     // Verify BEFORE any DB write — a forged or replayed body must never reach the event log.
-    const verified = this.gateway.verifyAndParseEvent(rawBody, headers);
+    const verified = this.paymentGateway.verifyAndParseEvent(rawBody, headers);
     if (verified.kind !== 'valid') {
       return { outcome: 'rejected', reason: verified.kind };
     }
     const delivery = { providerEventId: verified.providerEventId, eventType: verified.type };
 
-    return this.txRunner.run(async (tx) => {
-      const { inserted, event } = await this.webhookEvents.insertIfNew(
+    return this.transactionRunner.run(async (tx) => {
+      const { inserted, event } = await this.webhookEventRepo.insertIfNew(
         {
-          provider: this.gateway.provider,
+          provider: this.paymentGateway.provider,
           providerEventId: verified.providerEventId,
           type: verified.type,
           payload: verified.payload,
@@ -84,22 +84,22 @@ export class ProcessWebhookEventUseCase {
       // The session finished but the money has not cleared. Leaving the payment PENDING is the whole
       // point: the sweep settles it once the gateway reports it paid, and never before.
       if (settlement.kind === 'awaiting_payment') {
-        await this.webhookEvents.markSkipped(eventId, tx);
+        await this.webhookEventRepo.markSkipped(eventId, tx);
         return { outcome: 'skipped', reason: 'awaiting_payment', ...delivery };
       }
 
       const target = settlement.status;
-      const payment = facts.sessionId ? await this.payments.findByProviderSessionId(facts.sessionId, tx) : null;
+      const payment = facts.sessionId ? await this.paymentRepo.findByProviderSessionId(facts.sessionId, tx) : null;
       // The webhook raced ahead of our own commit, or carries a shape we don't link to a payment.
       // Keep the audit row and skip applying; the sweep settles the order either way.
       if (!payment || payment.id === null) {
-        await this.webhookEvents.markSkipped(eventId, tx);
+        await this.webhookEventRepo.markSkipped(eventId, tx);
         return { outcome: 'skipped', reason: 'payment_not_found', ...delivery };
       }
 
       // Only a success moves money, so only a success has to prove it moved OUR money.
       if (target === PaymentStatus.SUCCEEDED && !chargeMatchesPayment(payment, facts)) {
-        await this.webhookEvents.markSkipped(eventId, tx);
+        await this.webhookEventRepo.markSkipped(eventId, tx);
         return {
           outcome: 'skipped',
           reason: 'amount_mismatch',
@@ -117,14 +117,14 @@ export class ProcessWebhookEventUseCase {
       // The outcome this payment already settled to (reconcile got there first): a no-op, not a
       // conflict that books a refund.
       if (payment.status === target) {
-        await this.webhookEvents.markSkipped(eventId, tx);
+        await this.webhookEventRepo.markSkipped(eventId, tx);
         return { outcome: 'skipped', reason: 'already_settled', ...delivery };
       }
 
       // Out-of-order or terminal-state event: refuse it in the domain rather than clobber a settled
       // payment. The read's FOR UPDATE lock makes the guard hold under concurrent distinct events.
       if (!canTransition(payment.status, target)) {
-        await this.webhookEvents.markSkipped(eventId, tx);
+        await this.webhookEventRepo.markSkipped(eventId, tx);
         return {
           outcome: 'skipped',
           reason: 'conflict',
@@ -135,19 +135,19 @@ export class ProcessWebhookEventUseCase {
 
       const applied =
         target === PaymentStatus.SUCCEEDED ? payment.markSucceeded(facts.intentId) : payment.markFailed(facts.intentId);
-      const updated = await this.payments.updateStatus(payment.id, applied.status, {
+      const updated = await this.paymentRepo.updateStatus(payment.id, applied.status, {
         providerIntentId: applied.providerIntentId,
         tx,
       });
       // The row was just read+locked in this tx, so a null update is an invariant break, not a
       // missing payment — throw to roll the whole unit back rather than falsely mark it PROCESSED.
       if (!updated) throw new Error(`payment vanished mid-transaction: ${payment.id}`);
-      await this.webhookEvents.markProcessed(eventId, tx);
+      await this.webhookEventRepo.markProcessed(eventId, tx);
 
       // Same tx as the settlement, so a settled payment can never lose the event that drives its order
       // — the crash window the direct call in HandlePaymentWebhookUseCase cannot close, since that one
       // runs after this commit. It publishes what happened to the money, not what the order becomes.
-      await this.outbox.append(
+      await this.outboxWriter.append(
         tx,
         toSettledOutboxRecord({
           paymentId: payment.id,

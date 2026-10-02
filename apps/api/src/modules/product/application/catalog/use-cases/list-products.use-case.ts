@@ -22,13 +22,13 @@ export interface ListProductsResult {
 export class ListProductsUseCase {
   constructor(
     @Inject(PRODUCT_REPOSITORY)
-    private readonly products: ProductRepositoryPort,
+    private readonly productRepo: ProductRepositoryPort,
     @Inject(MEDIA_QUERY)
-    private readonly media: MediaQueryPort,
+    private readonly mediaQuery: MediaQueryPort,
   ) {}
 
   async execute(criteria: FindManyActiveCriteria): Promise<ListProductsResult> {
-    const { items, total } = await this.products.findManyActive(criteria);
+    const { items, total } = await this.productRepo.findManyActive(criteria);
     const totalPages = criteria.pageSize > 0 ? Math.ceil(total / criteria.pageSize) : 0;
     return {
       items,
@@ -36,7 +36,7 @@ export class ListProductsUseCase {
       page: criteria.page,
       pageSize: criteria.pageSize,
       totalPages,
-      imageUrls: await this.media.resolveUrls(items.flatMap((product) => product.imageAssetIds)),
+      imageUrls: await this.mediaQuery.resolveUrls(items.flatMap((product) => product.imageAssetIds)),
     };
   }
 }

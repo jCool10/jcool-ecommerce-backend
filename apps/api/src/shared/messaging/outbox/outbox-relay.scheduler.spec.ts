@@ -50,7 +50,7 @@ describe('OutboxRelayScheduler', () => {
       { 'outbox.pollMs': 0 },
       { 'outbox.relayEnabled': false, 'outbox.batchSize': -1 },
     ]) {
-      expect(() => build(overrides).make(), JSON.stringify(overrides)).toThrow(/Invalid outbox relay config/);
+      expect(() => build(overrides).make(), JSON.stringify(overrides)).toThrow(/Invalid config: outbox\./);
     }
   });
 

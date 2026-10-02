@@ -29,7 +29,7 @@ const logCallShape = [
 // columns or pass the `ck_*_routable` checks, and the failure only shows at insert time. `jti` is not
 // a row id and stays on uuidv7 in application/.
 const rowIdMessage =
-  'Row ids must be minted through IdentityService: a uuid does not fit the bigint id columns or the routable-id checks.';
+  'Row ids must be minted through IdGeneratorService: a uuid does not fit the bigint id columns or the routable-id checks.';
 const uuidImportBan = { group: ['uuid', 'uuid/*'], message: rowIdMessage };
 const randomUuidBan = [
   { selector: "ImportSpecifier[imported.name='randomUUID']", message: rowIdMessage },
@@ -104,7 +104,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/modules/user/infrastructure/**/*.ts', 'src/modules/user/application/services/identity.service.ts'],
+    files: ['src/modules/user/infrastructure/**/*.ts', 'src/modules/user/application/services/id-generator.service.ts'],
     ignores: ['**/*.spec.ts'],
     rules: {
       'no-restricted-imports': ['error', { paths: [nestLoggerBan], patterns: [uuidImportBan] }],

@@ -6,13 +6,13 @@ import type { CartSnapshotLine, CartSnapshotReader } from './cart-snapshot.port'
 export class CartSnapshotService implements CartSnapshotReader {
   constructor(
     @Inject(CART_REPOSITORY)
-    private readonly repo: CartRepositoryPort,
+    private readonly cartRepo: CartRepositoryPort,
   ) {}
 
   async getLines(userId: string): Promise<CartSnapshotLine[]> {
-    const cartId = await this.repo.findCartId(userId);
+    const cartId = await this.cartRepo.findCartId(userId);
     if (!cartId) return [];
-    const items = await this.repo.findItems(cartId);
+    const items = await this.cartRepo.findItems(cartId);
     return items.map((item) => ({ skuId: item.skuId, quantity: item.quantity }));
   }
 }

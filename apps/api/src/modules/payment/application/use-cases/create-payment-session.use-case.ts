@@ -36,9 +36,9 @@ export interface CreatePaymentSessionResult {
 @Injectable()
 export class CreatePaymentSessionUseCase {
   constructor(
-    @Inject(ORDER_READ_PORT) private readonly orders: OrderReadPort,
-    @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
-    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
+    @Inject(ORDER_READ_PORT) private readonly orderReader: OrderReadPort,
+    @Inject(PAYMENT_REPOSITORY) private readonly paymentRepo: PaymentRepositoryPort,
+    @Inject(PAYMENT_GATEWAY) private readonly paymentGateway: PaymentGatewayPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {
@@ -46,7 +46,7 @@ export class CreatePaymentSessionUseCase {
   }
 
   async execute(orderId: string, userId: string): Promise<CreatePaymentSessionResult> {
-    const order = await this.orders.findForPayment(orderId);
+    const order = await this.orderReader.findForPayment(orderId);
     // Absent OR owned by someone else both collapse to 404 — never leak another user's order id.
     if (!order || order.userId !== userId) {
       throw new NotFoundException(`Order not found: ${orderId}`);
@@ -55,7 +55,7 @@ export class CreatePaymentSessionUseCase {
       throw new ConflictException(`Order is not payable in status ${order.status}`);
     }
 
-    const existing = await this.payments.findByOrderId(orderId);
+    const existing = await this.paymentRepo.findByOrderId(orderId);
     if (existing && existing.status === PaymentStatus.SUCCEEDED) {
       // Already owns the order's charge; a second session would risk a double charge.
       throw new ConflictException(`Order already has an active payment (${existing.status})`);
@@ -73,7 +73,7 @@ export class CreatePaymentSessionUseCase {
     // on this key — the DB active-payment guard and its unique index do.
     let session: GatewaySession;
     try {
-      session = await this.gateway.createSession({
+      session = await this.paymentGateway.createSession({
         orderId,
         amountMinor: order.amountMinor,
         currency: order.currency,
@@ -97,10 +97,10 @@ export class CreatePaymentSessionUseCase {
     try {
       // Built inside the try because the entity's own invariants can reject a malformed session, and
       // that strands one at the gateway exactly the way a failed insert does.
-      saved = await this.payments.create(
+      saved = await this.paymentRepo.create(
         Payment.create({
           orderId,
-          provider: this.gateway.provider,
+          provider: this.paymentGateway.provider,
           providerSessionId: session.providerSessionId,
           amountMinor: order.amountMinor,
           currency: order.currency,
@@ -141,7 +141,7 @@ export class CreatePaymentSessionUseCase {
   private async reuseOrRetireExisting(existing: Payment): Promise<CreatePaymentSessionResult | null> {
     let probe: RetrievedSession;
     try {
-      probe = await this.gateway.retrieveSession(existing.providerSessionId);
+      probe = await this.paymentGateway.retrieveSession(existing.providerSessionId);
     } catch (error) {
       this.metrics.recordSagaStep('payment_session', 'failed');
       if (error instanceof PaymentGatewayError) {
@@ -169,7 +169,7 @@ export class CreatePaymentSessionUseCase {
 
     // A definite "not open" answer, so the row is stale — close it out like a reconcile settlement
     // would, and the one-active-payment index no longer blocks the fresh session about to open.
-    const written = await this.payments.updateStatus(existing.id as string, existing.markFailed().status, {
+    const written = await this.paymentRepo.updateStatus(existing.id as string, existing.markFailed().status, {
       expectedStatus: PaymentStatus.PENDING,
     });
     if (written === null) {
@@ -187,12 +187,12 @@ export class CreatePaymentSessionUseCase {
    * cancel inside the gateway round-trip finds no payment, acks, and leaves a payable session behind.
    */
   private async abortIfOrderDiedMeanwhile(orderId: string, payment: Payment): Promise<void> {
-    const current = await this.orders.findForPayment(orderId);
+    const current = await this.orderReader.findForPayment(orderId);
     if (current !== null && current.status === ORDER_STATUS_PENDING) return;
 
     const status = current?.status ?? 'DELETED';
     try {
-      await this.gateway.expireSession(payment.providerSessionId);
+      await this.paymentGateway.expireSession(payment.providerSessionId);
     } catch (error) {
       // Left PENDING deliberately — marking it EXPIRED would claim a session was closed that is
       // still live. Nothing retries this, so the gateway's own expiry is the backstop.
@@ -203,7 +203,7 @@ export class CreatePaymentSessionUseCase {
       throw new ConflictException(`Order is not payable in status ${status}`);
     }
 
-    await this.payments.updateStatus(payment.id as string, PaymentStatus.EXPIRED, {
+    await this.paymentRepo.updateStatus(payment.id as string, PaymentStatus.EXPIRED, {
       expectedStatus: PaymentStatus.PENDING,
     });
     throw new ConflictException(`Order is not payable in status ${status}`);

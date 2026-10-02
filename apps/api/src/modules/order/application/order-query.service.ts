@@ -24,23 +24,23 @@ export interface OrderPageView {
 export class OrderQueryService {
   constructor(
     @Inject(ORDER_REPOSITORY)
-    private readonly repo: OrderRepositoryPort,
+    private readonly orderRepo: OrderRepositoryPort,
   ) {}
 
   getOne(userId: string, orderId: string): Promise<OrderView> {
-    return loadOrderView(this.repo, orderId, userId);
+    return loadOrderView(this.orderRepo, orderId, userId);
   }
 
   async list(userId: string, query: OrderPageQuery): Promise<OrderPageView> {
-    return toPageView(await this.repo.findPageForUser(userId, query), query);
+    return toPageView(await this.orderRepo.findPageForUser(userId, query), query);
   }
 
   async adminList(query: AdminOrderPageQuery): Promise<OrderPageView> {
-    return toPageView(await this.repo.findPage(query), query);
+    return toPageView(await this.orderRepo.findPage(query), query);
   }
 
   async adminGetOne(orderId: string): Promise<OrderView> {
-    const order = await this.repo.findById(orderId);
+    const order = await this.orderRepo.findById(orderId);
     if (!order) {
       throw new NotFoundException(`Order not found: ${orderId}`);
     }

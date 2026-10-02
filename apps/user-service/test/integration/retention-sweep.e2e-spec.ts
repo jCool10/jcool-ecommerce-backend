@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { RetentionScheduler, RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
 import type { DrizzleDB } from '../../src/database';
 import * as schema from '../../src/database/schema';
-import { IdentityService } from '../../src/modules/user/application/services/identity.service';
+import { IdGeneratorService } from '../../src/modules/user/application/services/id-generator.service';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 
@@ -31,7 +31,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   let db: DrizzleDB;
   let registry: RetentionSweepRegistry;
   let scheduler: RetentionScheduler;
-  let identity: IdentityService;
+  let idGeneratorService: IdGeneratorService;
 
   const sweepNamed = (name: string): RetentionSweep => {
     const sweep = registry.all().find((s) => s.name === name);
@@ -40,7 +40,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   };
 
   async function insertUser(email: string): Promise<string> {
-    const id = await identity.mintId();
+    const id = await idGeneratorService.mintId();
     await db.insert(schema.users).values({ id, email, passwordHash: 'not-a-real-hash' });
     return id;
   }
@@ -49,7 +49,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     ({ app, pool, db } = await createTestAppWithPool(WINDOWS));
     registry = app.get(RetentionSweepRegistry);
     scheduler = app.get(RetentionScheduler);
-    identity = app.get(IdentityService);
+    idGeneratorService = app.get(IdGeneratorService);
   });
 
   closeAppAfterAll(() => app);
@@ -73,7 +73,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       ]) {
         const userId = await insertUser(`${name.replace(/[:.]/g, '-')}@example.com`);
         const row = async (suffix: string, expiresAt: Date, consumedAt: Date | null = null) => ({
-          id: await identity.mintId(),
+          id: await idGeneratorService.mintId(),
           userId,
           tokenHash: `${suffix}-${'0'.repeat(40)}`,
           expiresAt,
@@ -102,9 +102,9 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     // replay back into a successful refresh.
     it('auth-tokens:refresh keeps a revoked token far longer than an expired one', async () => {
       const userId = await insertUser('refresh-retention@example.com');
-      const familyId = await identity.mintId();
+      const familyId = await idGeneratorService.mintId();
       const row = async (suffix: string, expiresAt: Date, revokedAt: Date | null = null) => ({
-        id: await identity.mintId(),
+        id: await idGeneratorService.mintId(),
         userId,
         tokenHash: `${suffix}-${'0'.repeat(40)}`,
         familyId,
@@ -141,7 +141,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       });
       const userId = await insertUser('fault-isolation@example.com');
       await db.insert(schema.emailVerificationTokens).values({
-        id: await identity.mintId(),
+        id: await idGeneratorService.mintId(),
         userId,
         tokenHash: `expired-${'0'.repeat(40)}`,
         expiresAt: daysAgo(1),

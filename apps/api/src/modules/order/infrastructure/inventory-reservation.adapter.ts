@@ -19,11 +19,11 @@ import type {
 export class InventoryReservationAdapter implements InventoryReservationPort {
   constructor(
     @Inject(PRODUCT_STOCK_RESERVATION)
-    private readonly stock: ProductStockReservation,
+    private readonly productStockReservation: ProductStockReservation,
   ) {}
 
   reserve(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void> {
-    return this.stock.reserve(
+    return this.productStockReservation.reserve(
       tx,
       orderId,
       lines.map((line) => ({ variantId: line.skuId, quantity: line.quantity })),
@@ -32,14 +32,14 @@ export class InventoryReservationAdapter implements InventoryReservationPort {
 
   // Reservations are keyed by orderId, so resolution needs no skuId → variantId mapping.
   commit(tx: DrizzleTx, orderId: string): Promise<StockResolution> {
-    return this.stock.commit(tx, orderId);
+    return this.productStockReservation.commit(tx, orderId);
   }
 
   release(tx: DrizzleTx, orderId: string): Promise<StockResolution> {
-    return this.stock.release(tx, orderId);
+    return this.productStockReservation.release(tx, orderId);
   }
 
   findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]> {
-    return this.stock.findExpiredHolds(query);
+    return this.productStockReservation.findExpiredHolds(query);
   }
 }

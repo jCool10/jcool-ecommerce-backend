@@ -6,6 +6,7 @@ import { PinoLogger } from 'nestjs-pino';
 import { runInJobContext } from '../observability/correlation/job-context';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { toError } from '@jcool/kernel';
+import { requireIntConfig } from '../config/require-int-config';
 import { withSpan } from '../observability/tracing/tracer';
 import type { RetentionSweep } from './retention-sweep.port';
 import { RetentionSweepRegistry } from './retention-sweep.registry';
@@ -36,12 +37,10 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {
-    // A mistyped key reads as undefined, and `setInterval(fn, undefined)` fires every event-loop
-    // turn — a busy loop issuing DELETEs. Refuse to build rather than boot that.
     this.enabled = config.get<boolean>('retention.enabled') === true;
-    this.intervalMs = requireInt(config, 'retention.intervalMs', 1);
-    this.batchSize = requireInt(config, 'retention.batchSize', 1);
-    this.sweepTimeoutMs = requireInt(config, 'retention.sweepTimeoutMs', 1);
+    this.intervalMs = requireIntConfig(config, 'retention.intervalMs', 1);
+    this.batchSize = requireIntConfig(config, 'retention.batchSize', 1);
+    this.sweepTimeoutMs = requireIntConfig(config, 'retention.sweepTimeoutMs', 1);
     logger.setContext(LOG_CONTEXT);
   }
 
@@ -50,8 +49,8 @@ export class RetentionScheduler implements OnApplicationBootstrap, OnModuleDestr
       this.logger.info('retention sweeps disabled');
       return;
     }
-    const interval = setInterval(() => void this.tick(), this.intervalMs);
-    this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
+    const timer = setInterval(() => void this.tick(), this.intervalMs);
+    this.schedulerRegistry.addInterval(INTERVAL_NAME, timer);
     this.logger.info(
       {
         intervalMs: this.intervalMs,
@@ -152,12 +151,4 @@ function withTimeout<T>(work: Promise<T>, ms: number, sweep: string): Promise<T>
     timer.unref();
   });
   return Promise.race([work, expiry]).finally(() => clearTimeout(timer));
-}
-
-function requireInt(config: ConfigService, key: string, min: number): number {
-  const value = config.get<number>(key);
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
-    throw new Error(`Invalid retention config: ${key} must be an integer >= ${min}`);
-  }
-  return value;
 }

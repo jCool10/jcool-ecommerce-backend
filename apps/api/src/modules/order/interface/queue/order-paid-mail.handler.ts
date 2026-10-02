@@ -18,8 +18,8 @@ const LOG_CONTEXT = 'OrderPaidMailHandler';
 @Injectable()
 export class OrderPaidMailHandler {
   constructor(
-    @Inject(USER_CONTACT) private readonly contacts: UserContactPort,
-    @Inject(MAIL_TRANSPORT) private readonly transport: MailTransportPort,
+    @Inject(USER_CONTACT) private readonly userContact: UserContactPort,
+    @Inject(MAIL_TRANSPORT) private readonly mailTransport: MailTransportPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {
@@ -36,7 +36,7 @@ export class OrderPaidMailHandler {
 
     // The event deliberately carries no email address: the outbox is jsonb in Postgres, and a
     // deleted account must not leave its address behind in it.
-    const user = await this.contacts.find(userId, new Date(job.occurredAt));
+    const user = await this.userContact.find(userId, new Date(job.occurredAt));
     if (!user) {
       throw new PermanentError(`order.paid for order ${orderId} names a user that no longer exists`);
     }
@@ -44,7 +44,7 @@ export class OrderPaidMailHandler {
     const message = buildMessage(orderId, user.email, job.payload);
     return async () => {
       try {
-        await this.transport.sendMail(message);
+        await this.mailTransport.sendMail(message);
       } catch (error: unknown) {
         this.metrics.recordMailSendFailure('order_paid');
         this.logger.error(

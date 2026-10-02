@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
+import { requireIntConfig } from '@jcool/platform/config';
 import { runInJobContext } from '@jcool/platform/observability';
 import { toError } from '@jcool/kernel';
 import { OutboxRelay } from './outbox-relay';
@@ -20,17 +21,15 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly batchSize: number;
 
   constructor(
-    private readonly relay: OutboxRelay,
+    private readonly outboxRelay: OutboxRelay,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly cls: ClsService,
     private readonly logger: PinoLogger,
   ) {
-    // A mistyped key reads as undefined, and `setInterval(fn, undefined)` fires every event-loop
-    // turn — a busy loop opening a transaction against the outbox. Refuse to build rather than boot it.
     this.enabled = config.get<boolean>('outbox.relayEnabled') === true;
-    this.intervalMs = requireInt(config, 'outbox.pollMs', 1);
-    this.batchSize = requireInt(config, 'outbox.batchSize', 1);
+    this.intervalMs = requireIntConfig(config, 'outbox.pollMs', 1);
+    this.batchSize = requireIntConfig(config, 'outbox.batchSize', 1);
     logger.setContext(LOG_CONTEXT);
   }
 
@@ -39,8 +38,8 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
       this.logger.info('outbox relay disabled');
       return;
     }
-    const interval = setInterval(() => void this.tick(), this.intervalMs);
-    this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
+    const timer = setInterval(() => void this.tick(), this.intervalMs);
+    this.schedulerRegistry.addInterval(INTERVAL_NAME, timer);
     this.logger.info({ intervalMs: this.intervalMs, batchSize: this.batchSize }, 'outbox relay scheduled');
   }
 
@@ -71,7 +70,7 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
     try {
       // One correlation id per tick — a timer has no request to inherit one from.
       await runInJobContext(this.cls, INTERVAL_NAME, async () => {
-        const summary = await this.relay.runOnce(this.batchSize);
+        const summary = await this.outboxRelay.runOnce(this.batchSize);
         // An idle backlog is the steady state; logging it would bury the ticks that moved something.
         if (summary.published > 0 || summary.failed > 0) {
           this.logger.info({ ...summary }, 'outbox relay tick completed');
@@ -83,14 +82,6 @@ export class OutboxRelayScheduler implements OnModuleInit, OnModuleDestroy {
       this.logger.error({ err: toError(error) }, 'outbox relay tick failed');
     }
   }
-}
-
-function requireInt(config: ConfigService, key: string, min: number): number {
-  const value = config.get<number>(key);
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
-    throw new Error(`Invalid outbox relay config: ${key} must be an integer >= ${min}`);
-  }
-  return value;
 }
 
 // A pending drain must not hold the process open once the tick it was racing has finished.

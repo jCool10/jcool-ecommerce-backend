@@ -16,7 +16,7 @@ export class SweepWebhookEventsUseCase implements RetentionSweep, OnModuleInit {
   private readonly retentionMs: number;
 
   constructor(
-    @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEvents: WebhookEventRepositoryPort,
+    @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEventRepo: WebhookEventRepositoryPort,
     config: ConfigService,
     private readonly registry: RetentionSweepRegistry,
   ) {
@@ -28,6 +28,6 @@ export class SweepWebhookEventsUseCase implements RetentionSweep, OnModuleInit {
   }
 
   sweep(batchSize: number): Promise<number> {
-    return this.webhookEvents.deleteReceivedBefore(new Date(Date.now() - this.retentionMs), batchSize);
+    return this.webhookEventRepo.deleteReceivedBefore(new Date(Date.now() - this.retentionMs), batchSize);
   }
 }

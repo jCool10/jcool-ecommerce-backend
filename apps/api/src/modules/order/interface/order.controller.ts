@@ -32,9 +32,9 @@ import { RequireIdempotencyKeyGuard } from './require-idempotency-key.guard';
 @Controller('orders')
 export class OrderController {
   constructor(
-    private readonly checkout: CheckoutOrderUseCase,
+    private readonly checkoutOrder: CheckoutOrderUseCase,
     private readonly cancelOrder: CancelOrderUseCase,
-    private readonly orderQuery: OrderQueryService,
+    private readonly orderQueryService: OrderQueryService,
   ) {}
 
   @Post()
@@ -55,7 +55,7 @@ export class OrderController {
   @ApiConflictResponse({ description: 'Idempotency-Key already in progress, or insufficient stock' })
   @ApiUnprocessableEntityResponse({ description: 'Idempotency-Key reused with a different request' })
   async create(@CurrentUser() user: AuthenticatedUser): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.checkout.execute(user.userId));
+    return OrderResponseDto.fromView(await this.checkoutOrder.execute(user.userId));
   }
 
   @Get()
@@ -65,7 +65,7 @@ export class OrderController {
     @Query() query: ListOrdersQueryDto,
   ): Promise<PaginatedOrdersResponseDto> {
     return PaginatedOrdersResponseDto.fromPage(
-      await this.orderQuery.list(user.userId, { page: query.page, pageSize: query.pageSize }),
+      await this.orderQueryService.list(user.userId, { page: query.page, pageSize: query.pageSize }),
     );
   }
 
@@ -94,6 +94,6 @@ export class OrderController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseSnowflakeIdPipe) id: string,
   ): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.orderQuery.getOne(user.userId, id));
+    return OrderResponseDto.fromView(await this.orderQueryService.getOne(user.userId, id));
   }
 }

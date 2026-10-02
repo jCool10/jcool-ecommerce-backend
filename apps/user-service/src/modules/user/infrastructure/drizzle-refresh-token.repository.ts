@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '../../../database';
-import { IdentityService } from '../application/services/identity.service';
+import { IdGeneratorService } from '../application/services/id-generator.service';
 import { refreshTokens, users } from './schema/user.schema';
 import type {
   ActiveSession,
@@ -16,12 +16,12 @@ import type {
 export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    private readonly identity: IdentityService,
+    private readonly idGeneratorService: IdGeneratorService,
   ) {}
 
   async create(input: CreateRefreshTokenInput): Promise<void> {
     await this.db.insert(refreshTokens).values({
-      id: await this.identity.mintId(),
+      id: await this.idGeneratorService.mintId(),
       userId: input.userId,
       tokenHash: input.tokenHash,
       familyId: input.familyId,

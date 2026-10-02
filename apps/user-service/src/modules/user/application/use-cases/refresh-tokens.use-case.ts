@@ -9,7 +9,7 @@ import {
   SESSION_EPOCH,
   type SessionEpochPort,
 } from '../ports';
-import { type AuthTokens, AuthTokensService, IdentityService } from '../services';
+import { type AuthTokens, AuthTokensService, IdGeneratorService } from '../services';
 
 // One generic message for every failure branch so a caller can't probe validity.
 const INVALID_REFRESH_TOKEN = 'Invalid refresh token';
@@ -19,10 +19,10 @@ const LOG_CONTEXT = 'RefreshTokens';
 @Injectable()
 export class RefreshTokensUseCase {
   constructor(
-    @Inject(REFRESH_TOKEN_REPOSITORY) private readonly refreshTokens: RefreshTokenRepositoryPort,
-    private readonly identity: IdentityService,
-    private readonly authTokens: AuthTokensService,
-    @Inject(AUTH_AUDIT) private readonly audit: AuthAuditPort,
+    @Inject(REFRESH_TOKEN_REPOSITORY) private readonly refreshTokenRepo: RefreshTokenRepositoryPort,
+    private readonly idGeneratorService: IdGeneratorService,
+    private readonly authTokensService: AuthTokensService,
+    @Inject(AUTH_AUDIT) private readonly authAudit: AuthAuditPort,
     @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochPort,
     private readonly logger: PinoLogger,
   ) {
@@ -32,16 +32,16 @@ export class RefreshTokensUseCase {
   // Cookie-authenticated, so no request.user carries the userId the caller's audit line needs.
   async execute(rawRefreshToken: string): Promise<AuthTokens & { userId: string }> {
     const presentedTokenHash = hashRefreshToken(rawRefreshToken);
-    const owner = await this.refreshTokens.findOwner(presentedTokenHash);
+    const owner = await this.refreshTokenRepo.findOwner(presentedTokenHash);
     if (!owner) {
       throw new UnauthorizedException(INVALID_REFRESH_TOKEN);
     }
 
     // A retired token skips the mint, so theft detection never waits on the id service. An id
     // minted for a rotation that then loses the race is never used, which costs nothing.
-    const successorId = owner.rotatable ? await this.identity.mintId() : null;
-    const successor = this.authTokens.newRefreshToken();
-    const outcome = await this.refreshTokens.rotate({
+    const successorId = owner.rotatable ? await this.idGeneratorService.mintId() : null;
+    const successor = this.authTokensService.newRefreshToken();
+    const outcome = await this.refreshTokenRepo.rotate({
       presentedTokenHash,
       expectedUserId: owner.userId,
       successorId,
@@ -54,7 +54,7 @@ export class RefreshTokensUseCase {
       const session = { userId: outcome.userId, familyId: outcome.familyId };
       if (outcome.replaced) {
         // A superseded token replayed is the classic stolen-token signature.
-        this.audit.record({
+        this.authAudit.record({
           event: 'token.reuse_detected',
           outcome: 'failure',
           userId: outcome.userId,
@@ -76,11 +76,11 @@ export class RefreshTokensUseCase {
       throw new UnauthorizedException(INVALID_REFRESH_TOKEN);
     }
 
-    const accessToken = await this.authTokens.signAccess(outcome.userId, outcome.role, outcome.tokenEpoch);
+    const accessToken = await this.authTokensService.signAccess(outcome.userId, outcome.role, outcome.tokenEpoch);
     return {
       accessToken,
       refreshToken: successor.raw,
-      expiresIn: this.authTokens.accessExpiresIn,
+      expiresIn: this.authTokensService.accessExpiresIn,
       userId: outcome.userId,
     };
   }

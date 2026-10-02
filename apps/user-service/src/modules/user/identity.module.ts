@@ -4,7 +4,7 @@ import { ClsService } from 'nestjs-cls';
 import { ID_SERVICE_BREAKER, IdServiceHttpAdapter, isIdServiceFault } from '@jcool/platform/identity';
 import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
 import { ID_GENERATOR, type IdGeneratorPort } from './application/ports';
-import { IdentityService } from './application/services/identity.service';
+import { IdGeneratorService } from './application/services/id-generator.service';
 
 /**
  * Every id comes from the id service. There is deliberately no in-process generator here: one would
@@ -27,11 +27,11 @@ import { IdentityService } from './application/services/identity.service';
       },
     },
     {
-      provide: IdentityService,
+      provide: IdGeneratorService,
       inject: [ID_GENERATOR],
-      useFactory: (ids: IdGeneratorPort) => new IdentityService(ids),
+      useFactory: (ids: IdGeneratorPort) => new IdGeneratorService(ids),
     },
   ],
-  exports: [IdentityService],
+  exports: [IdGeneratorService],
 })
 export class IdentityModule {}

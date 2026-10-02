@@ -71,7 +71,7 @@ async function main(): Promise<void> {
       `SELECT n_live_tup, n_dead_tup, autovacuum_count, last_autovacuum, last_autoanalyze
          FROM pg_stat_user_tables WHERE relname = 'users'`,
     );
-    const v = vac.rows.at(0);
+    const vacuumRow = vac.rows.at(0);
 
     const sharedBuffersRaw = await scalar<string>(pool, `SHOW shared_buffers`);
     const sharedBuffersBytes = parseSharedBuffers(sharedBuffersRaw);
@@ -109,11 +109,11 @@ async function main(): Promise<void> {
       `heap cache-hit ratio : ${hitRatio(Number(ioRow.heap_hit), Number(ioRow.heap_read))}  (hit ${ioRow.heap_hit} / read ${ioRow.heap_read})`,
       `index cache-hit ratio: ${hitRatio(Number(ioRow.idx_hit), Number(ioRow.idx_read))}  (hit ${ioRow.idx_hit} / read ${ioRow.idx_read})`,
       '',
-      `n_live_tup           : ${v?.n_live_tup ?? 'n/a'}`,
-      `n_dead_tup           : ${v?.n_dead_tup ?? 'n/a'}`,
-      `autovacuum_count     : ${v?.autovacuum_count ?? 'n/a'}`,
-      `last_autovacuum      : ${v?.last_autovacuum?.toISOString() ?? 'never'}`,
-      `last_autoanalyze     : ${v?.last_autoanalyze?.toISOString() ?? 'never'}`,
+      `n_live_tup           : ${vacuumRow?.n_live_tup ?? 'n/a'}`,
+      `n_dead_tup           : ${vacuumRow?.n_dead_tup ?? 'n/a'}`,
+      `autovacuum_count     : ${vacuumRow?.autovacuum_count ?? 'n/a'}`,
+      `last_autovacuum      : ${vacuumRow?.last_autovacuum?.toISOString() ?? 'never'}`,
+      `last_autoanalyze     : ${vacuumRow?.last_autoanalyze?.toISOString() ?? 'never'}`,
       '',
       'pg_stat_statements (insert/select on users):',
       pgss,

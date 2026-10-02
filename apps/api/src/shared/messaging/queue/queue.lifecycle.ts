@@ -14,9 +14,9 @@ const LOG_CONTEXT = 'QueueLifecycle';
 @Injectable()
 export class QueueLifecycle implements OnApplicationShutdown {
   constructor(
-    @Inject(DOMAIN_EVENTS_QUEUE) private readonly queue: Queue,
+    @Inject(DOMAIN_EVENTS_QUEUE) private readonly domainEventsQueue: Queue,
     @Inject(DOMAIN_EVENTS_DLQ_QUEUE) private readonly deadLetterQueue: Queue,
-    @Inject(QUEUE_CONNECTION) private readonly connection: Redis,
+    @Inject(QUEUE_CONNECTION) private readonly queueConnection: Redis,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -27,7 +27,7 @@ export class QueueLifecycle implements OnApplicationShutdown {
   async onApplicationShutdown(): Promise<void> {
     // Queues first — they can still have commands in flight on the connection underneath them. One
     // failing to close must not leave the others open, so each is closed on its own.
-    for (const queue of [this.queue, this.deadLetterQueue]) {
+    for (const queue of [this.domainEventsQueue, this.deadLetterQueue]) {
       try {
         await queue.close();
       } catch (error) {
@@ -38,9 +38,9 @@ export class QueueLifecycle implements OnApplicationShutdown {
     // quit() drains then closes; it rejects immediately when Redis is already gone, so fall back to
     // an unconditional teardown instead of hanging shutdown on an unreachable server.
     try {
-      await this.connection.quit();
+      await this.queueConnection.quit();
     } catch {
-      this.connection.disconnect();
+      this.queueConnection.disconnect();
     }
   }
 }

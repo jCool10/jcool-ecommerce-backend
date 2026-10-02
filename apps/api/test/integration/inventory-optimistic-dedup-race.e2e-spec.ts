@@ -11,7 +11,7 @@ import {
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
   STOCK_REPOSITORY,
-  type ReserveLine,
+  type ReservationLine,
   type StockRepositoryPort,
 } from '../../src/modules/product/application/stock/ports/stock-repository.port';
 import { readStock } from '../setup/fixtures/order-flow.fixture';
@@ -26,14 +26,14 @@ const ORDER = testId();
 const STOCK = 10;
 const QUANTITY = 1;
 
-type Hold = (tx: DrizzleTx, orderId: string, lines: ReserveLine[]) => Promise<void>;
+type Hold = (tx: DrizzleTx, orderId: string, lines: ReservationLine[]) => Promise<void>;
 
 // A holds its transaction open until B is parked on the row lock, so B's dedup read has already run.
 async function raceDuplicateSubmission(
   db: DrizzleDB,
   pool: Pool,
   hold: Hold,
-  line: ReserveLine,
+  line: ReservationLine,
 ): Promise<PromiseSettledResult<void>> {
   let releaseA!: () => void;
   const aMayCommit = new Promise<void>((resolve) => (releaseA = resolve));

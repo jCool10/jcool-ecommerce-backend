@@ -19,8 +19,8 @@ export class SweepAbandonedAssetsUseCase implements RetentionSweep, OnModuleInit
   private readonly staleClaimMs: number;
 
   constructor(
-    @Inject(MEDIA_ASSET_REPOSITORY) private readonly repository: MediaAssetRepositoryPort,
-    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStoragePort,
+    @Inject(MEDIA_ASSET_REPOSITORY) private readonly mediaAssetRepo: MediaAssetRepositoryPort,
+    @Inject(OBJECT_STORAGE) private readonly objectStorage: ObjectStoragePort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     config: ConfigService,
     private readonly registry: RetentionSweepRegistry,
@@ -36,15 +36,19 @@ export class SweepAbandonedAssetsUseCase implements RetentionSweep, OnModuleInit
 
   async sweep(batchSize: number): Promise<number> {
     const now = new Date();
-    const claimed = await this.repository.claimForSweep(now, new Date(now.getTime() - this.staleClaimMs), batchSize);
+    const claimed = await this.mediaAssetRepo.claimForSweep(
+      now,
+      new Date(now.getTime() - this.staleClaimMs),
+      batchSize,
+    );
 
     let deleted = 0;
     for (const asset of claimed) {
       // Serial, not `Promise.all`: the batch is the unit of work the scheduler timed, and firing a
       // whole batch of bucket deletes at once turns one slow storage day into a timed-out sweep.
       try {
-        await this.storage.delete(asset.storageKey);
-        if (await this.repository.deleteClaimed(asset.id)) {
+        await this.objectStorage.delete(asset.storageKey);
+        if (await this.mediaAssetRepo.deleteClaimed(asset.id)) {
           deleted += 1;
           this.metrics.recordMediaBytesReclaimed(asset.sizeBytes ?? 0);
         }

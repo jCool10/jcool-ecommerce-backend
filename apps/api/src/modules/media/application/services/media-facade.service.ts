@@ -15,8 +15,8 @@ export class MediaFacadeService implements MediaFacade {
   private readonly readyTtlSec: number;
 
   constructor(
-    @Inject(MEDIA_ASSET_REPOSITORY) private readonly repository: MediaAssetRepositoryPort,
-    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStoragePort,
+    @Inject(MEDIA_ASSET_REPOSITORY) private readonly mediaAssetRepo: MediaAssetRepositoryPort,
+    @Inject(OBJECT_STORAGE) private readonly objectStorage: ObjectStoragePort,
     config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
@@ -28,18 +28,18 @@ export class MediaFacadeService implements MediaFacade {
     const unique = [...new Set(assetIds)];
     if (unique.length === 0) return new Map();
 
-    const rows = await this.repository.findStorageKeys(unique);
+    const rows = await this.mediaAssetRepo.findStorageKeys(unique);
     // Signing is local arithmetic, not a request, so resolving a page of images costs one query and
     // no round trips.
     const entries = await Promise.all(
-      rows.map(async (row) => [row.id, await this.storage.publicUrl(row.storageKey)] as const),
+      rows.map(async (row) => [row.id, await this.objectStorage.publicUrl(row.storageKey)] as const),
     );
     return new Map(entries);
   }
 
   async attach(tx: DrizzleTx, assetId: string): Promise<void> {
     try {
-      await this.repository.attach(tx, assetId);
+      await this.mediaAssetRepo.attach(tx, assetId);
     } catch (error) {
       throw this.translate(error, assetId);
     }
@@ -49,7 +49,7 @@ export class MediaFacadeService implements MediaFacade {
     try {
       // Restores an expiry rather than deleting anything: a bucket call inside the caller's
       // transaction would hold a connection across the network, so the bytes go when the sweep does.
-      await this.repository.detach(tx, assetId, new Date(Date.now() + this.readyTtlSec * 1000));
+      await this.mediaAssetRepo.detach(tx, assetId, new Date(Date.now() + this.readyTtlSec * 1000));
     } catch (error) {
       // Nothing left to give back, and dropping the link row is exactly the repair for an asset whose
       // row is already gone. The lookup found no row rather than failing, so the caller's tx commits.

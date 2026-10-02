@@ -30,8 +30,8 @@ export class SessionEpochReconciler {
   private readonly firstPassLookbackMs: number;
 
   constructor(
-    @Inject(SESSION_EPOCH_CHANGES) private readonly changes: SessionEpochChangesPort,
-    @Inject(SESSION_EPOCH_PUBLISHER) private readonly publisher: SessionEpochPublisherPort,
+    @Inject(SESSION_EPOCH_CHANGES) private readonly sessionEpochChanges: SessionEpochChangesPort,
+    @Inject(SESSION_EPOCH_PUBLISHER) private readonly sessionEpochPublisher: SessionEpochPublisherPort,
     private readonly logger: PinoLogger,
     config: ConfigService,
   ) {
@@ -48,10 +48,10 @@ export class SessionEpochReconciler {
 
     let after: EpochChangeCursor | null = null;
     for (;;) {
-      const page = await this.changes.listChanges(since, after, PAGE_SIZE);
+      const page = await this.sessionEpochChanges.listChanges(since, after, PAGE_SIZE);
       for (const change of page) {
         try {
-          await this.publisher.publish(change.userId, change.epoch);
+          await this.sessionEpochPublisher.publish(change.userId, change.epoch);
         } catch (error) {
           // The watermark stays put, so the next pass starts over from the same point.
           this.logger.warn({ userId: change.userId, err: toError(error) }, 'session epoch reconcile pass aborted');

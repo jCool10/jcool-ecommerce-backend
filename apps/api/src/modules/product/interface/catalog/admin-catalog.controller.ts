@@ -40,13 +40,13 @@ import {
 @Roles(Role.Admin)
 @Controller('admin')
 export class AdminCatalogController {
-  constructor(private readonly admin: CatalogAdminService) {}
+  constructor(private readonly catalogAdminService: CatalogAdminService) {}
 
   @Post('categories')
   @ApiCreatedResponse({ type: AdminCategoryResponseDto })
   @ApiConflictResponse({ description: 'Slug already exists' })
   async createCategory(@Body() dto: CreateCategoryDto): Promise<AdminCategoryResponseDto> {
-    return AdminCategoryResponseDto.fromEntity(await this.admin.createCategory(dto));
+    return AdminCategoryResponseDto.fromEntity(await this.catalogAdminService.createCategory(dto));
   }
 
   @Patch('categories/:id')
@@ -57,7 +57,7 @@ export class AdminCatalogController {
     @Param('id', ParseSnowflakeIdPipe) id: string,
     @Body() dto: UpdateCategoryDto,
   ): Promise<AdminCategoryResponseDto> {
-    return AdminCategoryResponseDto.fromEntity(await this.admin.updateCategory(id, dto));
+    return AdminCategoryResponseDto.fromEntity(await this.catalogAdminService.updateCategory(id, dto));
   }
 
   @Delete('categories/:id')
@@ -66,7 +66,7 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'Category not found' })
   @ApiConflictResponse({ description: 'Category still has active products' })
   async deleteCategory(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<AdminCategoryResponseDto> {
-    return AdminCategoryResponseDto.fromEntity(await this.admin.archiveCategory(id));
+    return AdminCategoryResponseDto.fromEntity(await this.catalogAdminService.archiveCategory(id));
   }
 
   @Post('products')
@@ -74,7 +74,7 @@ export class AdminCatalogController {
   @ApiNotFoundResponse({ description: 'Category not found' })
   @ApiConflictResponse({ description: 'Slug already exists' })
   async createProduct(@Body() dto: CreateProductDto): Promise<AdminProductResponseDto> {
-    return AdminProductResponseDto.fromEntity(await this.admin.createProduct(dto));
+    return AdminProductResponseDto.fromEntity(await this.catalogAdminService.createProduct(dto));
   }
 
   @Patch('products/:id')
@@ -85,7 +85,7 @@ export class AdminCatalogController {
     @Param('id', ParseSnowflakeIdPipe) id: string,
     @Body() dto: UpdateProductDto,
   ): Promise<AdminProductResponseDto> {
-    return AdminProductResponseDto.fromEntity(await this.admin.updateProduct(id, dto));
+    return AdminProductResponseDto.fromEntity(await this.catalogAdminService.updateProduct(id, dto));
   }
 
   @Delete('products/:id')
@@ -93,7 +93,7 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminProductResponseDto, description: 'Product archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'Product not found' })
   async deleteProduct(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<AdminProductResponseDto> {
-    return AdminProductResponseDto.fromEntity(await this.admin.archiveProduct(id));
+    return AdminProductResponseDto.fromEntity(await this.catalogAdminService.archiveProduct(id));
   }
 
   @Post('products/:productId/skus')
@@ -104,7 +104,7 @@ export class AdminCatalogController {
     @Param('productId', ParseSnowflakeIdPipe) productId: string,
     @Body() dto: CreateSkuDto,
   ): Promise<AdminSkuResponseDto> {
-    return AdminSkuResponseDto.fromEntity(await this.admin.createSku(productId, dto));
+    return AdminSkuResponseDto.fromEntity(await this.catalogAdminService.createSku(productId, dto));
   }
 
   @Patch('skus/:id')
@@ -115,7 +115,7 @@ export class AdminCatalogController {
     @Param('id', ParseSnowflakeIdPipe) id: string,
     @Body() dto: UpdateSkuDto,
   ): Promise<AdminSkuResponseDto> {
-    return AdminSkuResponseDto.fromEntity(await this.admin.updateSku(id, dto));
+    return AdminSkuResponseDto.fromEntity(await this.catalogAdminService.updateSku(id, dto));
   }
 
   @Delete('skus/:id')
@@ -123,7 +123,7 @@ export class AdminCatalogController {
   @ApiOkResponse({ type: AdminSkuResponseDto, description: 'SKU archived (soft-delete)' })
   @ApiNotFoundResponse({ description: 'SKU not found' })
   async deleteSku(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<AdminSkuResponseDto> {
-    return AdminSkuResponseDto.fromEntity(await this.admin.archiveSku(id));
+    return AdminSkuResponseDto.fromEntity(await this.catalogAdminService.archiveSku(id));
   }
 
   @Get('products/:productId/images')
@@ -132,7 +132,7 @@ export class AdminCatalogController {
   async listProductImages(
     @Param('productId', ParseSnowflakeIdPipe) productId: string,
   ): Promise<AdminProductImageResponseDto[]> {
-    const images = await this.admin.listProductImages(productId);
+    const images = await this.catalogAdminService.listProductImages(productId);
     return images.map((image) => AdminProductImageResponseDto.fromEntity(image));
   }
 
@@ -144,7 +144,7 @@ export class AdminCatalogController {
     @Param('productId', ParseSnowflakeIdPipe) productId: string,
     @Body() dto: AttachProductImageDto,
   ): Promise<AdminProductImageResponseDto> {
-    return AdminProductImageResponseDto.fromEntity(await this.admin.attachProductImage(productId, dto));
+    return AdminProductImageResponseDto.fromEntity(await this.catalogAdminService.attachProductImage(productId, dto));
   }
 
   // Unlike the archives above, this one is a hard delete of the link row: the asset itself survives
@@ -157,7 +157,7 @@ export class AdminCatalogController {
     @Param('productId', ParseSnowflakeIdPipe) productId: string,
     @Param('imageId', ParseSnowflakeIdPipe) imageId: string,
   ): Promise<void> {
-    await this.admin.detachProductImage(productId, imageId);
+    await this.catalogAdminService.detachProductImage(productId, imageId);
   }
 
   @Patch('products/:productId/images')
@@ -168,7 +168,7 @@ export class AdminCatalogController {
     @Param('productId', ParseSnowflakeIdPipe) productId: string,
     @Body() dto: ReorderProductImagesDto,
   ): Promise<AdminProductImageResponseDto[]> {
-    const images = await this.admin.reorderProductImages(productId, dto.imageIds);
+    const images = await this.catalogAdminService.reorderProductImages(productId, dto.imageIds);
     return images.map((image) => AdminProductImageResponseDto.fromEntity(image));
   }
 
@@ -179,6 +179,6 @@ export class AdminCatalogController {
     @Param('skuId', ParseSnowflakeIdPipe) skuId: string,
     @Body() dto: SetPriceDto,
   ): Promise<AdminPriceResponseDto> {
-    return AdminPriceResponseDto.fromEntity(await this.admin.setPrice(skuId, dto));
+    return AdminPriceResponseDto.fromEntity(await this.catalogAdminService.setPrice(skuId, dto));
   }
 }

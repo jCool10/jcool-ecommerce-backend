@@ -31,7 +31,7 @@ import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto'
 @Controller('admin/orders')
 export class AdminOrderController {
   constructor(
-    private readonly orderQuery: OrderQueryService,
+    private readonly orderQueryService: OrderQueryService,
     private readonly cancelOrder: CancelOrderUseCase,
   ) {}
 
@@ -39,7 +39,7 @@ export class AdminOrderController {
   @ApiOkResponse({ type: PaginatedOrdersResponseDto })
   async list(@Query() query: ListAdminOrdersQueryDto): Promise<PaginatedOrdersResponseDto> {
     return PaginatedOrdersResponseDto.fromPage(
-      await this.orderQuery.adminList({
+      await this.orderQueryService.adminList({
         page: query.page,
         pageSize: query.pageSize,
         status: query.status,
@@ -53,7 +53,7 @@ export class AdminOrderController {
   @ApiOkResponse({ type: OrderResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found' })
   async getOne(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.orderQuery.adminGetOne(id));
+    return OrderResponseDto.fromView(await this.orderQueryService.adminGetOne(id));
   }
 
   @Post(':id/cancel')

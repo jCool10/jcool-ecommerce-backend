@@ -23,12 +23,12 @@ import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
 @Controller('cart')
 export class CartController {
-  constructor(private readonly cart: CartService) {}
+  constructor(private readonly cartService: CartService) {}
 
   @Get()
   @ApiOkResponse({ type: CartResponseDto })
   async view(@CurrentUser() user: AuthenticatedUser): Promise<CartResponseDto> {
-    return CartResponseDto.fromView(await this.cart.view(user.userId));
+    return CartResponseDto.fromView(await this.cartService.view(user.userId));
   }
 
   @Post('items')
@@ -36,7 +36,7 @@ export class CartController {
   @ApiOkResponse({ type: CartResponseDto })
   @ApiNotFoundResponse({ description: 'SKU not found in catalog' })
   async addItem(@CurrentUser() user: AuthenticatedUser, @Body() dto: AddCartItemDto): Promise<CartResponseDto> {
-    return CartResponseDto.fromView(await this.cart.addItem(user.userId, dto.skuId, dto.quantity));
+    return CartResponseDto.fromView(await this.cartService.addItem(user.userId, dto.skuId, dto.quantity));
   }
 
   @Patch('items/:skuId')
@@ -48,7 +48,7 @@ export class CartController {
     @Param('skuId', ParseSnowflakeIdPipe) skuId: string,
     @Body() dto: UpdateCartItemDto,
   ): Promise<CartResponseDto> {
-    return CartResponseDto.fromView(await this.cart.setItemQuantity(user.userId, skuId, dto.quantity));
+    return CartResponseDto.fromView(await this.cartService.setItemQuantity(user.userId, skuId, dto.quantity));
   }
 
   @Delete('items/:skuId')
@@ -58,12 +58,12 @@ export class CartController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('skuId', ParseSnowflakeIdPipe) skuId: string,
   ): Promise<CartResponseDto> {
-    return CartResponseDto.fromView(await this.cart.removeItem(user.userId, skuId));
+    return CartResponseDto.fromView(await this.cartService.removeItem(user.userId, skuId));
   }
 
   @Delete()
   @ApiOkResponse({ type: CartResponseDto })
   async clear(@CurrentUser() user: AuthenticatedUser): Promise<CartResponseDto> {
-    return CartResponseDto.fromView(await this.cart.clear(user.userId));
+    return CartResponseDto.fromView(await this.cartService.clear(user.userId));
   }
 }

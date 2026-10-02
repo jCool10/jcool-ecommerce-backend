@@ -6,11 +6,11 @@ import type { OrderPaymentSnapshot, OrderPaymentView, StalePendingOrderSnapshot 
 export class OrderPaymentViewService implements OrderPaymentView {
   constructor(
     @Inject(ORDER_REPOSITORY)
-    private readonly repo: OrderRepositoryPort,
+    private readonly orderRepo: OrderRepositoryPort,
   ) {}
 
   async findForPayment(orderId: string): Promise<OrderPaymentSnapshot | null> {
-    const order = await this.repo.findById(orderId);
+    const order = await this.orderRepo.findById(orderId);
     if (!order) {
       return null;
     }
@@ -24,6 +24,6 @@ export class OrderPaymentViewService implements OrderPaymentView {
   }
 
   async findStalePending(input: { placedBefore: Date; limit: number }): Promise<StalePendingOrderSnapshot[]> {
-    return this.repo.findStalePending(input);
+    return this.orderRepo.findStalePending(input);
   }
 }

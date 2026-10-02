@@ -6,7 +6,7 @@ import { LeaseHealthIndicator } from '../lease/lease.health-indicator';
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
-    private readonly lease: LeaseHealthIndicator,
+    private readonly leaseHealth: LeaseHealthIndicator,
   ) {}
 
   @Get('live')
@@ -19,6 +19,6 @@ export class HealthController {
   @Get('ready')
   @HealthCheck()
   ready(): Promise<HealthCheckResult> {
-    return this.health.check([() => this.lease.isHealthy('lease')]);
+    return this.health.check([() => this.leaseHealth.isHealthy('lease')]);
   }
 }

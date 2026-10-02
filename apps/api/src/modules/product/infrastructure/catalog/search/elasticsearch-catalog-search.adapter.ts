@@ -75,7 +75,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
   // which emits no decorator metadata, so an inferred constructor type resolves to undefined there.
   constructor(
     @Inject(ConfigService) config: ConfigService,
-    @Inject(SEARCH_ENGINE_CALLS) private readonly calls: SearchEngineCalls,
+    @Inject(SEARCH_ENGINE_CALLS) private readonly searchEngineCalls: SearchEngineCalls,
     @Inject(PinoLogger) private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -103,7 +103,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     const client = this.client;
     if (!client) return;
 
-    const write = this.calls.write;
+    const write = this.searchEngineCalls.write;
     if (!(await this.call(write, () => client.indices.existsAlias({ name: PRODUCTS_ALIAS })))) {
       // Replicas booting together race to create it; the losers only add the alias.
       await this.call(write, () => client.indices.create({ index: INITIAL_INDEX, ...PRODUCTS_INDEX_DEFINITION })).catch(
@@ -133,7 +133,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     const client = this.client;
     if (!client) return '';
 
-    const write = this.calls.write;
+    const write = this.searchEngineCalls.write;
     const rebuilding = () => this.call(write, () => client.indices.existsAlias({ name: REBUILD_ALIAS }));
     if (await rebuilding()) throw new RebuildInProgressError();
     const index = `${PRODUCTS_INDEX_PREFIX}${Date.now()}`;
@@ -156,7 +156,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     const client = this.client;
     if (!client) return [];
 
-    const write = this.calls.write;
+    const write = this.searchEngineCalls.write;
     const indices = await this.physicalIndices(client);
     // Cleared by --clear-stale while this run was filling; the lock may now be another run's.
     if (!indices.some(({ name, aliases }) => name === rebuild && aliases.includes(REBUILD_ALIAS))) {
@@ -184,7 +184,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     const client = this.client;
     if (!client) return;
 
-    const write = this.calls.write;
+    const write = this.searchEngineCalls.write;
     const locked = (await this.physicalIndices(client)).filter(
       ({ name, aliases }) =>
         (rebuild === undefined || name === rebuild) &&
@@ -219,7 +219,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     );
     const doomed = indices.filter((index) => idle.has(index));
     if (doomed.length > 0) {
-      await this.call(this.calls.write, () => client.indices.delete({ index: doomed }));
+      await this.call(this.searchEngineCalls.write, () => client.indices.delete({ index: doomed }));
     }
   }
 
@@ -228,7 +228,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
     if (!client) return EMPTY;
 
     try {
-      const response = await this.call(this.calls.read, () =>
+      const response = await this.call(this.searchEngineCalls.read, () =>
         client.search<SearchableProduct>(this.searchRequest(criteria)),
       );
       const total = response.hits.total;
@@ -290,7 +290,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
 
     for (let offset = 0; offset < changes.length; offset += WRITE_CHUNK) {
       const chunk = changes.slice(offset, offset + WRITE_CHUNK);
-      await this.call(this.calls.write, async () => {
+      await this.call(this.searchEngineCalls.write, async () => {
         const response = await client.bulk({
           // A missing alias fails the write instead of auto-creating a bare index under its name.
           require_alias: true,
@@ -312,7 +312,7 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
   }
 
   private async physicalIndices(client: Client): Promise<{ name: string; aliases: string[] }[]> {
-    const found = await this.call(this.calls.write, () =>
+    const found = await this.call(this.searchEngineCalls.write, () =>
       client.indices.getAlias({ index: `${PRODUCTS_INDEX_PREFIX}*` }),
     );
     return Object.entries(found).map(([name, { aliases }]) => ({ name, aliases: Object.keys(aliases) }));

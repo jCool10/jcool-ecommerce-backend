@@ -24,6 +24,32 @@ The route contract — status-code semantics, the error envelope, auth per route
 
 One decision the README does not place: `Idempotency-Key` support is not a platform-wide interceptor. The reusable pieces — the canonical request-fingerprint hash and the CLS carrier that lets a transaction flip the stored record in the same unit of work as the write it guards — live in [`../apps/api/src/shared/idempotency`](../apps/api/src/shared/idempotency/index.ts), but the guard, interceptor and store that enforce it are implemented once, for Order's checkout ([`require-idempotency-key.guard.ts`](../apps/api/src/modules/order/interface/require-idempotency-key.guard.ts)), its only consumer today. A new route that needs the same guarantee reuses the shared utility rather than copying Order's.
 
+## Naming
+
+`product_variants.id` carries two names, split by the side of the boundary that holds it:
+
+| Name | Used by | Persisted / on the wire |
+| --- | --- | --- |
+| `skuId` | Cart, Order, Product's catalog side and its published `PRODUCT_SKU_QUERY` port | `cart_items.sku_id`, `order_items.sku_id`; `/cart/items/:skuId`, `/admin/skus/:skuId/price` |
+| `variantId` | Product's stock side, prices, and the published `PRODUCT_STOCK_RESERVATION` port | `prices.variant_id`, `stock_levels.variant_id`, `reservations.variant_id`; `/admin/inventory/:variantId` |
+| `sku` | `product_variants.sku` | The human-readable SKU code (`TSHIRT-RED-M`) — never an id |
+
+A new field takes the name of the side it lives on. The crossing is translated in one place — Order's [`inventory-reservation.adapter.ts`](../apps/api/src/modules/order/infrastructure/inventory-reservation.adapter.ts) maps `skuId` to `variantId` — never inline in a use case. Both names are persisted and on the wire, so unifying them is a migration plus a breaking API change, not a rename. The one route where they meet, `PUT /admin/skus/:skuId/price`, answers with `variantId`.
+
+### Injected dependencies
+
+A constructor-injected field is named from its type, so `this.<field>` says what it is and what role it plays without a look at the constructor. One type has one name everywhere, and one name never stands for two types.
+
+| Type | Field | Example |
+| --- | --- | --- |
+| `XRepositoryPort` | `xRepo`, singular | `orderRepo`, `refreshTokenRepo` — never `repo`, never the plural, which is also the Drizzle table's name |
+| `XUseCase` | the full verb phrase, no suffix | `checkoutOrder`, `reconcileStaleOrders` — `.execute()` already marks it a use case; `initiateUploadUseCase` only where the class already has a method of that name |
+| A module's own `XService` | `xService` | `cartService`, `sessionService` |
+| Any other port, adapter or component | the type's name without `Port`, camelCased | `inventoryReservation`, `idempotencyStore`, `outboxWriter`, `paymentGateway`, `idGenerator` |
+| `XHealthIndicator` | `xHealth` | `redisHealth`, `leaseHealth` |
+
+Framework and infrastructure handles keep their short names, because each is one type used identically everywhere: `logger`, `metrics`, `db`, `cls`, `config`, `redis`, `cache`, `reflector`, `schedulerRegistry`, `mailer`. A decorator's wrapped delegate is `source` (caching) or `inner` (circuit breaker). Two instances of one type are told apart by role, after their DI token: `domainEventsQueue` and `deadLetterQueue`.
+
 ## Migrations
 
 Schema changes are generated, never typed into an existing file: edit the Drizzle schema, run the project's `db:generate`, and commit the emitted `.sql` together with its `meta/_journal.json` entry. This applies per service — `apps/api`, `apps/user-service` and `apps/id-service` each own a schema, a `drizzle.config.ts` and a migrations journal.

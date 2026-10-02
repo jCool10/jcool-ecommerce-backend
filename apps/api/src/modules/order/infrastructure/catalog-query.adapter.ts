@@ -11,11 +11,11 @@ import type { CatalogQueryPort, OrderSkuView } from '../application/ports/catalo
 export class CatalogQueryAdapter implements CatalogQueryPort {
   constructor(
     @Inject(PRODUCT_SKU_QUERY)
-    private readonly catalog: ProductSkuQuery,
+    private readonly productSkuQuery: ProductSkuQuery,
   ) {}
 
   async getSkuViews(skuIds: string[]): Promise<OrderSkuView[]> {
-    const views = await this.catalog.getSkuViews(skuIds);
+    const views = await this.productSkuQuery.getSkuViews(skuIds);
     return views.map(toOrderSkuView);
   }
 }

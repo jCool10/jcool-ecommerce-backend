@@ -22,7 +22,7 @@ const ON_HAND_NONNEG = 'ck_stock_on_hand_nonneg';
 export class StockAdminRepository implements StockAdminPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
   async getLevel(variantId: string): Promise<StockView | null> {
@@ -36,7 +36,7 @@ export class StockAdminRepository implements StockAdminPort {
 
   async setOnHand(variantId: string, quantity: number): Promise<StockView> {
     // Wasted when the row already exists; minting only on a miss would need a second round trip.
-    const id = await mintOne(this.ids);
+    const id = await mintOne(this.idGenerator);
     const [row] = await this.guardChecks(() =>
       this.db
         .insert(stockLevels)

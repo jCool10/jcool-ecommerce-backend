@@ -58,9 +58,9 @@ export interface ReconcileSummary {
 @Injectable()
 export class ReconcileStaleOrdersUseCase {
   constructor(
-    @Inject(ORDER_READ_PORT) private readonly orders: OrderReadPort,
-    @Inject(PAYMENT_REPOSITORY) private readonly payments: PaymentRepositoryPort,
-    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayPort,
+    @Inject(ORDER_READ_PORT) private readonly orderReader: OrderReadPort,
+    @Inject(PAYMENT_REPOSITORY) private readonly paymentRepo: PaymentRepositoryPort,
+    @Inject(PAYMENT_GATEWAY) private readonly paymentGateway: PaymentGatewayPort,
     private readonly finalizeOrder: FinalizeOrderUseCase,
     private readonly logger: PinoLogger,
   ) {
@@ -69,7 +69,7 @@ export class ReconcileStaleOrdersUseCase {
 
   async execute({ staleAfterSec, ttlSec, batchSize }: ReconcileInput): Promise<ReconcileSummary> {
     const now = Date.now();
-    const stale = await this.orders.findStalePending({
+    const stale = await this.orderReader.findStalePending({
       placedBefore: new Date(now - staleAfterSec * 1000),
       limit: batchSize,
     });
@@ -106,10 +106,10 @@ export class ReconcileStaleOrdersUseCase {
   }
 
   private async settleOne(order: StalePendingOrderView, expiredBefore: Date, stuckBefore: Date): Promise<OrderOutcome> {
-    const payment = await this.payments.findByOrderId(order.id);
+    const payment = await this.paymentRepo.findByOrderId(order.id);
     // No payment row = a session was never opened, so there is nothing to ask; only the TTL applies.
     const probe: GatewayPaymentStatus = payment
-      ? await this.gateway.getPaymentStatus(payment.providerSessionId)
+      ? await this.paymentGateway.getPaymentStatus(payment.providerSessionId)
       : { status: 'UNKNOWN' };
 
     const outcome = mapGatewayStatusToOutcome(probe.status, { pastTtl: order.placedAt < expiredBefore });
@@ -129,7 +129,7 @@ export class ReconcileStaleOrdersUseCase {
       // The page must stop taking money BEFORE the stock hold is released, or a buyer returning to it
       // pays for an order that no longer exists. A refusal for any reason but a completed session
       // throws, leaving the order for the next tick.
-      const closed = await this.gateway.expireSession(payment.providerSessionId);
+      const closed = await this.paymentGateway.expireSession(payment.providerSessionId);
       if (closed === 'already_completed') {
         // The buyer paid between the probe above and this call. Expiring now would settle the order
         // unpaid on top of money that moved; the next tick probes again and reads PAID.
@@ -168,7 +168,7 @@ export class ReconcileStaleOrdersUseCase {
     if (payment && payment.id !== null) {
       if (payment.status === PaymentStatus.PENDING) {
         const settled = settlePayment(payment, outcome);
-        const written = await this.payments.updateStatus(payment.id, settled.status, {
+        const written = await this.paymentRepo.updateStatus(payment.id, settled.status, {
           expectedStatus: PaymentStatus.PENDING,
           // Fills a gap only — a handle already on the row came from the webhook and stays.
           ...(payment.providerIntentId === null && probe.intentId ? { providerIntentId: probe.intentId } : {}),

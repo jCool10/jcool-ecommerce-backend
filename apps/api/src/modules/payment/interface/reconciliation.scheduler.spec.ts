@@ -58,7 +58,7 @@ describe('ReconciliationScheduler', () => {
     ];
 
     for (const overrides of invalid) {
-      expect(() => build(overrides).make(), JSON.stringify(overrides)).toThrow(/Invalid reconciliation config/);
+      expect(() => build(overrides).make(), JSON.stringify(overrides)).toThrow(/Invalid config: reconcile\./);
     }
   });
 

@@ -6,14 +6,14 @@ import type { ProductSkuQuery, SkuView } from '../../public/product-sku-query.po
 export class CatalogSkuQueryService implements ProductSkuQuery {
   constructor(
     @Inject(PRODUCT_REPOSITORY)
-    private readonly products: ProductRepositoryPort,
+    private readonly productRepo: ProductRepositoryPort,
   ) {}
 
   getSkuView(skuId: string): Promise<SkuView | null> {
-    return this.products.findSkuView(skuId);
+    return this.productRepo.findSkuView(skuId);
   }
 
   getSkuViews(skuIds: string[]): Promise<SkuView[]> {
-    return this.products.findManySkuViews(skuIds);
+    return this.productRepo.findManySkuViews(skuIds);
   }
 }

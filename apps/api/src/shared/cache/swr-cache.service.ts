@@ -54,7 +54,7 @@ export class SwrCacheService {
 
   constructor(
     private readonly cache: CacheService,
-    private readonly lock: SingleFlightLock,
+    private readonly singleFlightLock: SingleFlightLock,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     config: ConfigService,
     private readonly logger: PinoLogger,
@@ -106,7 +106,7 @@ export class SwrCacheService {
     rebuild: () => Promise<T>,
     options: ResolvedOptions<T>,
   ): Promise<T> {
-    const attempt = await this.lock.acquire(lockKeyFor(key), options.policy.leaseMs);
+    const attempt = await this.singleFlightLock.acquire(lockKeyFor(key), options.policy.leaseMs);
     if (attempt.status === 'error') {
       this.metrics.recordCatalogCacheOperation('error_fallthrough');
       return rebuild();
@@ -124,7 +124,7 @@ export class SwrCacheService {
         // because the value is already there. Rebuilding again is the herd this whole class prevents.
         return filled ? filled.data : await this.rebuildAndStore(key, rebuild, options, 'miss');
       } finally {
-        await this.lock.release(lockKeyFor(key), attempt.token);
+        await this.singleFlightLock.release(lockKeyFor(key), attempt.token);
       }
     }
 
@@ -167,7 +167,7 @@ export class SwrCacheService {
     rebuild: () => Promise<T>,
     options: ResolvedOptions<T>,
   ): Promise<void> {
-    const attempt = await this.lock.acquire(lockKeyFor(key), options.policy.leaseMs);
+    const attempt = await this.singleFlightLock.acquire(lockKeyFor(key), options.policy.leaseMs);
     if (attempt.status !== 'acquired') {
       return;
     }
@@ -177,7 +177,7 @@ export class SwrCacheService {
         await this.rebuildAndStore(key, rebuild, options, 'hit_stale');
       }
     } finally {
-      await this.lock.release(lockKeyFor(key), attempt.token);
+      await this.singleFlightLock.release(lockKeyFor(key), attempt.token);
     }
   }
 
@@ -263,7 +263,7 @@ export class SwrCacheService {
       // A holder can finish without storing anything — an absent value is never cached, a rebuild
       // can throw, a write can be refused — and then no amount of waiting produces a value, so the
       // lock disappearing is the signal to stop and read through.
-      if (!(await this.lock.isHeld(lockKeyFor(key)))) {
+      if (!(await this.singleFlightLock.isHeld(lockKeyFor(key)))) {
         return null;
       }
       const remaining = deadline - Date.now();

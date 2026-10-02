@@ -34,12 +34,12 @@ const LOG_CONTEXT = 'CheckoutOrder';
 @Injectable()
 export class CheckoutOrderUseCase {
   constructor(
-    @Inject(ORDER_REPOSITORY) private readonly repo: OrderRepositoryPort,
-    @Inject(CART_SNAPSHOT_READER) private readonly cart: CartSnapshotReaderPort,
-    @Inject(CATALOG_QUERY) private readonly catalog: CatalogQueryPort,
-    @Inject(INVENTORY_RESERVATION) private readonly reservation: InventoryReservationPort,
-    @Inject(IDEMPOTENCY_STORE) private readonly idempotency: IdempotencyStorePort,
-    @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
+    @Inject(ORDER_REPOSITORY) private readonly orderRepo: OrderRepositoryPort,
+    @Inject(CART_SNAPSHOT_READER) private readonly cartSnapshotReader: CartSnapshotReaderPort,
+    @Inject(CATALOG_QUERY) private readonly catalogQuery: CatalogQueryPort,
+    @Inject(INVENTORY_RESERVATION) private readonly inventoryReservation: InventoryReservationPort,
+    @Inject(IDEMPOTENCY_STORE) private readonly idempotencyStore: IdempotencyStorePort,
+    @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly cls: ClsService,
     private readonly logger: PinoLogger,
@@ -51,26 +51,27 @@ export class CheckoutOrderUseCase {
     const { currency, items } = await this.snapshotCart(userId);
     const placed = Order.create(userId, currency, items).place(new Date());
     const lines = items.map((item) => ({ skuId: item.skuId, quantity: item.quantity }));
-    const idem = getIdempotencyContext(this.cls);
-    if (!idem) {
+    const idempotencyContext = getIdempotencyContext(this.cls);
+    if (!idempotencyContext) {
       // POST /orders always runs behind the idempotency guard + interceptor, which seed this
       // context over CLS. Its absence is a broken wiring contract: proceeding would persist an
       // order whose IN_PROGRESS key can never be flipped COMPLETED, and a retry would duplicate it.
       throw new InternalServerErrorException('Missing idempotency context for checkout');
     }
 
-    let result;
+    let checkout;
     try {
-      result = await this.repo.createCheckout(
+      checkout = await this.orderRepo.createCheckout(
         placed,
-        idem.key,
-        (tx, orderId) => this.reservation.reserve(tx, orderId, lines),
-        (tx, orderId) => this.outbox.append(tx, toPlacedOutboxRecord(this.withId(placed, orderId).toPlacedEvent())),
+        idempotencyContext.key,
+        (tx, orderId) => this.inventoryReservation.reserve(tx, orderId, lines),
         (tx, orderId) =>
-          this.idempotency.markCompleted(
+          this.outboxWriter.append(tx, toPlacedOutboxRecord(this.withId(placed, orderId).toPlacedEvent())),
+        (tx, orderId) =>
+          this.idempotencyStore.markCompleted(
             {
-              scope: idem.scope,
-              key: idem.key,
+              scope: idempotencyContext.scope,
+              key: idempotencyContext.key,
               responseStatus: HttpStatus.CREATED,
               responseBody: this.viewOf(placed, orderId),
               orderId,
@@ -97,45 +98,45 @@ export class CheckoutOrderUseCase {
       throw error;
     }
 
-    if (result.created) {
+    if (checkout.created) {
       // Only a fresh hold is a step: the replay below reuses one an earlier attempt already took.
       this.metrics.recordSagaStep('reserve', 'success');
       this.metrics.recordOrderCreated(placed.status);
       this.metrics.observeOrderValue(placed.totalAmountMinor);
       this.logger.info(
         {
-          orderId: result.orderId,
+          orderId: checkout.orderId,
           itemCount: items.length,
           totalAmountMinor: placed.totalAmountMinor,
           currency,
         },
         'order placed',
       );
-      return this.viewOf(placed, result.orderId);
+      return this.viewOf(placed, checkout.orderId);
     }
 
     // Crash-reclaim heal: an order already carried this key (a prior attempt committed, then its
     // idempotency row was reclaimed). Point the key at the existing order and replay it — no second
     // order, no second hold.
-    this.logger.warn({ orderId: result.orderId }, 'checkout key already placed an order — replaying it');
-    const view = await loadOrderView(this.repo, result.orderId, userId);
-    await this.idempotency.markCompleted({
-      scope: idem.scope,
-      key: idem.key,
+    this.logger.warn({ orderId: checkout.orderId }, 'checkout key already placed an order — replaying it');
+    const view = await loadOrderView(this.orderRepo, checkout.orderId, userId);
+    await this.idempotencyStore.markCompleted({
+      scope: idempotencyContext.scope,
+      key: idempotencyContext.key,
       responseStatus: HttpStatus.CREATED,
       responseBody: view,
-      orderId: result.orderId,
+      orderId: checkout.orderId,
     });
     return view;
   }
 
   private async snapshotCart(userId: string): Promise<{ currency: string; items: OrderItem[] }> {
-    const lines = await this.cart.getLines(userId);
+    const lines = await this.cartSnapshotReader.getLines(userId);
     if (lines.length === 0) {
       throw new BadRequestException('Cart is empty');
     }
 
-    const views = await this.catalog.getSkuViews(lines.map((line) => line.skuId));
+    const views = await this.catalogQuery.getSkuViews(lines.map((line) => line.skuId));
     const viewBySku = new Map<string, OrderSkuView>(views.map((view) => [view.skuId, view]));
     // The order's currency is the first surviving line's, walked in cart order rather than in the
     // batch read's order, which would anchor on a different line and blame a different one below.
@@ -145,22 +146,22 @@ export class CheckoutOrderUseCase {
     }
 
     const items = lines.map((line) => {
-      const v = viewBySku.get(line.skuId);
-      if (!v) {
+      const skuView = viewBySku.get(line.skuId);
+      if (!skuView) {
         throw new BadRequestException(`SKU no longer exists in catalog: ${line.skuId}`);
       }
       // Order is the sell/commit boundary: an archived product / archived variant is not orderable,
       // even if a residual price lingers.
-      if (!v.isActive) {
+      if (!skuView.isActive) {
         throw new BadRequestException(`SKU is not available for order: ${line.skuId}`);
       }
-      if (v.unitPriceMinor == null) {
+      if (skuView.unitPriceMinor == null) {
         throw new BadRequestException(`SKU is not purchasable (no price): ${line.skuId}`);
       }
-      if (v.currency !== currency) {
+      if (skuView.currency !== currency) {
         throw new BadRequestException('Cart mixes currencies; cannot create a single-currency order');
       }
-      return OrderItem.of(line.skuId, v.productName, v.unitPriceMinor, line.quantity);
+      return OrderItem.of(line.skuId, skuView.productName, skuView.unitPriceMinor, line.quantity);
     });
     return { currency, items };
   }

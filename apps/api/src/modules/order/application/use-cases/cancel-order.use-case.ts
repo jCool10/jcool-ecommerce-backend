@@ -15,8 +15,8 @@ import { FinalizeOrderUseCase } from './finalize-order.use-case';
 @Injectable()
 export class CancelOrderUseCase {
   constructor(
-    @Inject(ORDER_REPOSITORY) private readonly repo: OrderRepositoryPort,
-    private readonly finalize: FinalizeOrderUseCase,
+    @Inject(ORDER_REPOSITORY) private readonly orderRepo: OrderRepositoryPort,
+    private readonly finalizeOrder: FinalizeOrderUseCase,
   ) {}
 
   cancelOwn(orderId: string, userId: string): Promise<OrderView> {
@@ -34,8 +34,8 @@ export class CancelOrderUseCase {
   }
 
   private async cancel(orderId: string, reason: string, authorize?: (order: Order) => void): Promise<OrderView> {
-    const { view, report } = await this.repo.withTransaction<CancelOutcome>(async (tx: DrizzleTx) => {
-      const order = await this.repo.findByIdForUpdate(orderId, tx);
+    const { view, report } = await this.orderRepo.withTransaction<CancelOutcome>(async (tx: DrizzleTx) => {
+      const order = await this.orderRepo.findByIdForUpdate(orderId, tx);
       if (!order) {
         throw new NotFoundException(`Order not found: ${orderId}`);
       }
@@ -52,7 +52,7 @@ export class CancelOrderUseCase {
         throw new ConflictException(`Order cannot be cancelled in status ${order.status}`);
       }
 
-      const result = await this.finalize.execute({ orderId, outcome: OrderStatus.CANCELLED, reason }, tx);
+      const result = await this.finalizeOrder.execute({ orderId, outcome: OrderStatus.CANCELLED, reason }, tx);
       if (result.status === 'finalized' || result.status === 'noop') {
         return { view: toView(result.order as Order), report: result.reportFinalized };
       }

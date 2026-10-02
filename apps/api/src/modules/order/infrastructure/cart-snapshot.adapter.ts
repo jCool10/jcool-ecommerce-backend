@@ -7,11 +7,11 @@ import type { CartSnapshotReaderPort, OrderCartLine } from '../application/ports
 export class CartSnapshotAdapter implements CartSnapshotReaderPort {
   constructor(
     @Inject(CART_SNAPSHOT)
-    private readonly cart: CartSnapshotReader,
+    private readonly cartSnapshotReader: CartSnapshotReader,
   ) {}
 
   async getLines(userId: string): Promise<OrderCartLine[]> {
-    const lines = await this.cart.getLines(userId);
+    const lines = await this.cartSnapshotReader.getLines(userId);
     return lines.map((line) => ({ skuId: line.skuId, quantity: line.quantity }));
   }
 }

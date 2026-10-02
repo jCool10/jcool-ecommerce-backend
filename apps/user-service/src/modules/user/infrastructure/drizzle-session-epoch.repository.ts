@@ -20,7 +20,7 @@ import {
 export class DrizzleSessionEpochRepository implements SessionEpochPort, SessionEpochChangesPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(SESSION_EPOCH_PUBLISHER) private readonly publisher: SessionEpochPublisherPort,
+    @Inject(SESSION_EPOCH_PUBLISHER) private readonly sessionEpochPublisher: SessionEpochPublisherPort,
   ) {}
 
   async current(userId: string): Promise<number | null> {
@@ -44,7 +44,7 @@ export class DrizzleSessionEpochRepository implements SessionEpochPort, SessionE
     // A throw here is a 5xx on a revocation the database already holds; the reconciler publishes
     // it on its next pass.
     try {
-      await this.publisher.publish(userId, row.tokenEpoch);
+      await this.sessionEpochPublisher.publish(userId, row.tokenEpoch);
     } catch (error) {
       throw new SessionEpochNotPublishedError(userId, row.tokenEpoch, error);
     }

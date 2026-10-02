@@ -2,7 +2,7 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import * as argon2 from 'argon2';
 import { Pool } from 'pg';
 import { normalizeEmail, type NormalizedEmail } from '@jcool/kernel';
-import type { IdentityService } from '../src/modules/user/application/services/identity.service';
+import type { IdGeneratorService } from '../src/modules/user/application/services/id-generator.service';
 import { withScriptsMintLock } from './scripts-mint-lock';
 
 // Grows `users` and its unique-email index to a target row count WITHOUT going through the API, so
@@ -31,7 +31,7 @@ function intArg(name: string, fallback: number): number {
 }
 
 async function mintBatch(
-  ids: IdentityService,
+  ids: IdGeneratorService,
   hash: string,
   start: number,
   size: number,
@@ -54,7 +54,7 @@ async function mintBatch(
 // most one INSERT in flight.
 async function insertAll(
   pool: Pool,
-  ids: IdentityService,
+  ids: IdGeneratorService,
   hash: string,
   count: number,
   batch: number,

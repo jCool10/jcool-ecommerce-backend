@@ -25,11 +25,11 @@ export class SweepAuthTokensService implements OnModuleInit {
 
   constructor(
     @Inject(EMAIL_VERIFICATION_TOKEN_REPOSITORY)
-    private readonly emailVerification: EmailVerificationTokenRepositoryPort,
+    private readonly emailVerificationTokenRepo: EmailVerificationTokenRepositoryPort,
     @Inject(PASSWORD_RESET_TOKEN_REPOSITORY)
-    private readonly passwordReset: PasswordResetTokenRepositoryPort,
+    private readonly passwordResetTokenRepo: PasswordResetTokenRepositoryPort,
     @Inject(REFRESH_TOKEN_REPOSITORY)
-    private readonly refresh: RefreshTokenRepositoryPort,
+    private readonly refreshTokenRepo: RefreshTokenRepositoryPort,
     config: ConfigService,
     private readonly registry: RetentionSweepRegistry,
   ) {
@@ -46,16 +46,20 @@ export class SweepAuthTokensService implements OnModuleInit {
     return [
       {
         name: 'auth-tokens:email-verification',
-        sweep: (batchSize) => this.emailVerification.deleteSpentBefore(this.tokenCutoff(), batchSize),
+        sweep: (batchSize) => this.emailVerificationTokenRepo.deleteSpentBefore(this.tokenCutoff(), batchSize),
       },
       {
         name: 'auth-tokens:password-reset',
-        sweep: (batchSize) => this.passwordReset.deleteSpentBefore(this.tokenCutoff(), batchSize),
+        sweep: (batchSize) => this.passwordResetTokenRepo.deleteSpentBefore(this.tokenCutoff(), batchSize),
       },
       {
         name: 'auth-tokens:refresh',
         sweep: (batchSize) =>
-          this.refresh.deleteCollectable(this.tokenCutoff(), new Date(Date.now() - this.refreshGraceMs), batchSize),
+          this.refreshTokenRepo.deleteCollectable(
+            this.tokenCutoff(),
+            new Date(Date.now() - this.refreshGraceMs),
+            batchSize,
+          ),
       },
     ];
   }

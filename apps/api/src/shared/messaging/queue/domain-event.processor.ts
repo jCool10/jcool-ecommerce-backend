@@ -26,8 +26,8 @@ export class DomainEventProcessor {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     @Inject(METRICS) private readonly metrics: MetricsPort,
-    private readonly inbox: InboxStore,
-    private readonly dispatcher: DomainEventDispatcher,
+    private readonly inboxStore: InboxStore,
+    private readonly domainEventDispatcher: DomainEventDispatcher,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -43,14 +43,14 @@ export class DomainEventProcessor {
       result = await withConsumeSpan(job.eventType, job.traceparent, async (): Promise<ConsumeResult> => {
         // Settled rather than awaited: a failure is only the delivery's once the claim says this is not
         // a duplicate, or an already-applied message would ride the retry ladder into the DLQ.
-        const prepared = await this.dispatcher.prepare(job).then(
+        const prepared = await this.domainEventDispatcher.prepare(job).then(
           (step) => ({ step }),
           (error: unknown) => ({ error }),
         );
 
         let effect: PostCommitEffect | void = undefined;
         const outcome = await this.db.transaction(async (tx): Promise<ConsumeResult> => {
-          const claimed = await this.inbox.claim(tx, {
+          const claimed = await this.inboxStore.claim(tx, {
             consumer: DOMAIN_EVENTS_CONSUMER,
             messageId: job.outboxId,
             eventType: job.eventType,
@@ -70,13 +70,13 @@ export class DomainEventProcessor {
     } catch (error) {
       // Counted before rethrowing: a pipeline where every consume throws would otherwise look
       // exactly like an idle one — the counter simply stops moving.
-      this.metrics.recordEventConsumed(this.dispatcher.label(job.eventType), 'failed');
+      this.metrics.recordEventConsumed(this.domainEventDispatcher.label(job.eventType), 'failed');
       throw error;
     }
 
     // Counted after the commit: an effect that rolled back has not been applied, and a metric saying
     // otherwise would hide exactly the failures this is here to surface.
-    this.metrics.recordEventConsumed(this.dispatcher.label(job.eventType), result);
+    this.metrics.recordEventConsumed(this.domainEventDispatcher.label(job.eventType), result);
     if (result === 'duplicate') {
       this.logger.debug(
         // Qualified by `aggregateType` because the id means a different thing per producer — an

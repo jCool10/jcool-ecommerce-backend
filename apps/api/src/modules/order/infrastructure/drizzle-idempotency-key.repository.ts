@@ -16,14 +16,14 @@ type Row = typeof idempotencyKeys.$inferSelect;
 export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
   async tryInsertInProgress(input: InsertInProgressInput): Promise<IdempotencyRecord | null> {
     const [row] = await this.db
       .insert(idempotencyKeys)
       .values({
-        id: await mintOne(this.ids),
+        id: await mintOne(this.idGenerator),
         scope: input.scope,
         key: input.key,
         requestHash: input.requestHash,

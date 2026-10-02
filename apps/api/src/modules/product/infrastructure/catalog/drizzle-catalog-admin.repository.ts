@@ -43,14 +43,14 @@ function isUniqueViolation(error: unknown): boolean {
 export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(MEDIA_FACADE) private readonly media: MediaFacade,
-    @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(MEDIA_FACADE) private readonly mediaFacade: MediaFacade,
+    @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
   // Minted before a transaction opens, so no lock is held across the call.
   private mintId(): Promise<string> {
-    return mintOne(this.ids);
+    return mintOne(this.idGenerator);
   }
 
   private async guardUnique<T>(op: () => Promise<T>, conflictMessage: string): Promise<T> {
@@ -104,7 +104,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
         'Category slug already exists',
       );
       if (row.name !== before.name || row.slug !== before.slug) {
-        await this.outbox.append(tx, toCategoryRenamedRecord(id));
+        await this.outboxWriter.append(tx, toCategoryRenamedRecord(id));
       }
       return toCategory(row);
     });
@@ -177,7 +177,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     if (!row) {
       return null;
     }
-    await this.outbox.append(tx, toProductChangedRecord(row.id));
+    await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
     return row.id;
   }
 
@@ -205,7 +205,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
             .returning(),
         'Product slug already exists',
       );
-      await this.outbox.append(tx, toProductChangedRecord(row.id));
+      await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
       return toProduct(row);
     });
   }
@@ -237,7 +237,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
       if (!row) {
         return null;
       }
-      await this.outbox.append(tx, toProductChangedRecord(row.id));
+      await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
       return toProduct(row);
     });
   }
@@ -252,7 +252,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
       if (!row) {
         return null;
       }
-      await this.outbox.append(tx, toProductChangedRecord(row.id));
+      await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
       return toProduct(row);
     });
   }
@@ -326,7 +326,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
             .returning(),
         'Image already attached to this product',
       );
-      await this.media.attach(tx, data.assetId);
+      await this.mediaFacade.attach(tx, data.assetId);
       return toProductImage(row);
     });
   }
@@ -340,7 +340,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
       if (!row) {
         return null;
       }
-      await this.media.detach(tx, row.assetId);
+      await this.mediaFacade.detach(tx, row.assetId);
       return toProductImage(row);
     });
   }

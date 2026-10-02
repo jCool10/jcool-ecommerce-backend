@@ -12,7 +12,7 @@ export class AuthCookieService {
 
   constructor(
     config: ConfigService,
-    private readonly csrf: CsrfTokenService,
+    private readonly csrfTokenService: CsrfTokenService,
   ) {
     this.secure = config.get<boolean>('app.cookieSecure') === true;
     this.maxAgeMs = durationToMs(config.getOrThrow<string>('auth.refreshTokenTtl'));
@@ -20,7 +20,7 @@ export class AuthCookieService {
 
   setSession(res: Response, refreshToken: string): void {
     res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, this.cookieOptions(true));
-    res.cookie(CSRF_TOKEN_COOKIE, this.csrf.issue(), this.cookieOptions(false));
+    res.cookie(CSRF_TOKEN_COOKIE, this.csrfTokenService.issue(), this.cookieOptions(false));
   }
 
   /** The attributes must match the ones they were set with, or the browser keeps the cookies. */

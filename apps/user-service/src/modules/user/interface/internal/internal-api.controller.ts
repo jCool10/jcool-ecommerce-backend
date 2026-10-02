@@ -22,14 +22,14 @@ import { secretFingerprint } from './secret-fingerprint';
 @Controller('internal/v1')
 export class InternalApiController {
   constructor(
-    @Inject(USER_FACADE) private readonly users: UserFacade,
+    @Inject(USER_FACADE) private readonly userFacade: UserFacade,
     private readonly fillSessionEpoch: FillSessionEpochUseCase,
     private readonly config: ConfigService,
   ) {}
 
   @Get('users/:id/summary')
   async userSummary(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<UserSummary> {
-    const summary = await this.users.getUserSummary(id);
+    const summary = await this.userFacade.getUserSummary(id);
     if (!summary) throw new NotFoundException();
     return summary;
   }

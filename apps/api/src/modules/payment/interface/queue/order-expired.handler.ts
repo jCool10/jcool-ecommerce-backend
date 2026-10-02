@@ -11,7 +11,7 @@ import { ExpirePaymentSessionUseCase } from '../../application/use-cases';
  */
 @Injectable()
 export class OrderExpiredHandler {
-  constructor(private readonly expireSession: ExpirePaymentSessionUseCase) {}
+  constructor(private readonly expirePaymentSession: ExpirePaymentSessionUseCase) {}
 
   async close(job: DomainEventJob, tx: DrizzleTx): Promise<void> {
     const orderId = job.payload.orderId;
@@ -21,6 +21,6 @@ export class OrderExpiredHandler {
       throw new PermanentError(`Unusable order expiry event "${job.eventType}"`);
     }
 
-    await this.expireSession.execute(orderId, tx, 'ttl');
+    await this.expirePaymentSession.execute(orderId, tx, 'ttl');
   }
 }

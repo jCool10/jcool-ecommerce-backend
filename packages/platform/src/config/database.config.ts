@@ -1,4 +1,5 @@
 import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
+import { parseIntOr } from './env-parsers';
 import { StrictInt } from './strict-env-decorators';
 import type { EnvBase } from './validate-env';
 
@@ -46,24 +47,18 @@ export function DatabaseEnv<TBase extends EnvBase>(Base: TBase) {
 // class-validator coerces "" to 0 and passes @Min(0), so the blank-string guard must live here,
 // where the raw string is read. A NaN pool timeout is falsy to pg, which silently reverts to
 // wait-forever/never-reap — defeating the bound.
-function intEnv(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const parsed = parseInt(raw, 10);
-  return Number.isNaN(parsed) ? fallback : parsed;
-}
-
 export const databaseConfig = () => ({
   database: {
     url: process.env.DATABASE_URL,
     // The stack has no external pooler (a PgBouncer drop-in is owned by deploy), so this caps the
     // backend connections Postgres faces.
-    poolMax: intEnv(process.env.DB_POOL_MAX, 10),
+    poolMax: parseIntOr(process.env.DB_POOL_MAX, 10),
     // Fail an acquire after this long instead of pg's default of waiting forever, so a saturated
     // pool surfaces as a fast failure rather than an unbounded request backlog.
-    connectionTimeoutMs: intEnv(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 5000),
-    idleTimeoutMs: intEnv(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10000),
+    connectionTimeoutMs: parseIntOr(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 5000),
+    idleTimeoutMs: parseIntOr(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10000),
     // Client-side, so it also bounds a server that stopped answering, which statement_timeout cannot.
     // 0 (pg's default) waits forever.
-    queryTimeoutMs: intEnv(process.env.DB_QUERY_TIMEOUT_MS, 0),
+    queryTimeoutMs: parseIntOr(process.env.DB_QUERY_TIMEOUT_MS, 0),
   },
 });

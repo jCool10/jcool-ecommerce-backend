@@ -17,9 +17,9 @@ import { DrizzleHealthIndicator, RedisHealthIndicator, ShutdownHealthIndicator }
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
-    private readonly drizzle: DrizzleHealthIndicator,
-    private readonly redis: RedisHealthIndicator,
-    private readonly shutdown: ShutdownHealthIndicator,
+    private readonly drizzleHealth: DrizzleHealthIndicator,
+    private readonly redisHealth: RedisHealthIndicator,
+    private readonly shutdownHealth: ShutdownHealthIndicator,
   ) {}
 
   // Checks no dependency: a flaky DB/Redis must not make an orchestrator kill a healthy process.
@@ -38,9 +38,9 @@ export class HealthController {
   })
   ready(): Promise<HealthCheckResult> {
     return this.health.check([
-      () => this.shutdown.isHealthy('shutdown'),
-      () => this.drizzle.isHealthy('database'),
-      () => this.redis.isHealthy('redis'),
+      () => this.shutdownHealth.isHealthy('shutdown'),
+      () => this.drizzleHealth.isHealthy('database'),
+      () => this.redisHealth.isHealthy('redis'),
     ]);
   }
 }

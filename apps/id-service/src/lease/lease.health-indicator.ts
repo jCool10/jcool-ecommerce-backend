@@ -6,12 +6,12 @@ import { NodeLease } from '@jcool/id-generator';
 export class LeaseHealthIndicator {
   constructor(
     private readonly healthIndicatorService: HealthIndicatorService,
-    private readonly lease: NodeLease,
+    private readonly nodeLease: NodeLease,
   ) {}
 
   isHealthy(key: string): HealthIndicatorResult {
     const indicator = this.healthIndicatorService.check(key);
-    const { state, nodeId } = this.lease;
+    const { state, nodeId } = this.nodeLease;
     return state === 'held' || state === 'draining' ? indicator.up({ nodeId }) : indicator.down({ state });
   }
 }

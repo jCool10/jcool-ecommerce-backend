@@ -12,17 +12,17 @@ export interface ProductDetailResult {
 export class GetProductDetailUseCase {
   constructor(
     @Inject(PRODUCT_REPOSITORY)
-    private readonly products: ProductRepositoryPort,
+    private readonly productRepo: ProductRepositoryPort,
     @Inject(MEDIA_QUERY)
-    private readonly media: MediaQueryPort,
+    private readonly mediaQuery: MediaQueryPort,
   ) {}
 
   async execute(idOrSlug: string): Promise<ProductDetailResult> {
-    const product = await this.products.findActiveByIdOrSlug(idOrSlug);
+    const product = await this.productRepo.findActiveByIdOrSlug(idOrSlug);
     if (!product) {
       throw new NotFoundException(`Product not found: ${idOrSlug}`);
     }
     // After the repository read, which is where the cache sits — a signed URL must never enter it.
-    return { product, imageUrls: await this.media.resolveUrls(product.imageAssetIds) };
+    return { product, imageUrls: await this.mediaQuery.resolveUrls(product.imageAssetIds) };
   }
 }

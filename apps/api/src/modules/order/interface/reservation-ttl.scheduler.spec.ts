@@ -67,7 +67,7 @@ describe('ReservationTtlScheduler', () => {
       ];
 
       for (const overrides of invalid) {
-        expect(() => build(overrides).make(), JSON.stringify(overrides)).toThrow(/Invalid reservation sweep config/);
+        expect(() => build(overrides).make(), JSON.stringify(overrides)).toThrow(/Invalid config: reservationSweep\./);
       }
     });
   });

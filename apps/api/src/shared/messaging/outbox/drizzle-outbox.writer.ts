@@ -11,12 +11,12 @@ import { outbox } from './schema/outbox.schema';
  */
 @Injectable()
 export class DrizzleOutboxWriter implements OutboxWriterPort {
-  constructor(@Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort) {}
+  constructor(@Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort) {}
 
   async append(tx: DrizzleTx, record: OutboxRecord): Promise<void> {
     const { traceparent } = injectTraceContext();
     await tx.insert(outbox).values({
-      id: await mintOne(this.ids),
+      id: await mintOne(this.idGenerator),
       aggregateType: record.aggregateType,
       aggregateId: record.aggregateId,
       eventType: record.eventType,

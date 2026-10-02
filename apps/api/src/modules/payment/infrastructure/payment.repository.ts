@@ -19,12 +19,12 @@ type PaymentRow = typeof payments.$inferSelect;
 export class DrizzlePaymentRepository implements PaymentRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
   async create(payment: Payment, tx?: DrizzleTx): Promise<Payment> {
     const executor = tx ?? this.db;
-    const id = await mintOne(this.ids);
+    const id = await mintOne(this.idGenerator);
     try {
       const [row] = await executor
         .insert(payments)

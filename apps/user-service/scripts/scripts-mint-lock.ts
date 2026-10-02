@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { IdentityService } from '../src/modules/user/application/services/identity.service';
+import type { IdGeneratorService } from '../src/modules/user/application/services/id-generator.service';
 import { scriptsIdentity } from './scripts-identity';
 
 // Any fixed pair identifies the lock; these two are arbitrary and only have to stay put.
@@ -20,7 +20,10 @@ const LOCK_KEY = 1;
  * queue behind a seed that may take an hour. The lock is session-scoped, so a crashed run releases
  * it when its connection closes. It holds one pool connection for the whole of `run`.
  */
-export async function withScriptsMintLock<T>(pool: Pool, run: (identity: IdentityService) => Promise<T>): Promise<T> {
+export async function withScriptsMintLock<T>(
+  pool: Pool,
+  run: (idGeneratorService: IdGeneratorService) => Promise<T>,
+): Promise<T> {
   const client = await pool.connect();
   try {
     const { rows } = await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1, $2) AS locked', [

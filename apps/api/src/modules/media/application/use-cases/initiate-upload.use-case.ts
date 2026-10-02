@@ -31,9 +31,9 @@ export class InitiateUploadUseCase {
   private readonly uploadTtlSec: number;
 
   constructor(
-    @Inject(MEDIA_ASSET_REPOSITORY) private readonly repository: MediaAssetRepositoryPort,
-    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStoragePort,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(MEDIA_ASSET_REPOSITORY) private readonly mediaAssetRepo: MediaAssetRepositoryPort,
+    @Inject(OBJECT_STORAGE) private readonly objectStorage: ObjectStoragePort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
     config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
@@ -44,10 +44,10 @@ export class InitiateUploadUseCase {
 
   async execute(input: InitiateUploadInput): Promise<InitiateUploadResult> {
     const contentType = assertAllowedContentType(input.contentType);
-    const assetId = await mintOne(this.ids);
+    const assetId = await mintOne(this.idGenerator);
     const storageKey = `media/${assetId}.${extensionFor(contentType)}`;
 
-    await this.repository.insertPending(
+    await this.mediaAssetRepo.insertPending(
       MediaAsset.pending({
         id: assetId,
         storageKey,
@@ -57,7 +57,7 @@ export class InitiateUploadUseCase {
       }),
     );
 
-    const upload = await this.storage.presignPut(storageKey, contentType);
+    const upload = await this.objectStorage.presignPut(storageKey, contentType);
     this.logger.info({ assetId, contentType }, 'media upload initiated');
     return { assetId, uploadUrl: upload.url, headers: upload.headers, expiresInSec: upload.expiresInSec };
   }

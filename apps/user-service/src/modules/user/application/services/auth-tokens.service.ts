@@ -11,7 +11,7 @@ import {
   REFRESH_TOKEN_REPOSITORY,
   type RefreshTokenRepositoryPort,
 } from '../ports';
-import { IdentityService } from './identity.service';
+import { IdGeneratorService } from './id-generator.service';
 
 export interface AuthTokens {
   /** Signed JWT (ES256). */
@@ -35,22 +35,22 @@ export class AuthTokensService {
   private readonly refreshTtlMs: number;
 
   constructor(
-    @Inject(ACCESS_TOKEN_SIGNER) private readonly signer: AccessTokenSignerPort,
+    @Inject(ACCESS_TOKEN_SIGNER) private readonly accessTokenSigner: AccessTokenSignerPort,
     config: ConfigService,
     @Inject(REFRESH_TOKEN_REPOSITORY)
-    private readonly refreshTokens: RefreshTokenRepositoryPort,
-    private readonly identity: IdentityService,
+    private readonly refreshTokenRepo: RefreshTokenRepositoryPort,
+    private readonly idGeneratorService: IdGeneratorService,
   ) {
     this.refreshTtlMs = durationToMs(config.getOrThrow<string>('auth.refreshTokenTtl'));
   }
 
   get accessExpiresIn(): number {
-    return this.signer.expiresIn;
+    return this.accessTokenSigner.expiresIn;
   }
 
   // Fresh jti per token, so logout can denylist exactly this one.
   signAccess(sub: string, role: Role, epoch = 0): Promise<string> {
-    return this.signer.sign({ sub, role, jti: uuidv7(), epoch });
+    return this.accessTokenSigner.sign({ sub, role, jti: uuidv7(), epoch });
   }
 
   // Mints only: the caller owns the family id and the persistence.
@@ -64,17 +64,17 @@ export class AuthTokensService {
 
     // Login opens a fresh token family (= one session/device).
     const refresh = this.newRefreshToken();
-    await this.refreshTokens.create({
+    await this.refreshTokenRepo.create({
       userId: user.id,
       tokenHash: refresh.hash,
-      familyId: await this.identity.mintId(),
+      familyId: await this.idGeneratorService.mintId(),
       expiresAt: refresh.expiresAt,
     });
 
     return {
       accessToken,
       refreshToken: refresh.raw,
-      expiresIn: this.signer.expiresIn,
+      expiresIn: this.accessTokenSigner.expiresIn,
     };
   }
 }

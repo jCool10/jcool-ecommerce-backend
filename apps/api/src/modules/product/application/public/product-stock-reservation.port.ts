@@ -6,6 +6,7 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 // The ONLY way another context holds stock; bound to ReserveStockUseCase, whose strategy is config.
 export const PRODUCT_STOCK_RESERVATION = Symbol('PRODUCT_STOCK_RESERVATION');
 
+/** At most one line per `variantId` — a duplicate variant is held once, not summed. */
 export interface ReservationLine {
   variantId: string;
   quantity: number;

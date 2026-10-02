@@ -13,7 +13,7 @@ export class SweepIdempotencyKeysUseCase implements RetentionSweep, OnModuleInit
   private readonly graceSec: number;
 
   constructor(
-    @Inject(IDEMPOTENCY_STORE) private readonly store: IdempotencyStorePort,
+    @Inject(IDEMPOTENCY_STORE) private readonly idempotencyStore: IdempotencyStorePort,
     config: ConfigService,
     private readonly registry: RetentionSweepRegistry,
   ) {
@@ -27,6 +27,6 @@ export class SweepIdempotencyKeysUseCase implements RetentionSweep, OnModuleInit
   sweep(batchSize: number): Promise<number> {
     // The key's own TTL is already the retry window; this only adds slack for a clock skew between
     // the app that stamped `expires_at` and the database that compares against it.
-    return this.store.deleteExpired(new Date(Date.now() - this.graceSec * 1000), batchSize);
+    return this.idempotencyStore.deleteExpired(new Date(Date.now() - this.graceSec * 1000), batchSize);
   }
 }

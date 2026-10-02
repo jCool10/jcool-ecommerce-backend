@@ -7,7 +7,7 @@ import { EchoAccessTokenSigner, claimsOf } from '../../testing/access-token-sign
 import { RecordingIdGenerator } from '../../testing/id-generator.double';
 import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
 import { AuthTokensService } from './auth-tokens.service';
-import { IdentityService } from './identity.service';
+import { IdGeneratorService } from './id-generator.service';
 
 const NOW = new Date('2026-09-24T08:00:00.000Z');
 const SEVEN_DAYS_MS = 7 * 86_400_000;
@@ -36,7 +36,7 @@ describe('AuthTokensService', () => {
       new EchoAccessTokenSigner(),
       fakeConfigService({ 'auth.refreshTokenTtl': '7d' }),
       repo,
-      new IdentityService(ids),
+      new IdGeneratorService(ids),
     );
   });
 

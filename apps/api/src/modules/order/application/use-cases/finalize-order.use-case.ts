@@ -30,9 +30,9 @@ const COMPENSATION_TRIGGER: Readonly<Record<Exclude<FinalizeOutcome, typeof Orde
 @Injectable()
 export class FinalizeOrderUseCase {
   constructor(
-    @Inject(ORDER_REPOSITORY) private readonly repo: OrderRepositoryPort,
-    @Inject(INVENTORY_RESERVATION) private readonly inventory: InventoryReservationPort,
-    @Inject(OUTBOX_WRITER) private readonly outbox: OutboxWriterPort,
+    @Inject(ORDER_REPOSITORY) private readonly orderRepo: OrderRepositoryPort,
+    @Inject(INVENTORY_RESERVATION) private readonly inventoryReservation: InventoryReservationPort,
+    @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
   ) {
@@ -75,8 +75,8 @@ export class FinalizeOrderUseCase {
     join?: DrizzleTx,
   ): Promise<FinalizeResult> {
     try {
-      return await this.repo.withTransaction(async (tx) => {
-        const order = await this.repo.findByIdForUpdate(orderId, tx);
+      return await this.orderRepo.withTransaction(async (tx) => {
+        const order = await this.orderRepo.findByIdForUpdate(orderId, tx);
         if (!order) {
           return { status: 'not_found' };
         }
@@ -96,21 +96,21 @@ export class FinalizeOrderUseCase {
         }
 
         const finalized = order.finalize(outcome, { now: new Date(), reason, paymentRef });
-        await this.repo.persistFinalization(finalized, tx);
+        await this.orderRepo.persistFinalization(finalized, tx);
 
         // Same tx again: the settlement event cannot outlive a rolled-back finalize, and a committed
         // finalize cannot lose its event. Only this branch emits — a duplicate or conflicting outcome
         // already returned above, so the terminal guard doubles as the event's dedup. Appended before
         // the stock rows are locked, because appending mints an id over the network.
         const event = finalized.toFinalizedEvent();
-        await this.outbox.append(tx, toFinalizedOutboxRecord(event));
+        await this.outboxWriter.append(tx, toFinalizedOutboxRecord(event));
 
         // Same tx as the status flip, so there is no window where an order is PAID but its stock is not.
-        const resolution =
+        const stockResolution =
           outcome === OrderStatus.PAID
-            ? await this.inventory.commit(tx, orderId)
-            : await this.inventory.release(tx, orderId);
-        if (!resolution.applied && !resolution.alreadyResolved) {
+            ? await this.inventoryReservation.commit(tx, orderId)
+            : await this.inventoryReservation.release(tx, orderId);
+        if (!stockResolution.applied && !stockResolution.alreadyResolved) {
           // Not fatal, but it breaks the money = stock = status invariant, so a human has to look.
           this.logger.warn({ orderId, outcome }, 'finalized order had no reservation to resolve');
         }

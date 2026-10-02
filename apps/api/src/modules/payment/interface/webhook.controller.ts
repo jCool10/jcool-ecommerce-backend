@@ -28,7 +28,7 @@ import { HandlePaymentWebhookUseCase } from '../application/use-cases';
 @ApiTags('payments')
 @Controller('webhooks')
 export class WebhookController {
-  constructor(private readonly handleWebhook: HandlePaymentWebhookUseCase) {}
+  constructor(private readonly handlePaymentWebhook: HandlePaymentWebhookUseCase) {}
 
   @Public()
   // Both tiers must be named — bare `@SkipThrottle()` skips only `default`, leaving `account`. The
@@ -46,7 +46,7 @@ export class WebhookController {
       throw new UnauthorizedException('Missing webhook body');
     }
 
-    const result = await this.handleWebhook.execute(rawBody, req.headers as Record<string, string>);
+    const result = await this.handlePaymentWebhook.execute(rawBody, req.headers as Record<string, string>);
     if (result.outcome === 'rejected') {
       // The cause is logged, not sent: it tells a wrong secret apart from a clock or replay problem.
       throw new UnauthorizedException('Invalid webhook signature', {

@@ -41,12 +41,15 @@ export class CachingProductRepository implements ProductRepositoryPort {
   constructor(
     private readonly source: DrizzleProductRepository,
     private readonly cache: CacheService,
-    private readonly swr: SwrCacheService,
+    private readonly swrCacheService: SwrCacheService,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     config: ConfigService,
   ) {
     // Only freshness is catalog's to choose; the stale window, jitter and lock bounds stay process-wide.
-    this.policy = { ...swr.defaultPolicy, softTtlMs: config.getOrThrow<number>('catalog.cacheTtlSec') * 1000 };
+    this.policy = {
+      ...swrCacheService.defaultPolicy,
+      softTtlMs: config.getOrThrow<number>('catalog.cacheTtlSec') * 1000,
+    };
   }
 
   async findManyActive(criteria: FindManyActiveCriteria): Promise<FindManyActiveResult> {
@@ -56,11 +59,15 @@ export class CachingProductRepository implements ProductRepositoryPort {
       return this.source.findManyActive(criteria);
     }
 
-    return this.swr.readThroughSwr(productListKey(version, criteria), () => this.source.findManyActive(criteria), {
-      policy: this.policy,
-      codec: LIST_CODEC,
-      label: 'catalog.product_list',
-    });
+    return this.swrCacheService.readThroughSwr(
+      productListKey(version, criteria),
+      () => this.source.findManyActive(criteria),
+      {
+        policy: this.policy,
+        codec: LIST_CODEC,
+        label: 'catalog.product_list',
+      },
+    );
   }
 
   async findActiveByIdOrSlug(idOrSlug: string): Promise<Product | null> {
@@ -70,7 +77,7 @@ export class CachingProductRepository implements ProductRepositoryPort {
       return this.source.findActiveByIdOrSlug(idOrSlug);
     }
 
-    return this.swr.readThroughSwr(
+    return this.swrCacheService.readThroughSwr(
       productDetailKey(version, idOrSlug),
       () => this.source.findActiveByIdOrSlug(idOrSlug),
       { policy: this.policy, codec: DETAIL_CODEC, label: 'catalog.product_detail' },

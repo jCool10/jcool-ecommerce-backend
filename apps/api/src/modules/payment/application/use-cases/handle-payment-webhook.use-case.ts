@@ -17,7 +17,7 @@ const LOG_CONTEXT = 'HandlePaymentWebhook';
 @Injectable()
 export class HandlePaymentWebhookUseCase {
   constructor(
-    private readonly processEvent: ProcessWebhookEventUseCase,
+    private readonly processWebhookEvent: ProcessWebhookEventUseCase,
     private readonly finalizeOrder: FinalizeOrderUseCase,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
@@ -26,7 +26,7 @@ export class HandlePaymentWebhookUseCase {
   }
 
   async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
-    const result = await this.processEvent.execute(rawBody, headers);
+    const result = await this.processWebhookEvent.execute(rawBody, headers);
     // Only a first-delivery settle finalizes: on any other outcome the payment side already decided.
     if (result.outcome !== 'processed') {
       if (result.outcome === 'skipped' && result.conflict?.to === PaymentStatus.SUCCEEDED) {

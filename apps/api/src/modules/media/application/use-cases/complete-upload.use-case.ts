@@ -21,8 +21,8 @@ export class CompleteUploadUseCase {
   private readonly readyTtlSec: number;
 
   constructor(
-    @Inject(MEDIA_ASSET_REPOSITORY) private readonly repository: MediaAssetRepositoryPort,
-    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStoragePort,
+    @Inject(MEDIA_ASSET_REPOSITORY) private readonly mediaAssetRepo: MediaAssetRepositoryPort,
+    @Inject(OBJECT_STORAGE) private readonly objectStorage: ObjectStoragePort,
     config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
@@ -32,11 +32,11 @@ export class CompleteUploadUseCase {
   }
 
   async execute(assetId: string): Promise<void> {
-    const asset = await this.repository.findById(assetId);
+    const asset = await this.mediaAssetRepo.findById(assetId);
     if (!asset) throw new MediaAssetNotFoundError(assetId);
     assertTransition(asset.status, AssetStatus.READY);
 
-    const head = await this.storage.head(asset.storageKey);
+    const head = await this.objectStorage.head(asset.storageKey);
     if (!head) throw new UploadRejectedError('No object was uploaded for this asset', assetId);
 
     if (head.sizeBytes > this.maxBytes) {
@@ -51,7 +51,7 @@ export class CompleteUploadUseCase {
 
     // Extended, never cleared: an asset with no expiry can never be selected by the sweep, so only
     // a successful attach earns a null one.
-    const moved = await this.repository.markReady(
+    const moved = await this.mediaAssetRepo.markReady(
       assetId,
       head.sizeBytes,
       new Date(Date.now() + this.readyTtlSec * 1000),

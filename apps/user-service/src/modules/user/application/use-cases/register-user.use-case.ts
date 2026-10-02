@@ -23,10 +23,10 @@ export interface RegisterUserInput {
 @Injectable()
 export class RegisterUserUseCase {
   constructor(
-    @Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort,
-    @Inject(PASSWORD_HASHER) private readonly hasher: PasswordHasherPort,
-    private readonly emailVerification: EmailVerificationService,
-    @Inject(SESSION_EPOCH_PUBLISHER) private readonly epochs: SessionEpochPublisherPort,
+    @Inject(USER_REPOSITORY) private readonly userRepo: UserRepositoryPort,
+    @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasherPort,
+    private readonly emailVerificationService: EmailVerificationService,
+    @Inject(SESSION_EPOCH_PUBLISHER) private readonly sessionEpochPublisher: SessionEpochPublisherPort,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -38,20 +38,20 @@ export class RegisterUserUseCase {
     // No pre-check: the unique email index is the sole guard. Hashing before the insert makes a
     // taken-email attempt cost the same as a real signup (closes a register timing oracle); the
     // argon2 cost per attempt is bounded by the register throttle.
-    const passwordHash = await this.hasher.hash(input.password);
-    const user = await this.users.create({ email, passwordHash });
+    const passwordHash = await this.passwordHasher.hash(input.password);
+    const user = await this.userRepo.create({ email, passwordHash });
     if (!user) {
       throw new ConflictException('Email already registered'); // lost the insert race
     }
 
     // Best effort: a missing key is filled on its first read, and the reconciler publishes new rows.
-    await this.epochs.publish(user.id, user.tokenEpoch).catch((err: unknown) => {
+    await this.sessionEpochPublisher.publish(user.id, user.tokenEpoch).catch((err: unknown) => {
       this.logger.warn({ userId: user.id, err: toError(err) }, 'session epoch not published at signup');
     });
 
     // Not awaited, so a slow mail server cannot stretch an already-persisted signup. The mailer
     // itself swallows delivery failures; the .catch is only what `void` needs.
-    void this.emailVerification.issueAndSend(user).catch((err: unknown) => {
+    void this.emailVerificationService.issueAndSend(user).catch((err: unknown) => {
       this.logger.warn({ userId: user.id, err: toError(err) }, 'verification email failed');
     });
     return user;

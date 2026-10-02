@@ -32,7 +32,7 @@ export interface SweepSummary {
 @Injectable()
 export class SweepExpiredReservationsUseCase {
   constructor(
-    @Inject(INVENTORY_RESERVATION) private readonly inventory: InventoryReservationPort,
+    @Inject(INVENTORY_RESERVATION) private readonly inventoryReservation: InventoryReservationPort,
     private readonly finalizeOrder: FinalizeOrderUseCase,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     private readonly logger: PinoLogger,
@@ -41,7 +41,7 @@ export class SweepExpiredReservationsUseCase {
   }
 
   async execute({ graceSec, batchSize }: SweepInput): Promise<SweepSummary> {
-    const holds = await this.inventory.findExpiredHolds({
+    const holds = await this.inventoryReservation.findExpiredHolds({
       expiredBefore: new Date(Date.now() - graceSec * 1000),
       limit: batchSize,
     });

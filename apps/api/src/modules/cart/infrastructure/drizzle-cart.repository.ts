@@ -13,7 +13,7 @@ import { cartItems, carts } from './schema/cart.schema';
 export class DrizzleCartRepository implements CartRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
   async ensureCartId(userId: string): Promise<string> {
@@ -25,7 +25,7 @@ export class DrizzleCartRepository implements CartRepositoryPort {
     }
     const [created] = await this.db
       .insert(carts)
-      .values({ id: await mintOne(this.ids), userId })
+      .values({ id: await mintOne(this.idGenerator), userId })
       .onConflictDoNothing({ target: carts.userId })
       .returning({ id: carts.id });
     if (created) {
@@ -55,7 +55,7 @@ export class DrizzleCartRepository implements CartRepositoryPort {
   async addItem(cartId: string, skuId: string, quantity: number): Promise<void> {
     await this.db
       .insert(cartItems)
-      .values({ id: await mintOne(this.ids), cartId, skuId, quantity })
+      .values({ id: await mintOne(this.idGenerator), cartId, skuId, quantity })
       // $onUpdate doesn't fire on a conflict SET, so bump updated_at by hand. LEAST applies the
       // MAX_LINE_QUANTITY ceiling inside the same statement, so the cap stays race-safe.
       .onConflictDoUpdate({

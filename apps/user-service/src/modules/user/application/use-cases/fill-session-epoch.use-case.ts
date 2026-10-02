@@ -13,13 +13,13 @@ import {
 @Injectable()
 export class FillSessionEpochUseCase {
   constructor(
-    @Inject(SESSION_EPOCH) private readonly epochs: SessionEpochPort,
-    @Inject(SESSION_EPOCH_PUBLISHER) private readonly publisher: SessionEpochPublisherPort,
+    @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochPort,
+    @Inject(SESSION_EPOCH_PUBLISHER) private readonly sessionEpochPublisher: SessionEpochPublisherPort,
   ) {}
 
   /** Null for an unknown user. */
   async execute(userId: string): Promise<number | null> {
-    const epoch = await this.epochs.current(userId);
-    return epoch === null ? null : this.publisher.publish(userId, epoch);
+    const epoch = await this.sessionEpoch.current(userId);
+    return epoch === null ? null : this.sessionEpochPublisher.publish(userId, epoch);
   }
 }

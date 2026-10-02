@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, isNull } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '../../../database';
-import { IdentityService } from '../application/services/identity.service';
+import { IdGeneratorService } from '../application/services/id-generator.service';
 import { users } from './schema/user.schema';
 import { User } from '../domain/entities/user.entity';
 import type { CreateUserInput, UserRepositoryPort } from '../application/ports';
@@ -27,7 +27,7 @@ function toDomain(row: UserRow): User {
 export class DrizzleUserRepository implements UserRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    private readonly identity: IdentityService,
+    private readonly idGeneratorService: IdGeneratorService,
   ) {}
 
   async findByEmail(email: string): Promise<User | null> {
@@ -45,7 +45,7 @@ export class DrizzleUserRepository implements UserRepositoryPort {
     const [row] = await this.db
       .insert(users)
       .values({
-        id: await this.identity.mintId(),
+        id: await this.idGeneratorService.mintId(),
         email: input.email,
         passwordHash: input.passwordHash,
         // Omit `role` when unset so the column default (CUSTOMER) applies.

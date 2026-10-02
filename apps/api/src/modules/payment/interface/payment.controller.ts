@@ -24,7 +24,7 @@ import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.re
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
 @Controller('orders')
 export class PaymentController {
-  constructor(private readonly createSession: CreatePaymentSessionUseCase) {}
+  constructor(private readonly createPaymentSession: CreatePaymentSessionUseCase) {}
 
   @Post(':id/pay')
   // Each attempt opens a session at the gateway, so this is throttled per authenticated user as
@@ -40,6 +40,6 @@ export class PaymentController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseSnowflakeIdPipe) orderId: string,
   ): Promise<CreatePaymentSessionResponseDto> {
-    return CreatePaymentSessionResponseDto.from(await this.createSession.execute(orderId, user.userId));
+    return CreatePaymentSessionResponseDto.from(await this.createPaymentSession.execute(orderId, user.userId));
   }
 }

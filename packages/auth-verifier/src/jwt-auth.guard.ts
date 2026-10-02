@@ -15,7 +15,7 @@ interface HttpRequest {
 export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
-    private readonly verifier: AccessTokenVerifier,
+    private readonly accessTokenVerifier: AccessTokenVerifier,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -29,7 +29,7 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<HttpRequest>();
     const token = BEARER.exec(request.headers.authorization ?? '')?.[1];
-    request.user = await this.verifier.verify(token);
+    request.user = await this.accessTokenVerifier.verify(token);
     return true;
   }
 }

@@ -28,7 +28,7 @@ const LOG_CONTEXT = 'CatalogAdminService';
 export class CatalogAdminService {
   constructor(
     @Inject(CATALOG_ADMIN_REPOSITORY)
-    private readonly repo: CatalogAdminRepositoryPort,
+    private readonly catalogAdminRepo: CatalogAdminRepositoryPort,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -36,14 +36,14 @@ export class CatalogAdminService {
 
   async createCategory(data: CreateCategoryData): Promise<Category> {
     // Uniqueness is enforced by the DB; the adapter maps 23505 -> 409.
-    const created = await this.repo.createCategory({ ...data, slug: Slug.of(data.slug).value });
+    const created = await this.catalogAdminRepo.createCategory({ ...data, slug: Slug.of(data.slug).value });
     this.logger.info({ categoryId: created.id }, 'category created');
     return created;
   }
 
   async updateCategory(id: string, data: UpdateCategoryData): Promise<Category> {
     const patch = data.slug !== undefined ? { ...data, slug: Slug.of(data.slug).value } : data;
-    const updated = await this.repo.updateCategory(id, patch);
+    const updated = await this.catalogAdminRepo.updateCategory(id, patch);
     if (!updated) {
       throw new NotFoundException(`Category not found: ${id}`);
     }
@@ -52,7 +52,7 @@ export class CatalogAdminService {
   }
 
   async archiveCategory(id: string): Promise<Category> {
-    const { category, blocked } = await this.repo.archiveCategoryIfEmpty(id);
+    const { category, blocked } = await this.catalogAdminRepo.archiveCategoryIfEmpty(id);
     if (blocked) {
       throw new ConflictException('Category still has active products');
     }
@@ -70,7 +70,7 @@ export class CatalogAdminService {
 
   async createProduct(data: CreateProductData): Promise<AdminProduct> {
     await this.assertCategoryUsable(data.categoryId);
-    const created = await this.repo.createProduct({ ...data, slug: Slug.of(data.slug).value });
+    const created = await this.catalogAdminRepo.createProduct({ ...data, slug: Slug.of(data.slug).value });
     this.logger.info({ productId: created.id, categoryId: created.categoryId }, 'product created');
     return created;
   }
@@ -80,7 +80,7 @@ export class CatalogAdminService {
       await this.assertCategoryUsable(data.categoryId);
     }
     const patch = data.slug !== undefined ? { ...data, slug: Slug.of(data.slug).value } : data;
-    const updated = await this.repo.updateProduct(id, patch);
+    const updated = await this.catalogAdminRepo.updateProduct(id, patch);
     if (!updated) {
       throw new NotFoundException(`Product not found: ${id}`);
     }
@@ -89,7 +89,7 @@ export class CatalogAdminService {
   }
 
   async archiveProduct(id: string): Promise<AdminProduct> {
-    const archived = await this.repo.archiveProduct(id);
+    const archived = await this.catalogAdminRepo.archiveProduct(id);
     if (!archived) {
       throw new NotFoundException(`Product not found: ${id}`);
     }
@@ -99,13 +99,13 @@ export class CatalogAdminService {
 
   async createSku(productId: string, data: CreateSkuData): Promise<Sku> {
     await this.assertProductExists(productId);
-    const created = await this.repo.createSku(productId, data);
+    const created = await this.catalogAdminRepo.createSku(productId, data);
     this.logger.info({ skuId: created.id, productId }, 'sku created');
     return created;
   }
 
   async updateSku(id: string, data: UpdateSkuData): Promise<Sku> {
-    const updated = await this.repo.updateSku(id, data);
+    const updated = await this.catalogAdminRepo.updateSku(id, data);
     if (!updated) {
       throw new NotFoundException(`SKU not found: ${id}`);
     }
@@ -114,7 +114,7 @@ export class CatalogAdminService {
   }
 
   async archiveSku(id: string): Promise<Sku> {
-    const archived = await this.repo.archiveSku(id);
+    const archived = await this.catalogAdminRepo.archiveSku(id);
     if (!archived) {
       throw new NotFoundException(`SKU not found: ${id}`);
     }
@@ -128,13 +128,13 @@ export class CatalogAdminService {
    */
   async listProductImages(productId: string): Promise<ProductImage[]> {
     await this.assertProductExists(productId);
-    return this.repo.listImages(productId);
+    return this.catalogAdminRepo.listImages(productId);
   }
 
   async attachProductImage(productId: string, data: AttachImageData): Promise<ProductImage> {
     await this.assertProductExists(productId);
     try {
-      const attached = await this.repo.attachImage(productId, data);
+      const attached = await this.catalogAdminRepo.attachImage(productId, data);
       this.logger.info({ productId, imageId: attached.id, assetId: data.assetId }, 'product image attached');
       return attached;
     } catch (error) {
@@ -147,7 +147,7 @@ export class CatalogAdminService {
   }
 
   async detachProductImage(productId: string, imageId: string): Promise<ProductImage> {
-    const detached = await this.repo.detachImage(productId, imageId);
+    const detached = await this.catalogAdminRepo.detachImage(productId, imageId);
     if (!detached) {
       throw new NotFoundException(`Image not found on product ${productId}: ${imageId}`);
     }
@@ -157,7 +157,7 @@ export class CatalogAdminService {
 
   async reorderProductImages(productId: string, imageIds: string[]): Promise<ProductImage[]> {
     await this.assertProductExists(productId);
-    const reordered = await this.repo.reorderImages(productId, imageIds);
+    const reordered = await this.catalogAdminRepo.reorderImages(productId, imageIds);
     // A partial order would silently leave the omitted images wherever they were, so the whole set
     // is required and a mismatch is refused rather than half-applied.
     if (!reordered) {
@@ -167,18 +167,18 @@ export class CatalogAdminService {
   }
 
   async setPrice(skuId: string, data: { amountMinor: number; currency?: string }): Promise<Price> {
-    const sku = await this.repo.findSkuById(skuId);
+    const sku = await this.catalogAdminRepo.findSkuById(skuId);
     if (!sku) {
       throw new NotFoundException(`SKU not found: ${skuId}`);
     }
     const payload: SetPriceData = { currency: data.currency ?? DEFAULT_CURRENCY, amountMinor: data.amountMinor };
-    const price = await this.repo.setPrice(skuId, payload);
+    const price = await this.catalogAdminRepo.setPrice(skuId, payload);
     this.logger.info({ skuId, amountMinor: price.amountMinor, currency: price.currency }, 'price set');
     return price;
   }
 
   private async assertProductExists(productId: string): Promise<void> {
-    if (!(await this.repo.findProductById(productId))) {
+    if (!(await this.catalogAdminRepo.findProductById(productId))) {
       throw new NotFoundException(`Product not found: ${productId}`);
     }
   }
@@ -187,7 +187,7 @@ export class CatalogAdminService {
   // category under a row lock, which is what holds the rule against a concurrent archive. Neither
   // runs for a status-only PATCH, which names no category.
   private async assertCategoryUsable(categoryId: string): Promise<void> {
-    const category = await this.repo.findCategoryById(categoryId);
+    const category = await this.catalogAdminRepo.findCategoryById(categoryId);
     if (!category || category.archivedAt !== null) {
       throw new NotFoundException(`Category not found: ${categoryId}`);
     }

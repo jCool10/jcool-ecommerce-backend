@@ -14,11 +14,11 @@ export interface SearchProductsResult {
 export class SearchProductsUseCase {
   constructor(
     @Inject(CATALOG_SEARCH)
-    private readonly search: CatalogSearchPort,
+    private readonly catalogSearch: CatalogSearchPort,
   ) {}
 
   async execute(criteria: SearchCriteria): Promise<SearchProductsResult> {
-    const { items, total } = await this.search.search(criteria);
+    const { items, total } = await this.catalogSearch.search(criteria);
     // A downed engine answers with an empty result rather than throwing, so the degraded case needs
     // no handling here: zero hits, zero pages.
     const totalPages = criteria.pageSize > 0 ? Math.ceil(total / criteria.pageSize) : 0;

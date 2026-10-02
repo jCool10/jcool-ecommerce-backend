@@ -9,7 +9,7 @@ import { RecordingAuthAudit } from '../../testing/recording-auth-audit.double';
 import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
 import { FakeSessionEpoch } from '../../testing/session-epoch.double';
 import type { IdGeneratorPort } from '../ports';
-import { AuthTokensService, IdentityService } from '../services';
+import { AuthTokensService, IdGeneratorService } from '../services';
 import { RefreshTokensUseCase } from './refresh-tokens.use-case';
 
 const OWNER = encode({ tsMs: EPOCH_MS + 1, nodeId: 1, sequence: 0 });
@@ -44,11 +44,16 @@ describe('RefreshTokensUseCase', () => {
     audit = new RecordingAuthAudit();
     epochs = new FakeSessionEpoch();
     warn = vi.fn();
-    const identity = new IdentityService(ids);
+    const idGeneratorService = new IdGeneratorService(ids);
     useCase = new RefreshTokensUseCase(
       refreshTokens,
-      identity,
-      new AuthTokensService(signer, fakeConfigService({ 'auth.refreshTokenTtl': '7d' }), refreshTokens, identity),
+      idGeneratorService,
+      new AuthTokensService(
+        signer,
+        fakeConfigService({ 'auth.refreshTokenTtl': '7d' }),
+        refreshTokens,
+        idGeneratorService,
+      ),
       audit,
       epochs,
       fakePinoLogger({ warn }),

@@ -5,10 +5,10 @@ import { USER_REPOSITORY, type UserRepositoryPort } from '../ports';
 /** A valid token whose user no longer exists is a 401, not a 404. */
 @Injectable()
 export class GetProfileUseCase {
-  constructor(@Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort) {}
+  constructor(@Inject(USER_REPOSITORY) private readonly userRepo: UserRepositoryPort) {}
 
   async execute(userId: string): Promise<User> {
-    const user = await this.users.findById(userId);
+    const user = await this.userRepo.findById(userId);
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }

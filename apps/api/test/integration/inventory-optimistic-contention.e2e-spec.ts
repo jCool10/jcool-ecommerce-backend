@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import {
   STOCK_REPOSITORY,
-  type ReserveLine,
+  type ReservationLine,
   type StockRepositoryPort,
 } from '../../src/modules/product/application/stock/ports/stock-repository.port';
 import { InsufficientStockError } from '../../src/modules/product/domain/stock/errors/insufficient-stock.error';
@@ -38,7 +38,10 @@ interface Contenders {
  * B's `WHERE version = stale` is guaranteed to match nothing. B is settled inside, so no rejected
  * promise is left unobserved.
  */
-async function forceCasMiss({ db, pool, repo }: Contenders, line: ReserveLine): Promise<PromiseSettledResult<void>> {
+async function forceCasMiss(
+  { db, pool, repo }: Contenders,
+  line: ReservationLine,
+): Promise<PromiseSettledResult<void>> {
   let releaseA!: () => void;
   const aMayCommit = new Promise<void>((resolve) => (releaseA = resolve));
   let aReserved!: () => void;

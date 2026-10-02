@@ -73,8 +73,9 @@ export const products = pgTable(
   ],
 );
 
-// A ProductVariant IS the sellable SKU. Other contexts reference `variantId`, so this id contract
-// is kept stable on purpose.
+// A ProductVariant IS the sellable SKU. Its id is `skuId` to Cart, Order and the catalog side, and
+// `variantId` to stock and prices (docs/code-standards.md#naming); `sku` is the human code, never an
+// id. The id contract is kept stable on purpose.
 export const productVariants = pgTable(
   'product_variants',
   {

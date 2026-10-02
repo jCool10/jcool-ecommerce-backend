@@ -55,7 +55,7 @@ describe('RetentionScheduler', () => {
         build(overrides).make();
         return false;
       } catch (error) {
-        return /Invalid retention config/.test((error as Error).message);
+        return /Invalid config: retention\./.test((error as Error).message);
       }
     };
     const invalid = [

@@ -16,7 +16,7 @@ import { ProductSearchSyncService } from './application/catalog/services/product
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from './application/catalog/use-cases';
 import { PRODUCT_SKU_QUERY } from './application/public/product-sku-query.port';
 import { PRODUCT_STOCK_RESERVATION } from './application/public/product-stock-reservation.port';
-import { AdjustStockUseCase } from './application/stock/adjust-stock.use-case';
+import { StockAdminService } from './application/stock/stock-admin.service';
 import { STOCK_ADMIN } from './application/stock/ports/stock-admin.port';
 import { STOCK_REPOSITORY } from './application/stock/ports/stock-repository.port';
 import { ReserveStockUseCase } from './application/stock/reserve-stock.use-case';
@@ -85,7 +85,7 @@ import { AdminInventoryController } from './interface/stock/admin-inventory.cont
     ProductChangedHandler,
     CategoryRenamedHandler,
     ReserveStockUseCase,
-    AdjustStockUseCase,
+    StockAdminService,
     { provide: STOCK_REPOSITORY, useClass: StockRepository },
     { provide: STOCK_ADMIN, useClass: StockAdminRepository },
     { provide: PRODUCT_STOCK_RESERVATION, useExisting: ReserveStockUseCase },

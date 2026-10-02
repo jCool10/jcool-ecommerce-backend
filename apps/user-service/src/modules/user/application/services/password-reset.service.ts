@@ -27,12 +27,12 @@ export class PasswordResetService {
 
   constructor(
     @Inject(PASSWORD_RESET_TOKEN_REPOSITORY)
-    private readonly tokens: PasswordResetTokenRepositoryPort,
-    @Inject(USER_REPOSITORY) private readonly users: UserRepositoryPort,
-    @Inject(PASSWORD_HASHER) private readonly hasher: PasswordHasherPort,
-    private readonly sessions: SessionService,
+    private readonly passwordResetTokenRepo: PasswordResetTokenRepositoryPort,
+    @Inject(USER_REPOSITORY) private readonly userRepo: UserRepositoryPort,
+    @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasherPort,
+    private readonly sessionService: SessionService,
     @Inject(MAILER) private readonly mailer: MailerPort,
-    @Inject(AUTH_AUDIT) private readonly audit: AuthAuditPort,
+    @Inject(AUTH_AUDIT) private readonly authAudit: AuthAuditPort,
     config: ConfigService,
   ) {
     this.ttlMs = durationToMs(config.getOrThrow<string>('auth.passwordResetTtl'));
@@ -42,14 +42,18 @@ export class PasswordResetService {
     const rawToken = randomBytes(32).toString('base64url');
     const tokenHash = sha256Hex(rawToken);
 
-    await this.tokens.create({ userId: recipient.id, tokenHash, expiresAt: new Date(Date.now() + this.ttlMs) });
-    await this.tokens.invalidateOthersForUser(recipient.id, tokenHash);
+    await this.passwordResetTokenRepo.create({
+      userId: recipient.id,
+      tokenHash,
+      expiresAt: new Date(Date.now() + this.ttlMs),
+    });
+    await this.passwordResetTokenRepo.invalidateOthersForUser(recipient.id, tokenHash);
     // Not awaited, for the reason spelled out in EmailVerificationService: forgot-password answers 202
     // for any address, and a mail server's latency on the existing-account branch alone would hand back
     // that difference. The catch is only what `void` needs.
     void this.mailer.sendPasswordReset({ to: recipient.email, token: rawToken }).catch(() => undefined);
 
-    this.audit.record({
+    this.authAudit.record({
       event: 'password.reset_requested',
       outcome: 'success',
       userId: recipient.id,
@@ -59,17 +63,19 @@ export class PasswordResetService {
 
   /** One generic 400 covers invalid, expired and already-used tokens alike. */
   async reset(rawToken: string, newPassword: string): Promise<{ userId: string }> {
-    const outcome = await this.tokens.consume(sha256Hex(rawToken));
+    const outcome = await this.passwordResetTokenRepo.consume(sha256Hex(rawToken));
     if (outcome.status === 'invalid') {
       throw new BadRequestException('Invalid or expired password-reset token');
     }
 
-    const passwordHash = await this.hasher.hash(newPassword);
+    const passwordHash = await this.passwordHasher.hash(newPassword);
     // A reset is a compromise response, so every session goes. Revoking first fails safe: a crash
     // leaves the old password with the sessions gone, never the reverse. Still open — the attacker
     // holds that old password, and a login racing the window INSERTs a refresh family after
     // revokeAllForUser has passed, which no later write revokes. Closing it needs one transaction.
-    await this.sessions.revokeAllThen(outcome.userId, () => this.users.updatePassword(outcome.userId, passwordHash));
+    await this.sessionService.revokeAllThen(outcome.userId, () =>
+      this.userRepo.updatePassword(outcome.userId, passwordHash),
+    );
 
     return { userId: outcome.userId };
   }

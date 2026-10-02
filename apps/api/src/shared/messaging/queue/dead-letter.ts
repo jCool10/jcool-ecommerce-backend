@@ -24,9 +24,9 @@ export interface DeadLetterJob extends DomainEventJob {
 @Injectable()
 export class DeadLetterRouter {
   constructor(
-    @Inject(DOMAIN_EVENTS_DLQ_QUEUE) private readonly dlq: Queue,
+    @Inject(DOMAIN_EVENTS_DLQ_QUEUE) private readonly deadLetterQueue: Queue,
     @Inject(METRICS) private readonly metrics: MetricsPort,
-    private readonly dispatcher: DomainEventDispatcher,
+    private readonly domainEventDispatcher: DomainEventDispatcher,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -34,7 +34,7 @@ export class DeadLetterRouter {
 
   async route(job: Job<DomainEventJob>, error: Error): Promise<void> {
     // `job.name` is the event type straight off the wire; only the dispatch table bounds it.
-    const eventType = this.dispatcher.label(job.name);
+    const eventType = this.domainEventDispatcher.label(job.name);
     const messageId = job.data?.outboxId ?? job.id;
 
     if (job.finishedOn === undefined) {
@@ -63,8 +63,8 @@ export class DeadLetterRouter {
       // silently ignored, so without it an operator would debug the first failure. Safe to lose the
       // entry in between — the main queue holds this job in its failed set for a week either way.
       const slot = job.data?.outboxId ? jobIdFor(job.data.outboxId) : job.id;
-      if (slot) await this.dlq.remove(slot);
-      await this.dlq.add(job.name, dead, { jobId: slot });
+      if (slot) await this.deadLetterQueue.remove(slot);
+      await this.deadLetterQueue.add(job.name, dead, { jobId: slot });
       this.metrics.recordDeadLetter(eventType, reason);
       this.logger.error(
         { err: error, eventType: job.name, messageId, attemptsMade: job.attemptsMade, reason },

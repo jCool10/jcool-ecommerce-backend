@@ -12,14 +12,14 @@ import { MintRequest, type MintResponse } from './mint.request';
 @UseFilters(LeaseNotHeldFilter)
 export class MintController {
   constructor(
-    private readonly lease: NodeLease,
+    private readonly nodeLease: NodeLease,
     @InjectMetric(ID_MINTED_TOTAL) private readonly minted: Counter<'caller'>,
   ) {}
 
   @Post()
   @HttpCode(HttpStatus.OK)
   mint(@Body() { count }: MintRequest, @Headers('x-caller') caller: string | undefined): MintResponse {
-    const ids = Array.from({ length: count }, () => this.lease.generate());
+    const ids = Array.from({ length: count }, () => this.nodeLease.generate());
     this.minted.inc({ caller: callerLabel(caller) }, count);
     return { ids };
   }

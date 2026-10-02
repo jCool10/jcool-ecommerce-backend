@@ -10,7 +10,7 @@ const LOG_CONTEXT = 'CategoryRenamedHandler';
 @Injectable()
 export class CategoryRenamedHandler {
   constructor(
-    private readonly sync: ProductSearchSyncService,
+    private readonly productSearchSyncService: ProductSearchSyncService,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -21,7 +21,7 @@ export class CategoryRenamedHandler {
     if (!isRoutableId(job.aggregateId)) {
       throw new PermanentError(`catalog.category.renamed without a usable category id (message ${job.outboxId})`);
     }
-    const products = await this.sync.syncCategory(job.aggregateId);
+    const products = await this.productSearchSyncService.syncCategory(job.aggregateId);
     this.logger.info({ categoryId: job.aggregateId, products }, 'category rename written to its products');
   }
 }

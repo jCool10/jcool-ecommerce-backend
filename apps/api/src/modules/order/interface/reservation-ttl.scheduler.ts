@@ -4,6 +4,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import { durationToMs, toError } from '@jcool/kernel';
+import { requireIntConfig } from '@jcool/platform/config';
 import { runInJobContext, withSpan } from '@jcool/platform/observability';
 import { SweepExpiredReservationsUseCase, type SweepInput } from '../application/use-cases';
 
@@ -27,19 +28,17 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly config: ConfigService;
 
   constructor(
-    private readonly sweepExpired: SweepExpiredReservationsUseCase,
+    private readonly sweepExpiredReservations: SweepExpiredReservationsUseCase,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly cls: ClsService,
     private readonly logger: PinoLogger,
   ) {
-    // A mistyped key reads as undefined, and `setInterval(fn, undefined)` fires every event-loop
-    // turn — a busy loop opening transactions. Refuse to build rather than boot that.
     this.enabled = config.get<boolean>('reservationSweep.enabled') === true;
-    this.intervalMs = requireInt(config, 'reservationSweep.intervalMs', 1);
+    this.intervalMs = requireIntConfig(config, 'reservationSweep.intervalMs', 1);
     this.sweep = {
-      graceSec: requireInt(config, 'reservationSweep.graceSec', 0),
-      batchSize: requireInt(config, 'reservationSweep.batchSize', 1),
+      graceSec: requireIntConfig(config, 'reservationSweep.graceSec', 0),
+      batchSize: requireIntConfig(config, 'reservationSweep.batchSize', 1),
     };
     this.config = config;
     logger.setContext(LOG_CONTEXT);
@@ -51,8 +50,8 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
       return;
     }
     this.assertBehindReconcile();
-    const interval = setInterval(() => void this.tick(), this.intervalMs);
-    this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
+    const timer = setInterval(() => void this.tick(), this.intervalMs);
+    this.schedulerRegistry.addInterval(INTERVAL_NAME, timer);
     this.logger.info({ intervalMs: this.intervalMs }, 'reservation expiry sweep scheduled');
   }
 
@@ -75,7 +74,7 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
       // not per order — the batch is the unit of work, and each order carries its own id already.
       await runInJobContext(this.cls, INTERVAL_NAME, () =>
         withSpan('reservation.sweep', async () => {
-          const summary = await this.sweepExpired.execute(this.sweep);
+          const summary = await this.sweepExpiredReservations.execute(this.sweep);
           // A full batch that expired nothing means the oldest holds cannot be cleared, and the read
           // is ordered oldest-first — so they will fill every tick from here on and newer holds never
           // get looked at. Distinct from the catch below: the sweep worked, its queue is jammed.
@@ -107,7 +106,7 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
    */
   private assertBehindReconcile(): void {
     const holdTtlSec = durationToMs(this.config.getOrThrow<string>('inventory.reservationTtl')) / 1000;
-    const orderTtlSec = requireInt(this.config, 'reconcile.orderTtlSec', 0);
+    const orderTtlSec = requireIntConfig(this.config, 'reconcile.orderTtlSec', 0);
     const claimsAtSec = holdTtlSec + this.sweep.graceSec;
 
     if (claimsAtSec < orderTtlSec) {
@@ -117,12 +116,4 @@ export class ReservationTtlScheduler implements OnModuleInit, OnModuleDestroy {
       );
     }
   }
-}
-
-function requireInt(config: ConfigService, key: string, min: number): number {
-  const value = config.get<number>(key);
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
-    throw new Error(`Invalid reservation sweep config: ${key} must be an integer >= ${min}`);
-  }
-  return value;
 }

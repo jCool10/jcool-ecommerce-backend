@@ -12,7 +12,7 @@ import {
 } from '@nestjs/swagger';
 import { Role, Roles } from '@jcool/platform/rbac';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
-import { AdjustStockUseCase } from '../../application/stock/adjust-stock.use-case';
+import { StockAdminService } from '../../application/stock/stock-admin.service';
 import { AdjustStockDto, SetStockDto, StockLevelResponseDto } from './dto';
 
 /**
@@ -29,14 +29,14 @@ import { AdjustStockDto, SetStockDto, StockLevelResponseDto } from './dto';
 @Roles(Role.Admin)
 @Controller('admin/inventory')
 export class AdminInventoryController {
-  constructor(private readonly stock: AdjustStockUseCase) {}
+  constructor(private readonly stockAdminService: StockAdminService) {}
 
   @Get(':variantId')
   @ApiParam({ name: 'variantId', example: '137465797020397179' })
   @ApiOkResponse({ type: StockLevelResponseDto })
   @ApiNotFoundResponse({ description: 'This SKU has no stock level yet' })
   async getLevel(@Param('variantId', ParseSnowflakeIdPipe) variantId: string): Promise<StockLevelResponseDto> {
-    return StockLevelResponseDto.fromView(variantId, await this.stock.getLevel(variantId));
+    return StockLevelResponseDto.fromView(variantId, await this.stockAdminService.getLevel(variantId));
   }
 
   @Put(':variantId')
@@ -47,7 +47,10 @@ export class AdminInventoryController {
     @Param('variantId', ParseSnowflakeIdPipe) variantId: string,
     @Body() dto: SetStockDto,
   ): Promise<StockLevelResponseDto> {
-    return StockLevelResponseDto.fromView(variantId, await this.stock.setOnHand(variantId, dto.quantityOnHand));
+    return StockLevelResponseDto.fromView(
+      variantId,
+      await this.stockAdminService.setOnHand(variantId, dto.quantityOnHand),
+    );
   }
 
   @Post(':variantId/adjust')
@@ -62,6 +65,6 @@ export class AdminInventoryController {
     @Param('variantId', ParseSnowflakeIdPipe) variantId: string,
     @Body() dto: AdjustStockDto,
   ): Promise<StockLevelResponseDto> {
-    return StockLevelResponseDto.fromView(variantId, await this.stock.adjust(variantId, dto.delta));
+    return StockLevelResponseDto.fromView(variantId, await this.stockAdminService.adjust(variantId, dto.delta));
   }
 }

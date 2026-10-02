@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
+import { requireIntConfig } from '@jcool/platform/config';
 import { runInJobContext, withSpan } from '@jcool/platform/observability';
 import { toError } from '@jcool/kernel';
 import { ReconcileStaleOrdersUseCase, type ReconcileInput } from '../application/use-cases';
@@ -24,20 +25,18 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly sweep: ReconcileInput;
 
   constructor(
-    private readonly reconcile: ReconcileStaleOrdersUseCase,
+    private readonly reconcileStaleOrders: ReconcileStaleOrdersUseCase,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly cls: ClsService,
     private readonly logger: PinoLogger,
   ) {
-    // A mistyped key reads as undefined, and `setInterval(fn, undefined)` fires every event-loop
-    // turn — a busy loop against the gateway. Refuse to build rather than boot that.
     this.enabled = config.get<boolean>('reconcile.enabled') === true;
-    this.intervalMs = requireInt(config, 'reconcile.intervalMs', 1);
+    this.intervalMs = requireIntConfig(config, 'reconcile.intervalMs', 1);
     this.sweep = {
-      staleAfterSec: requireInt(config, 'reconcile.staleAfterSec', 0),
-      ttlSec: requireInt(config, 'reconcile.orderTtlSec', 0),
-      batchSize: requireInt(config, 'reconcile.batchSize', 1),
+      staleAfterSec: requireIntConfig(config, 'reconcile.staleAfterSec', 0),
+      ttlSec: requireIntConfig(config, 'reconcile.orderTtlSec', 0),
+      batchSize: requireIntConfig(config, 'reconcile.batchSize', 1),
     };
     logger.setContext(LOG_CONTEXT);
   }
@@ -47,8 +46,8 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
       this.logger.info('reconciliation sweep disabled');
       return;
     }
-    const interval = setInterval(() => void this.tick(), this.intervalMs);
-    this.schedulerRegistry.addInterval(INTERVAL_NAME, interval);
+    const timer = setInterval(() => void this.tick(), this.intervalMs);
+    this.schedulerRegistry.addInterval(INTERVAL_NAME, timer);
     this.logger.info({ intervalMs: this.intervalMs }, 'reconciliation sweep scheduled');
   }
 
@@ -71,7 +70,7 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
       // correlation id there for readers with no tracing backend.
       await runInJobContext(this.cls, INTERVAL_NAME, () =>
         withSpan('payment.reconcile', async () => {
-          const summary = await this.reconcile.execute(this.sweep);
+          const summary = await this.reconcileStaleOrders.execute(this.sweep);
           // Idle sweeps are the common case; logging them buries the ticks that did something.
           if (summary.scanned > 0) {
             this.logger.info({ ...summary }, 'reconciliation sweep completed');
@@ -86,12 +85,4 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
       this.running = false;
     }
   }
-}
-
-function requireInt(config: ConfigService, key: string, min: number): number {
-  const value = config.get<number>(key);
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
-    throw new Error(`Invalid reconciliation config: ${key} must be an integer >= ${min}`);
-  }
-  return value;
 }

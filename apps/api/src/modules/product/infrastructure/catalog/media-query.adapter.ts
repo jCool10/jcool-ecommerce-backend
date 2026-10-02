@@ -4,9 +4,9 @@ import type { MediaQueryPort } from '../../application/catalog/ports';
 
 @Injectable()
 export class MediaQueryAdapter implements MediaQueryPort {
-  constructor(@Inject(MEDIA_FACADE) private readonly media: MediaFacade) {}
+  constructor(@Inject(MEDIA_FACADE) private readonly mediaFacade: MediaFacade) {}
 
   resolveUrls(assetIds: string[]): Promise<Map<string, string>> {
-    return this.media.getPublicUrls(assetIds);
+    return this.mediaFacade.getPublicUrls(assetIds);
   }
 }

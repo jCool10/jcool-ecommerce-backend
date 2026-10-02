@@ -17,7 +17,7 @@ export interface InboxEntry {
  */
 @Injectable()
 export class InboxStore {
-  constructor(@Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort) {}
+  constructor(@Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort) {}
 
   /**
    * True when this delivery won the row and owns the effect. Two concurrent deliveries do not race:
@@ -27,7 +27,7 @@ export class InboxStore {
   async claim(tx: DrizzleTx, entry: InboxEntry): Promise<boolean> {
     const claimed = await tx
       .insert(inbox)
-      .values({ id: await mintOne(this.ids), ...entry })
+      .values({ id: await mintOne(this.idGenerator), ...entry })
       .onConflictDoNothing({ target: [inbox.consumer, inbox.messageId] })
       .returning({ id: inbox.id });
 

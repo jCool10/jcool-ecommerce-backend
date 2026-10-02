@@ -17,14 +17,14 @@ const LOG_CONTEXT = 'SearchIndexBootstrap';
 @Injectable()
 export class SearchIndexBootstrap implements OnModuleInit {
   constructor(
-    @Inject(CATALOG_SEARCH) private readonly search: CatalogSearchPort,
+    @Inject(CATALOG_SEARCH) private readonly catalogSearch: CatalogSearchPort,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
   }
 
   async onModuleInit(): Promise<void> {
-    const provisioning = this.search.ensureIndex().catch((error: unknown) => {
+    const provisioning = this.catalogSearch.ensureIndex().catch((error: unknown) => {
       this.logger.warn(
         { error: logShapeOf(error) },
         'search index provisioning failed; search returns empty until it succeeds',

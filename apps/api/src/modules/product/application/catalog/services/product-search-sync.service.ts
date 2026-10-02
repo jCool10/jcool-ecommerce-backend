@@ -15,22 +15,22 @@ export const CATEGORY_FAN_OUT_BATCH = 500;
 @Injectable()
 export class ProductSearchSyncService {
   constructor(
-    @Inject(PRODUCT_SEARCH_STATE) private readonly states: ProductSearchStatePort,
-    @Inject(CATALOG_SEARCH) private readonly search: CatalogSearchPort,
+    @Inject(PRODUCT_SEARCH_STATE) private readonly productSearchState: ProductSearchStatePort,
+    @Inject(CATALOG_SEARCH) private readonly catalogSearch: CatalogSearchPort,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
   }
 
   async syncProduct(productId: string): Promise<void> {
-    const states = await this.states.findByIds([productId]);
+    const states = await this.productSearchState.findByIds([productId]);
     // Products are archived, never deleted: no row means a restored database or a forged message, and
     // a retry would find none either.
     if (states.length === 0) {
       this.logger.warn({ productId }, 'product change names no product; nothing indexed');
       return;
     }
-    await this.search.write(states.map(toSearchDocumentWrite));
+    await this.catalogSearch.write(states.map(toSearchDocumentWrite));
   }
 
   /**
@@ -42,10 +42,10 @@ export class ProductSearchSyncService {
     let written = 0;
     let afterId: string | null = null;
     for (;;) {
-      const ids = await this.states.bumpCategoryProducts(categoryId, afterId, batchSize);
+      const ids = await this.productSearchState.bumpCategoryProducts(categoryId, afterId, batchSize);
       if (ids.length === 0) return written;
-      const states = await this.states.findByIds(ids);
-      await this.search.write(states.map(toSearchDocumentWrite));
+      const states = await this.productSearchState.findByIds(ids);
+      await this.catalogSearch.write(states.map(toSearchDocumentWrite));
       written += states.length;
       afterId = ids[ids.length - 1];
     }

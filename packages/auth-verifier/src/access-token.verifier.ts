@@ -20,7 +20,7 @@ export class AccessTokenVerifier {
   constructor(
     @Inject(AUTH_VERIFIER_OPTIONS) private readonly options: AuthVerifierOptions,
     @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochReader,
-    @Inject(TOKEN_DENYLIST) private readonly denylist: TokenDenylistReader,
+    @Inject(TOKEN_DENYLIST) private readonly tokenDenylist: TokenDenylistReader,
   ) {}
 
   async verify(token: string | undefined): Promise<AuthenticatedUser> {
@@ -29,7 +29,7 @@ export class AccessTokenVerifier {
     }
     const claims = await this.verifiedClaims(token);
 
-    if (await this.denylist.isDenylisted(claims.jti)) {
+    if (await this.tokenDenylist.isDenylisted(claims.jti)) {
       throw new UnauthorizedException('Token has been revoked');
     }
     const currentEpoch = await this.sessionEpoch.current(claims.sub);

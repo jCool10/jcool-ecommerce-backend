@@ -10,11 +10,11 @@ import type { OrderReadPort, OrderView, StalePendingOrderView } from '../applica
 export class OrderReadAdapter implements OrderReadPort {
   constructor(
     @Inject(ORDER_PAYMENT_VIEW)
-    private readonly orders: OrderPaymentView,
+    private readonly orderPaymentView: OrderPaymentView,
   ) {}
 
   async findForPayment(orderId: string): Promise<OrderView | null> {
-    const order = await this.orders.findForPayment(orderId);
+    const order = await this.orderPaymentView.findForPayment(orderId);
     if (!order) {
       return null;
     }
@@ -28,6 +28,6 @@ export class OrderReadAdapter implements OrderReadPort {
   }
 
   async findStalePending(input: { placedBefore: Date; limit: number }): Promise<StalePendingOrderView[]> {
-    return this.orders.findStalePending(input);
+    return this.orderPaymentView.findStalePending(input);
   }
 }

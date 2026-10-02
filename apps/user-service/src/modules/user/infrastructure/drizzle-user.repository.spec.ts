@@ -2,7 +2,7 @@ import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '../../../database';
-import type { IdentityService } from '../application/services/identity.service';
+import type { IdGeneratorService } from '../application/services/id-generator.service';
 import { DrizzleUserRepository } from './drizzle-user.repository';
 
 // A real id: the column type refuses anything that would not survive a `bigint` round trip.
@@ -29,7 +29,7 @@ describe('DrizzleUserRepository.markEmailVerified', () => {
   it('stamps the verification date only on a row that has none yet', async () => {
     const { db, set, predicateSql } = fakeDb();
 
-    await new DrizzleUserRepository(db, {} as IdentityService).markEmailVerified(USER_ID);
+    await new DrizzleUserRepository(db, {} as IdGeneratorService).markEmailVerified(USER_ID);
 
     expect(set.mock.calls[0][0].emailVerifiedAt).toBeInstanceOf(Date);
     expect(predicateSql()).toContain('"email_verified_at" is null');

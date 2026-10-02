@@ -58,8 +58,8 @@ function asHttp(error: unknown): never {
 @Controller('admin/media')
 export class MediaController {
   constructor(
-    private readonly initiate: InitiateUploadUseCase,
-    private readonly complete: CompleteUploadUseCase,
+    private readonly initiateUploadUseCase: InitiateUploadUseCase,
+    private readonly completeUploadUseCase: CompleteUploadUseCase,
   ) {}
 
   @Post('uploads')
@@ -71,7 +71,7 @@ export class MediaController {
   ): Promise<UploadTicketResponseDto> {
     try {
       return UploadTicketResponseDto.from(
-        await this.initiate.execute({ contentType: dto.contentType, uploadedBy: user.userId }),
+        await this.initiateUploadUseCase.execute({ contentType: dto.contentType, uploadedBy: user.userId }),
       );
     } catch (error) {
       asHttp(error);
@@ -88,7 +88,7 @@ export class MediaController {
   })
   async completeUpload(@Param('assetId', ParseSnowflakeIdPipe) assetId: string): Promise<void> {
     try {
-      await this.complete.execute(assetId);
+      await this.completeUploadUseCase.execute(assetId);
     } catch (error) {
       asHttp(error);
     }

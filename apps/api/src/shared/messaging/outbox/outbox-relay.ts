@@ -35,13 +35,13 @@ export class OutboxRelay {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(DOMAIN_EVENTS_QUEUE) private readonly queue: Queue,
-    @Inject(QUEUE_CONNECTION) private readonly connection: Redis,
+    @Inject(DOMAIN_EVENTS_QUEUE) private readonly domainEventsQueue: Queue,
+    @Inject(QUEUE_CONNECTION) private readonly queueConnection: Redis,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     // Not to dispatch anything — for `label()`, which folds the free-text `outbox.event_type` into
     // the bounded set of names. The fold is also the signal: `event_type="unregistered"` climbing
     // here means events are heading straight for the DLQ, a full retry budget before it says so.
-    private readonly dispatcher: DomainEventDispatcher,
+    private readonly domainEventDispatcher: DomainEventDispatcher,
     config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
@@ -72,7 +72,7 @@ export class OutboxRelay {
       let published = 0;
 
       for (const row of rows) {
-        const eventType = this.dispatcher.label(row.eventType);
+        const eventType = this.domainEventDispatcher.label(row.eventType);
         try {
           await this.publish(row);
         } catch (error) {
@@ -116,7 +116,7 @@ export class OutboxRelay {
   }
 
   private isConnected(): boolean {
-    return this.connection.status === 'ready';
+    return this.queueConnection.status === 'ready';
   }
 
   private async publish(row: OutboxRow): Promise<void> {
@@ -139,7 +139,7 @@ export class OutboxRelay {
 
         // Republishing a row BullMQ still remembers is a no-op instead of a second job — best effort
         // only, since a completed job eventually ages out of retention and frees the id again.
-        await this.queue.add(row.eventType, job, {
+        await this.domainEventsQueue.add(row.eventType, job, {
           jobId: jobIdFor(row.id),
           ...jobOptionsFor(row.eventType, this.orderPaidAttempts),
         });

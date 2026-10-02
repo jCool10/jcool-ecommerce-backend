@@ -31,31 +31,31 @@ export interface CartView {
 export class CartService {
   constructor(
     @Inject(CART_REPOSITORY)
-    private readonly repo: CartRepositoryPort,
+    private readonly cartRepo: CartRepositoryPort,
     @Inject(CATALOG_QUERY)
-    private readonly catalog: CatalogQueryPort,
+    private readonly catalogQuery: CatalogQueryPort,
     @Inject(METRICS)
     private readonly metrics: MetricsPort,
   ) {}
 
   async view(userId: string): Promise<CartView> {
-    return this.buildView(await this.repo.findCartId(userId));
+    return this.buildView(await this.cartRepo.findCartId(userId));
   }
 
   async addItem(userId: string, skuId: string, quantity: number): Promise<CartView> {
-    const sku = await this.catalog.getSkuView(skuId);
+    const sku = await this.catalogQuery.getSkuView(skuId);
     if (!sku) {
       throw new NotFoundException(`SKU not found: ${skuId}`);
     }
-    const cartId = await this.repo.ensureCartId(userId);
-    await this.repo.addItem(cartId, skuId, quantity);
+    const cartId = await this.cartRepo.ensureCartId(userId);
+    await this.cartRepo.addItem(cartId, skuId, quantity);
     this.metrics.recordCartOperation('add');
     return this.buildView(cartId);
   }
 
   async setItemQuantity(userId: string, skuId: string, quantity: number): Promise<CartView> {
-    const cartId = await this.repo.ensureCartId(userId);
-    const updated = await this.repo.setItemQuantity(cartId, skuId, quantity);
+    const cartId = await this.cartRepo.ensureCartId(userId);
+    const updated = await this.cartRepo.setItemQuantity(cartId, skuId, quantity);
     if (!updated) {
       throw new NotFoundException(`Cart item not found: ${skuId}`);
     }
@@ -64,22 +64,22 @@ export class CartService {
   }
 
   async removeItem(userId: string, skuId: string): Promise<CartView> {
-    const cartId = await this.repo.ensureCartId(userId);
-    await this.repo.removeItem(cartId, skuId);
+    const cartId = await this.cartRepo.ensureCartId(userId);
+    await this.cartRepo.removeItem(cartId, skuId);
     this.metrics.recordCartOperation('remove');
     return this.buildView(cartId);
   }
 
   async clear(userId: string): Promise<CartView> {
-    const cartId = await this.repo.ensureCartId(userId);
-    await this.repo.clear(cartId);
+    const cartId = await this.cartRepo.ensureCartId(userId);
+    await this.cartRepo.clear(cartId);
     this.metrics.recordCartOperation('clear');
     return this.buildView(cartId);
   }
 
   private async buildView(cartId: string | null): Promise<CartView> {
-    const items = cartId ? await this.repo.findItems(cartId) : [];
-    const views = await this.catalog.getSkuViews(items.map((item) => item.skuId));
+    const items = cartId ? await this.cartRepo.findItems(cartId) : [];
+    const views = await this.catalogQuery.getSkuViews(items.map((item) => item.skuId));
     const viewBySku = new Map<string, CartSkuView>(views.map((view) => [view.skuId, view]));
 
     // First priced line in CART order, not the batch read's order, which would anchor a
@@ -91,21 +91,21 @@ export class CartService {
     ).toUpperCase();
 
     const priceOf = (skuId: string): Money | null => {
-      const v = viewBySku.get(skuId);
-      return v && v.unitPriceMinor != null ? Money.of(v.unitPriceMinor, v.currency) : null;
+      const skuView = viewBySku.get(skuId);
+      return skuView && skuView.unitPriceMinor != null ? Money.of(skuView.unitPriceMinor, skuView.currency) : null;
     };
     const subtotal = new Cart(items).subtotal(currency, priceOf);
 
     const lines: CartLineView[] = items.map((item) => {
-      const v = viewBySku.get(item.skuId);
-      const unitPriceMinor = v?.unitPriceMinor ?? null;
+      const skuView = viewBySku.get(item.skuId);
+      const unitPriceMinor = skuView?.unitPriceMinor ?? null;
       return {
         skuId: item.skuId,
-        productName: v?.productName ?? '',
+        productName: skuView?.productName ?? '',
         quantity: item.quantity,
         unitPriceMinor,
         lineTotalMinor: unitPriceMinor != null ? unitPriceMinor * item.quantity : null,
-        isActive: v?.isActive ?? false,
+        isActive: skuView?.isActive ?? false,
       };
     });
 

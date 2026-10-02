@@ -24,10 +24,10 @@ function parseHeader(header: string | undefined): ParsedHeader | null {
   let timestamp: number | undefined;
   const signatures: string[] = [];
   for (const part of header.split(',')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    const key = part.slice(0, eq).trim();
-    const value = part.slice(eq + 1).trim();
+    const separatorIndex = part.indexOf('=');
+    if (separatorIndex === -1) continue;
+    const key = part.slice(0, separatorIndex).trim();
+    const value = part.slice(separatorIndex + 1).trim();
     if (key === 't' && value !== '') timestamp = Number(value);
     else if (key === 'v1' && value !== '') signatures.push(value);
   }

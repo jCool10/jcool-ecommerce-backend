@@ -24,7 +24,7 @@ const CLOSE_TIMEOUT_MS = 10_000;
 @Injectable()
 export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdown {
   private worker: Worker<DomainEventJob, ConsumeResult> | null = null;
-  private connection: Redis | null = null;
+  private queueConnection: Redis | null = null;
   // BullMQ's 'failed' listener is synchronous, so routing to the dead-letter queue outlives the
   // event that triggered it. Tracked because shutdown has to wait for it: worker.close() knows
   // nothing about these, and the queue underneath them is closed moments later.
@@ -38,8 +38,8 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
   private readonly orderPaidBackoffCapMs: number;
 
   constructor(
-    private readonly processor: DomainEventProcessor,
-    private readonly deadLetter: DeadLetterRouter,
+    private readonly domainEventProcessor: DomainEventProcessor,
+    private readonly deadLetterRouter: DeadLetterRouter,
     config: ConfigService,
     private readonly cls: ClsService,
     private readonly logger: PinoLogger,
@@ -61,14 +61,17 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
 
     // Its own connection, deliberately without the producer's command timeout: a worker parks on a
     // blocking read for the whole poll, so timing that wait out would cut off the design, not a hang.
-    this.connection = createQueueConnection(this.redisUrl, this.logger);
+    this.queueConnection = createQueueConnection(this.redisUrl, this.logger);
     // One correlation context per delivery, not per worker: at concurrency > 1 several jobs are in
     // flight and without a scope each their lines interleave.
     this.worker = new Worker<DomainEventJob, ConsumeResult>(
       QUEUE_DOMAIN_EVENTS,
-      (job) => runInJobContext(this.cls, `${QUEUE_DOMAIN_EVENTS}:${job.name}`, () => this.processor.process(job.data)),
+      (job) =>
+        runInJobContext(this.cls, `${QUEUE_DOMAIN_EVENTS}:${job.name}`, () =>
+          this.domainEventProcessor.process(job.data),
+        ),
       {
-        connection: this.connection,
+        connection: this.queueConnection,
         prefix: this.prefix,
         concurrency: this.concurrency,
         // BullMQ consults this only for a type it has no built-in for: the long ladder order.paid and
@@ -93,7 +96,7 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
         this.logger.error({ err: error }, 'domain event consume failed');
         return;
       }
-      const route = this.deadLetter
+      const route = this.deadLetterRouter
         .route(job, error)
         .catch((caught: unknown) => {
           this.logger.error({ err: toError(caught) }, 'dead-letter routing threw');
@@ -122,12 +125,12 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     // would close the dead-letter queue out from under a move still in flight.
     await Promise.race([Promise.allSettled(this.pendingRoutes), timeout(CLOSE_TIMEOUT_MS)]);
 
-    if (!this.connection) return;
+    if (!this.queueConnection) return;
     // quit() rejects outright when Redis is already gone, hence the unconditional fallback.
     try {
-      await this.connection.quit();
+      await this.queueConnection.quit();
     } catch {
-      this.connection.disconnect();
+      this.queueConnection.disconnect();
     }
   }
 }

@@ -6,14 +6,14 @@ import { CsrfTokenService } from './csrf-token.service';
 /** Runs after the global JwtAuthGuard, so an invalid access token 401s before this can 403. */
 @Injectable()
 export class CsrfGuard implements CanActivate {
-  constructor(private readonly csrf: CsrfTokenService) {}
+  constructor(private readonly csrfTokenService: CsrfTokenService) {}
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
     const cookieValue = request.cookies?.[CSRF_TOKEN_COOKIE] as string | undefined;
     const headerValue = request.header(CSRF_HEADER);
 
-    if (!this.csrf.verify(cookieValue, headerValue)) {
+    if (!this.csrfTokenService.verify(cookieValue, headerValue)) {
       // `cause` is logged, never sent. Passing options drops Nest's default description, so it is restated.
       throw new ForbiddenException('Invalid or missing CSRF token', {
         cause: new Error(csrfFailure(cookieValue, headerValue)),

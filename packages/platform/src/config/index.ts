@@ -4,6 +4,7 @@ export * from './env-parsers';
 export * from './mail.config';
 export * from './observability.config';
 export * from './redis.config';
+export * from './require-int-config';
 export * from './resilience.config';
 export * from './retention.config';
 export * from './strict-env-decorators';

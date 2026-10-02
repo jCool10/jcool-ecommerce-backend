@@ -14,16 +14,16 @@ import type { CartSkuView, CatalogQueryPort } from '../application/ports/catalog
 export class CatalogQueryAdapter implements CatalogQueryPort {
   constructor(
     @Inject(PRODUCT_SKU_QUERY)
-    private readonly catalog: ProductSkuQuery,
+    private readonly productSkuQuery: ProductSkuQuery,
   ) {}
 
   async getSkuView(skuId: string): Promise<CartSkuView | null> {
-    const view = await this.catalog.getSkuView(skuId);
+    const view = await this.productSkuQuery.getSkuView(skuId);
     return view ? toCartSkuView(view) : null;
   }
 
   async getSkuViews(skuIds: string[]): Promise<CartSkuView[]> {
-    const views = await this.catalog.getSkuViews(skuIds);
+    const views = await this.productSkuQuery.getSkuViews(skuIds);
     return views.map(toCartSkuView);
   }
 }

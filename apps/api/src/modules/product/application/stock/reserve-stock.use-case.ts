@@ -8,9 +8,10 @@ import {
   type ExpiredHold,
   type ExpiredHoldQuery,
   type ProductStockReservation,
+  type ReservationLine,
   type StockResolveResult,
 } from '../public/product-stock-reservation.port';
-import { STOCK_REPOSITORY, type ReserveLine, type StockRepositoryPort } from './ports/stock-repository.port';
+import { STOCK_REPOSITORY, type StockRepositoryPort } from './ports/stock-repository.port';
 
 export type LockStrategy = 'pessimistic' | 'optimistic';
 
@@ -23,17 +24,17 @@ export type LockStrategy = 'pessimistic' | 'optimistic';
 export class ReserveStockUseCase implements ProductStockReservation {
   constructor(
     @Inject(STOCK_REPOSITORY)
-    private readonly stock: StockRepositoryPort,
+    private readonly stockRepo: StockRepositoryPort,
     private readonly config: ConfigService,
   ) {}
 
-  async reserve(tx: DrizzleTx, orderId: string, lines: ReserveLine[]): Promise<void> {
+  async reserve(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void> {
     const strategy = this.config.get<LockStrategy>('inventory.lockStrategy') ?? 'pessimistic';
     try {
       if (strategy === 'optimistic') {
-        await this.stock.reserveOptimistic(tx, orderId, lines);
+        await this.stockRepo.reserveOptimistic(tx, orderId, lines);
       } else {
-        await this.stock.reservePessimistic(tx, orderId, lines);
+        await this.stockRepo.reservePessimistic(tx, orderId, lines);
       }
     } catch (error) {
       if (error instanceof InsufficientStockError) {
@@ -49,14 +50,14 @@ export class ReserveStockUseCase implements ProductStockReservation {
   // No shortfall path here, so no error translation: a DB CHECK violation would be a logic bug
   // and must surface rather than be masked.
   commit(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
-    return this.stock.commitReservations(tx, orderId);
+    return this.stockRepo.commitReservations(tx, orderId);
   }
 
   release(tx: DrizzleTx, orderId: string): Promise<StockResolveResult> {
-    return this.stock.releaseReservations(tx, orderId);
+    return this.stockRepo.releaseReservations(tx, orderId);
   }
 
   findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]> {
-    return this.stock.findExpiredHolds(query);
+    return this.stockRepo.findExpiredHolds(query);
   }
 }

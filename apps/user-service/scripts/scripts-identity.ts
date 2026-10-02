@@ -1,7 +1,7 @@
 import type { ClientBase } from 'pg';
 import { NODE_COUNT, SEQUENCE_BITS, decode } from '@jcool/id-codec';
 import { SCRIPTS_NODE_ID, SnowflakeGenerator } from '@jcool/id-generator';
-import { IdentityService } from '../src/modules/user/application/services/identity.service';
+import { IdGeneratorService } from '../src/modules/user/application/services/id-generator.service';
 
 /**
  * Scripts mint in process, on the node reserved for them, so a seed run never collides with the id
@@ -11,9 +11,9 @@ import { IdentityService } from '../src/modules/user/application/services/identi
  * run to the next, so it is read back from `users`: a run whose clock reads at or before an earlier
  * run's last millisecond would otherwise replay that run's ids.
  */
-export async function scriptsIdentity(db: ClientBase): Promise<IdentityService> {
+export async function scriptsIdentity(db: ClientBase): Promise<IdGeneratorService> {
   const generator = SnowflakeGenerator.create({ nodeId: SCRIPTS_NODE_ID, floorMs: await lastScriptsMintMs(db) });
-  return new IdentityService({
+  return new IdGeneratorService({
     mint: (count = 1) => Promise.resolve(Array.from({ length: count }, () => generator.generate())),
   });
 }

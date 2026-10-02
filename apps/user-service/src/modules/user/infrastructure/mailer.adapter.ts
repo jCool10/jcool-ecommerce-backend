@@ -18,7 +18,7 @@ export class MailerAdapter implements MailerPort {
   private readonly publicUrl: string;
 
   constructor(
-    @Inject(MAIL_TRANSPORT) private readonly transport: MailTransportPort,
+    @Inject(MAIL_TRANSPORT) private readonly mailTransport: MailTransportPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     config: ConfigService,
     private readonly logger: PinoLogger,
@@ -54,7 +54,7 @@ export class MailerAdapter implements MailerPort {
    */
   private async send(kind: MailKind, message: MailMessage): Promise<void> {
     try {
-      await this.transport.sendMail(message);
+      await this.mailTransport.sendMail(message);
     } catch (error) {
       this.metrics.recordMailSendFailure(kind);
       // The recipient is in the audit trail already; the body never is, since it holds the token.

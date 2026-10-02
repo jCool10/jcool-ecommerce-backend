@@ -76,14 +76,14 @@ export class AuthController {
     private readonly getProfile: GetProfileUseCase,
     private readonly refreshTokens: RefreshTokensUseCase,
     private readonly logoutUser: LogoutUserUseCase,
-    private readonly authCookies: AuthCookieService,
-    @Inject(AUTH_AUDIT) private readonly audit: AuthAuditPort,
-    private readonly emailVerification: EmailVerificationService,
+    private readonly authCookieService: AuthCookieService,
+    @Inject(AUTH_AUDIT) private readonly authAudit: AuthAuditPort,
+    private readonly emailVerificationService: EmailVerificationService,
     private readonly resendVerification: ResendVerificationUseCase,
-    private readonly passwordReset: PasswordResetService,
+    private readonly passwordResetService: PasswordResetService,
     private readonly forgotPassword: ForgotPasswordUseCase,
     private readonly changePassword: ChangePasswordUseCase,
-    private readonly sessions: SessionService,
+    private readonly sessionService: SessionService,
   ) {}
 
   @Public()
@@ -98,7 +98,7 @@ export class AuthController {
     @Headers('user-agent') userAgent?: string,
   ): Promise<UserResponseDto> {
     const user = await this.registerUser.execute({ email: dto.email, password: dto.password });
-    this.audit.record({
+    this.authAudit.record({
       event: 'user.registered',
       outcome: 'success',
       userId: user.id,
@@ -121,8 +121,8 @@ export class AuthController {
     @Ip() ip: string,
     @Headers('user-agent') userAgent?: string,
   ): Promise<void> {
-    const { userId } = await this.emailVerification.verify(dto.token);
-    this.audit.record({ event: 'email.verified', outcome: 'success', userId, ip, userAgent });
+    const { userId } = await this.emailVerificationService.verify(dto.token);
+    this.authAudit.record({ event: 'email.verified', outcome: 'success', userId, ip, userAgent });
   }
 
   @Public()
@@ -159,8 +159,8 @@ export class AuthController {
     @Ip() ip: string,
     @Headers('user-agent') userAgent?: string,
   ): Promise<void> {
-    const { userId } = await this.passwordReset.reset(dto.token, dto.password);
-    this.audit.record({ event: 'password.reset', outcome: 'success', userId, ip, userAgent });
+    const { userId } = await this.passwordResetService.reset(dto.token, dto.password);
+    this.authAudit.record({ event: 'password.reset', outcome: 'success', userId, ip, userAgent });
   }
 
   @Public()
@@ -179,12 +179,12 @@ export class AuthController {
   ): Promise<AuthTokensResponseDto> {
     try {
       const tokens = await this.loginUser.execute({ email: dto.email, password: dto.password });
-      this.authCookies.setSession(res, tokens.refreshToken);
-      this.audit.record({ event: 'login.succeeded', outcome: 'success', email: dto.email, ip, userAgent });
+      this.authCookieService.setSession(res, tokens.refreshToken);
+      this.authAudit.record({ event: 'login.succeeded', outcome: 'success', email: dto.email, ip, userAgent });
       return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
     } catch (error) {
       // Audited as a brute-force signal, then rethrown unchanged so the response reveals nothing beyond status.
-      this.audit.record({
+      this.authAudit.record({
         event: 'login.failed',
         outcome: 'failure',
         email: dto.email,
@@ -225,8 +225,8 @@ export class AuthController {
       currentPassword: dto.currentPassword,
       newPassword: dto.newPassword,
     });
-    this.authCookies.clear(res);
-    this.audit.record({ event: 'password.changed', outcome: 'success', userId: current.userId, ip, userAgent });
+    this.authCookieService.clear(res);
+    this.authAudit.record({ event: 'password.changed', outcome: 'success', userId: current.userId, ip, userAgent });
   }
 
   @Get('sessions')
@@ -237,7 +237,7 @@ export class AuthController {
     @CurrentUser() current: AuthenticatedUser,
     @RefreshTokenCookie() refreshToken: string | undefined,
   ): Promise<SessionResponseDto[]> {
-    const sessions = await this.sessions.listActiveSessions(current.userId, refreshToken ?? null);
+    const sessions = await this.sessionService.listActiveSessions(current.userId, refreshToken ?? null);
     return sessions.map((session) => SessionResponseDto.fromActive(session));
   }
 
@@ -254,9 +254,9 @@ export class AuthController {
     @Ip() ip: string,
     @Headers('user-agent') userAgent?: string,
   ): Promise<void> {
-    const revoked = await this.sessions.revokeSession(current.userId, id);
+    const revoked = await this.sessionService.revokeSession(current.userId, id);
     if (!revoked) throw new NotFoundException('Session not found');
-    this.audit.record({
+    this.authAudit.record({
       event: 'session.revoked',
       outcome: 'success',
       userId: current.userId,
@@ -278,9 +278,9 @@ export class AuthController {
     @Ip() ip: string,
     @Headers('user-agent') userAgent?: string,
   ): Promise<void> {
-    await this.sessions.revokeAll(current.userId);
-    this.authCookies.clear(res);
-    this.audit.record({ event: 'logout.all', outcome: 'success', userId: current.userId, ip, userAgent });
+    await this.sessionService.revokeAll(current.userId);
+    this.authCookieService.clear(res);
+    this.authAudit.record({ event: 'logout.all', outcome: 'success', userId: current.userId, ip, userAgent });
   }
 
   @Public() // carries its own credential (the refresh cookie) — no access token needed.
@@ -302,8 +302,8 @@ export class AuthController {
     if (!refreshToken) throw new UnauthorizedException('Invalid refresh token');
 
     const tokens = await this.refreshTokens.execute(refreshToken);
-    this.authCookies.setSession(res, tokens.refreshToken);
-    this.audit.record({ event: 'token.refreshed', outcome: 'success', userId: tokens.userId, ip, userAgent });
+    this.authCookieService.setSession(res, tokens.refreshToken);
+    this.authAudit.record({ event: 'token.refreshed', outcome: 'success', userId: tokens.userId, ip, userAgent });
     return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
   }
 
@@ -328,8 +328,8 @@ export class AuthController {
       // No cookie is a no-op revoke; the access jti is still denylisted below.
       rawRefreshToken: refreshToken ?? '',
     });
-    this.authCookies.clear(res);
-    this.audit.record({ event: 'logout', outcome: 'success', userId: current.userId, ip, userAgent });
+    this.authCookieService.clear(res);
+    this.authAudit.record({ event: 'logout', outcome: 'success', userId: current.userId, ip, userAgent });
   }
 }
 
