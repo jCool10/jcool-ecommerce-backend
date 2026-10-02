@@ -8,8 +8,8 @@ import {
   CATALOG_SEARCH,
   type CatalogSearchPort,
   type SearchableProduct,
-} from '../../src/modules/catalog/application/ports';
-import { PRODUCTS_ALIAS } from '../../src/modules/catalog/infrastructure/search/index-settings';
+} from '../../src/modules/product/application/catalog/ports';
+import { PRODUCTS_ALIAS } from '../../src/modules/product/infrastructure/catalog/search/index-settings';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';

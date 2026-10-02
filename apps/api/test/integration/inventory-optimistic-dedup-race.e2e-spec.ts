@@ -13,7 +13,7 @@ import {
   STOCK_REPOSITORY,
   type ReserveLine,
   type StockRepositoryPort,
-} from '../../src/modules/inventory/application/ports/stock-repository.port';
+} from '../../src/modules/product/application/stock/ports/stock-repository.port';
 import { readStock } from '../setup/fixtures/order-flow.fixture';
 import { releaseOnceBlocked, seedStock } from '../setup/fixtures/inventory.fixture';
 import { testId } from '../setup/id-service-stub';

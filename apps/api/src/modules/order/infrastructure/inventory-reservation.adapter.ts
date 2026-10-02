@@ -1,5 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { STOCK_RESERVATION, type StockReservation } from '@modules/inventory/application/public/stock-reservation.port';
+import {
+  PRODUCT_STOCK_RESERVATION,
+  type ProductStockReservation,
+} from '@modules/product/application/public/product-stock-reservation.port';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type {
   ExpiredHold,
@@ -9,14 +12,14 @@ import type {
   StockResolution,
 } from '../application/ports/inventory-reservation.port';
 
-// The only place Order touches Inventory, and only through its `application/public` surface. Order's
-// `skuId` maps to the variant id Inventory holds stock by, and the caller's `tx` flows through so
+// The only place Order touches Product's stock, and only through its `application/public` surface.
+// Order's `skuId` maps to the variant id stock is held by, and the caller's `tx` flows through so
 // the hold joins the placement transaction.
 @Injectable()
 export class InventoryReservationAdapter implements InventoryReservationPort {
   constructor(
-    @Inject(STOCK_RESERVATION)
-    private readonly stock: StockReservation,
+    @Inject(PRODUCT_STOCK_RESERVATION)
+    private readonly stock: ProductStockReservation,
   ) {}
 
   reserve(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void> {

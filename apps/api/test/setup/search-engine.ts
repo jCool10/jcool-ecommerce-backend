@@ -1,12 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
 import { Client } from '@elastic/elasticsearch';
 import { ElasticsearchContainer } from '@testcontainers/elasticsearch';
-import { CATALOG_SEARCH, type CatalogSearchPort } from '../../src/modules/catalog/application/ports';
+import { CATALOG_SEARCH, type CatalogSearchPort } from '../../src/modules/product/application/catalog/ports';
 import {
   PRODUCTS_ALIAS,
   PRODUCTS_INDEX_PREFIX,
   SEARCH_MAX_TOTAL_HITS,
-} from '../../src/modules/catalog/infrastructure/search/index-settings';
+} from '../../src/modules/product/infrastructure/catalog/search/index-settings';
 
 const SEARCH_IMAGE = 'docker.elastic.co/elasticsearch/elasticsearch:9.5.4';
 // The module writes -Xmx2G into this exact file; overwriting it leaves one heap setting, not two.

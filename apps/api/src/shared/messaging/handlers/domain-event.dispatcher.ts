@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { CategoryRenamedHandler } from '@modules/catalog/interface/queue/category-renamed.handler';
-import { ProductChangedHandler } from '@modules/catalog/interface/queue/product-changed.handler';
 import { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
+import { CategoryRenamedHandler } from '@modules/product/interface/catalog/queue/category-renamed.handler';
+import { ProductChangedHandler } from '@modules/product/interface/catalog/queue/product-changed.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { UnhandledEventError } from '../errors';
 import type { DomainEventJob, PostCommitEffect } from '../queue/domain-event.job';

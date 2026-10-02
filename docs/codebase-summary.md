@@ -19,14 +19,14 @@ CLIs (each also has a `:prod` twin that runs the compiled `dist/` file — see [
 | api migrate | [`apps/api/src/shared/infrastructure/database/migrate-cli.ts`](../apps/api/src/shared/infrastructure/database/migrate-cli.ts) |
 | api seed | [`apps/api/src/shared/infrastructure/database/seed.ts`](../apps/api/src/shared/infrastructure/database/seed.ts) |
 | DLQ replay | [`apps/api/src/shared/messaging/queue/replay-dlq.cli.ts`](../apps/api/src/shared/messaging/queue/replay-dlq.cli.ts) |
-| search reindex | [`apps/api/src/modules/catalog/infrastructure/search/reindex.ts`](../apps/api/src/modules/catalog/infrastructure/search/reindex.ts) |
+| search reindex | [`apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts`](../apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts) |
 | storage verify | [`apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts`](../apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts) |
 | id-service migrate | [`apps/id-service/src/database/migrate-cli.ts`](../apps/id-service/src/database/migrate-cli.ts) |
 | user-service migrate | [`apps/user-service/src/database/migrate-cli.ts`](../apps/user-service/src/database/migrate-cli.ts) |
 
 ## Bounded contexts
 
-Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `catalog`, `inventory`, `media`, `order`, `payment`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. What each context owns and publishes is the README's [bounded-context table](../README.md#bounded-contexts); this is only the path to open.
+Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `media`, `order`, `payment`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer is split again into `catalog/` and `stock/`, with the published ports in `application/public/`. What each context owns and publishes is the README's [bounded-context table](../README.md#bounded-contexts); this is only the path to open.
 
 ## Shared / messaging
 

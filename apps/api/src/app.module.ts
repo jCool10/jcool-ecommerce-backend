@@ -21,12 +21,11 @@ import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } 
 import { MetricsModule } from '@jcool/platform/metrics';
 import { HttpExceptionFilter } from '@jcool/platform/interface';
 import { DebugController } from '@shared/interface/controllers/debug.controller';
-import { CatalogModule } from '@modules/catalog/catalog.module';
 import { CartModule } from '@modules/cart/cart.module';
-import { InventoryModule } from '@modules/inventory/inventory.module';
 import { MediaModule } from '@modules/media/media.module';
 import { OrderModule } from '@modules/order/order.module';
 import { PaymentModule } from '@modules/payment/payment.module';
+import { ProductModule } from '@modules/product/product.module';
 
 // ClsModule precedes ObservabilityLoggerModule so its correlation middleware mounts before pino;
 // ThrottlerSecurityModule precedes AuthVerifierModule: global guards run in module-scan order.
@@ -53,10 +52,9 @@ import { PaymentModule } from '@modules/payment/payment.module';
     }),
     ScheduleModule.forRoot(),
     HealthModule,
-    CatalogModule,
+    ProductModule,
     CartModule,
-    InventoryModule,
-    // Position carries no meaning here: Catalog reaches Media through MEDIA_FACADE in the DI graph.
+    // Position carries no meaning here: Product reaches Media through MEDIA_FACADE in the DI graph.
     MediaModule,
     OrderModule,
     PaymentModule,

@@ -23,10 +23,10 @@ import {
   prices,
   productVariants,
   products,
-} from '../src/modules/catalog/infrastructure/schema/catalog.schema';
-import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/catalog/infrastructure/catalog-cache.keys';
+} from '../src/modules/product/infrastructure/catalog/schema/catalog.schema';
+import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/product/infrastructure/catalog/catalog-cache.keys';
 import { cartItems, carts } from '../src/modules/cart/infrastructure/schema/cart.schema';
-import { stockLevels } from '../src/modules/inventory/infrastructure/schema/inventory.schema';
+import { stockLevels } from '../src/modules/product/infrastructure/stock/schema/stock.schema';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';

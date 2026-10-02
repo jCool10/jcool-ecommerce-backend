@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   STOCK_REPOSITORY,
   type StockRepositoryPort,
-} from '../../src/modules/inventory/application/ports/stock-repository.port';
+} from '../../src/modules/product/application/stock/ports/stock-repository.port';
 import { FinalizeOrderUseCase } from '../../src/modules/order/application/use-cases';
 import { OrderCancelledEvent } from '../../src/modules/order/domain/events/order-cancelled.event';
 import { OrderExpiredEvent } from '../../src/modules/order/domain/events/order-expired.event';

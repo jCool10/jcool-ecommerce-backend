@@ -2,7 +2,7 @@
 //
 // N concurrent buyers against a single SKU under both reservation strategies at identical offered
 // load. The claim being measured is NOT "our lock prevents oversell" — the database already does
-// that (inventory.schema.ts:40, check ck_stock_no_oversell), and a wrong app-layer lock would be
+// that (stock.schema.ts:40, check ck_stock_no_oversell), and a wrong app-layer lock would be
 // REJECTED by Postgres and surface as a 500, not as an oversell. The publishable claim is:
 //
 //   Under N-way contention on one SKU, both strategies keep the DB invariant intact and surface

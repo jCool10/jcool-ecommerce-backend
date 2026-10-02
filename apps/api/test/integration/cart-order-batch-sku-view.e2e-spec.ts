@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
+import { DrizzleProductRepository } from '../../src/modules/product/infrastructure/catalog/drizzle-product.repository';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';

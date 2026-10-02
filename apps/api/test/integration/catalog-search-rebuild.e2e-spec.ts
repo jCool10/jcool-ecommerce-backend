@@ -9,14 +9,18 @@ import {
   RebuildInProgressError,
   type SearchDocumentWrite,
   type SearchableProduct,
-} from '../../src/modules/catalog/application/ports';
-import { DrizzleProductRepository, rebuildIndex, type RebuildResult } from '../../src/modules/catalog/infrastructure';
+} from '../../src/modules/product/application/catalog/ports';
+import {
+  DrizzleProductRepository,
+  rebuildIndex,
+  type RebuildResult,
+} from '../../src/modules/product/infrastructure/catalog';
 import {
   PRODUCTS_ALIAS,
   PRODUCTS_INDEX_DEFINITION,
   PRODUCTS_INDEX_PREFIX,
   REBUILD_ALIAS,
-} from '../../src/modules/catalog/infrastructure/search/index-settings';
+} from '../../src/modules/product/infrastructure/catalog/search/index-settings';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';

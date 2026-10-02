@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { RedisService } from '@jcool/platform/redis';
-import { CATALOG_CACHE_VERSION_KEY } from '../../src/modules/catalog/infrastructure/catalog-cache.keys';
+import { CATALOG_CACHE_VERSION_KEY } from '../../src/modules/product/infrastructure/catalog/catalog-cache.keys';
 
 /**
  * `resetDatabase` truncates Postgres only, and fixtures insert straight through Drizzle (bypassing

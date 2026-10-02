@@ -1,11 +1,11 @@
 import { vi } from 'vitest';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import type { CategoryRenamedHandler } from '@modules/catalog/interface/queue/category-renamed.handler';
-import type { ProductChangedHandler } from '@modules/catalog/interface/queue/product-changed.handler';
 import type { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import type { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
 import type { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
 import type { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
+import type { CategoryRenamedHandler } from '@modules/product/interface/catalog/queue/category-renamed.handler';
+import type { ProductChangedHandler } from '@modules/product/interface/catalog/queue/product-changed.handler';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import { OrderEventsHandler } from '../handlers/order-events.handler';
 

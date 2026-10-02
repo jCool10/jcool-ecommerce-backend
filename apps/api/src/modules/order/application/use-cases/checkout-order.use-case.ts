@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
-import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
+import { StockReservationError } from '@modules/product/application/public/product-stock-reservation.port';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { getIdempotencyContext } from '@shared/idempotency';

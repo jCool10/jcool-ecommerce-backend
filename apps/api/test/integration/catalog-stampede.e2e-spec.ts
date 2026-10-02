@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure/drizzle-product.repository';
+import { DrizzleProductRepository } from '../../src/modules/product/infrastructure/catalog/drizzle-product.repository';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';

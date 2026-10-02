@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { CatalogModule } from '@modules/catalog/catalog.module';
+import { ProductModule } from '@modules/product/product.module';
 import { CART_REPOSITORY } from './application/ports/cart-repository.port';
 import { CATALOG_QUERY } from './application/ports/catalog-query.port';
 import { CART_SNAPSHOT } from './application/public/cart-snapshot.port';
@@ -10,7 +10,7 @@ import { DrizzleCartRepository } from './infrastructure/drizzle-cart.repository'
 import { CartController } from './interface/cart.controller';
 
 @Module({
-  imports: [CatalogModule],
+  imports: [ProductModule],
   controllers: [CartController],
   providers: [
     CartService,

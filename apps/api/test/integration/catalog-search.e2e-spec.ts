@@ -10,19 +10,19 @@ import {
   type CatalogSearchPort,
   type SearchDocumentWrite,
   type SearchableProduct,
-} from '../../src/modules/catalog/application/ports';
+} from '../../src/modules/product/application/catalog/ports';
 import {
   DrizzleProductRepository,
   ElasticsearchCatalogSearch,
   rebuildIndex,
   type RebuildResult,
-} from '../../src/modules/catalog/infrastructure';
+} from '../../src/modules/product/infrastructure/catalog';
 import {
   PRODUCTS_ALIAS,
   PRODUCTS_INDEX_DEFINITION,
   PRODUCTS_INDEX_PREFIX,
   SEARCH_MAX_TOTAL_HITS,
-} from '../../src/modules/catalog/infrastructure/search/index-settings';
+} from '../../src/modules/product/infrastructure/catalog/search/index-settings';
 import { authHeader } from '../setup/bearer.helper';
 import { drainDomainEvents } from '../setup/domain-events';
 import { archiveTestCategory, createTestCategory, createTestProduct } from '../setup/fixtures/catalog.fixture';

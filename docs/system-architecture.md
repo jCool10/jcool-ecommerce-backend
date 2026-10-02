@@ -6,7 +6,7 @@ Current boundaries and the decision ledger behind them. The diagram, the bounded
 
 ### Topology and data ownership
 
-Four processes: `apps/api` (the modular monolith, six bounded contexts — [README → Architecture](../README.md#architecture)), `apps/user-service` (`/auth`, sessions, token signing), `apps/id-service` (id minting, N replicas behind a leased node id) and `apps/gateway` (Caddy — public entry plus the id-service's private load balancer, [README → Project layout](../README.md#project-layout)). `packages/` holds what they share.
+Four processes: `apps/api` (the modular monolith, five bounded contexts — [README → Architecture](../README.md#architecture)), `apps/user-service` (`/auth`, sessions, token signing), `apps/id-service` (id minting, N replicas behind a leased node id) and `apps/gateway` (Caddy — public entry plus the id-service's private load balancer, [README → Project layout](../README.md#project-layout)). `packages/` holds what they share.
 
 Each service owns one Postgres database and there is no foreign key between any two of them; what a restore of one does to the others is in [RUNBOOK → Backup and restore](../RUNBOOK.md#backup-and-restore). Within `apps/api` itself, the same rule holds context to context ([README → Bounded contexts](../README.md#bounded-contexts)).
 
@@ -22,17 +22,25 @@ The user-service signs every access token (ES256) and is the **only writer** of 
 
 ### How the boundaries are enforced
 
-Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.dependency-cruiser.cjs) — `no-cross-context-internals`, `domain-is-pure`, `application-no-infra`, `app-domain-telemetry-free`, `messaging-port-only-from-core`, `shared-no-module-internals`, `no-reach-outside-package` — are the mechanical form of the layering contract described in [README → Layering](../README.md#layering). Two ESLint fences add what dependency-cruiser can't express as an import-graph rule: no `await`/`async` anywhere in the mint path of [`packages/id-generator`](../packages/id-generator/eslint.config.mjs) (an awaited mint could interleave two callers onto one sequence value), and no `uuid`/`randomUUID` inside [`apps/user-service`'s user infrastructure](../apps/user-service/eslint.config.mjs) or [`apps/api`'s seed scripts](../apps/api/eslint.config.mjs) (a row id must be a snowflake id, minted through the id-service or, for a seed run, on the node reserved for scripts, not a random one).
+Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.dependency-cruiser.cjs) — `no-cross-context-internals`, `product-aggregate-isolation`, `domain-is-pure`, `application-no-infra`, `app-domain-telemetry-free`, `messaging-port-only-from-core`, `shared-no-module-internals`, `no-reach-outside-package` — are the mechanical form of the layering contract described in [README → Layering](../README.md#layering). Two ESLint fences add what dependency-cruiser can't express as an import-graph rule: no `await`/`async` anywhere in the mint path of [`packages/id-generator`](../packages/id-generator/eslint.config.mjs) (an awaited mint could interleave two callers onto one sequence value), and no `uuid`/`randomUUID` inside [`apps/user-service`'s user infrastructure](../apps/user-service/eslint.config.mjs) or [`apps/api`'s seed scripts](../apps/api/eslint.config.mjs) (a row id must be a snowflake id, minted through the id-service or, for a seed run, on the node reserved for scripts, not a random one).
 
 ## Decision ledger
 
 ### Modular monolith with extraction-ready contexts
 
-- **Decision:** ship one deployable process (`apps/api`) with six bounded contexts under Clean Architecture layering, instead of a service per context from the start.
+- **Decision:** ship one deployable process (`apps/api`) split into bounded contexts under Clean Architecture layering, instead of a service per context from the start.
 - **Why:** a single-store shop has no current need for per-context scaling or deploys, but the boundary still has to be real enough that a context can leave later as bounded work.
 - **Rejected alternatives:** microservices per context from day one (operational cost with no current scaling need); an undifferentiated Nest app with no enforced boundary (cheapest short term, but the boundary erodes silently without a build gate).
 - **Consequences:** the same layering rule that keeps `domain`/`application` framework-free is what let the user context and the id generator leave as `apps/user-service` and `apps/id-service` without moving business logic, only wiring.
 - **Revisit when:** a remaining context's write volume or ownership needs its own deploy cadence — Payment settling Order through one shared-transaction port is the one edge already scoped as bounded extraction work ([README → Known limits](../README.md#known-limits)).
+
+### Catalog and stock share one product module, not one aggregate
+
+- **Decision:** `modules/product` holds the catalog group (Product with its SKUs, prices and images; Category) and the stock group (StockLevel, Reservation), laid out layer first — `<layer>/catalog/` and `<layer>/stock/` — and publishes `PRODUCT_SKU_QUERY` and `PRODUCT_STOCK_RESERVATION` from one `application/public/`.
+- **Why:** Order's checkout deals with one Product participant, which reads price and name and holds stock. Catalog edits and stock holds never need one transaction, though, so the module merges and the aggregates stay apart.
+- **Rejected alternatives:** subdomain first (`product/{catalog,stock}/<layer>`), where every layering rule keyed on `modules/<context>/<layer>/` would stop matching without failing; a façade module re-exporting the old two, which merges on paper only; renaming the tables to `product_*`, which buys a migration and nothing else.
+- **Consequences:** `no-cross-context-internals` no longer separates the two groups, so `product-aggregate-isolation` forbids either subdomain from importing the other in any layer. They meet only through `product.module.ts`, `application/public/` and the `variantId`, and a stock write must never bump the catalog cache generation. Table names, `catalog.*` event names, `catalog:*` cache keys, admin URLs and the `INVENTORY_LOCK_STRATEGY` / `CATALOG_CACHE_*` variables did not change.
+- **Revisit when:** stock needs its own database or a reservation has to call an external warehouse system — the hold then leaves checkout's local transaction and becomes a saga step, so `PRODUCT_STOCK_RESERVATION` loses the caller's `tx` and turns into a command/reply contract.
 
 ### Transactional outbox and inbox instead of dual-write
 
@@ -55,7 +63,7 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 - **Decision:** `StockRepositoryPort` exposes both a pessimistic (`SELECT … FOR UPDATE`) and an optimistic (version CAS, bounded retry) reservation path, picked at runtime by `INVENTORY_LOCK_STRATEGY`, both inside the caller's transaction.
 - **Why:** which one wins is a function of contention shape (a hot SKU vs. broad low-contention traffic) — an operational measurement, not an architectural one ([README → Concurrency and consistency](../README.md#concurrency-and-consistency), `test/load/` → `load:sku-contention`).
 - **Rejected alternatives:** committing to a single strategy repo-wide (forecloses the measurement); a distributed lock across replicas (unnecessary — both strategies already run inside the caller's own transaction).
-- **Consequences:** the optimistic path's idempotency check is not lock-guarded, so callers must dedupe order submission upstream, not rely on the reservation call itself ([`stock-repository.port.ts`](../apps/api/src/modules/inventory/application/ports/stock-repository.port.ts)).
+- **Consequences:** the optimistic path's idempotency check is not lock-guarded, so callers must dedupe order submission upstream, not rely on the reservation call itself ([`stock-repository.port.ts`](../apps/api/src/modules/product/application/stock/ports/stock-repository.port.ts)).
 - **Revisit when:** `load:sku-contention` shows one strategy dominating every measured shape, making the switch dead weight.
 
 ### Ids minted by a separate id-service, not in process
@@ -143,11 +151,11 @@ What the design had to hold, in order of weight:
 
 **Decision:** a transactional outbox with thin events, applied through versioned writes the engine itself orders.
 
-- **Version in the row.** Every write that changes what a product document shows increments `products.search_version` and appends a `catalog.product.changed` outbox row in the same transaction ([`drizzle-catalog-admin.repository.ts`](../apps/api/src/modules/catalog/infrastructure/drizzle-catalog-admin.repository.ts)).
-- **Thin events, re-read at consume time.** The event carries only the product id. The worker reads the product as it is now and writes it with `version_type: external`, so the engine refuses any version at or below the one it holds — a late, repeated or reordered delivery is a no-op instead of a regression ([`product-search-sync.service.ts`](../apps/api/src/modules/catalog/application/services/product-search-sync.service.ts), [`elasticsearch-catalog-search.adapter.ts`](../apps/api/src/modules/catalog/infrastructure/search/elasticsearch-catalog-search.adapter.ts)).
+- **Version in the row.** Every write that changes what a product document shows increments `products.search_version` and appends a `catalog.product.changed` outbox row in the same transaction ([`drizzle-catalog-admin.repository.ts`](../apps/api/src/modules/product/infrastructure/catalog/drizzle-catalog-admin.repository.ts)).
+- **Thin events, re-read at consume time.** The event carries only the product id. The worker reads the product as it is now and writes it with `version_type: external`, so the engine refuses any version at or below the one it holds — a late, repeated or reordered delivery is a no-op instead of a regression ([`product-search-sync.service.ts`](../apps/api/src/modules/product/application/catalog/services/product-search-sync.service.ts), [`elasticsearch-catalog-search.adapter.ts`](../apps/api/src/modules/product/infrastructure/catalog/search/elasticsearch-catalog-search.adapter.ts)).
 - **Tombstones, not deletes.** A product that leaves the public projection is stored as a versioned document search never matches, so a stale write arriving after an archive cannot recreate it.
 - **Category renames fan out in the worker.** A rename appends one `catalog.category.renamed` row; the worker bumps and rewrites the category's products in pages, so the rename transaction stays small whatever the category holds.
-- **Rebuilds go through a second alias.** `search:reindex` fills a fresh index behind a rebuild alias while live writes reach both indices, then swaps the `products` alias atomically; the rebuild alias doubles as the lock ([`reindex-runner.ts`](../apps/api/src/modules/catalog/infrastructure/search/reindex-runner.ts)).
+- **Rebuilds go through a second alias.** `search:reindex` fills a fresh index behind a rebuild alias while live writes reach both indices, then swaps the `products` alias atomically; the rebuild alias doubles as the lock ([`reindex-runner.ts`](../apps/api/src/modules/product/infrastructure/catalog/search/reindex-runner.ts)).
 - **Catalog jobs yield.** They carry a lower BullMQ priority, so a burst of catalog events queues behind order and payment work, and they share the long retry ladder with `order.paid` through the `ORDER_PAID_CONSUMER_*` keys ([`queue.constants.ts`](../apps/api/src/shared/messaging/queue/queue.constants.ts)). Every engine call runs behind one of two circuit breakers, one for reads and one for writes, kept separate because the engine can refuse writes while still answering queries.
 
 **Invariants:**

@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
-import { CatalogModule } from '@modules/catalog/catalog.module';
 import { OrderModule } from '@modules/order/order.module';
 import { PaymentModule } from '@modules/payment/payment.module';
+import { ProductModule } from '@modules/product/product.module';
 import { DomainEventDispatcher } from './handlers/domain-event.dispatcher';
 import { OrderEventsHandler } from './handlers/order-events.handler';
 import { InboxStore } from './inbox/inbox.store';
@@ -21,10 +21,10 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
 // Global because any context may need to emit an event and the writer holds no per-module state.
 @Global()
 @Module({
-  // Reaches into Order, Payment and Catalog for their handlers rather than reimplementing their
+  // Reaches into Order, Payment and Product for their handlers rather than reimplementing their
   // effects. One-way: none imports this module — each reads the outbox port off the global export —
   // so the graph stays acyclic.
-  imports: [OrderModule, PaymentModule, CatalogModule],
+  imports: [OrderModule, PaymentModule, ProductModule],
   // The queue token stays unexported on purpose: exporting the raw Queue from a @Global module would
   // let any context publish straight to it — the dual-write the outbox exists to prevent, and one
   // the architecture rules would not catch.

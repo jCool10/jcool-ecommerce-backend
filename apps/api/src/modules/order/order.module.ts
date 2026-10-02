@@ -2,8 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClsService } from 'nestjs-cls';
 import { CartModule } from '@modules/cart/cart.module';
-import { CatalogModule } from '@modules/catalog/catalog.module';
-import { InventoryModule } from '@modules/inventory/inventory.module';
+import { ProductModule } from '@modules/product/product.module';
 import { createUserServiceClient } from '@shared/user-service/user-service.client';
 import { durationToMs } from '@jcool/kernel';
 import { MailModule } from '@jcool/platform/mail';
@@ -39,12 +38,12 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
 import { ReservationTtlScheduler } from './interface/reservation-ttl.scheduler';
 
 /**
- * Every cross-context read or write — Cart's CART_SNAPSHOT, Catalog's CATALOG_SKU_QUERY, Inventory's
- * STOCK_RESERVATION — goes through an Order-owned anti-corruption adapter bound to an Order port, so
- * nothing in this module imports another context's domain or infrastructure.
+ * Every cross-context read or write — Cart's CART_SNAPSHOT, Product's PRODUCT_SKU_QUERY and
+ * PRODUCT_STOCK_RESERVATION — goes through an Order-owned anti-corruption adapter bound to an Order
+ * port, so nothing in this module imports another context's domain or infrastructure.
  */
 @Module({
-  imports: [CartModule, CatalogModule, InventoryModule, MailModule, ResilienceModule],
+  imports: [CartModule, ProductModule, MailModule, ResilienceModule],
   controllers: [OrderController, AdminOrderController],
   providers: [
     CheckoutOrderUseCase,

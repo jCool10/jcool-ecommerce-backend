@@ -2,9 +2,9 @@ import type { INestApplication } from '@nestjs/common';
 import { eq, inArray } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { PRODUCT_SEARCH_STATE, type ProductSearchStatePort } from '../../src/modules/catalog/application/ports';
-import type { Product } from '../../src/modules/catalog/domain/entities';
-import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure';
+import { PRODUCT_SEARCH_STATE, type ProductSearchStatePort } from '../../src/modules/product/application/catalog/ports';
+import type { Product } from '../../src/modules/product/domain/catalog/entities';
+import { DrizzleProductRepository } from '../../src/modules/product/infrastructure/catalog';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {

@@ -3,7 +3,7 @@ import type { ClsService } from 'nestjs-cls';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import { StockReservationError } from '@modules/inventory/application/public/stock-reservation.port';
+import { StockReservationError } from '@modules/product/application/public/product-stock-reservation.port';
 import type { OutboxRecord, OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { Order } from '../../domain/order.entity';

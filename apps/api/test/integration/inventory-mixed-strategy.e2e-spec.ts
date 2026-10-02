@@ -4,8 +4,8 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { ReserveStockUseCase } from '../../src/modules/inventory/application/reserve-stock.use-case';
-import { StockReservationError } from '../../src/modules/inventory/application/public/stock-reservation.port';
+import { ReserveStockUseCase } from '../../src/modules/product/application/stock/reserve-stock.use-case';
+import { StockReservationError } from '../../src/modules/product/application/public/product-stock-reservation.port';
 import {
   countHeldReservations,
   getStockView,

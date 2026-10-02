@@ -5,8 +5,8 @@ import {
   STOCK_REPOSITORY,
   type ReserveLine,
   type StockRepositoryPort,
-} from '../../src/modules/inventory/application/ports/stock-repository.port';
-import { InsufficientStockError } from '../../src/modules/inventory/domain/errors/insufficient-stock.error';
+} from '../../src/modules/product/application/stock/ports/stock-repository.port';
+import { InsufficientStockError } from '../../src/modules/product/domain/stock/errors/insufficient-stock.error';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { readStock, reservationsFor } from '../setup/fixtures/order-flow.fixture';

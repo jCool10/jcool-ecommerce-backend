@@ -1,8 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { ProductSearchState } from '../../src/modules/catalog/application/ports';
-import { DrizzleProductRepository } from '../../src/modules/catalog/infrastructure';
+import type { ProductSearchState } from '../../src/modules/product/application/catalog/ports';
+import { DrizzleProductRepository } from '../../src/modules/product/infrastructure/catalog';
 import { archiveProduct, seedProducts } from '../setup/fixtures/catalog.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 

@@ -32,8 +32,8 @@
     "db:seed:perf": "tsx scripts/perf-seed.ts",
     "queue:replay-dlq": "tsx src/shared/messaging/queue/replay-dlq.cli.ts",
     "queue:replay-dlq:prod": "node dist/shared/messaging/queue/replay-dlq.cli.js",
-    "search:reindex": "tsx src/modules/catalog/infrastructure/search/reindex.ts",
-    "search:reindex:prod": "node dist/modules/catalog/infrastructure/search/reindex.js",
+    "search:reindex": "tsx src/modules/product/infrastructure/catalog/search/reindex.ts",
+    "search:reindex:prod": "node dist/modules/product/infrastructure/catalog/search/reindex.js",
     "storage:verify": "tsx src/shared/infrastructure/storage/verify-storage-orphans.cli.ts",
     "storage:verify:prod": "node dist/shared/infrastructure/storage/verify-storage-orphans.cli.js"
   },

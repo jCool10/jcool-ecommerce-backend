@@ -1,17 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
-  CATALOG_SKU_QUERY,
-  type CatalogSkuQuery,
+  PRODUCT_SKU_QUERY,
+  type ProductSkuQuery,
   type SkuView,
-} from '@modules/catalog/application/public/catalog-sku-query.port';
+} from '@modules/product/application/public/product-sku-query.port';
 import type { CatalogQueryPort, OrderSkuView } from '../application/ports/catalog-query.port';
 
-// The only place Order touches Catalog, and only through Catalog's `application/public` surface.
+// The only place Order reads the catalog, and only through Product's `application/public` surface.
 @Injectable()
 export class CatalogQueryAdapter implements CatalogQueryPort {
   constructor(
-    @Inject(CATALOG_SKU_QUERY)
-    private readonly catalog: CatalogSkuQuery,
+    @Inject(PRODUCT_SKU_QUERY)
+    private readonly catalog: ProductSkuQuery,
   ) {}
 
   async getSkuViews(skuIds: string[]): Promise<OrderSkuView[]> {

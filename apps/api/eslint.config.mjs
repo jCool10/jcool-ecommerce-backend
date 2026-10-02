@@ -140,7 +140,7 @@ export default tseslint.config(
       'src/shared/infrastructure/database/seed.ts',
       'src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
       'src/shared/messaging/queue/replay-dlq.cli.ts',
-      'src/modules/catalog/infrastructure/search/reindex.ts',
+      'src/modules/product/infrastructure/catalog/search/reindex.ts',
       'src/**/*.spec.ts',
     ],
     rules: {

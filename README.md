@@ -1,6 +1,6 @@
 # JCool E-commerce Backend
 
-Single-store e-commerce backend built as a **NestJS modular monolith** — six bounded contexts plus an extracted identity service, Clean Architecture layering enforced by a build gate, and a deliberate focus on the parts of commerce that are hard: **never oversell, never double-charge, never lose an event**.
+Single-store e-commerce backend built as a **NestJS modular monolith** — five bounded contexts plus an extracted identity service, Clean Architecture layering enforced by a build gate, and a deliberate focus on the parts of commerce that are hard: **never oversell, never double-charge, never lose an event**.
 
 <p>
   <a href="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jCool10/jcool-ecommerce-backend/actions/workflows/ci.yml/badge.svg"></a>
@@ -18,9 +18,9 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — six b
 
 | | |
 | --- | --- |
-| **Scale** | api: 6 bounded contexts · 437 TypeScript files · 17 tables · 28 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
+| **Scale** | api: 5 bounded contexts · 437 TypeScript files · 17 tables · 28 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
 | **Tests** | The claims above are pinned on real Postgres, Redis, MinIO, Elasticsearch and SMTP (Testcontainers), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
-| **Gates** | `lint` → `typecheck` → `arch:check` (7 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
+| **Gates** | `lint` → `typecheck` → `arch:check` (8 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
 
@@ -66,8 +66,8 @@ flowchart TB
     end
 
     subgraph core["bounded contexts — application + domain"]
-        C[Catalog]:::box --- K[Cart]:::box
-        O[Order]:::box --- P[Payment]:::box --- I[Inventory]:::box --- M[Media]:::box
+        PR["Product<br/>catalog · stock"]:::box --- K[Cart]:::box
+        O[Order]:::box --- P[Payment]:::box --- M[Media]:::box
     end
 
     subgraph async["asynchronous backbone"]
@@ -86,20 +86,20 @@ flowchart TB
         STRIPE([Stripe]):::ext
     end
 
-    CAT --> C
+    CAT --> PR
     CART --> K
     ORD --> O
     PAY --> P
-    INV --> I
+    INV --> PR
     MED --> M
 
     O -->|one transaction| PG
     O --> OB
     P --> OB
     P --> STRIPE
-    C --> RD
-    C --> OB
-    C -->|search| ES
+    PR --> RD
+    PR --> OB
+    PR -->|search| ES
     M --> S3
     W --> PG
     W -->|versioned writes| ES
@@ -128,9 +128,8 @@ shared Redis; it holds no user rows, no signing key and no `/auth` route.
 
 | Context | Owns | Publishes to other contexts |
 | --- | --- | --- |
-| **Catalog** | Categories, products, SKUs, prices, product images, search index | `CATALOG_SKU_QUERY` (live price/name) |
+| **Product** | Two aggregate groups that meet only by `variantId`: catalog (categories, products, SKUs, prices, product images, search index) and stock (stock levels, reservations) | `PRODUCT_SKU_QUERY` (live price/name), `PRODUCT_STOCK_RESERVATION` (reserve / commit / release) |
 | **Cart** | Per-user cart lines — quantities only, no prices | `CART_SNAPSHOT` (`{skuId, quantity}`) |
-| **Inventory** | Stock levels and reservations | `STOCK_RESERVATION` (reserve / commit / release) |
 | **Order** | The order aggregate, its state machine, checkout and settlement | `ORDER_PAYMENT_VIEW`, `FinalizeOrderUseCase` |
 | **Payment** | Gateway sessions, webhook sink, reconciliation | — (settles Order through Order's own use case) |
 | **Media** | Upload lifecycle, presigned URLs, reclaim sweep | `MEDIA_QUERY`, `MEDIA_FACADE` |
@@ -147,7 +146,7 @@ interface  ──▶  application  ──▶  domain          (framework-free, n
                      └──── implements ─┴──── infrastructure   (Drizzle, Redis, S3, Stripe, SMTP)
 ```
 
-`pnpm arch:check` (dependency-cruiser, 7 error-severity rules) fails the build when `domain` imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one context reaches into another for anything but its `application/public` surface — internal use cases included, which is the crossing a boundary rule usually forgets — or when `domain`/`application` import **any** telemetry package. That last rule is mechanical because the leak is easy: the observability barrel transitively pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no `uuid`/`randomUUID` in user infrastructure.
+`pnpm arch:check` (dependency-cruiser, 8 error-severity rules) fails the build when `domain` imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one context reaches into another for anything but its `application/public` surface — internal use cases included, which is the crossing a boundary rule usually forgets — when Product's catalog and stock subdomains import each other in any layer, or when `domain`/`application` import **any** telemetry package. That last rule is mechanical because the leak is easy: the observability barrel transitively pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no `uuid`/`randomUUID` in user infrastructure.
 
 Two composition roots are exempt from the "shared may not import a context" rule, because wiring contexts together is precisely their job: `shared/messaging` (registers context event handlers) and the schema barrel (collects every context's tables for the migrator).
 
@@ -162,7 +161,7 @@ apps/api/
 │   ├── instrumentation.ts   # OTel + Sentry, preloaded via `node --import` before Nest boots
 │   ├── app.module.ts
 │   ├── modules/             # bounded contexts — each: domain / application / infrastructure / interface
-│   │   ├── cart/  catalog/  inventory/  media/  order/  payment/
+│   │   ├── cart/  media/  order/  payment/  product/   # product: <layer>/catalog/ and <layer>/stock/
 │   └── shared/
 │       ├── config/          # the api's env schema (platform fragments + its own keys) + config factory
 │       ├── auth/            # token verifier options (the user-service's JWKS) + Redis epoch/denylist readers
@@ -206,7 +205,7 @@ The parts worth reading the code for. Each row names the file to open.
 
 | Problem | Approach | Where |
 | --- | --- | --- |
-| **Oversell under contention** | Two interchangeable strategies behind one port, picked by `INVENTORY_LOCK_STRATEGY`: pessimistic `SELECT … FOR UPDATE`, or a version CAS with bounded retry. Both run **inside the caller's transaction**, so the hold commits with the order. Three `CHECK` constraints (`ck_stock_on_hand_nonneg`, `ck_stock_reserved_nonneg`, `ck_stock_no_oversell`) make the database the final authority | `modules/inventory/infrastructure/stock.repository.ts` |
+| **Oversell under contention** | Two interchangeable strategies behind one port, picked by `INVENTORY_LOCK_STRATEGY`: pessimistic `SELECT … FOR UPDATE`, or a version CAS with bounded retry. Both run **inside the caller's transaction**, so the hold commits with the order. Three `CHECK` constraints (`ck_stock_on_hand_nonneg`, `ck_stock_reserved_nonneg`, `ck_stock_no_oversell`) make the database the final authority | `modules/product/infrastructure/stock/stock.repository.ts` |
 | **Checkout atomicity** | One transaction inserts the placed order and its price-snapshot lines, takes the stock hold, appends the `order.placed` outbox row, and flips the idempotency key to `COMPLETED`. A stock shortfall rolls back all four — no order, no event, no key blocking the retry | `modules/order/application/use-cases/checkout-order.use-case.ts` |
 | **Exactly-once settlement** | Every path that settles an order (webhook, queue consumer, reconcile sweep, buyer cancel, admin cancel) funnels through one `FinalizeOrderUseCase`: `SELECT … FOR UPDATE` on the order row plus a terminal-status guard. No distributed lock. It can **join** a caller's transaction so a consumer's inbox claim and the settlement commit together | `modules/order/application/use-cases/finalize-order.use-case.ts` |
 | **Duplicate checkout requests** | Two layers: a per-`(scope, key)` idempotency entry gate that replays the first response body and status, and a `UNIQUE (user_id, idempotency_key)` index on `orders` as the backstop. A key reused with a different request body is `422`, not a silent replay. A key left `IN_PROGRESS` by a crashed request is reclaimable after a 30 s lease; a reclaim racing a request that is still alive is safe, because checkout also takes a per-user advisory lock and the unique index still decides | `modules/order/application/ports/idempotency-store.port.ts` |
@@ -220,7 +219,7 @@ The parts worth reading the code for. Each row names the file to open.
 | **At-least-once → exactly-once** | The consumer claims `message_id = outbox.id` in an `inbox` table (`UNIQUE (consumer, message_id)`) and applies the handler's effect **in that same transaction** (anything slow, such as a call to another service, is prepared before it opens). A redelivery loses the claim and does nothing; a handler that throws takes its claim down with it, so the redelivery does the work | `shared/messaging/queue/domain-event.processor.ts` |
 | **Sweeping the inbox safely** | Inbox claims are swept on a schedule (`RETENTION_INBOX_DAYS`, default 30d), and the app **refuses to boot** if that retention is shorter than the queue's failed-job horizon — deleting a claim while its message can still be redelivered would apply the effect twice | `shared/messaging/inbox/sweep-inbox.ts` |
 | **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery; `order.paid`, which waits on the user-service, gets 15 with a capped backoff, as do `order.expired` and `order.cancelled`, which close the Stripe session and so must outlive its 32-minute lifetime), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
-| **Search index consistency** | No transaction reaches the engine, so the index follows Postgres through the outbox. Every catalog write bumps `products.search_version` and appends its event in the same transaction; the worker re-reads the product and writes it with `version_type: external`, so the engine refuses a stale, repeated or reordered delivery. An archived product stays as a versioned tombstone, so a late write cannot bring it back. A rebuild fills a fresh index behind a second alias and swaps atomically ([decision record](./docs/system-architecture.md#search-index-consistency)) | `modules/catalog/application/services/product-search-sync.service.ts`, `modules/catalog/infrastructure/search/elasticsearch-catalog-search.adapter.ts` |
+| **Search index consistency** | No transaction reaches the engine, so the index follows Postgres through the outbox. Every catalog write bumps `products.search_version` and appends its event in the same transaction; the worker re-reads the product and writes it with `version_type: external`, so the engine refuses a stale, repeated or reordered delivery. An archived product stays as a versioned tombstone, so a late write cannot bring it back. A rebuild fills a fresh index behind a second alias and swaps atomically ([decision record](./docs/system-architecture.md#search-index-consistency)) | `modules/product/application/catalog/services/product-search-sync.service.ts`, `modules/product/infrastructure/catalog/search/elasticsearch-catalog-search.adapter.ts` |
 | **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts` |
 | **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `packages/platform/src/observability/tracing/propagation.ts` |
 
@@ -229,11 +228,11 @@ The parts worth reading the code for. Each row names the file to open.
 | Problem | Approach | Where |
 | --- | --- | --- |
 | **Thundering herd on cache expiry** | Reads go through stale-while-revalidate behind a Redis **single-flight rebuild lock** with a lease and jitter: one request rebuilds, everyone else is served the stale value. `cache_rebuild_duration_seconds` measures the rebuild | `shared/cache/swr-cache.service.ts`, `shared/cache/single-flight.lock.ts` |
-| **Catalog-wide invalidation** | A generation counter, not key enumeration: bumping one Redis integer retires every catalog key at once, in O(1). Staleness after a *missed* invalidation is bounded by `CATALOG_CACHE_TTL_SEC` **plus** the shared stale window and jitter (≈100s at defaults) | `modules/catalog/infrastructure/caching-product.repository.ts` |
-| **Cache poisoning across deploys** | The cache codec re-validates every field on read, so a shape change between deploys degrades to a cache refill instead of a 500 | `modules/catalog/infrastructure/product-cache.codec.ts` |
-| **Presigned URLs vs cached documents** | Catalog stores **asset ids, never URLs**. A presigned URL outlives its cache entry by minutes and the entry by hours, so URLs are resolved *after* the cache read — one batched call per response page. An id whose asset has since gone is dropped rather than rendered as a broken image | `modules/catalog/application/use-cases/get-product-detail.use-case.ts` |
-| **Unbounded cache keys** | Every query parameter is part of the cache-key fingerprint, so each is bounded at the DTO edge: `page ≤ 10000`, `pageSize ≤ 100`, `categorySlug` must match the slug pattern. An unbounded field would be an unbounded number of cache keys as well as an unbounded query | `modules/catalog/interface/dto/list-products-query.dto.ts` |
-| **Deep pagination cost** | Count and page are read inside one repeatable-read read-only snapshot with a tie-broken sort, so the total and the rows cannot disagree | `modules/catalog/infrastructure/drizzle-product.repository.ts` |
+| **Catalog-wide invalidation** | A generation counter, not key enumeration: bumping one Redis integer retires every catalog key at once, in O(1). Staleness after a *missed* invalidation is bounded by `CATALOG_CACHE_TTL_SEC` **plus** the shared stale window and jitter (≈100s at defaults) | `modules/product/infrastructure/catalog/caching-product.repository.ts` |
+| **Cache poisoning across deploys** | The cache codec re-validates every field on read, so a shape change between deploys degrades to a cache refill instead of a 500 | `modules/product/infrastructure/catalog/product-cache.codec.ts` |
+| **Presigned URLs vs cached documents** | Catalog stores **asset ids, never URLs**. A presigned URL outlives its cache entry by minutes and the entry by hours, so URLs are resolved *after* the cache read — one batched call per response page. An id whose asset has since gone is dropped rather than rendered as a broken image | `modules/product/application/catalog/use-cases/get-product-detail.use-case.ts` |
+| **Unbounded cache keys** | Every query parameter is part of the cache-key fingerprint, so each is bounded at the DTO edge: `page ≤ 10000`, `pageSize ≤ 100`, `categorySlug` must match the slug pattern. An unbounded field would be an unbounded number of cache keys as well as an unbounded query | `modules/product/interface/catalog/dto/list-products-query.dto.ts` |
+| **Deep pagination cost** | Count and page are read inside one repeatable-read read-only snapshot with a tie-broken sort, so the total and the rows cannot disagree | `modules/product/infrastructure/catalog/drizzle-product.repository.ts` |
 
 ### Security
 
@@ -256,7 +255,7 @@ The parts worth reading the code for. Each row names the file to open.
 | **Money** | Integer minor units (VND đồng, USD cents) in a `Money` value object — never a float. Cross-currency operations throw rather than coerce. The order total is computed once from the lines and then persisted, never recomputed against a live price | `packages/kernel/src/money.vo.ts` |
 | **Media lifecycle as stock reservation** | An upload commits to something before knowing whether the caller will finish, so it is modelled like a stock hold: `PENDING → READY → ATTACHED → DETACHED`, plus `SWEEPING` as a terminal claim. `expires_at` is `NULL` in exactly one state (`ATTACHED`) — an asset no sweep can select is exactly what that state needs and exactly the leak every other state must not have | `modules/media/domain/asset-state-machine.ts` |
 | **Deleting bytes safely** | The sweep commits its `SWEEPING` claim **first**, then deletes the object, then the row. A crash mid-way leaves an orphan row whose object is gone — re-scannable, and deleting an absent object is a no-op. The other order leaves bytes nobody has a pointer to: unfindable and paid for indefinitely | `modules/media/application/use-cases/sweep-abandoned-assets.use-case.ts` |
-| **Deadlock avoidance** | Attaching an image claims the asset and writes the link row in one transaction, always taking `product_images` before `media_assets`, so two concurrent edits of the same asset cannot deadlock | `modules/catalog/infrastructure/drizzle-catalog-admin.repository.ts` |
+| **Deadlock avoidance** | Attaching an image claims the asset and writes the link row in one transaction, always taking `product_images` before `media_assets`, so two concurrent edits of the same asset cannot deadlock | `modules/product/infrastructure/catalog/drizzle-catalog-admin.repository.ts` |
 
 ---
 

@@ -6,9 +6,9 @@ import {
   STOCK_REPOSITORY,
   type ReserveLine,
   type StockRepositoryPort,
-} from '../../src/modules/inventory/application/ports/stock-repository.port';
-import { InsufficientStockError } from '../../src/modules/inventory/domain/errors/insufficient-stock.error';
-import { ReservationConflictError } from '../../src/modules/inventory/domain/errors/reservation-conflict.error';
+} from '../../src/modules/product/application/stock/ports/stock-repository.port';
+import { InsufficientStockError } from '../../src/modules/product/domain/stock/errors/insufficient-stock.error';
+import { ReservationConflictError } from '../../src/modules/product/domain/stock/errors/reservation-conflict.error';
 import { countHeldReservations, releaseOnceBlocked, seedStock } from '../setup/fixtures/inventory.fixture';
 import { readStock } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
