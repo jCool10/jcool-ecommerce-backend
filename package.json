@@ -50,7 +50,7 @@
     "load:public-read": "OUT=${OUT_DIR:-plans/260911-0904-k6-performance-program/results/public-read/${PROFILE:-steady}}; mkdir -p \"$OUT\" && k6 run --summary-export=\"$OUT/k6-summary.json\" test/load/public-read/read-profile.js"
   },
   "devDependencies": {
-    "railway": "^3.11.0",
-    "turbo": "^2.10.13"
+    "railway": "^3.12.0",
+    "turbo": "^2.11.6"
   }
 }
