@@ -11,9 +11,7 @@ import {
   type ReservationLine,
   type StockResolveResult,
 } from '../public/product-stock-reservation.port';
-import { STOCK_REPOSITORY, type StockRepositoryPort } from './ports/stock-repository.port';
-
-export type LockStrategy = 'pessimistic' | 'optimistic';
+import { STOCK_REPOSITORY, type LockStrategy, type StockRepositoryPort } from './ports/stock-repository.port';
 
 /**
  * Strategy comes from `INVENTORY_LOCK_STRATEGY` (default pessimistic). Runs inside the caller's

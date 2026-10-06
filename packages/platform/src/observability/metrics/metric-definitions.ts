@@ -34,6 +34,8 @@ export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
 // itself claimed. The difference is what the gateway-driven reconcile expired first, so once
 // expiries are happening at all, the two rates converging means reconcile has stopped.
 export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
+// One per answered participant call, retries included: does not reconcile 1:1 with saga_step_total.
+export const TCC_BRANCH_TOTAL = 'tcc_branch_total';
 export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
 
 // Sent after its transaction commits, so nothing retries it: every increment is one notification
@@ -150,6 +152,11 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: RESERVATION_EXPIRY_TOTAL,
     help: 'Orders the reservation sweep expired because their hold had lapsed. Orders, not reservation rows: a multi-line order is one hold to the sweep.',
+  }),
+  makeCounterProvider({
+    name: TCC_BRANCH_TOTAL,
+    help: 'TCC participant calls answered, by participant (inventory/payment), op (try/commit/release/restock/open_session/capture/cancel/sweep) and outcome: ok = moved the order, idempotent = found it already there, conflict = refused by the per-order fence, fenced = a release that arrived before any Try, rejected = a business refusal such as out of stock, error = threw, so the caller does not know the outcome. op="sweep" outcome="ok" is a hold the participant released on its own because nothing resolved it before its deadline.',
+    labelNames: ['participant', 'op', 'outcome'],
   }),
   makeCounterProvider({
     name: PAYMENT_REFUND_OWED_TOTAL,

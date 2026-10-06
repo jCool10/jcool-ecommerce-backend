@@ -17,6 +17,9 @@ import type {
   RefundOwedSource,
   SagaStep,
   SessionEpochLookupResult,
+  TccBranchOutcome,
+  TccOp,
+  TccParticipant,
 } from '@jcool/metrics-port';
 import {
   AUTH_EVENTS_TOTAL,
@@ -43,6 +46,7 @@ import {
   SAGA_COMPENSATION_TOTAL,
   SAGA_STEP_TOTAL,
   SESSION_EPOCH_LOOKUPS_TOTAL,
+  TCC_BRANCH_TOTAL,
 } from './metric-definitions';
 
 const LOG_CONTEXT = 'BusinessMetrics';
@@ -69,6 +73,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(SAGA_STEP_TOTAL) private readonly sagaSteps: Counter<string>,
     @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
     @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
+    @InjectMetric(TCC_BRANCH_TOTAL) private readonly tccBranches: Counter<string>,
     @InjectMetric(PAYMENT_REFUND_OWED_TOTAL) private readonly refundsOwed: Counter<string>,
     @InjectMetric(MAIL_SEND_FAILURES_TOTAL) private readonly mailSendFailures: Counter<string>,
     @InjectMetric(RETENTION_ROWS_DELETED_TOTAL) private readonly retentionRowsDeleted: Counter<string>,
@@ -132,6 +137,10 @@ export class BusinessMetrics implements MetricsPort {
 
   recordReservationExpiry(): void {
     this.safely('reservation_expiry', () => this.reservationExpiries.inc());
+  }
+
+  recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void {
+    this.safely('tcc_branch', () => this.tccBranches.inc({ participant, op, outcome }));
   }
 
   recordMailSendFailure(kind: MailKind): void {

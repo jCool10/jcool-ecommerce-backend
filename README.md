@@ -128,7 +128,7 @@ shared Redis; it holds no user rows, no signing key and no `/auth` route.
 
 | Context | Owns | Publishes to other contexts |
 | --- | --- | --- |
-| **Product** | Two aggregate groups that meet only by `variantId`: catalog (categories, products, SKUs, prices, product images, search index) and stock (stock levels, reservations) | `PRODUCT_SKU_QUERY` (live price/name), `PRODUCT_STOCK_RESERVATION` (reserve / commit / release) |
+| **Product** | Two aggregate groups that meet only by `variantId`: catalog (categories, products, SKUs, prices, product images, search index) and stock (stock levels, reservations) | `PRODUCT_SKU_QUERY` (live price/name), `PRODUCT_STOCK_RESERVATION` (reserve / commit / release), `INVENTORY_PARTICIPANT` (TCC try / commit / release / restock) |
 | **Cart** | Per-user cart lines — quantities only, no prices | `CART_SNAPSHOT` (`{skuId, quantity}`) |
 | **Order** | The order aggregate, its state machine, checkout and settlement | `ORDER_PAYMENT_VIEW`, `FinalizeOrderUseCase` |
 | **Payment** | Gateway sessions, webhook sink, reconciliation | — (settles Order through Order's own use case) |

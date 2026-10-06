@@ -3,7 +3,7 @@ import { DomainError } from '@jcool/kernel';
 // runtime drizzle module into the application layer.
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 
-// The ONLY way another context holds stock; bound to ReserveStockUseCase, whose strategy is config.
+// Legacy checkout's in-transaction hold; the saga uses INVENTORY_PARTICIPANT instead.
 export const PRODUCT_STOCK_RESERVATION = Symbol('PRODUCT_STOCK_RESERVATION');
 
 /** At most one line per `variantId` — a duplicate variant is held once, not summed. */

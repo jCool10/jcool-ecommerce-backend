@@ -14,8 +14,11 @@ import { CatalogAdminService } from './application/catalog/services/catalog-admi
 import { CatalogSkuQueryService } from './application/catalog/services/catalog-sku-query.service';
 import { ProductSearchSyncService } from './application/catalog/services/product-search-sync.service';
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from './application/catalog/use-cases';
+import { INVENTORY_PARTICIPANT } from './application/public/inventory-participant.port';
 import { PRODUCT_SKU_QUERY } from './application/public/product-sku-query.port';
 import { PRODUCT_STOCK_RESERVATION } from './application/public/product-stock-reservation.port';
+import { InventoryParticipantService } from './application/stock/inventory-participant.service';
+import { ReleaseLapsedHoldsUseCase } from './application/stock/release-lapsed-holds.use-case';
 import { StockAdminService } from './application/stock/stock-admin.service';
 import { STOCK_ADMIN } from './application/stock/ports/stock-admin.port';
 import { STOCK_REPOSITORY } from './application/stock/ports/stock-repository.port';
@@ -41,6 +44,7 @@ import { CatalogController } from './interface/catalog/catalog.controller';
 import { CategoryRenamedHandler } from './interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from './interface/catalog/queue/product-changed.handler';
 import { AdminInventoryController } from './interface/stock/admin-inventory.controller';
+import { LapsedHoldSweepScheduler } from './interface/stock/lapsed-hold-sweep.scheduler';
 
 /**
  * One module, two aggregate groups: catalog and stock reference each other only by `variantId`, and
@@ -89,10 +93,15 @@ import { AdminInventoryController } from './interface/stock/admin-inventory.cont
     { provide: STOCK_REPOSITORY, useClass: StockRepository },
     { provide: STOCK_ADMIN, useClass: StockAdminRepository },
     { provide: PRODUCT_STOCK_RESERVATION, useExisting: ReserveStockUseCase },
+    InventoryParticipantService,
+    { provide: INVENTORY_PARTICIPANT, useExisting: InventoryParticipantService },
+    ReleaseLapsedHoldsUseCase,
+    LapsedHoldSweepScheduler,
   ],
   exports: [
     PRODUCT_SKU_QUERY,
     PRODUCT_STOCK_RESERVATION,
+    INVENTORY_PARTICIPANT,
     STOCK_REPOSITORY,
     ProductChangedHandler,
     CategoryRenamedHandler,

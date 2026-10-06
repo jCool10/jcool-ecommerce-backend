@@ -36,11 +36,11 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 
 ### Catalog and stock share one product module, not one aggregate
 
-- **Decision:** `modules/product` holds the catalog group (Product with its SKUs, prices and images; Category) and the stock group (StockLevel, Reservation), laid out layer first — `<layer>/catalog/` and `<layer>/stock/` — and publishes `PRODUCT_SKU_QUERY` and `PRODUCT_STOCK_RESERVATION` from one `application/public/`.
+- **Decision:** `modules/product` holds the catalog group (Product with its SKUs, prices and images; Category) and the stock group (StockLevel, Reservation), laid out layer first — `<layer>/catalog/` and `<layer>/stock/` — and publishes `PRODUCT_SKU_QUERY`, `PRODUCT_STOCK_RESERVATION` and `INVENTORY_PARTICIPANT` from one `application/public/`.
 - **Why:** Order's checkout deals with one Product participant, which reads price and name and holds stock. Catalog edits and stock holds never need one transaction, though, so the module merges and the aggregates stay apart.
 - **Rejected alternatives:** subdomain first (`product/{catalog,stock}/<layer>`), where every layering rule keyed on `modules/<context>/<layer>/` would stop matching without failing; a façade module re-exporting the old two, which merges on paper only; renaming the tables to `product_*`, which buys a migration and nothing else.
 - **Consequences:** `no-cross-context-internals` no longer separates the two groups, so `product-aggregate-isolation` forbids either subdomain from importing the other in any layer. They meet only through `product.module.ts`, `application/public/` and the `variantId`, and a stock write must never bump the catalog cache generation. Table names, `catalog.*` event names, `catalog:*` cache keys, admin URLs and the `INVENTORY_LOCK_STRATEGY` / `CATALOG_CACHE_*` variables did not change.
-- **Revisit when:** stock needs its own database or a reservation has to call an external warehouse system — the hold then leaves checkout's local transaction and becomes a saga step, so `PRODUCT_STOCK_RESERVATION` loses the caller's `tx` and turns into a command/reply contract.
+- **Revisit when:** stock needs its own database or a reservation has to call an external warehouse system — the hold then leaves checkout's local transaction and becomes a saga step, so `PRODUCT_STOCK_RESERVATION` loses the caller's `tx` and turns into a command/reply contract. Being addressed by [Checkout saga](#checkout-saga-orchestration-tcc-on-stock-and-payment-stripe-manual-capture): `INVENTORY_PARTICIPANT` is that contract.
 
 ### Transactional outbox and inbox instead of dual-write
 
@@ -56,7 +56,7 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 - **Why:** settlement has to commit atomically with a caller's own transaction, a consumer's inbox claim in particular; an external lock (Redis, ZooKeeper) can be released without that commit ever happening, which a row lock inside the same transaction cannot.
 - **Rejected alternatives:** a distributed lock service; per-path settlement logic, which would duplicate the terminal guard once per caller and risk one that forgets it.
 - **Consequences:** `execute` can run standalone or `join` a caller's transaction; no network I/O is allowed inside it, so a gateway call must be resolved before entry ([`finalize-order.use-case.ts`](../apps/api/src/modules/order/application/use-cases/finalize-order.use-case.ts)).
-- **Revisit when:** settlement needs to span more than one Postgres instance — that would need a saga step, the same shape the api/user-service split already uses for `order.paid`.
+- **Revisit when:** settlement needs to span more than one Postgres instance — that would need a saga step, the same shape the api/user-service split already uses for `order.paid`. Being addressed by [Checkout saga](#checkout-saga-orchestration-tcc-on-stock-and-payment-stripe-manual-capture).
 
 ### Two inventory lock strategies behind one port
 
@@ -65,6 +65,15 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 - **Rejected alternatives:** committing to a single strategy repo-wide (forecloses the measurement); a distributed lock across replicas (unnecessary — both strategies already run inside the caller's own transaction).
 - **Consequences:** the optimistic path's idempotency check is not lock-guarded, so callers must dedupe order submission upstream, not rely on the reservation call itself ([`stock-repository.port.ts`](../apps/api/src/modules/product/application/stock/ports/stock-repository.port.ts)).
 - **Revisit when:** `load:sku-contention` shows one strategy dominating every measured shape, making the switch dead weight.
+
+### Checkout saga: orchestration, TCC on stock and payment, Stripe manual capture
+
+- **Status:** implementation in progress. Stock's participant side is in place ([`inventory-participant.port.ts`](../apps/api/src/modules/product/application/public/inventory-participant.port.ts)), but nothing calls it yet: checkout still holds stock inside its own transaction through `PRODUCT_STOCK_RESERVATION` until the orchestrator replaces that path.
+- **Decision:** checkout becomes a saga driven step by step by one orchestrator, hand-rolled as a saga table plus a leased runner rather than a workflow engine. Stock and payment are TCC participants: stock holds and then commits or releases, and a committed hold is restocked if capture then fails; payment authorizes through Stripe manual capture and then captures or voids. Capture is the pivot and runs only after stock has committed. The stock Try runs synchronously inside `POST /orders`, so the 201/409 contract stays. Commands are idempotent calls; events go outbox → a BullMQ queue per service → inbox.
+- **Why:** order, inventory and payment are to leave `apps/api` as separate services, which ends the single-transaction checkout. Orchestration keeps the whole flow in one place a reader can follow, and TCC lets each participant refuse a late or repeated call on its own. With capture last, a buyer is never charged for stock that was not secured, so no refund path is needed.
+- **Rejected alternatives:** choreography (the flow is spread over event handlers and only visible by reading all of them); Temporal (a cluster to run and a programming model to learn, for a flow that fits one table); Kafka (the outbox and BullMQ already deliver at least once); capturing at once and refunding as compensation (money moves before stock is certain, and refunds are out of scope); 2PC (neither Stripe nor the queue is an XA resource).
+- **Consequences:** each participant keeps one header row per order as its fence, so every call is idempotent, a release that beats its Try fences the order, and the late Try is refused ([`reservation-order-fence.ts`](../apps/api/src/modules/product/domain/stock/reservation-order-fence.ts)). The stock Try spends one time budget (`INVENTORY_TRY_LOCK_TIMEOUT_MS`) counted from the call, covering id minting, the wait for a pooled connection and every lock wait, so no lock wait or statement outlives it, and a Try still queued for a pooled connection when it runs out writes nothing; stock's other transactions are bounded by the same value. Stock also releases holds past their `hold_until` by itself without deciding anything about the order. Payment methods that cannot be captured manually, and automatic refunds, are out of scope.
+- **Revisit when:** a step has to wait on a person or for longer than the payment deadline, or open sagas outgrow what one leased runner can tick — that is when a workflow engine earns its cost.
 
 ### Ids minted by a separate id-service, not in process
 

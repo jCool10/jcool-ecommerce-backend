@@ -70,6 +70,32 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
   });
 
+  it('bounds the lapsed hold sweep and the Try lock budget', () => {
+    const refused: Array<[string, string]> = [
+      ['INVENTORY_HOLD_SWEEP_ENABLED', '0'],
+      ['INVENTORY_HOLD_SWEEP_INTERVAL_MS', '999'],
+      ['INVENTORY_HOLD_SWEEP_INTERVAL_MS', '3600001'],
+      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '0'],
+      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '501'],
+      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '99'],
+      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '30001'],
+      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '2e3'],
+    ];
+    for (const [key, value] of refused) {
+      expect(() => validate({ ...BASE_ENV, [key]: value }), `${key}=${value}`).toThrow(new RegExp(key));
+    }
+
+    expect(() =>
+      validate({
+        ...BASE_ENV,
+        INVENTORY_HOLD_SWEEP_ENABLED: 'false',
+        INVENTORY_HOLD_SWEEP_INTERVAL_MS: '3600000',
+        INVENTORY_HOLD_SWEEP_BATCH_SIZE: '500',
+        INVENTORY_TRY_LOCK_TIMEOUT_MS: '30000',
+      }),
+    ).not.toThrow();
+  });
+
   // The platform injects its own variables, and a retired key can linger in a deployment.
   it('boots with env keys the schema does not declare', () => {
     expect(() => validate({ ...BASE_ENV, RAILWAY_DEPLOYMENT_DRAINING_SECONDS: 'not-a-number' })).not.toThrow();

@@ -41,6 +41,7 @@ describe('BusinessMetrics', () => {
     metrics.recordSagaStep('payment_session', 'failed');
     metrics.recordCompensation('ttl_expired');
     metrics.recordReservationExpiry();
+    metrics.recordTccBranch('inventory', 'release', 'fenced');
     metrics.recordRefundOwed('webhook_direct');
     metrics.recordMailSendFailure('order_paid');
     metrics.recordRetentionSweep('messaging:outbox', 0);
@@ -68,6 +69,7 @@ describe('BusinessMetrics', () => {
       'saga_step_total{step="payment_session",outcome="failed"} 1',
       'saga_compensation_total{trigger="ttl_expired"} 1',
       'reservation_expiry_total 1',
+      'tcc_branch_total{participant="inventory",op="release",outcome="fenced"} 1',
       'payment_refund_owed_total{source="webhook_direct"} 1',
       'mail_send_failures_total{kind="order_paid"} 1',
       // Recorded at zero so an idle sweep still has a series to alert on.

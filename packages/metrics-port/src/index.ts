@@ -41,6 +41,13 @@ export type SagaStep = 'reserve' | 'payment_session' | 'finalize';
 
 export type CompensationTrigger = 'payment_failed' | 'ttl_expired' | 'cancelled';
 
+export type TccParticipant = 'inventory' | 'payment';
+
+export type TccOp = 'try' | 'commit' | 'release' | 'restock' | 'open_session' | 'capture' | 'cancel' | 'sweep';
+
+/** `fenced`: release before any Try; `rejected`: business refusal; `error`: outcome unknown. */
+export type TccBranchOutcome = 'ok' | 'idempotent' | 'conflict' | 'fenced' | 'rejected' | 'error';
+
 /** WHICH PATH noticed money on an order that will never ship — the observer, not the cause. */
 export type RefundOwedSource = 'expire_session' | 'webhook_direct' | 'settlement_event';
 
@@ -78,6 +85,7 @@ export interface MetricsPort {
   /** Read as a funnel: orders holding stock that never reach `finalize` are what the sweep expires. */
   recordSagaStep(step: SagaStep, outcome: 'success' | 'failed'): void;
   recordCompensation(trigger: CompensationTrigger): void;
+  recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void;
   /** Observations, not refunds — one order can raise several. */
   recordRefundOwed(source: RefundOwedSource): void;
   recordReservationExpiry(): void;

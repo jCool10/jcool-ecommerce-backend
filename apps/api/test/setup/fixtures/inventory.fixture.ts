@@ -95,6 +95,40 @@ export async function releaseOnceBlocked(
   }
 }
 
+export interface StockRowLock {
+  release: () => void;
+  done: Promise<void>;
+}
+
+export async function holdStockRowLock(app: INestApplication, variantId: string): Promise<StockRowLock> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  let release!: () => void;
+  const mayCommit = new Promise<void>((resolve) => (release = resolve));
+  let locked!: () => void;
+  const isLocked = new Promise<void>((resolve) => (locked = resolve));
+  const done = db.transaction(async (tx) => {
+    await tx.select().from(schema.stockLevels).where(eq(schema.stockLevels.variantId, variantId)).for('update');
+    locked();
+    await mayCommit;
+  });
+  await Promise.race([isLocked, done]);
+  return { release, done };
+}
+
+export async function readReservationOrder(app: INestApplication, orderId: string) {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  const [row] = await db.select().from(schema.reservationOrders).where(eq(schema.reservationOrders.orderId, orderId));
+  return row;
+}
+
+export async function lapseHoldHeader(app: INestApplication, orderId: string, minutesAgo = 30): Promise<void> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  await db
+    .update(schema.reservationOrders)
+    .set({ holdUntil: new Date(Date.now() - minutesAgo * 60_000) })
+    .where(eq(schema.reservationOrders.orderId, orderId));
+}
+
 /** Must equal the number of winning holds after a race. */
 export async function countHeldReservations(app: INestApplication, variantId: string): Promise<number> {
   const db = app.get<DrizzleDB>(DRIZZLE);
