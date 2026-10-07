@@ -35,6 +35,9 @@ const API_VARIABLES = [
   'STORAGE_BUCKET',
   'STORAGE_ENDPOINT',
   'STORAGE_SECRET_ACCESS_KEY',
+  'STRIPE_CANCEL_URL',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_SUCCESS_URL',
   'SWAGGER_ENABLED',
   'THROTTLE_ENABLED',
   // Flipped by hand with the public domain (RUNBOOK), so an apply never reverts it.
@@ -163,7 +166,13 @@ export default defineRailway(() => {
       // Set by hand: the edge ranges come from a probe, the auth upstream from its RUNBOOK step,
       // and the write freeze only while auth writes have to stop. check-railway-flip-vars.mjs
       // keeps them declared here.
-      ...preserved(['TRUSTED_PROXY_CIDRS', 'AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED', 'AUTH_WRITE_FREEZE']),
+      ...preserved([
+        'TRUSTED_PROXY_CIDRS',
+        'AUTH_UPSTREAM',
+        'AUTH_UPSTREAM_REQUIRED',
+        'AUTH_WRITE_FREEZE',
+        'CHECKOUT_WRITE_FREEZE',
+      ]),
     },
   });
 

@@ -3,28 +3,35 @@ import { ConfigService } from '@nestjs/config';
 import { OrderModule } from '@modules/order/order.module';
 import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
 import { PAYMENT_REPOSITORY } from './application/ports/payment-repository.port';
+import { PAYMENT_ORDER_REPOSITORY } from './application/ports/payment-order-repository.port';
 import { WEBHOOK_EVENT_REPOSITORY } from './application/ports/webhook-event-repository.port';
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './application/ports/payment-gateway.port';
 import { ORDER_READ_PORT } from './application/ports/order-read.port';
 import { TRANSACTION_RUNNER } from './application/ports/transaction-runner.port';
+import { PAYMENT_PARTICIPANT } from './application/public/payment-participant.port';
+import { PaymentParticipantFacade } from './application/payment-participant.facade';
 import {
+  ApplyTccWebhookEventUseCase,
+  CancelPaymentUseCase,
+  CapturePaymentUseCase,
   CreatePaymentSessionUseCase,
   ExpirePaymentSessionUseCase,
   HandlePaymentWebhookUseCase,
+  OpenPaymentSessionUseCase,
   ProcessWebhookEventUseCase,
   ReconcileStaleOrdersUseCase,
+  ReconcileTccPaymentsUseCase,
+  RecordAuthorizationUseCase,
   SweepWebhookEventsUseCase,
 } from './application/use-cases';
 import { DrizzlePaymentRepository } from './infrastructure/payment.repository';
+import { DrizzlePaymentOrderRepository } from './infrastructure/payment-order.repository';
 import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.repository';
 import { DrizzleTransactionRunner } from './infrastructure/drizzle-transaction-runner';
 import { OrderReadAdapter } from './infrastructure/order-read.adapter';
 import { StripeGatewayAdapter } from './infrastructure/gateway/stripe-gateway.adapter';
 import { isStripeUnavailable } from './infrastructure/gateway/stripe-fault-classification';
-import {
-  BreakerPaymentGateway,
-  PAYMENT_GATEWAY_BREAKER,
-} from './infrastructure/gateway/breaker-payment-gateway.adapter';
+import { guardPaymentGateway } from './infrastructure/gateway/breaker-payment-gateway.adapter';
 import { PaymentController } from './interface/payment.controller';
 import { WebhookController } from './interface/webhook.controller';
 import { ReconciliationScheduler } from './interface/reconciliation.scheduler';
@@ -34,15 +41,19 @@ import { OrderExpiredHandler } from './interface/queue/order-expired.handler';
 // The gateway is fronted by a circuit breaker because it is the one dependency here that lives on
 // someone else's network, so it is the one whose slowness can exhaust our request slots.
 function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFactory): PaymentGatewayPort {
+  const captureTimeoutMs = config.getOrThrow<number>('payment.captureTimeoutMs');
   const gateway = new StripeGatewayAdapter({
     webhookSecret: config.get<string>('payment.webhookSecret'),
     toleranceSec: config.get<number>('payment.webhookToleranceSec') ?? 300,
     secretKey: config.get<string>('payment.secretKey'),
     successUrl: config.get<string>('payment.successUrl'),
     cancelUrl: config.get<string>('payment.cancelUrl'),
+    sessionFloorSec:
+      config.getOrThrow<number>('payment.sessionMinTtlSec') +
+      config.getOrThrow<number>('payment.sessionExpiryMarginSec'),
+    captureTimeoutMs,
   });
-  const breaker = breakers.create(PAYMENT_GATEWAY_BREAKER, { isDownstreamFault: isStripeUnavailable });
-  return new BreakerPaymentGateway(gateway, breaker);
+  return guardPaymentGateway(gateway, breakers, { captureTimeoutMs, isDownstreamFault: isStripeUnavailable });
 }
 
 /**
@@ -55,6 +66,7 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
   controllers: [PaymentController, WebhookController],
   providers: [
     { provide: PAYMENT_REPOSITORY, useClass: DrizzlePaymentRepository },
+    { provide: PAYMENT_ORDER_REPOSITORY, useClass: DrizzlePaymentOrderRepository },
     { provide: WEBHOOK_EVENT_REPOSITORY, useClass: DrizzleWebhookEventRepository },
     { provide: PAYMENT_GATEWAY, useFactory: createPaymentGateway, inject: [ConfigService, CircuitBreakerFactory] },
     { provide: ORDER_READ_PORT, useClass: OrderReadAdapter },
@@ -69,9 +81,23 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     SweepWebhookEventsUseCase,
     OrderExpiredHandler,
     OrderCancelledHandler,
+    RecordAuthorizationUseCase,
+    ApplyTccWebhookEventUseCase,
+    OpenPaymentSessionUseCase,
+    CapturePaymentUseCase,
+    CancelPaymentUseCase,
+    ReconcileTccPaymentsUseCase,
+    { provide: PAYMENT_PARTICIPANT, useClass: PaymentParticipantFacade },
   ],
   // The queue handlers are exported so the shared event consumer can route Order's two unpaid endings
   // back here — only Payment can reach the session each one closes.
-  exports: [PAYMENT_REPOSITORY, WEBHOOK_EVENT_REPOSITORY, PAYMENT_GATEWAY, OrderExpiredHandler, OrderCancelledHandler],
+  exports: [
+    PAYMENT_REPOSITORY,
+    WEBHOOK_EVENT_REPOSITORY,
+    PAYMENT_GATEWAY,
+    PAYMENT_PARTICIPANT,
+    OrderExpiredHandler,
+    OrderCancelledHandler,
+  ],
 })
 export class PaymentModule {}

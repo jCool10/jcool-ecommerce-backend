@@ -1,9 +1,10 @@
 import { vi } from 'vitest';
 import type { PaymentGatewayPort } from '../application/ports/payment-gateway.port';
+import type { PaymentOrderRepositoryPort } from '../application/ports/payment-order-repository.port';
 import type { PaymentRepositoryPort } from '../application/ports/payment-repository.port';
 
 /**
- * Whole-port doubles for Payment's two outbound seams. They live here rather than in
+ * Whole-port doubles for Payment's outbound seams. They live here rather than in
  * `@jcool/testing` because they name this context's ports, and a shared package may not import a context.
  *
  * Every method is present so the spec passes a real port instead of casting a one-method literal,
@@ -14,7 +15,24 @@ export function fakePaymentRepository(overrides: Partial<PaymentRepositoryPort> 
   return {
     create: vi.fn(),
     findByOrderId: vi.fn(),
+    findActiveByOrderIdForUpdate: vi.fn(),
+    findAllByOrderId: vi.fn(),
     findByProviderSessionId: vi.fn(),
+    findStaleTcc: vi.fn(),
+    touch: vi.fn(),
+    bumpKeyGen: vi.fn(),
+    updateStatus: vi.fn(),
+    ...overrides,
+  };
+}
+
+export function fakePaymentOrderRepository(
+  overrides: Partial<PaymentOrderRepositoryPort> = {},
+): PaymentOrderRepositoryPort {
+  return {
+    insertIfAbsent: vi.fn(),
+    findForUpdate: vi.fn(),
+    find: vi.fn(),
     updateStatus: vi.fn(),
     ...overrides,
   };
@@ -28,6 +46,9 @@ export function fakePaymentGateway(overrides: Partial<PaymentGatewayPort> = {}):
     getPaymentStatus: vi.fn(),
     retrieveSession: vi.fn(),
     expireSession: vi.fn(),
+    retrieveAuthorization: vi.fn(),
+    capture: vi.fn(),
+    void: vi.fn(),
     ...overrides,
   };
 }

@@ -224,6 +224,32 @@ describe('gateway: public site', () => {
     });
   });
 
+  describe('checkout frozen for the cutover', () => {
+    let frozen: StartedTestContainer;
+
+    beforeAll(async () => {
+      frozen = await startGateway(network, { ...baseEnv, CHECKOUT_WRITE_FREEZE: 'true' });
+    });
+
+    afterAll(async () => {
+      await frozen?.stop();
+    });
+
+    it.each(['/orders', '/orders/', '/orders/1/pay', '/orders/1/pay/'])(
+      'turns a POST to %s away with 503 and Retry-After',
+      async (path) => {
+        const res = await direct(path, { method: 'POST' }, frozen);
+
+        expect(res.status).toBe(503);
+        expect(res.headers.get('retry-after')).toBe('120');
+      },
+    );
+
+    it('still serves reads', async () => {
+      expect((await echoOf(direct('/orders', undefined, frozen))).upstream).toBe('api');
+    });
+  });
+
   describe('startup', () => {
     // A container that exits non-zero fails "to start"; one that keeps running would time out instead.
     // No published ports: those would be waited on first, and never bound.

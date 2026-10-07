@@ -28,3 +28,26 @@ export function toSettledOutboxRecord(facts: PaymentSettledFacts): OutboxRecord 
     },
   };
 }
+
+export interface PaymentAuthorizedFacts {
+  paymentId: string;
+  orderId: string;
+  amountMinor: number;
+  currency: string;
+  authorizedAt: Date;
+}
+
+export function toAuthorizedOutboxRecord(facts: PaymentAuthorizedFacts): OutboxRecord {
+  return {
+    aggregateType: AGGREGATE_TYPE,
+    aggregateId: facts.paymentId,
+    eventType: 'payment.authorized',
+    payload: {
+      paymentId: facts.paymentId,
+      orderId: facts.orderId,
+      amountMinor: facts.amountMinor,
+      currency: facts.currency,
+      authorizedAt: facts.authorizedAt.toISOString(),
+    },
+  };
+}

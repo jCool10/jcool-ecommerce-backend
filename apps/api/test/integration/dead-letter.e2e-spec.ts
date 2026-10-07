@@ -162,6 +162,35 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(dead.data.attemptsMade).toBe(1);
   });
 
+  // No consumer handles a hold yet, so none can claim and drop one; replay delivers it once one ships.
+  it('parks an authorized hold until its consumer ships, then replays it intact', async () => {
+    const authorized = job({
+      aggregateType: 'Payment',
+      aggregateId: messageId(2),
+      eventType: 'payment.authorized',
+      payload: {
+        paymentId: messageId(2),
+        orderId: ORDER_ID,
+        amountMinor: 150_000,
+        currency: 'VND',
+        authorizedAt: new Date().toISOString(),
+      },
+    });
+    await publish(authorized);
+
+    const [dead] = await waitForDeadLetter();
+    expect(dead.data).toMatchObject({ eventType: 'payment.authorized', payload: authorized.payload, attemptsMade: 1 });
+    expect(dead.data.failedReason).toMatch(/No handler registered/);
+
+    const shipped = spyOnEffect(dispatcher).mockResolvedValue(undefined);
+    const summary = await replayDeadLetters(queue, dlq, { ...replayGuards, dryRun: false });
+
+    expect(summary).toMatchObject({ replayed: 1, skipped: 0 });
+    await vi.waitFor(async () => expect(await inboxRows()).toHaveLength(1), { timeout: 15_000, interval: 50 });
+    expect(shipped).toHaveBeenCalledWith(expect.objectContaining({ payload: authorized.payload }), expect.anything());
+    expect(await deadLetters()).toHaveLength(0);
+  });
+
   it('replays a message once the handler is fixed and clears the dead letter', async () => {
     const effect = spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());

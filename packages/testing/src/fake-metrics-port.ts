@@ -18,6 +18,7 @@ const METHODS = [
   'recordBreakerCall',
   'recordBreakerTransition',
   'recordCartOperation',
+  'recordCaptureConflict',
   'recordCatalogCacheOperation',
   'recordCompensation',
   'recordConsumeRetry',

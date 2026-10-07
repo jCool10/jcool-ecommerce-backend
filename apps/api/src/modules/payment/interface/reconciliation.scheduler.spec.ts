@@ -3,7 +3,12 @@ import type { ClsService } from 'nestjs-cls';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ReconcileStaleOrdersUseCase, ReconcileSummary } from '../application/use-cases';
+import type {
+  ReconcileStaleOrdersUseCase,
+  ReconcileSummary,
+  ReconcileTccPaymentsUseCase,
+  ReconcileTccSummary,
+} from '../application/use-cases';
 import { ReconciliationScheduler } from './reconciliation.scheduler';
 
 const CONFIG: Record<string, unknown> = {
@@ -24,18 +29,34 @@ const IDLE: ReconcileSummary = {
   errors: 0,
 };
 
-function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockResolvedValue(IDLE)) {
+const IDLE_TCC: ReconcileTccSummary = {
+  scanned: 0,
+  authorized: 0,
+  expired: 0,
+  voided: 0,
+  undecided: 0,
+  skipped: 0,
+  conflicts: 0,
+  errors: 0,
+};
+
+function build(
+  overrides: Record<string, unknown> = {},
+  execute = vi.fn().mockResolvedValue(IDLE),
+  executeTcc = vi.fn().mockResolvedValue(IDLE_TCC),
+) {
   const registry = { addInterval: vi.fn(), deleteInterval: vi.fn(), doesExist: vi.fn().mockReturnValue(true) };
   const error = vi.fn();
   const make = () =>
     new ReconciliationScheduler(
       { execute } as unknown as ReconcileStaleOrdersUseCase,
+      { execute: executeTcc } as unknown as ReconcileTccPaymentsUseCase,
       fakeConfigService({ ...CONFIG, ...overrides }),
       registry as unknown as SchedulerRegistry,
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
       fakePinoLogger({ error }),
     );
-  return { make, registry, error, execute };
+  return { make, registry, error, execute, executeTcc };
 }
 
 describe('ReconciliationScheduler', () => {
@@ -63,7 +84,7 @@ describe('ReconciliationScheduler', () => {
   });
 
   it('registers one timer that drives a sweep once the period elapses', async () => {
-    const { make, registry, execute } = build();
+    const { make, registry, execute, executeTcc } = build();
 
     make().onModuleInit();
     await vi.advanceTimersByTimeAsync(60_000);
@@ -71,6 +92,7 @@ describe('ReconciliationScheduler', () => {
     expect(registry.addInterval).toHaveBeenCalledWith('payment-reconcile-stale-orders', expect.anything());
     expect(vi.getTimerCount()).toBe(1);
     expect(execute).toHaveBeenCalledWith({ staleAfterSec: 120, ttlSec: 900, batchSize: 50 });
+    expect(executeTcc).toHaveBeenCalledWith({ staleAfterSec: 120, batchSize: 50 });
   });
 
   it('registers nothing at all when disabled', () => {
@@ -106,5 +128,20 @@ describe('ReconciliationScheduler', () => {
 
     await scheduler.tick();
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  // Two independent backstops: one that cannot read orders must not stall the one releasing holds.
+  it('still sweeps fenced payments when the order sweep fails, and the other way round', async () => {
+    const failing = () => vi.fn().mockRejectedValue(new Error('query failed'));
+    const orderSweepDown = build({}, failing());
+    const tccSweepDown = build({}, undefined, failing());
+
+    await orderSweepDown.make().tick();
+    await tccSweepDown.make().tick();
+
+    expect(orderSweepDown.executeTcc).toHaveBeenCalledOnce();
+    expect(orderSweepDown.error).toHaveBeenCalledOnce();
+    expect(tccSweepDown.execute).toHaveBeenCalledOnce();
+    expect(tccSweepDown.error).toHaveBeenCalledOnce();
   });
 });

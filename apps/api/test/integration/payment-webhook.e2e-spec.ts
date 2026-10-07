@@ -81,6 +81,19 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     await expectSettledPaid(order);
   });
 
+  it('settles an auto-capture payment to SUCCEEDED and emits payment.succeeded, never payment.authorized', async () => {
+    const order = await openOrder();
+
+    await postWebhook(app, paid(order.sessionId, order.charge, 'evt_auto_capture')).expect(200);
+
+    expect((await readPayment(app, order.orderId)).status).toBe('SUCCEEDED');
+    const paymentEvents = await db
+      .select({ eventType: schema.outbox.eventType })
+      .from(schema.outbox)
+      .where(eq(schema.outbox.aggregateType, 'Payment'));
+    expect(paymentEvents).toEqual([{ eventType: 'payment.succeeded' }]);
+  });
+
   it('rejects a body changed after signing with 401 and writes nothing', async () => {
     const order = await openOrder();
     const signed = paid(order.sessionId, order.charge, 'evt_tampered');

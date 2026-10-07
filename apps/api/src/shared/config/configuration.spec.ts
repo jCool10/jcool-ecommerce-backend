@@ -32,7 +32,18 @@ describe('configuration', () => {
     'STRIPE_SUCCESS_URL',
     'ID_SERVICE_URL',
     'ID_SERVICE_TIMEOUT_MS',
+    'PAYMENT_SESSION_MIN_TTL_SEC',
+    'PAYMENT_SESSION_EXPIRY_MARGIN_SEC',
+    'PAYMENT_CAPTURE_TIMEOUT_MS',
   ]);
+
+  it("floors a session at Stripe's 30-minute minimum plus 2 minutes of skew, and bounds capture at 10s", () => {
+    expect(configuration().payment).toMatchObject({
+      sessionMinTtlSec: 1_800,
+      sessionExpiryMarginSec: 120,
+      captureTimeoutMs: 10_000,
+    });
+  });
 
   it('runs the lapsed hold sweep and bounds a Try at 2s unless told otherwise', () => {
     const { tryLockTimeoutMs, holdSweep } = configuration().inventory;

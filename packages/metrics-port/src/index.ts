@@ -88,6 +88,8 @@ export interface MetricsPort {
   recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void;
   /** Observations, not refunds — one order can raise several. */
   recordRefundOwed(source: RefundOwedSource): void;
+  /** A cancel that found the order's money already captured: someone must refund by hand. */
+  recordCaptureConflict(): void;
   recordReservationExpiry(): void;
   /** Nothing retries a failed send, so this counts mail actually lost, not mail delayed. */
   recordMailSendFailure(kind: MailKind): void;

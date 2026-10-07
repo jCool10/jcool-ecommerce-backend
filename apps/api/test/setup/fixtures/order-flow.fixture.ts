@@ -122,6 +122,12 @@ export async function readPayment(app: INestApplication, orderId: string) {
   return row;
 }
 
+export async function readPaymentOrder(app: INestApplication, orderId: string) {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  const [row] = await db.select().from(schema.paymentOrders).where(eq(schema.paymentOrders.orderId, orderId));
+  return row;
+}
+
 export async function readStock(app: INestApplication, variantId: string) {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const [row] = await db.select().from(schema.stockLevels).where(eq(schema.stockLevels.variantId, variantId));

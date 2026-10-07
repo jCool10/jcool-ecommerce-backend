@@ -37,6 +37,7 @@ import {
   MESSAGING_PUBLISH_TOTAL,
   ORDERS_CREATED_TOTAL,
   ORDER_VALUE_MINOR,
+  PAYMENT_CAPTURE_CONFLICT_TOTAL,
   PAYMENT_REFUND_OWED_TOTAL,
   RATE_LIMIT_REJECTIONS_TOTAL,
   RESERVATION_EXPIRY_TOTAL,
@@ -75,6 +76,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
     @InjectMetric(TCC_BRANCH_TOTAL) private readonly tccBranches: Counter<string>,
     @InjectMetric(PAYMENT_REFUND_OWED_TOTAL) private readonly refundsOwed: Counter<string>,
+    @InjectMetric(PAYMENT_CAPTURE_CONFLICT_TOTAL) private readonly captureConflicts: Counter<string>,
     @InjectMetric(MAIL_SEND_FAILURES_TOTAL) private readonly mailSendFailures: Counter<string>,
     @InjectMetric(RETENTION_ROWS_DELETED_TOTAL) private readonly retentionRowsDeleted: Counter<string>,
     @InjectMetric(RETENTION_SWEEP_DURATION_SECONDS) private readonly retentionSweepDuration: Histogram<string>,
@@ -149,6 +151,10 @@ export class BusinessMetrics implements MetricsPort {
 
   recordRefundOwed(source: RefundOwedSource): void {
     this.safely('payment_refund_owed', () => this.refundsOwed.inc({ source }));
+  }
+
+  recordCaptureConflict(): void {
+    this.safely('payment_capture_conflict', () => this.captureConflicts.inc());
   }
 
   recordRetentionSweep(sweep: string, rows: number): void {

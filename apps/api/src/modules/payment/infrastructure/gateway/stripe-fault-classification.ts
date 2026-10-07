@@ -1,5 +1,14 @@
 import Stripe from 'stripe';
-import { PaymentGatewayError } from '../../application/ports/payment-gateway.port';
+import {
+  PaymentGatewayError,
+  type CaptureResult,
+  type IntentStatus,
+  type VoidOutcome,
+} from '../../application/ports/payment-gateway.port';
+
+function unwrap(error: unknown): unknown {
+  return error instanceof PaymentGatewayError ? error.cause : error;
+}
 
 /**
  * A 4xx is Stripe answering — a rejected amount, a stale handle, a key we got wrong — and answering
@@ -9,7 +18,7 @@ import { PaymentGatewayError } from '../../application/ports/payment-gateway.por
  * status at all and is the plainest outage signal there is — hence the default.
  */
 export function isStripeUnavailable(error: unknown): boolean {
-  const cause = error instanceof PaymentGatewayError ? error.cause : error;
+  const cause = unwrap(error);
   if (!(cause instanceof Stripe.errors.StripeError)) {
     return true;
   }
@@ -23,6 +32,50 @@ export function isStripeUnavailable(error: unknown): boolean {
  * session is not open; it does NOT say whether money moved — only reading it back tells those apart.
  */
 export function isSessionNotOpen(error: unknown): boolean {
-  const cause = error instanceof PaymentGatewayError ? error.cause : error;
+  const cause = unwrap(error);
   return cause instanceof Stripe.errors.StripeInvalidRequestError && cause.statusCode === 400;
+}
+
+export function isServerError(error: unknown): boolean {
+  const cause = unwrap(error);
+  return cause instanceof Stripe.errors.StripeError && cause.statusCode !== undefined && cause.statusCode >= 500;
+}
+
+export function isUnexpectedIntentState(error: unknown): boolean {
+  const cause = unwrap(error);
+  return cause instanceof Stripe.errors.StripeInvalidRequestError && cause.code === 'payment_intent_unexpected_state';
+}
+
+/**
+ * After a 5xx or a state refusal the intent itself is the only record of what the call did. A hold
+ * that is still capturable means the key now carries a stored failure, so it must be rotated.
+ */
+export function captureOutcomeAfterFault(status: IntentStatus, fault: unknown): CaptureResult {
+  switch (status) {
+    case 'succeeded':
+      return { kind: 'captured' };
+    case 'canceled':
+    case 'requires_payment_method':
+      return { kind: 'not_capturable', intentStatus: status };
+    default:
+      throw faultedOn('capture', status, fault);
+  }
+}
+
+export function voidOutcomeAfterFault(status: IntentStatus, fault: unknown): VoidOutcome {
+  switch (status) {
+    case 'canceled':
+    case 'requires_payment_method':
+      return 'already_canceled';
+    case 'succeeded':
+      return 'already_captured';
+    default:
+      throw faultedOn('void', status, fault);
+  }
+}
+
+function faultedOn(call: string, status: IntentStatus, fault: unknown): PaymentGatewayError {
+  return new PaymentGatewayError(`Stripe ${call} failed with the intent still ${status}`, fault, {
+    retryWithFreshKey: status === 'requires_capture',
+  });
 }

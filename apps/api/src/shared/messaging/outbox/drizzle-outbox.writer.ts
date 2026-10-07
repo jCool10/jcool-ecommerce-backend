@@ -13,10 +13,11 @@ import { outbox } from './schema/outbox.schema';
 export class DrizzleOutboxWriter implements OutboxWriterPort {
   constructor(@Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort) {}
 
-  async append(tx: DrizzleTx, record: OutboxRecord): Promise<void> {
+  // Callers that must not mint inside their transaction pass the id they minted before opening it.
+  async append(tx: DrizzleTx, record: OutboxRecord, id?: string): Promise<void> {
     const { traceparent } = injectTraceContext();
     await tx.insert(outbox).values({
-      id: await mintOne(this.idGenerator),
+      id: id ?? (await mintOne(this.idGenerator)),
       aggregateType: record.aggregateType,
       aggregateId: record.aggregateId,
       eventType: record.eventType,

@@ -391,6 +391,26 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsString()
   STRIPE_CANCEL_URL?: string;
 
+  // 0 is legal for both: a stack in front of a fake Stripe has no minimum to respect.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(0)
+  PAYMENT_SESSION_MIN_TTL_SEC?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(0)
+  PAYMENT_SESSION_EXPIRY_MARGIN_SEC?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  @Max(60_000)
+  PAYMENT_CAPTURE_TIMEOUT_MS?: number;
+
   // The only way in: without it every token is refused, so it is required rather than optional.
   @IsUrl(HTTP_URL)
   AUTH_JWKS_URL!: string;
@@ -457,6 +477,11 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
     throw new Error(
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
     );
+  }
+  // Without a key the adapter falls back to fabricated sessions that can never settle, so every
+  // order would quietly expire. PAYMENT_PROVIDER is not consulted: nothing sets it on Railway.
+  if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
+    throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
   }
   return env;
 }

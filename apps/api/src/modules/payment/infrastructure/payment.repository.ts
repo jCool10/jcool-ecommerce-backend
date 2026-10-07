@@ -1,17 +1,22 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, notInArray, or, sql } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx, isUniqueViolation } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { Payment } from '../domain/payment.entity';
+import { CANCELLED_PAYMENT_ORDER_STATUSES } from '../domain/payment-order-status';
 import { PaymentStatus } from '../domain/payment-status';
 import {
   DuplicateActivePaymentError,
   type PaymentRepositoryPort,
+  type StaleTccPayment,
+  type StaleTccQuery,
   type UpdatePaymentStatusOptions,
 } from '../application/ports/payment-repository.port';
-import { payments } from './schema/payment.schema';
+import { paymentOrders, payments } from './schema/payment.schema';
 
 const ACTIVE_PAYMENT_INDEX = 'uq_payments_one_active_per_order';
+// The complement of the active-payment index predicate.
+const SETTLED_INACTIVE = [PaymentStatus.FAILED, PaymentStatus.EXPIRED];
 
 type PaymentRow = typeof payments.$inferSelect;
 
@@ -22,14 +27,13 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
-  async create(payment: Payment, tx?: DrizzleTx): Promise<Payment> {
+  async create(payment: Payment, tx?: DrizzleTx, id?: string): Promise<Payment> {
     const executor = tx ?? this.db;
-    const id = await mintOne(this.idGenerator);
     try {
       const [row] = await executor
         .insert(payments)
         .values({
-          id,
+          id: id ?? (await mintOne(this.idGenerator)),
           orderId: payment.orderId,
           provider: payment.provider,
           providerSessionId: payment.providerSessionId,
@@ -62,6 +66,60 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     return row ? toDomain(row) : null;
   }
 
+  async findActiveByOrderIdForUpdate(tx: DrizzleTx, orderId: string): Promise<Payment | null> {
+    const [row] = await tx
+      .select()
+      .from(payments)
+      .where(and(eq(payments.orderId, orderId), notInArray(payments.status, SETTLED_INACTIVE)))
+      .for('update');
+    return row ? toDomain(row) : null;
+  }
+
+  async findAllByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment[]> {
+    const query = (tx ?? this.db)
+      .select()
+      .from(payments)
+      .where(eq(payments.orderId, orderId))
+      .orderBy(asc(payments.id));
+    const rows = await (tx ? query.for('update') : query);
+    return rows.map(toDomain);
+  }
+
+  async findStaleTcc({ untouchedSince, limit }: StaleTccQuery): Promise<StaleTccPayment[]> {
+    const rows = await this.db
+      .select({ payment: payments, headerStatus: paymentOrders.status })
+      .from(payments)
+      .innerJoin(paymentOrders, eq(paymentOrders.orderId, payments.orderId))
+      .where(
+        and(
+          lt(payments.updatedAt, untouchedSince),
+          or(
+            eq(payments.status, PaymentStatus.PENDING),
+            and(
+              eq(payments.status, PaymentStatus.AUTHORIZED),
+              inArray(paymentOrders.status, [...CANCELLED_PAYMENT_ORDER_STATUSES]),
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(payments.updatedAt))
+      .limit(limit);
+    return rows.map(({ payment, headerStatus }) => ({ payment: toDomain(payment), headerStatus }));
+  }
+
+  async touch(id: string): Promise<void> {
+    await this.db.update(payments).set({ updatedAt: new Date() }).where(eq(payments.id, id));
+  }
+
+  async bumpKeyGen(id: string, expectedGen: number, tx?: DrizzleTx): Promise<boolean> {
+    const bumped = await (tx ?? this.db)
+      .update(payments)
+      .set({ stripeKeyGen: sql`${payments.stripeKeyGen} + 1` })
+      .where(and(eq(payments.id, id), eq(payments.stripeKeyGen, expectedGen)))
+      .returning({ id: payments.id });
+    return bumped.length === 1;
+  }
+
   async findByProviderSessionId(providerSessionId: string, tx?: DrizzleTx): Promise<Payment | null> {
     const executor = tx ?? this.db;
     // Session handles are generated unique per creation; order by newest as a deterministic
@@ -85,9 +143,12 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     options: UpdatePaymentStatusOptions = {},
   ): Promise<Payment | null> {
     const executor = options.tx ?? this.db;
-    const patch: { status: PaymentStatus; providerIntentId?: string | null } = { status };
+    const patch: { status: PaymentStatus; providerIntentId?: string | null; authorizedAt?: Date } = { status };
     if (options.providerIntentId !== undefined) {
       patch.providerIntentId = options.providerIntentId;
+    }
+    if (options.authorizedAt !== undefined) {
+      patch.authorizedAt = options.authorizedAt;
     }
     // Postgres evaluates the status predicate under the row's own lock, so a caller that read the
     // row outside a transaction gets zero rows back instead of clobbering a committed change.
@@ -110,5 +171,7 @@ function toDomain(row: PaymentRow): Payment {
     amountMinor: row.amountMinor,
     currency: row.currency,
     status: row.status,
+    authorizedAt: row.authorizedAt,
+    idempotencyKeyGen: row.stripeKeyGen,
   });
 }

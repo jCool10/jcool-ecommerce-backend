@@ -148,6 +148,7 @@ services:
     container_name: jcool-app
     restart: unless-stopped
     # Unpublished, as on Railway: the gateway on 8080 is the way in.
+    # NODE_ENV=production below: .env must carry a real sk_test_ STRIPE_SECRET_KEY and STRIPE_SUCCESS_URL.
     # .env carries the app's own secrets/config; the values below then override the host-oriented
     # ones it also holds (DATABASE_URL/REDIS_URL point at localhost there).
     env_file:

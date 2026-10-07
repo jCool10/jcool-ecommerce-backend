@@ -9,6 +9,10 @@ export interface CreateSessionInput {
   // Passed to the gateway's own idempotency mechanism when it has one (Stripe: Idempotency-Key
   // header) so a retried session-create call returns the same session instead of a duplicate.
   idempotencyKey?: string;
+  /** `manual` only places a hold; the money moves on a later `capture`. Absent → automatic. */
+  captureMethod?: 'automatic' | 'manual';
+  /** When the hosted page stops taking money. Absent → the configured session floor from now. */
+  expiresAt?: Date;
 }
 
 export interface GatewaySession {
@@ -54,6 +58,21 @@ export interface RetrievedSession {
   clientSecret?: string;
 }
 
+export type IntentStatus =
+  'requires_capture' | 'succeeded' | 'canceled' | 'processing' | 'requires_payment_method' | 'other';
+
+export interface SessionAuthorization {
+  sessionStatus: 'open' | 'complete' | 'expired' | 'unknown';
+  intentId?: string;
+  intentStatus?: IntentStatus;
+  amountCapturableMinor?: number;
+  currency?: string;
+}
+
+export type CaptureResult = { kind: 'captured' } | { kind: 'not_capturable'; intentStatus: IntentStatus };
+
+export type VoidOutcome = 'voided' | 'already_canceled' | 'already_captured';
+
 export interface PaymentGatewayPort {
   // Recorded on Payment.provider from the adapter, not config, so the two can never drift.
   readonly provider: string;
@@ -78,15 +97,33 @@ export interface PaymentGatewayPort {
    * human a look.
    */
   expireSession(ref: string): Promise<ExpireSessionOutcome>;
+  /** Reads the session with its PaymentIntent expanded. Unconfigured or unrecognised → `unknown`. */
+  retrieveAuthorization(sessionRef: string): Promise<SessionAuthorization>;
+  /**
+   * `idempotencyKey` is `capture:{paymentId}:{gen}`. Resolves only on an outcome Stripe confirmed;
+   * an unknown outcome throws and the caller retries with the same key, unless the error asks for a
+   * fresh one (`retryWithFreshKey`).
+   */
+  capture(intentId: string, idempotencyKey: string): Promise<CaptureResult>;
+  /** `idempotencyKey` is `void:{paymentId}:{gen}`; same contract as `capture`. */
+  void(intentId: string, idempotencyKey: string): Promise<VoidOutcome>;
 }
 
 // An upstream provider fault (→ 502), kept distinct from the domain 4xx a bad request raises.
 export class PaymentGatewayError extends Error {
+  /**
+   * Stripe stores a 5xx against its idempotency key and replays it for every resend, so a hold that
+   * is still capturable can only be reached again under a new key.
+   */
+  readonly retryWithFreshKey: boolean;
+
   constructor(
     message: string,
     readonly cause?: unknown,
+    options: { retryWithFreshKey?: boolean } = {},
   ) {
     super(message);
     this.name = 'PaymentGatewayError';
+    this.retryWithFreshKey = options.retryWithFreshKey ?? false;
   }
 }

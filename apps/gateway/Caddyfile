@@ -69,6 +69,17 @@
 		}
 	}
 	handle {
+		# Stops checkout and payment writes while a cutover must not race an order, reads untouched.
+		# Substituted at parse time like the flag above, so it needs a redeploy.
+		@checkoutFrozen {
+			method POST
+			path /orders /orders/*
+			expression `"{$CHECKOUT_WRITE_FREEZE:false}" == "true"`
+		}
+		handle @checkoutFrozen {
+			header Retry-After 120
+			respond "checkout is read-only during a migration" 503
+		}
 		reverse_proxy {$API_UPSTREAM} {
 			import upstream
 		}

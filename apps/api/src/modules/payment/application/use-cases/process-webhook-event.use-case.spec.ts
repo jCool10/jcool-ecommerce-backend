@@ -1,13 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { Payment } from '../../domain/payment.entity';
+import { PaymentOrderStatus } from '../../domain/payment-order-status';
 import { PaymentStatus } from '../../domain/payment-status';
 import { WebhookEvent } from '../../domain/webhook-event.entity';
-import type { VerifiedEvent } from '../ports/payment-gateway.port';
-import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';
+import { PaymentGatewayError, type SessionAuthorization, type VerifiedEvent } from '../ports/payment-gateway.port';
+import {
+  fakePaymentGateway,
+  fakePaymentOrderRepository,
+  fakePaymentRepository,
+} from '../../testing/payment-port.doubles';
 import type { WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import type { TransactionRunnerPort } from '../ports/transaction-runner.port';
+import { ApplyTccWebhookEventUseCase } from './apply-tcc-webhook-event.use-case';
 import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';
+import { RecordAuthorizationUseCase } from './record-authorization.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PAYMENT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
@@ -85,8 +93,95 @@ function build(opts: { verify?: VerifiedEvent; inserted?: boolean; existing?: Pa
     webhookEvents,
     fakePaymentRepository({ findByProviderSessionId, updateStatus }),
     { append },
+    fakePaymentOrderRepository({ find: vi.fn().mockResolvedValue(null) }),
+    { execute: vi.fn() } as unknown as ApplyTccWebhookEventUseCase,
   );
   return { useCase, tx, insertIfNew, markProcessed, markSkipped, findByProviderSessionId, updateStatus, append };
+}
+
+const EVENT_ID = '7400000000000000011';
+const OUTBOX_ID = '7400000000000000012';
+const HOLD: SessionAuthorization = {
+  sessionStatus: 'complete',
+  intentId: 'pi_1',
+  intentStatus: 'requires_capture',
+  amountCapturableMinor: AMOUNT_MINOR,
+  currency: CURRENCY.toLowerCase(),
+};
+
+/** A payment opened behind a `payment_orders` header, wired through the real recorder. */
+function buildFenced(opts: {
+  verify?: VerifiedEvent;
+  inserted?: boolean;
+  authorization?: SessionAuthorization | Error;
+}) {
+  const calls: string[] = [];
+  let inTx = false;
+  const tx = { __tx: true };
+  const run = vi.fn(async (work: (t: unknown) => Promise<unknown>) => {
+    calls.push('tx');
+    inTx = true;
+    try {
+      return await work(tx);
+    } finally {
+      inTx = false;
+    }
+  });
+  const mint = vi.fn((count: number = 1) => {
+    calls.push(inTx ? 'mint inside tx' : 'mint');
+    return Promise.resolve([EVENT_ID, OUTBOX_ID].slice(0, count));
+  });
+  const authorization = opts.authorization ?? HOLD;
+  const retrieveAuthorization = vi.fn(() => {
+    calls.push('retrieve');
+    return authorization instanceof Error ? Promise.reject(authorization) : Promise.resolve(authorization);
+  });
+  const verifyAndParseEvent = vi
+    .fn()
+    .mockReturnValue(opts.verify ?? stripeEvent('checkout.session.completed', { paymentStatus: 'unpaid' }));
+  const insertIfNew = vi.fn().mockResolvedValue({ inserted: opts.inserted ?? true, event: eventRow() });
+  const markProcessed = vi.fn().mockResolvedValue(undefined);
+  const markSkipped = vi.fn().mockResolvedValue(undefined);
+  const header = { orderId: ORDER_ID, status: PaymentOrderStatus.OPEN, amountMinor: AMOUNT_MINOR, currency: CURRENCY };
+  const updateHeader = vi.fn().mockResolvedValue(true);
+  const findByProviderSessionId = vi.fn().mockResolvedValue(payment(PaymentStatus.PENDING));
+  const updateStatus = vi.fn().mockResolvedValue({});
+  const append = vi.fn<OutboxWriterPort['append']>().mockResolvedValue(undefined);
+
+  const txRunner = { run } as unknown as TransactionRunnerPort;
+  const gateway = fakePaymentGateway({ verifyAndParseEvent, retrieveAuthorization });
+  const webhookEvents = { insertIfNew, markProcessed, markSkipped } as unknown as WebhookEventRepositoryPort;
+  const headers = fakePaymentOrderRepository({
+    find: vi.fn().mockResolvedValue(header),
+    findForUpdate: vi.fn().mockResolvedValue(header),
+    updateStatus: updateHeader,
+  });
+  const payments = fakePaymentRepository({ findByProviderSessionId, updateStatus });
+  const recorder = new RecordAuthorizationUseCase(headers, payments, { append }, fakePinoLogger());
+  const useCase = new ProcessWebhookEventUseCase(
+    txRunner,
+    gateway,
+    webhookEvents,
+    payments,
+    { append },
+    headers,
+    new ApplyTccWebhookEventUseCase(txRunner, gateway, webhookEvents, payments, { mint }, recorder),
+  );
+  return {
+    useCase,
+    tx,
+    calls,
+    run,
+    mint,
+    retrieveAuthorization,
+    insertIfNew,
+    markProcessed,
+    markSkipped,
+    updateHeader,
+    findByProviderSessionId,
+    updateStatus,
+    append,
+  };
 }
 
 const RAW = Buffer.from('{}');
@@ -254,5 +349,88 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());
     expect(updateStatus).not.toHaveBeenCalled();
     expect(append).not.toHaveBeenCalled();
+  });
+
+  describe('for a payment opened behind a header', () => {
+    // Stripe never sends a settlement for a manual-capture session: completed means a hold was placed.
+    it('records the hold and announces it, never as a settlement, minting every id before the transaction', async () => {
+      const { useCase, tx, calls, insertIfNew, updateStatus, updateHeader, markProcessed, append } = buildFenced({});
+
+      await expect(useCase.execute(RAW, HEADERS)).resolves.toEqual({
+        outcome: 'processed',
+        status: PaymentStatus.AUTHORIZED,
+        orderId: ORDER_ID,
+        paymentRef: 'pi_1',
+        eventType: 'checkout.session.completed',
+      });
+      expect(calls).toEqual(['retrieve', 'mint', 'tx']);
+      expect(insertIfNew).toHaveBeenCalledWith(expect.anything(), tx, EVENT_ID);
+      expect(updateStatus).toHaveBeenCalledWith(
+        PAYMENT_ID,
+        PaymentStatus.AUTHORIZED,
+        expect.objectContaining({ tx, providerIntentId: 'pi_1', expectedStatus: PaymentStatus.PENDING }),
+      );
+      expect(updateHeader).toHaveBeenCalledWith(tx, ORDER_ID, PaymentOrderStatus.AUTHORIZED, PaymentOrderStatus.OPEN);
+      expect(markProcessed).toHaveBeenCalledWith(EVENT_ID, tx);
+      expect(append).toHaveBeenCalledExactlyOnceWith(
+        tx,
+        expect.objectContaining({ eventType: 'payment.authorized' }),
+        OUTBOX_ID,
+      );
+    });
+
+    // Without the row Stripe's redelivery is processed; with it, the redelivery would dedup to nothing.
+    it('answers unavailable without logging the delivery when Stripe cannot be read', async () => {
+      const { useCase, run, mint } = buildFenced({ authorization: new PaymentGatewayError('breaker open') });
+
+      await expect(useCase.execute(RAW, HEADERS)).resolves.toEqual({
+        outcome: 'unavailable',
+        providerEventId: 'evt_1',
+        eventType: 'checkout.session.completed',
+      });
+      expect(mint).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it('logs a completed session whose hold is not placed yet, leaving the payment for the sweep', async () => {
+      const { useCase, markSkipped, updateStatus, append } = buildFenced({
+        authorization: { sessionStatus: 'complete', intentId: 'pi_1', intentStatus: 'processing' },
+      });
+
+      await expect(useCase.execute(RAW, HEADERS)).resolves.toMatchObject({
+        outcome: 'skipped',
+        reason: 'awaiting_payment',
+      });
+      expect(markSkipped).toHaveBeenCalledWith(EVENT_ID, expect.anything());
+      expect(updateStatus).not.toHaveBeenCalled();
+      expect(append).not.toHaveBeenCalled();
+    });
+
+    it('expires the payment on a session expiry, leaving the header and the outbox alone', async () => {
+      const { useCase, tx, calls, findByProviderSessionId, updateStatus, updateHeader, markProcessed, append } =
+        buildFenced({ verify: stripeEvent('checkout.session.expired', { paymentStatus: 'unpaid' }) });
+
+      await expect(useCase.execute(RAW, HEADERS)).resolves.toMatchObject({
+        outcome: 'processed',
+        status: PaymentStatus.EXPIRED,
+      });
+      expect(calls).toEqual(['mint', 'tx']);
+      expect(findByProviderSessionId).toHaveBeenCalledWith(SESSION_ID, tx);
+      expect(updateStatus).toHaveBeenCalledWith(PAYMENT_ID, PaymentStatus.EXPIRED, {
+        tx,
+        expectedStatus: PaymentStatus.PENDING,
+      });
+      expect(markProcessed).toHaveBeenCalledWith(EVENT_ID, tx);
+      expect(updateHeader).not.toHaveBeenCalled();
+      expect(append).not.toHaveBeenCalled();
+    });
+
+    it('treats a redelivery as a duplicate without touching the payment', async () => {
+      const { useCase, updateStatus, append } = buildFenced({ inserted: false });
+
+      await expect(useCase.execute(RAW, HEADERS)).resolves.toMatchObject({ outcome: 'duplicate' });
+      expect(updateStatus).not.toHaveBeenCalled();
+      expect(append).not.toHaveBeenCalled();
+    });
   });
 });

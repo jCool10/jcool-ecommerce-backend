@@ -43,6 +43,7 @@ describe('BusinessMetrics', () => {
     metrics.recordReservationExpiry();
     metrics.recordTccBranch('inventory', 'release', 'fenced');
     metrics.recordRefundOwed('webhook_direct');
+    metrics.recordCaptureConflict();
     metrics.recordMailSendFailure('order_paid');
     metrics.recordRetentionSweep('messaging:outbox', 0);
     metrics.observeRetentionSweepDuration('messaging:outbox', 0.2);
@@ -71,6 +72,7 @@ describe('BusinessMetrics', () => {
       'reservation_expiry_total 1',
       'tcc_branch_total{participant="inventory",op="release",outcome="fenced"} 1',
       'payment_refund_owed_total{source="webhook_direct"} 1',
+      'payment_capture_conflict_total 1',
       'mail_send_failures_total{kind="order_paid"} 1',
       // Recorded at zero so an idle sweep still has a series to alert on.
       'retention_rows_deleted_total{sweep="messaging:outbox"} 0',

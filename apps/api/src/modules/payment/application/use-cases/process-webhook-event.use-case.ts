@@ -2,7 +2,9 @@ import { Inject, Injectable } from '@nestjs/common';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { canTransition } from '../../domain/payment-state-machine';
-import { PAYMENT_GATEWAY, type PaymentGatewayPort } from '../ports/payment-gateway.port';
+import type { Payment } from '../../domain/payment.entity';
+import { PAYMENT_GATEWAY, type PaymentGatewayPort, type VerifiedEvent } from '../ports/payment-gateway.port';
+import { PAYMENT_ORDER_REPOSITORY, type PaymentOrderRepositoryPort } from '../ports/payment-order-repository.port';
 import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment-repository.port';
 import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
@@ -10,33 +12,12 @@ import { chargeMatchesPayment } from '../mappers/charge-matches-payment';
 import { mapEventToOutcome } from '../mappers/map-event-to-outcome';
 import { readCheckoutSession } from '../mappers/read-checkout-session';
 import { toSettledOutboxRecord } from '../payment-outbox.mapper';
+import { ApplyTccWebhookEventUseCase } from './apply-tcc-webhook-event.use-case';
+import type { WebhookProcessResult } from './webhook-process-result';
 
-/**
- * `rejected` is the only non-2xx result (verify failed, nothing persisted); every other outcome means
- * the event was accepted and logged, so the gateway gets a 2xx and stops retrying.
- */
-export type WebhookProcessResult =
-  | { outcome: 'rejected'; reason: 'invalid_signature' | 'expired_timestamp' }
-  | { outcome: 'duplicate'; providerEventId: string; eventType: string }
-  | { outcome: 'ignored'; providerEventId: string; eventType: string }
-  // The reason separates the harmless (a late notice, a session already at rest on the outcome this
-  // event reports, one still clearing) from the two that need a human: an outcome landing on a payment
-  // already closed on a DIFFERENT one, and a charge that isn't ours.
-  | {
-      outcome: 'skipped';
-      reason: 'payment_not_found' | 'conflict' | 'awaiting_payment' | 'amount_mismatch' | 'already_settled';
-      providerEventId: string;
-      eventType: string;
-      conflict?: { orderId: string; from: PaymentStatus; to: PaymentStatus };
-      charge?: {
-        orderId: string;
-        expectedMinor: number;
-        expectedCurrency: string;
-        actualMinor?: number;
-        actualCurrency?: string;
-      };
-    }
-  | { outcome: 'processed'; status: PaymentStatus; orderId: string; paymentRef: string | null; eventType: string };
+export type { WebhookProcessResult } from './webhook-process-result';
+
+const SESSION_EVENTS = new Set(['checkout.session.completed', 'checkout.session.expired']);
 
 /**
  * Applies a verified webhook to the payment side only. The idempotency insert and the payment change
@@ -51,6 +32,8 @@ export class ProcessWebhookEventUseCase {
     @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEventRepo: WebhookEventRepositoryPort,
     @Inject(PAYMENT_REPOSITORY) private readonly paymentRepo: PaymentRepositoryPort,
     @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
+    @Inject(PAYMENT_ORDER_REPOSITORY) private readonly paymentOrders: PaymentOrderRepositoryPort,
+    private readonly applyTccEvent: ApplyTccWebhookEventUseCase,
   ) {}
 
   async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
@@ -60,6 +43,9 @@ export class ProcessWebhookEventUseCase {
       return { outcome: 'rejected', reason: verified.kind };
     }
     const delivery = { providerEventId: verified.providerEventId, eventType: verified.type };
+
+    const fenced = await this.findFencedPayment(verified);
+    if (fenced !== null) return this.applyTccEvent.execute(verified, fenced);
 
     return this.transactionRunner.run(async (tx) => {
       const { inserted, event } = await this.webhookEventRepo.insertIfNew(
@@ -166,5 +152,14 @@ export class ProcessWebhookEventUseCase {
         eventType: verified.type,
       };
     });
+  }
+
+  /** A payment opened behind a header never takes the settlement path below, whatever the event says. */
+  private async findFencedPayment(event: Extract<VerifiedEvent, { kind: 'valid' }>): Promise<Payment | null> {
+    if (!SESSION_EVENTS.has(event.type)) return null;
+    const { sessionId } = readCheckoutSession(event.payload);
+    const payment = sessionId ? await this.paymentRepo.findByProviderSessionId(sessionId) : null;
+    if (payment === null) return null;
+    return (await this.paymentOrders.find(payment.orderId)) === null ? null : payment;
   }
 }

@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Post,
   Req,
+  ServiceUnavailableException,
   UnauthorizedException,
   type RawBodyRequest,
 } from '@nestjs/common';
@@ -23,7 +24,8 @@ import { HandlePaymentWebhookUseCase } from '../application/use-cases';
  *
  * The body is read as raw bytes (`req.rawBody`, enabled by `rawBody: true` in the bootstrap) and never
  * bound to a DTO, so the global ValidationPipe/JSON parser cannot re-serialize it and break the
- * signature. Only a verify failure is non-2xx (401); every accepted event returns 200.
+ * signature. Only a verify failure (401) and an unreadable gateway (503) are non-2xx; every accepted
+ * event returns 200.
  */
 @ApiTags('payments')
 @Controller('webhooks')
@@ -54,6 +56,8 @@ export class WebhookController {
         description: 'Unauthorized',
       });
     }
+    // Nothing was recorded, so the gateway's redelivery is processed rather than deduplicated.
+    if (result.outcome === 'unavailable') throw new ServiceUnavailableException('Payment gateway unavailable');
     return { status: result.outcome };
   }
 }

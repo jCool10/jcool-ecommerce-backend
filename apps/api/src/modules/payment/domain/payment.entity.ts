@@ -1,6 +1,6 @@
 import { assertNonEmpty, assertPositive, Money } from '@jcool/kernel';
 import { PaymentStatus } from './payment-status';
-import { assertTransition } from './payment-state-machine';
+import { assertTransition, PaymentTransitionError } from './payment-state-machine';
 
 /**
  * Pure: no framework/DB imports. `amountMinor` is a frozen snapshot of the order total (integer minor
@@ -16,6 +16,12 @@ export class Payment {
     public readonly amountMinor: number,
     public readonly currency: string,
     public readonly status: PaymentStatus,
+    public readonly authorizedAt: Date | null,
+    /**
+     * Suffix of the gateway idempotency keys for capture and void. Bumped only when the gateway stored
+     * a server error under the current key, since resending that key would replay the error forever.
+     */
+    public readonly idempotencyKeyGen: number,
   ) {}
 
   static create(props: {
@@ -43,6 +49,8 @@ export class Payment {
       money.amountMinor,
       money.currency,
       PaymentStatus.PENDING,
+      null,
+      0,
     );
   }
 
@@ -56,6 +64,8 @@ export class Payment {
     amountMinor: number;
     currency: string;
     status: PaymentStatus;
+    authorizedAt?: Date | null;
+    idempotencyKeyGen?: number;
   }): Payment {
     return new Payment(
       props.id,
@@ -66,6 +76,8 @@ export class Payment {
       props.amountMinor,
       props.currency,
       props.status,
+      props.authorizedAt ?? null,
+      props.idempotencyKeyGen ?? 0,
     );
   }
 
@@ -75,30 +87,49 @@ export class Payment {
 
   markSucceeded(providerIntentId?: string | null): Payment {
     assertTransition(this.status, PaymentStatus.SUCCEEDED);
-    return this.withStatus(PaymentStatus.SUCCEEDED, providerIntentId);
+    return this.with({ status: PaymentStatus.SUCCEEDED, providerIntentId });
   }
 
   markFailed(providerIntentId?: string | null): Payment {
     assertTransition(this.status, PaymentStatus.FAILED);
-    return this.withStatus(PaymentStatus.FAILED, providerIntentId);
+    return this.with({ status: PaymentStatus.FAILED, providerIntentId });
   }
 
-  /** Only the sweep drives this — a webhook always carries a real outcome. */
   markExpired(): Payment {
     assertTransition(this.status, PaymentStatus.EXPIRED);
-    return this.withStatus(PaymentStatus.EXPIRED);
+    return this.with({ status: PaymentStatus.EXPIRED });
   }
 
-  private withStatus(status: PaymentStatus, providerIntentId?: string | null): Payment {
+  markAuthorized(providerIntentId: string, authorizedAt: Date): Payment {
+    assertTransition(this.status, PaymentStatus.AUTHORIZED);
+    return this.with({ status: PaymentStatus.AUTHORIZED, providerIntentId, authorizedAt });
+  }
+
+  /** Narrower than markSucceeded: PENDING → SUCCEEDED is the auto-capture edge, and a hold must exist first. */
+  markCaptured(): Payment {
+    if (this.status !== PaymentStatus.AUTHORIZED) {
+      throw new PaymentTransitionError(this.status, PaymentStatus.SUCCEEDED);
+    }
+    return this.with({ status: PaymentStatus.SUCCEEDED });
+  }
+
+  markVoided(): Payment {
+    assertTransition(this.status, PaymentStatus.VOIDED);
+    return this.with({ status: PaymentStatus.VOIDED });
+  }
+
+  private with(change: { status: PaymentStatus; providerIntentId?: string | null; authorizedAt?: Date }): Payment {
     return new Payment(
       this.id,
       this.orderId,
       this.provider,
       this.providerSessionId,
-      providerIntentId ?? this.providerIntentId,
+      change.providerIntentId ?? this.providerIntentId,
       this.amountMinor,
       this.currency,
-      status,
+      change.status,
+      change.authorizedAt ?? this.authorizedAt,
+      this.idempotencyKeyGen,
     );
   }
 }

@@ -22,10 +22,12 @@ Conventions used below:
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
+- [Enable Stripe test mode on Railway](#enable-stripe-test-mode-on-railway)
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
+- [Checkout freeze](#checkout-freeze)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [Standing exceptions](#standing-exceptions)
@@ -495,6 +497,23 @@ Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, a
 
 ---
 
+## Enable Stripe test mode on Railway
+
+The api in production needs a live Stripe key and a success URL, or it refuses to boot. Set the values right before merging the change that makes the api require them, with a key that starts `sk_test_`:
+
+```bash
+railway variable set STRIPE_SECRET_KEY --stdin --service jcool-ecommerce-backend --skip-deploys
+railway variable set STRIPE_SUCCESS_URL --stdin --service jcool-ecommerce-backend --skip-deploys
+railway variable set STRIPE_CANCEL_URL --stdin --service jcool-ecommerce-backend --skip-deploys
+```
+
+- `STRIPE_SUCCESS_URL` must keep the `{CHECKOUT_SESSION_ID}` placeholder, as in `https://<shop>/payments/success?session_id={CHECKOUT_SESSION_ID}`.
+- Check that `PAYMENT_WEBHOOK_SECRET` matches the signing secret of the endpoint registered in the Stripe dashboard.
+- `--skip-deploys` matters: without it each `set` redeploys the running api, and a redeploy that has the key but not yet `STRIPE_SUCCESS_URL` cannot boot.
+- Nothing else may be merged to `main` between setting the values and merging this change. `main` does not declare these names yet, so another CD run would turn them into deletions and stop at "Apply Railway config".
+
+---
+
 ## Deploy the monitoring stack
 
 `prometheus` and `grafana` are two ordinary Railway services declared in `.railway/railway.ts`, built
@@ -875,6 +894,28 @@ If the direct domain is already gone, create one with `railway domain --service 
 - `AUTH_UPSTREAM_REQUIRED=true` is on: the gateway refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of routing auth to an api that answers 404.
 - `AUTH_WRITE_FREEZE=true` answers every write under `/auth` with `503` and `Retry-After: 120`, reads untouched. Use it while a migration must not race a login or a password change, and unset it after. It is off unless set.
 - All three are set by hand and kept across every apply.
+
+---
+
+## Checkout freeze
+
+`CHECKOUT_WRITE_FREEZE=true` on the gateway answers every `POST` to `/orders` and `/orders/*` (checkout and payment) with `503` and `Retry-After: 120`. Reads are untouched. Use it while a cutover must not race an order in flight, and turn it off after. It is off unless set. The variable is set by hand and kept across every apply.
+
+The gateway substitutes the value when it parses its config, so a change needs a redeploy of the gateway:
+
+```bash
+railway variable set CHECKOUT_WRITE_FREEZE=true --service gateway --skip-deploys
+railway redeploy --service gateway --yes
+```
+
+Probe both routes through the public domain. Each must answer `503` with `Retry-After: 120`:
+
+```bash
+curl -i -X POST https://<public-domain>/orders
+curl -i -X POST https://<public-domain>/orders/1/pay
+```
+
+Turn it off by setting `false` and redeploying the gateway the same way.
 
 ---
 

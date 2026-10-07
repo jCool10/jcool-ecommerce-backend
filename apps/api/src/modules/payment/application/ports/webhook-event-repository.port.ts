@@ -21,7 +21,7 @@ export interface WebhookEventRepositoryPort {
    * ON CONFLICT DO NOTHING on the unique (provider, providerEventId): a duplicate delivery returns
    * the existing row instead of throwing, so a concurrent redelivery cannot double-apply.
    */
-  insertIfNew(input: NewWebhookEvent, tx?: DrizzleTx): Promise<InsertWebhookEventResult>;
+  insertIfNew(input: NewWebhookEvent, tx?: DrizzleTx, id?: string): Promise<InsertWebhookEventResult>;
 
   /**
    * Must be called in the SAME transaction as the payment status change, so "applied but not marked

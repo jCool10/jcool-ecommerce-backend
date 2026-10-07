@@ -42,6 +42,11 @@ export class HandlePaymentWebhookUseCase {
           { ...result.charge },
           'gateway reported a charge that does not match the recorded payment — payment left unsettled for manual review',
         );
+      } else if (result.outcome === 'unavailable') {
+        this.logger.warn(
+          { providerEventId: result.providerEventId, eventType: result.eventType },
+          'gateway unreadable — webhook left for redelivery',
+        );
       } else if (result.outcome === 'duplicate' || result.outcome === 'ignored') {
         // A redelivery or an event type we do not act on: routine, so debug only.
         this.logger.debug(
@@ -62,6 +67,9 @@ export class HandlePaymentWebhookUseCase {
       }
       return result;
     }
+
+    // A hold or an expiry behind a header: the saga moves that order, not this webhook.
+    if (result.status === PaymentStatus.AUTHORIZED || result.status === PaymentStatus.EXPIRED) return result;
 
     const outcome = mapPaymentToOrderOutcome(result.status);
     if (outcome === null) {

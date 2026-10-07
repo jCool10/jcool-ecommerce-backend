@@ -24,13 +24,14 @@ function build(process: WebhookProcessResult, finalize = () => Promise.resolve<u
   const finalizeExec = vi.fn().mockImplementation(finalize);
   const metrics = fakeMetricsPort();
   const error = vi.fn();
+  const warn = vi.fn();
   const useCase = new HandlePaymentWebhookUseCase(
     { execute: vi.fn().mockResolvedValue(process) } as unknown as ProcessWebhookEventUseCase,
     { execute: finalizeExec } as unknown as FinalizeOrderUseCase,
     metrics,
-    fakePinoLogger({ error }),
+    fakePinoLogger({ error, warn }),
   );
-  return { useCase, finalizeExec, metrics, error };
+  return { useCase, finalizeExec, metrics, error, warn };
 }
 
 // No sweep picks these up (reconcile's queue is orders still PENDING), so money that moved with no
@@ -125,5 +126,31 @@ describe('HandlePaymentWebhookUseCase', () => {
 
     await expect(useCase.execute(RAW, HEADERS)).resolves.toBe(process);
     expect(error).toHaveBeenCalledOnce();
+  });
+
+  // A payment behind a header belongs to the saga: the webhook records what Stripe holds and stops there.
+  it('moves no order and books no refund for a hold or an expiry recorded behind a header', async () => {
+    for (const status of [PaymentStatus.AUTHORIZED, PaymentStatus.EXPIRED]) {
+      const { useCase, finalizeExec, metrics, error, warn } = build(settled(status));
+
+      await useCase.execute(RAW, HEADERS);
+
+      expect(finalizeExec, status).not.toHaveBeenCalled();
+      expect(metrics.recordRefundOwed, status).not.toHaveBeenCalled();
+      expect(error, status).not.toHaveBeenCalled();
+      expect(warn, status).not.toHaveBeenCalled();
+    }
+  });
+
+  it('hands an unreadable gateway back to the caller untouched', async () => {
+    const process: WebhookProcessResult = {
+      outcome: 'unavailable',
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
+    };
+    const { useCase, finalizeExec } = build(process);
+
+    await expect(useCase.execute(RAW, HEADERS)).resolves.toBe(process);
+    expect(finalizeExec).not.toHaveBeenCalled();
   });
 });

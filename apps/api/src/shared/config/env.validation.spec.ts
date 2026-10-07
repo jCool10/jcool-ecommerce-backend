@@ -16,18 +16,66 @@ const BASE_ENV = {
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
 };
 
+const STRIPE_ENV = {
+  STRIPE_SECRET_KEY: 'sk_test_dummy',
+  STRIPE_SUCCESS_URL: 'https://shop.jcool.test/payments/success?session_id={CHECKOUT_SESSION_ID}',
+};
+
 describe('env validation', () => {
   it('refuses to boot in production until TRUST_PROXY is set to anything', () => {
     const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production };
 
     expect(() => validate(production)).toThrow(/TRUST_PROXY/);
     for (const value of ['fd12::/16', '1', 'false']) {
-      expect(() => validate({ ...production, TRUST_PROXY: value }), value).not.toThrow();
+      expect(() => validate({ ...production, ...STRIPE_ENV, TRUST_PROXY: value }), value).not.toThrow();
     }
   });
 
   it('leaves TRUST_PROXY optional outside production', () => {
     expect(() => validate(BASE_ENV)).not.toThrow();
+  });
+
+  // Railway never sets PAYMENT_PROVIDER, so a guard keyed on it would never run there.
+  it('refuses to boot in production without a Stripe key and success URL, whatever the provider says', () => {
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: '1' };
+
+    expect(() => validate(production)).toThrow(/STRIPE_SECRET_KEY/);
+    expect(() => validate({ ...production, STRIPE_SECRET_KEY: STRIPE_ENV.STRIPE_SECRET_KEY })).toThrow(
+      /STRIPE_SUCCESS_URL/,
+    );
+    expect(() => validate({ ...production, ...STRIPE_ENV })).not.toThrow();
+  });
+
+  it('keeps the network-free Stripe path outside production', () => {
+    for (const nodeEnv of [NodeEnv.Test, NodeEnv.Development]) {
+      expect(() => validate({ ...BASE_ENV, NODE_ENV: nodeEnv }), nodeEnv).not.toThrow();
+    }
+  });
+
+  it('bounds the session floor and the capture timeout', () => {
+    const refused: Array<[string, string]> = [
+      ['PAYMENT_SESSION_MIN_TTL_SEC', '-1'],
+      ['PAYMENT_SESSION_EXPIRY_MARGIN_SEC', '-1'],
+      ['PAYMENT_CAPTURE_TIMEOUT_MS', '99'],
+      ['PAYMENT_CAPTURE_TIMEOUT_MS', '60001'],
+      ['PAYMENT_CAPTURE_TIMEOUT_MS', '1e4'],
+    ];
+    for (const [key, value] of refused) {
+      expect(() => validate({ ...BASE_ENV, [key]: value }), `${key}=${value}`).toThrow(new RegExp(key));
+    }
+
+    // Zero floors are what a stack on a fake Stripe runs with, in production mode too.
+    expect(() =>
+      validate({
+        ...BASE_ENV,
+        NODE_ENV: NodeEnv.Production,
+        TRUST_PROXY: '1',
+        ...STRIPE_ENV,
+        PAYMENT_SESSION_MIN_TTL_SEC: '0',
+        PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '0',
+        PAYMENT_CAPTURE_TIMEOUT_MS: '1000',
+      }),
+    ).not.toThrow();
   });
 
   // Without any one of these the api boots and then refuses every caller.

@@ -7,13 +7,17 @@ export const PaymentStatus = {
   PENDING: 'PENDING',
   SUCCEEDED: 'SUCCEEDED',
   FAILED: 'FAILED',
-  /** Session lapsed without an outcome; set by the reconciliation sweep, never by a webhook. */
+  /** The session closed without taking money: it lapsed, or a cancel expired it. */
   EXPIRED: 'EXPIRED',
+  /** Manual capture only: the money is held, not taken, until capture or void. */
+  AUTHORIZED: 'AUTHORIZED',
+  /** The hold was released at the gateway; nothing was ever taken. */
+  VOIDED: 'VOIDED',
 } as const;
 
 export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 
-/** What a gateway event can settle a payment to — EXPIRED belongs to the sweep alone. */
+/** What a gateway event can settle an auto-capture payment to. */
 export type SettledPaymentStatus = typeof PaymentStatus.SUCCEEDED | typeof PaymentStatus.FAILED;
 
 /** Declaration order — the pg enum and exhaustive test iteration read this. */

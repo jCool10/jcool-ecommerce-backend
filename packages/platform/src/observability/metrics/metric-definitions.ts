@@ -37,6 +37,7 @@ export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
 // One per answered participant call, retries included: does not reconcile 1:1 with saga_step_total.
 export const TCC_BRANCH_TOTAL = 'tcc_branch_total';
 export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
+export const PAYMENT_CAPTURE_CONFLICT_TOTAL = 'payment_capture_conflict_total';
 
 // Sent after its transaction commits, so nothing retries it: every increment is one notification
 // the recipient will never receive.
@@ -162,6 +163,10 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
     name: PAYMENT_REFUND_OWED_TOTAL,
     help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: expire_session = closing the checkout session found the money instead; webhook_direct and settlement_event = a successful payment landing on an order already cancelled or expired, seen by the in-process finalize and by its durable event. Observations, not refunds — one stranded payment normally raises two of these, so alert on the sum being non-zero and get the count from the database, never by summing this.',
     labelNames: ['source'],
+  }),
+  makeCounterProvider({
+    name: PAYMENT_CAPTURE_CONFLICT_TOTAL,
+    help: 'Cancels that found the order already captured, so nothing was voided and the buyer is owed a refund by hand. Should stay at zero: the saga never cancels after a capture, so any increment is a bug or an operator action to investigate.',
   }),
   makeCounterProvider({
     name: MAIL_SEND_FAILURES_TOTAL,

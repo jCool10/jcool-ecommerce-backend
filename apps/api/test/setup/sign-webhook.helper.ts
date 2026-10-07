@@ -59,6 +59,15 @@ export function checkoutSessionCompleted(
   };
 }
 
+/** A manual-capture session completes `unpaid`: Stripe placed a hold and took nothing yet. */
+export function manualSessionCompleted(
+  sessionId: string,
+  charge: { amountMinor: number; currency: string },
+  opts: { eventId?: string } = {},
+): Record<string, unknown> {
+  return checkoutSessionCompleted(sessionId, { ...charge, paymentStatus: 'unpaid' }, opts);
+}
+
 /** Drives Payment PENDING→FAILED. */
 export function checkoutSessionExpired(sessionId: string, opts: { eventId?: string } = {}): Record<string, unknown> {
   return {
