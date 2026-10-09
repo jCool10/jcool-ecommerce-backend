@@ -28,6 +28,9 @@ Conventions used below:
 - [Deploy Elasticsearch](#deploy-elasticsearch)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [Checkout freeze](#checkout-freeze)
+- [Checkout saga cut-over](#checkout-saga-cut-over)
+- [Checkout saga rollback](#checkout-saga-rollback)
+- [Operating the checkout saga](#operating-the-checkout-saga)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [Standing exceptions](#standing-exceptions)
@@ -308,7 +311,7 @@ The CLI reads its Redis URL, queue prefix **and inbox window** through the app's
 
 ## Retention sweeps
 
-Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — five sweeps in the api, the three `auth-tokens:*` ones in the user-service. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
+Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — six sweeps in the api, the three `auth-tokens:*` ones in the user-service. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
 
 Every window is sized by **what still has to be able to retry against the row**, never by disk. Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say only during an incident.
 
@@ -317,6 +320,7 @@ Every window is sized by **what still has to be able to retry against the row**,
 | `messaging:outbox` | `outbox` | `published_at` older than the window | **Any row with `published_at IS NULL`, at any age** — that is an unsent event, not a stale record | `RETENTION_OUTBOX_DAYS` (30) |
 | `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
 | `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
+| `order:rejected-orders` | `orders` (their lines and saga row go with them) | `REJECTED` and `finalized_at` older than the window | Any order in another status | `RETENTION_REJECTED_ORDER_DAYS` (30) |
 | `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
 | `auth-tokens:email-verification` *(user-service)* | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
 | `auth-tokens:password-reset` *(user-service)* | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
@@ -325,7 +329,7 @@ Every window is sized by **what still has to be able to retry against the row**,
 
 `media:assets` is the only sweep that deletes something outside Postgres, and the only one whose work is not undoable by restoring a backup. It deletes **the object first, then the row**: a crash between the two leaves a row whose object is gone, which the next pass re-scans and finishes (deleting an absent object is a no-op). The reverse order would leave bytes nothing points at — unfindable and billed forever. If a pass dies mid-flight the claim is left at `SWEEPING`, and a claim older than the sweep's own timeout is assumed dead and picked up again.
 
-`reservations` is deliberately **not** in this list. Those rows are released by the reservation expiry sweep, which is a state machine driving stock back to available — not retention.
+`reservations` is deliberately **not** in this list. Those rows are released by the checkout saga and by stock's own sweep of holds past their `hold_until`, which are state machines driving stock back to available — not retention.
 
 ### The two horizons that are not preferences
 
@@ -377,19 +381,16 @@ When a sweep is actively working off a backlog the planner correctly prefers a s
 
 ## A refund is owed
 
-`payment_refund_owed_total` rising means money reached a buyer's payment for an order that will not be fulfilled. **This service does not refund anything automatically** — automatic refunds are out of scope — so every increment is a person's job, and nothing retries it away.
+`payment_refund_owed_total` or `payment_capture_conflict_total` rising means money reached a buyer's payment for an order that will not be fulfilled. **This service does not refund anything automatically** — automatic refunds are out of scope — so every increment is a person's job, and nothing retries it away.
 
-How it happens: an order dies unpaid (a cancel, or the TTL sweep) while the buyer still has the hosted checkout page open, and they pay on it. Stock has already been released and possibly resold; the money has not been.
+The checkout saga makes this rare. A session it opens only authorizes a hold, and a hold on an order that was cancelled, expired or failed is voided, so a buyer who pays on a dead order's page moves no money. Two paths are left, and both count **observations, not refunds**, so one stranded payment can raise a counter more than once.
 
-The counter counts **observations, not refunds.** One stranded payment is normally seen twice — usually `expire_session` first, then `webhook_direct` — so do not read the unlabelled total as a count of buyers. The label names the path that noticed, not a separate incident.
+| Counter | How it happens | Who saw it |
+| ------- | -------------- | ---------- |
+| `payment_refund_owed_total{source="webhook_direct"}` | A webhook captured a session opened before the saga existed: it carries no `payment_orders` header, so the webhook is logged as skipped (`reason: unfenced`, answer `{ status: 'skipped' }`) and counted, and nothing else happens. The checkout path that opened such sessions is gone, so after the cut-over nothing new should raise it | The webhook sink, in `ProcessWebhookEventUseCase` |
+| `payment_capture_conflict_total` | A capture landed on an order a cancel had already closed, or a cancel found the money already captured. The header stays closed and the payment is recorded `SUCCEEDED`, so a later cancel or reconcile pass may raise it again | The capture, cancel or reconcile of the payment |
 
-| `source` | Who saw it |
-| -------- | ---------- |
-| `expire_session` | Closing the checkout session failed because it had already taken money (`ExpirePaymentSession`) |
-| `webhook_direct` | The gateway's webhook settled a payment and found the order already terminal (`HandlePaymentWebhook`) |
-| `settlement_event` | The durable half of the same webhook, re-run through the queue (`PaymentEventsHandler`) |
-
-To act on one, find the order: every source logs at `error` with `orderId` and, for the first two, `paymentId`. Then read the money and the order side back —
+To act on one, find the order: both log at `error` with `orderId` (the `webhook_direct` line also carries `providerEventId`; the capture conflicts also carry `paymentId` or `foundBy`). Then read the money and the order side back —
 
 ```sql
 SELECT o.id, o.status, o.finalize_reason, o.total_amount,
@@ -398,9 +399,9 @@ FROM orders o JOIN payments p ON p.order_id = o.id
 WHERE o.id = '<orderId>';
 ```
 
-An order in `CANCELLED` / `EXPIRED` / `FAILED` carrying a `SUCCEEDED` payment is owed a refund. Refund `provider_intent_id` in the gateway's own dashboard; the order and the stock are already correct and must not be edited to match. If the order reads `PAID`, nothing is owed — the settlement won the race after all, and the alarm was a second observation of an order that resolved itself.
+An order in `CANCELLED` / `EXPIRED` / `FAILED` carrying a `SUCCEEDED` payment is owed a refund. Refund `provider_intent_id` in the gateway's own dashboard; the order and the stock are already correct and must not be edited to match. If the order reads `PAID`, nothing is owed — the order was fulfilled after all, and the alarm was a second observation of an order that resolved itself.
 
-**`payment_status = PENDING` does not mean nothing is owed.** The `expire_session` path deliberately leaves the row `PENDING`: it learned about the money from the gateway refusing to close the session, not from a settlement, and it must not fabricate one. If the webhook is late or lost, `PENDING` is all the database will ever say. For that source the authority is the session itself — read `provider_session_id` in the gateway dashboard:
+**`payment_status = PENDING` does not mean nothing is owed.** A session opened before the saga existed captures at once, and its webhook is skipped without touching the payment row, so `PENDING` is all the database will ever say about it. For those the authority is the session itself — read `provider_session_id` in the gateway dashboard:
 
 - `payment_status = paid` → the money landed. **Refund owed**, from the session's payment intent.
 - `status = complete`, `payment_status = unpaid` → an asynchronous method is still clearing. Nothing is owed *yet*; re-check later, or wait for `async_payment_failed`, which means nothing was ever taken.
@@ -916,6 +917,88 @@ curl -i -X POST https://<public-domain>/orders/1/pay
 ```
 
 Turn it off by setting `false` and redeploying the gateway the same way.
+
+---
+
+## Checkout saga cut-over
+
+The deploy that replaces the single-transaction settlement with the checkout saga cannot overlap with an order in flight: an order placed by the old code has no saga row, and its payment session auto-captures. So the cut-over drains the old path behind the [checkout freeze](#checkout-freeze) before the merge. It needs the public domain to go through the gateway ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)), since the freeze lives there. You run it by hand.
+
+1. **Back up** the api's database ([Backup and restore](#backup-and-restore)).
+2. **Freeze.** Set `CHECKOUT_WRITE_FREEZE=true` on the gateway and redeploy it, as in [Checkout freeze](#checkout-freeze).
+3. **Probe.** Both of these must answer `503` with `Retry-After: 120`; if either does not, stop. A pass also proves the public domain goes through the gateway.
+
+   ```bash
+   curl -i -X POST https://<public-domain>/orders
+   curl -i -X POST https://<public-domain>/orders/1/pay
+   ```
+
+4. **Drain.** Wait until all three counts are `0`. The freeze usually takes about 32 minutes to get there.
+
+   ```sql
+   SELECT count(*) FROM orders WHERE status = 'PENDING';
+   SELECT count(*) FROM payments WHERE status = 'PENDING' AND created_at > now() - interval '32 minutes';
+   SELECT count(*) FROM reservations r WHERE r.status = 'HELD'
+     AND NOT EXISTS (SELECT 1 FROM reservation_orders h WHERE h.order_id = r.order_id);
+   ```
+
+   - **Orders.** An order is `PENDING` until its buyer pays or the old code expires it. Wait, or cancel one as an admin (`POST /admin/orders/:id/cancel`, which the freeze does not cover), which releases its stock and closes its session.
+   - **Payments.** The window looks at creation time, and the freeze stops new sessions, so this count reaches `0` by itself within 32 minutes of the freeze: an old session expires 30 minutes plus a margin after it was created.
+   - **Holds without a header.** These are holds the old checkout took. Find their owners with `SELECT r.order_id, r.variant_id, r.expires_at, o.status AS order_status FROM reservations r LEFT JOIN orders o ON o.id = r.order_id WHERE r.status = 'HELD' AND NOT EXISTS (SELECT 1 FROM reservation_orders h WHERE h.order_id = r.order_id)`. A `PENDING` owner is handled above. A hold whose order is already terminal or missing is stranded: the new code's sweep reads only holds that have a header, so nothing will ever free it. Do not merge over one; reconcile that stock by hand first.
+
+5. **Refund candidates.** Run the candidate query in [A refund is owed](#a-refund-is-owed). Rows there do not block the merge, but check every session as that section says; most `PENDING` rows are buyers who never paid, and their sessions read `expired`.
+6. **Probe again**, immediately before the merge, as in step 3.
+7. **Merge** and let CD deploy. The migrations in the pre-deploy step add the new order statuses and the `checkout_sagas` table.
+8. **Check before lifting the freeze.** `/health/ready` answers, the three counts above are still `0`, and no `PENDING` order lacks a saga:
+
+   ```sql
+   SELECT count(*) FROM orders o WHERE o.status = 'PENDING'
+     AND NOT EXISTS (SELECT 1 FROM checkout_sagas s WHERE s.order_id = o.id);
+   ```
+
+   Any count above `0` means keep the freeze and clean up as in step 4. An order without a saga row cannot be cancelled through the api, because cancel needs the row: expire its session in the gateway dashboard and resolve the order by hand.
+9. **Lift the freeze.** Set `CHECKOUT_WRITE_FREEZE=false`, redeploy the gateway, and place one order at once. If that fails, freeze again, wait for every saga to close (the query in [Operating the checkout saga](#operating-the-checkout-saga) returns no rows), then fix forward or follow [Checkout saga rollback](#checkout-saga-rollback).
+
+---
+
+## Checkout saga rollback
+
+Roll back by committing forward, never by reverting a merge, and **never with `--confirm-destructive`**. If `railway config plan` shows any destroy, the rollback commit is wrong.
+
+1. **Back up** the api's database first ([Backup and restore](#backup-and-restore)).
+2. **Freeze** checkout ([Checkout freeze](#checkout-freeze)).
+3. **Wait for every saga to close.** The query in [Operating the checkout saga](#operating-the-checkout-saga) must return no rows.
+4. **Settle each authorized hold by hand.** `SELECT order_id FROM payment_orders WHERE status = 'AUTHORIZED'` lists the holds that were never captured or voided; capture or void each in the Stripe dashboard.
+5. **Delete the `REJECTED` orders.** The old code cannot read that status, and their lines and saga rows go with them: `DELETE FROM orders WHERE status = 'REJECTED'`.
+6. **Commit the rollback forward.** Restore the application code and checkout tests from before the cut-over: use cases, adapters, module wiring, the pay route in the payment module, config and metrics. Keep everything the infrastructure already applied: the `@checkoutFrozen` matcher in `apps/gateway/Caddyfile`, its entry in `.railway/railway.ts`, its entry in `scripts/check-railway-flip-vars.mjs`, the saga migrations with their `_journal.json` entries, the Drizzle schema for `checkout_sagas` and the new enum values (so `pnpm db:generate` does not generate a drop), and `infra/`. CD's apply is then a no-op.
+7. **Merge**, let CD deploy, and check `/health/ready`. Lift the freeze by setting `CHECKOUT_WRITE_FREEZE=false` and redeploying the gateway, not by reverting, then place one order.
+
+The new enum values and the `checkout_sagas` table stay in the database. That is harmless: the old code never reads them, and after steps 3 and 5 no order uses the new statuses.
+
+---
+
+## Operating the checkout saga
+
+Every order has one row in `checkout_sagas`, written with the order. The saga moves it through `RESERVING`, `AWAITING_AUTH` (parked until the buyer authorizes a hold, or until the payment deadline plus `SAGA_AUTH_GRACE_SEC` passes), `COMMITTING_STOCK` and `CAPTURING` to `COMPLETED`, or through `COMPENSATING` to `COMPENSATED`. The decision record is [Checkout saga](./docs/system-architecture.md#checkout-saga-orchestration-tcc-on-stock-and-payment-stripe-manual-capture); the tunables, with defaults, are in the "Checkout saga" section of [`.env.example`](./.env.example).
+
+A request, a post-commit kick and a runner all drive sagas through the same conditional claim, so they cannot work one saga at once. The runner is the backstop for everything else: a lost kick, a request that died mid-checkout, an unpaid order past its deadline, a step waiting out a backoff. `SAGA_RUNNER_ENABLED` (on by default; every replica may run it) switches it off for a one-off container. With it off everywhere, unpaid orders never expire and a failed step is never retried.
+
+Find the sagas that are not finished:
+
+```sql
+SELECT order_id, step, attempts, last_error, next_attempt_at, lease_until
+FROM checkout_sagas
+WHERE step NOT IN ('COMPLETED', 'COMPENSATED')
+ORDER BY next_attempt_at;
+```
+
+How to read a row:
+
+- **`AWAITING_AUTH` with `next_attempt_at` in the future** is healthy: an order waiting to be paid, due at its deadline plus the grace.
+- **`next_attempt_at` in the past and `lease_until` empty or past** is overdue. The runner is off or failing; check `SAGA_RUNNER_ENABLED` and the api's logs for `checkout saga advance failed`.
+- **`attempts` above `0` with a `last_error`** means a participant did not answer (a timeout, an unreachable gateway or database). The runner retries with exponential backoff from `SAGA_RETRY_BASE_MS` up to `SAGA_RETRY_CAP_MS`, with no attempt limit, and the row clears by itself once the participant answers.
+- **`COMPENSATING` with a `last_error`** means a compensation failed or was refused. `last_error` reads `RELEASE_STOCK`, `RESTOCK` or `CANCEL_PAYMENT`, then the error, or a conflict: `CONFLICT` for stock, `CAPTURED_CONFLICT` for payment. A failure heals on its own like any other. A conflict does not: the participant's state contradicts the compensation, the api logs `compensation conflicts with participant state`, and every retry gets the same answer. The order is already in its final status (`CANCELLED`, `EXPIRED`, `FAILED` or `REJECTED`) and the buyer has been told. `CAPTURED_CONFLICT` means the money was taken, so it is a refund owed: follow [A refund is owed](#a-refund-is-owed). Retrying is harmless, since every call is idempotent, and the row stays in this query until the participant's state changes.
+- **`RESERVING` past its lease** is a checkout request that died between inserting the order and finishing the stock Try. The runner rejects the order and releases whatever the Try may have held.
 
 ---
 

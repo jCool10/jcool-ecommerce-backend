@@ -54,7 +54,7 @@ describe('Checkout holds stock (integration, real Postgres)', () => {
     expect(await db.select().from(schema.reservations)).toHaveLength(0);
   });
 
-  it('holds stock without writing a participant fence row', async () => {
+  it('holds stock and creates exactly one inventory header', async () => {
     const token = await newPrincipalToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
     await seedStock(app, variantId, 5);
@@ -64,7 +64,9 @@ describe('Checkout holds stock (integration, real Postgres)', () => {
 
     expect(res.status).toBe(201);
     expect(await stockOf(variantId)).toEqual({ onHand: 5, reserved: 2 });
-    expect(await db.select().from(schema.reservationOrders)).toHaveLength(0);
+    const headers = await db.select().from(schema.reservationOrders);
+    expect(headers).toHaveLength(1);
+    expect(headers[0].status).toBe('HELD');
   });
 
   it('answers a stock shortfall with a message that hides the available count', async () => {

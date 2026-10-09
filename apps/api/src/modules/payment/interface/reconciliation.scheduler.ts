@@ -6,15 +6,10 @@ import { PinoLogger } from 'nestjs-pino';
 import { requireIntConfig } from '@jcool/platform/config';
 import { runInJobContext, withSpan } from '@jcool/platform/observability';
 import { toError } from '@jcool/kernel';
-import {
-  ReconcileStaleOrdersUseCase,
-  ReconcileTccPaymentsUseCase,
-  type ReconcileInput,
-  type ReconcileTccInput,
-} from '../application/use-cases';
+import { ReconcileTccPaymentsUseCase, type ReconcileTccInput } from '../application/use-cases';
 
 const LOG_CONTEXT = 'ReconciliationScheduler';
-const INTERVAL_NAME = 'payment-reconcile-stale-orders';
+const INTERVAL_NAME = 'payment-reconcile-tcc';
 
 /**
  * Owns the schedule and nothing else, so the sweep stays a plain use case a test can call directly.
@@ -27,11 +22,9 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
   private running = false;
   private readonly enabled: boolean;
   private readonly intervalMs: number;
-  private readonly sweep: ReconcileInput;
-  private readonly tccSweep: ReconcileTccInput;
+  private readonly sweep: ReconcileTccInput;
 
   constructor(
-    private readonly reconcileStaleOrders: ReconcileStaleOrdersUseCase,
     private readonly reconcileTccPayments: ReconcileTccPaymentsUseCase,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
@@ -42,10 +35,8 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
     this.intervalMs = requireIntConfig(config, 'reconcile.intervalMs', 1);
     this.sweep = {
       staleAfterSec: requireIntConfig(config, 'reconcile.staleAfterSec', 0),
-      ttlSec: requireIntConfig(config, 'reconcile.orderTtlSec', 0),
       batchSize: requireIntConfig(config, 'reconcile.batchSize', 1),
     };
-    this.tccSweep = { staleAfterSec: this.sweep.staleAfterSec, batchSize: this.sweep.batchSize };
     logger.setContext(LOG_CONTEXT);
   }
 
@@ -78,29 +69,17 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
       // correlation id there for readers with no tracing backend.
       await runInJobContext(this.cls, INTERVAL_NAME, () =>
         withSpan('payment.reconcile', async () => {
-          await this.runSweep('stale_orders', () => this.reconcileStaleOrders.execute(this.sweep));
-          await this.runSweep('tcc_payments', () => this.reconcileTccPayments.execute(this.tccSweep));
+          const summary = await this.reconcileTccPayments.execute(this.sweep);
+          // Idle sweeps are the common case; logging them buries the ticks that did something.
+          if (summary.scanned > 0) this.logger.info({ ...summary }, 'reconciliation sweep completed');
         }),
       );
     } catch (error) {
-      // An unhandled rejection in a timer kills the process.
+      // Per-payment failures are already isolated, so this is the sweep itself breaking. Swallow it:
+      // an unhandled rejection in a timer kills the process.
       this.logger.error({ err: toError(error) }, 'reconciliation sweep failed');
     } finally {
       this.running = false;
-    }
-  }
-
-  // Per-item failures are already isolated, so a throw here is the sweep itself breaking; it must not
-  // stall the other sweep.
-  private async runSweep(sweep: string, run: () => Promise<{ scanned: number }>): Promise<void> {
-    try {
-      const summary = await run();
-      // Idle sweeps are the common case; logging them buries the ticks that did something.
-      if (summary.scanned > 0) {
-        this.logger.info({ sweep, ...summary }, 'reconciliation sweep completed');
-      }
-    } catch (error) {
-      this.logger.error({ sweep, err: toError(error) }, 'reconciliation sweep failed');
     }
   }
 }

@@ -1,8 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
-import { PaymentEventsHandler } from '@modules/order/interface/queue/payment-events.handler';
-import { OrderCancelledHandler } from '@modules/payment/interface/queue/order-cancelled.handler';
-import { OrderExpiredHandler } from '@modules/payment/interface/queue/order-expired.handler';
+import { PaymentAuthorizedHandler } from '@modules/order/interface/queue/payment-authorized.handler';
 import { CategoryRenamedHandler } from '@modules/product/interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from '@modules/product/interface/catalog/queue/product-changed.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
@@ -49,18 +47,16 @@ export class DomainEventDispatcher {
 
   constructor(
     orderEvents: OrderEventsHandler,
-    paymentEvents: PaymentEventsHandler,
-    orderExpired: OrderExpiredHandler,
-    orderCancelled: OrderCancelledHandler,
+    paymentAuthorized: PaymentAuthorizedHandler,
     orderPaidMail: OrderPaidMailHandler,
     productChanged: ProductChangedHandler,
     categoryRenamed: CategoryRenamedHandler,
   ) {
     this.handlers = new Map<string, PreparedHandler>([
       ['order.placed', inTransaction((job) => orderEvents.record(job))],
-      // No DB effect, for the same reason as order.placed: the finalizing transaction already
-      // settled the stock, so re-applying anything here would double it. The buyer's confirmation
-      // is still owed, which is why order.paid hands back an effect instead of sending inline.
+      // No DB effect, for the same reason as order.placed: the saga already settled the stock, so
+      // re-applying anything here would double it. The buyer's confirmation is still owed, which is
+      // why order.paid hands back an effect instead of sending inline.
       [
         'order.paid',
         async (job) => {
@@ -72,27 +68,11 @@ export class DomainEventDispatcher {
         },
       ],
       ['order.failed', inTransaction((job) => orderEvents.record(job))],
-      // The two exceptions: an order that dies unpaid settles its stock but cannot reach the gateway,
-      // so the checkout session it leaves open is an effect still owed, and only Payment can apply it.
-      // Two handlers because the logs tell the two deaths apart.
-      [
-        'order.expired',
-        inTransaction(async (job, tx) => {
-          await orderEvents.record(job);
-          await orderExpired.close(job, tx);
-        }),
-      ],
-      [
-        'order.cancelled',
-        inTransaction(async (job, tx) => {
-          await orderEvents.record(job);
-          await orderCancelled.close(job, tx);
-        }),
-      ],
-      // Unlike the above, these carry an effect this consumer genuinely owns: the producing
-      // transaction moved money and nothing else, leaving the order still to settle.
-      ['payment.succeeded', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
-      ['payment.failed', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
+      ['order.expired', inTransaction((job) => orderEvents.record(job))],
+      ['order.cancelled', inTransaction((job) => orderEvents.record(job))],
+      // Unlike the above, this carries an effect this consumer genuinely owns: the producing
+      // transaction moved money and nothing else, leaving the saga still to move.
+      ['payment.authorized', (job) => paymentAuthorized.prepare(job)],
       ['catalog.product.changed', beforeClaim((job) => productChanged.apply(job))],
       ['catalog.category.renamed', beforeClaim((job) => categoryRenamed.apply(job))],
     ]);

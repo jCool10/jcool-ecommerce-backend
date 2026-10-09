@@ -13,7 +13,7 @@ import { OrderCancelledEvent } from './events/order-cancelled.event';
 const line = (unitPriceMinor: number, quantity: number, skuId = 'sku-a', name = 'Widget'): OrderItem =>
   OrderItem.of(skuId, name, unitPriceMinor, quantity);
 
-const pendingOrder = (status: OrderStatus = OrderStatus.PENDING): Order =>
+const orderIn = (status: OrderStatus): Order =>
   Order.rehydrate({
     id: 'order-1',
     userId: 'u',
@@ -25,6 +25,8 @@ const pendingOrder = (status: OrderStatus = OrderStatus.PENDING): Order =>
   });
 
 describe('Order entity', () => {
+  const now = new Date('2026-02-02T00:00:00.000Z');
+
   it('create() builds a DRAFT order with no id or placedAt and a normalized currency', () => {
     const order = Order.create('user-1', 'vnd', [line(100_000, 2)]);
 
@@ -63,47 +65,103 @@ describe('Order entity', () => {
     expect(order.items[0].quantity).toBe(MAX_QUANTITY_PER_ORDER_LINE + 1);
   });
 
-  it('place() moves a draft to PENDING and stamps placedAt, leaving the original untouched', () => {
-    const now = new Date('2026-01-01T00:00:00.000Z');
+  it('reserve() moves a draft to RESERVING and stamps placedAt, leaving the original untouched', () => {
     const draft = Order.create('u', 'VND', [line(100_000, 1)]);
 
-    const placed = draft.place(now);
+    const reserving = draft.reserve(now);
 
-    expect(placed.status).toBe(OrderStatus.PENDING);
-    expect(placed.placedAt).toBe(now);
+    expect(reserving.status).toBe(OrderStatus.RESERVING);
+    expect(reserving.placedAt).toBe(now);
+    expect(reserving.isTerminal()).toBe(false);
     expect(draft.status).toBe(OrderStatus.DRAFT);
     expect(draft.placedAt).toBeNull();
   });
 
-  describe('finalize()', () => {
-    const now = new Date('2026-02-02T00:00:00.000Z');
+  it('confirmPlaced() moves a reserving order to PENDING and keeps placedAt', () => {
+    const pending = orderIn(OrderStatus.RESERVING).confirmPlaced();
 
-    it('moves a pending order to PAID and stamps the settlement, leaving the original untouched', () => {
-      const pending = pendingOrder();
+    expect(pending.status).toBe(OrderStatus.PENDING);
+    expect(pending.placedAt).toEqual(new Date('2026-01-01T00:00:00.000Z'));
+    expect(pending.finalizedAt).toBeNull();
+  });
 
-      const paid = pending.finalize(OrderStatus.PAID, { now, reason: 'webhook:paid', paymentRef: 'pay_123' });
+  it('reject() moves a reserving order to REJECTED and stamps finalizedAt and the reason', () => {
+    const rejected = orderIn(OrderStatus.RESERVING).reject('try:out_of_stock', now);
+
+    expect(rejected.status).toBe(OrderStatus.REJECTED);
+    expect(rejected.isTerminal()).toBe(true);
+    expect(rejected.finalizedAt).toBe(now);
+    expect(rejected.finalizeReason).toBe('try:out_of_stock');
+  });
+
+  it('reject() refuses an order that already left RESERVING', () => {
+    expect(() => orderIn(OrderStatus.PENDING).reject('try:timeout', now)).toThrow(OrderTransitionError);
+  });
+
+  it('confirming() moves a pending order to CONFIRMING without settling it', () => {
+    const confirming = orderIn(OrderStatus.PENDING).confirming();
+
+    expect(confirming.status).toBe(OrderStatus.CONFIRMING);
+    expect(confirming.isTerminal()).toBe(false);
+    expect(confirming.finalizedAt).toBeNull();
+  });
+
+  describe('settle()', () => {
+    it('moves a confirming order to PAID and stamps the settlement, leaving the original untouched', () => {
+      const confirming = orderIn(OrderStatus.CONFIRMING);
+
+      const paid = confirming.settle(OrderStatus.PAID, { now, reason: 'payment:captured', paymentRef: 'pay_123' });
 
       expect(paid.status).toBe(OrderStatus.PAID);
       expect(paid.isTerminal()).toBe(true);
       expect(paid.finalizedAt).toBe(now);
-      expect(paid.finalizeReason).toBe('webhook:paid');
+      expect(paid.finalizeReason).toBe('payment:captured');
       expect(paid.paymentRef).toBe('pay_123');
-      expect(pending.status).toBe(OrderStatus.PENDING);
-      expect(pending.isTerminal()).toBe(false);
-      expect(pending.finalizedAt).toBeNull();
+      expect(confirming.status).toBe(OrderStatus.CONFIRMING);
+      expect(confirming.finalizedAt).toBeNull();
     });
 
-    it('throws OrderTransitionError when finalizing a non-PENDING order', () => {
-      expect(() => pendingOrder(OrderStatus.DRAFT).finalize(OrderStatus.PAID, { now })).toThrow(OrderTransitionError);
-      expect(() => pendingOrder(OrderStatus.PAID).finalize(OrderStatus.FAILED, { now })).toThrow(OrderTransitionError);
+    it.each([
+      [OrderStatus.CONFIRMING, OrderStatus.FAILED],
+      [OrderStatus.PENDING, OrderStatus.FAILED],
+      [OrderStatus.PENDING, OrderStatus.EXPIRED],
+      [OrderStatus.PENDING, OrderStatus.CANCELLED],
+    ] as const)('stamps finalizedAt when %s settles as %s', (from, outcome) => {
+      const settled = orderIn(from).settle(outcome, { now, reason: 'why' });
+
+      expect(settled.status).toBe(outcome);
+      expect(settled.finalizedAt).toBe(now);
+      expect(settled.finalizeReason).toBe('why');
+    });
+
+    it('throws OrderTransitionError on an edge the state machine does not wire', () => {
+      expect(() => orderIn(OrderStatus.PENDING).settle(OrderStatus.PAID, { now })).toThrow(OrderTransitionError);
+      expect(() => orderIn(OrderStatus.CONFIRMING).settle(OrderStatus.CANCELLED, { now })).toThrow(
+        OrderTransitionError,
+      );
+      expect(() => orderIn(OrderStatus.PAID).settle(OrderStatus.FAILED, { now })).toThrow(OrderTransitionError);
+    });
+  });
+
+  describe('toPlacedEvent()', () => {
+    it('describes a PENDING order', () => {
+      expect(orderIn(OrderStatus.PENDING).toPlacedEvent()).toMatchObject({
+        orderId: 'order-1',
+        totalAmountMinor: 100_000,
+        currency: 'VND',
+      });
+    });
+
+    it('throws for an order still reserving stock', () => {
+      expect(() => orderIn(OrderStatus.RESERVING).toPlacedEvent()).toThrow(DomainError);
     });
   });
 
   describe('toFinalizedEvent()', () => {
-    const now = new Date('2026-02-02T00:00:00.000Z');
-
     it('produces the event matching the terminal outcome', () => {
-      const paid = pendingOrder().finalize(OrderStatus.PAID, { now, paymentRef: 'pay_1' }).toFinalizedEvent();
+      const paid = orderIn(OrderStatus.CONFIRMING)
+        .settle(OrderStatus.PAID, { now, paymentRef: 'pay_1' })
+        .toFinalizedEvent();
       expect(paid).toBeInstanceOf(OrderPaidEvent);
       expect(paid).toMatchObject({
         eventName: 'order.paid',
@@ -112,25 +170,26 @@ describe('Order entity', () => {
         occurredAt: now,
       });
 
-      const failed = pendingOrder().finalize(OrderStatus.FAILED, { now }).toFinalizedEvent();
+      const failed = orderIn(OrderStatus.CONFIRMING).settle(OrderStatus.FAILED, { now }).toFinalizedEvent();
       expect(failed).toBeInstanceOf(OrderFailedEvent);
       expect(failed).toMatchObject({ reason: null });
-      expect(pendingOrder().finalize(OrderStatus.EXPIRED, { now }).toFinalizedEvent()).toBeInstanceOf(
+      expect(orderIn(OrderStatus.PENDING).settle(OrderStatus.EXPIRED, { now }).toFinalizedEvent()).toBeInstanceOf(
         OrderExpiredEvent,
       );
 
-      const cancelled = pendingOrder().finalize(OrderStatus.CANCELLED, { now, reason: 'user:cancelled' });
+      const cancelled = orderIn(OrderStatus.PENDING).settle(OrderStatus.CANCELLED, { now, reason: 'user:cancel' });
       expect(cancelled.toFinalizedEvent()).toBeInstanceOf(OrderCancelledEvent);
       expect(cancelled.toFinalizedEvent()).toMatchObject({
         eventName: 'order.cancelled',
         aggregateId: 'order-1',
-        reason: 'user:cancelled',
+        reason: 'user:cancel',
         occurredAt: now,
       });
     });
 
-    it('throws for an order that has not been finalized', () => {
-      expect(() => pendingOrder().toFinalizedEvent()).toThrow(DomainError);
+    it('throws for an order that has not settled, and for a rejected one, which nobody was ever shown', () => {
+      expect(() => orderIn(OrderStatus.PENDING).toFinalizedEvent()).toThrow(DomainError);
+      expect(() => orderIn(OrderStatus.RESERVING).reject('try:contended', now).toFinalizedEvent()).toThrow(DomainError);
     });
   });
 });

@@ -19,14 +19,19 @@ export interface SignWebhookOptions {
 }
 
 export function signWebhook({ secret, event, timestampSec }: SignWebhookOptions): SignedWebhook {
+  return signWebhookAs({ sign: (rawBody, ts) => signStripeStyle(secret, ts, rawBody) }, event, timestampSec);
+}
+
+/** For helpers handed the gateway double rather than its secret. */
+export function signWebhookAs(
+  signer: { sign(rawBody: string, timestampSec: number): string },
+  event: Record<string, unknown>,
+  timestampSec = Math.floor(Date.now() / 1000),
+): SignedWebhook {
   const rawBody = JSON.stringify(event);
-  const ts = timestampSec ?? Math.floor(Date.now() / 1000);
   return {
     rawBody,
-    headers: {
-      [STRIPE_SIGNATURE_HEADER]: signStripeStyle(secret, ts, rawBody),
-      'content-type': 'application/json',
-    },
+    headers: { [STRIPE_SIGNATURE_HEADER]: signer.sign(rawBody, timestampSec), 'content-type': 'application/json' },
   };
 }
 

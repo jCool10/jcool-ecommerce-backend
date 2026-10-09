@@ -1,74 +1,80 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { OrderStatus } from '../../domain/order-status';
+import { PinoLogger } from 'nestjs-pino';
+import { toError } from '@jcool/kernel';
+import { ID_GENERATOR, mintOne, type IdGeneratorPort } from '@shared/identity/id-generator.port';
+import { onCancelRequested, type SagaTransition } from '../../domain/checkout-saga';
 import type { Order } from '../../domain/order.entity';
-import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
+import { BUYER_HIDDEN_STATUSES, OrderStatus } from '../../domain/order-status';
 import { toView, type OrderView } from '../order-view.mapper';
-import { FinalizeOrderUseCase } from './finalize-order.use-case';
+import { CHECKOUT_SAGA_REPOSITORY, type CheckoutSagaRepositoryPort } from '../ports/checkout-saga-repository.port';
+import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
+import { CheckoutSagaWriter } from '../saga/checkout-saga.writer';
+import { AdvanceCheckoutSagaUseCase } from './advance-checkout-saga.use-case';
+
+const LOG_CONTEXT = 'CancelOrder';
 
 /**
- * Authorization runs under the same row lock as the finalize, which joins this transaction;
- * otherwise the order could settle some other way in between and this would answer 200 for a cancel
- * that never happened. Closing the gateway session is NOT done here — reaching the gateway would
- * hold that row lock for a network call; Payment reacts to `order.cancelled` instead.
+ * Authorization runs under the order's row lock, the same one the cancel is written under, so the
+ * order cannot settle some other way in between. The compensation runs after commit, awaited because
+ * this is a request rather than a queue slot; if it fails the runner finishes it, and the cancel stands.
  */
 @Injectable()
 export class CancelOrderUseCase {
   constructor(
-    @Inject(ORDER_REPOSITORY) private readonly orderRepo: OrderRepositoryPort,
-    private readonly finalizeOrder: FinalizeOrderUseCase,
-  ) {}
+    @Inject(ORDER_REPOSITORY) private readonly orders: OrderRepositoryPort,
+    @Inject(CHECKOUT_SAGA_REPOSITORY) private readonly sagas: CheckoutSagaRepositoryPort,
+    private readonly writer: CheckoutSagaWriter,
+    private readonly advance: AdvanceCheckoutSagaUseCase,
+    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
+  }
 
   cancelOwn(orderId: string, userId: string): Promise<OrderView> {
-    return this.cancel(orderId, 'user:cancel', (order) => {
-      // 404, not 403, for someone else's order: the same answer an id that does not exist gets, so
-      // the endpoint cannot be used to discover which order ids are real.
-      if (order.userId !== userId) {
+    return this.cancel(orderId, 'user', (order) => {
+      // 404, not 403: the same answer an id that does not exist gets, so the endpoint cannot be used
+      // to discover which order ids are real, nor see an order the buyer's own reads hide.
+      if (order.userId !== userId || BUYER_HIDDEN_STATUSES.includes(order.status)) {
         throw new NotFoundException(`Order not found: ${orderId}`);
       }
     });
   }
 
   cancelAsAdmin(orderId: string): Promise<OrderView> {
-    return this.cancel(orderId, 'admin:cancel');
+    return this.cancel(orderId, 'admin');
   }
 
-  private async cancel(orderId: string, reason: string, authorize?: (order: Order) => void): Promise<OrderView> {
-    const { view, report } = await this.orderRepo.withTransaction<CancelOutcome>(async (tx: DrizzleTx) => {
-      const order = await this.orderRepo.findByIdForUpdate(orderId, tx);
-      if (!order) {
-        throw new NotFoundException(`Order not found: ${orderId}`);
-      }
+  private async cancel(orderId: string, by: 'user' | 'admin', authorize?: (order: Order) => void): Promise<OrderView> {
+    // Before the transaction, so no row lock waits on the id service. A repeat cancel wastes it.
+    const eventId = await mintOne(this.ids);
+    const { view, transition } = await this.orders.withTransaction(async (tx) => {
+      const order = await this.orders.findByIdForUpdate(orderId, tx);
+      if (!order) throw new NotFoundException(`Order not found: ${orderId}`);
       authorize?.(order);
 
       // Re-cancelling is the same request answered again, not a conflict: a client that lost the
       // first response must be able to retry it.
-      if (order.status === OrderStatus.CANCELLED) {
-        return { view: toView(order) };
-      }
-      // Everything else refuses, PAID included — unwinding that is a refund, which this shop
-      // does not do.
+      if (order.status === OrderStatus.CANCELLED) return { view: toView(order), transition: null };
+      // CONFIRMING included: the money is already being taken, and unwinding that is a refund.
       if (order.status !== OrderStatus.PENDING) {
         throw new ConflictException(`Order cannot be cancelled in status ${order.status}`);
       }
+      const saga = await this.sagas.findForUpdate(tx, orderId);
+      if (!saga) throw new Error(`Pending order ${orderId} has no checkout saga`);
 
-      const result = await this.finalizeOrder.execute({ orderId, outcome: OrderStatus.CANCELLED, reason }, tx);
-      if (result.status === 'finalized' || result.status === 'noop') {
-        return { view: toView(result.order as Order), report: result.reportFinalized };
-      }
-      // Unreachable while the row lock holds, but if the finalize refuses anyway, answer from its
-      // view of the order rather than the stale one above.
-      throw new ConflictException(`Order cannot be cancelled in status ${result.order?.status ?? 'UNKNOWN'}`);
+      const cancelling: SagaTransition = onCancelRequested(saga, by);
+      const cancelled = await this.writer.rewrite(tx, order, saga, cancelling, { now: new Date(), eventId });
+      return { view: toView(cancelled), transition: cancelling };
     });
 
-    // The finalize joined the transaction above, so its counters and audit line only describe
-    // something that happened once that transaction has committed.
-    report?.();
+    if (transition) {
+      this.writer.reportCommitted(transition);
+      this.logger.info({ orderId, by }, 'order cancelled');
+      await this.advance.execute(orderId).catch((error: unknown) => {
+        this.logger.error({ err: toError(error), orderId }, 'cancel compensation failed; the runner takes it over');
+      });
+    }
     return view;
   }
-}
-
-interface CancelOutcome {
-  view: OrderView;
-  report?: () => void;
 }

@@ -22,7 +22,6 @@ export function fakeStockRepository(
     commitReservations: () => Promise.resolve(NOTHING_RESOLVED),
     releaseReservations: () => Promise.resolve(NOTHING_RESOLVED),
     restockReservations: () => Promise.resolve(NOTHING_RESOLVED),
-    findExpiredHolds: () => Promise.resolve([]),
     insertHeader: (_tx, header) => {
       if (headers.has(header.orderId)) return Promise.resolve(false);
       headers.set(header.orderId, header);

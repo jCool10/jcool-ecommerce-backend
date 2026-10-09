@@ -27,10 +27,10 @@ const LOG_CONTEXT = 'IdempotencyInterceptor';
 // How long a COMPLETED response stays replayable.
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
-// How long an IN_PROGRESS row is trusted before its owner counts as crashed. Checkout is one local
-// transaction, normally tens of ms. Reclaiming under a request that is still running stays safe: the
-// per-user checkout lock, UNIQUE (user_id, idempotency_key) on orders and the reclaim heal converge
-// both attempts on one order.
+// How long an IN_PROGRESS row is trusted before its owner counts as crashed. Checkout is two short
+// transactions around a stock Try bounded by CHECKOUT_TRY_TIMEOUT_MS. Reclaiming under a request that
+// is still running stays safe: the per-user checkout lock and UNIQUE (user_id, idempotency_key) on
+// orders send the second attempt down the reclaim heal, which answers 503 while the order is RESERVING.
 const IN_PROGRESS_LEASE_MS = 30 * 1000;
 
 /**
@@ -119,14 +119,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
   }
 
   private runHandler(scope: string, key: string, next: CallHandler): Observable<unknown> {
-    // Handed over CLS because the checkout transaction flips this row to COMPLETED inside the same
-    // unit of work as the order + reservation; on success this interceptor does nothing more.
+    // Handed over CLS because checkout flips this row to COMPLETED inside the transaction that places
+    // the order; on success this interceptor does nothing more.
     setIdempotencyContext(this.cls, { scope, key });
 
     return next.handle().pipe(
-      // Handler failure (business 4xx or unexpected 5xx): the checkout tx rolled back, so nothing
-      // committed and the row was never marked COMPLETED. Drop the IN_PROGRESS row so the client can
-      // retry. Cleanup failure must not mask the original error.
+      // Handler failure (business 4xx or unexpected 5xx): the row was never marked COMPLETED, and an
+      // order rejected on the way committed with its key cleared. Drop the IN_PROGRESS row so the
+      // client can retry. Cleanup failure must not mask the original error.
       catchError((err: unknown) =>
         from(this.idempotencyStore.deleteInProgress(scope, key)).pipe(
           catchError((cleanupErr: unknown) => {

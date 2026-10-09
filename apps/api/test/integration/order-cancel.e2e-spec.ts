@@ -1,283 +1,134 @@
 import type { INestApplication } from '@nestjs/common';
-import { desc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
-import { HandlePaymentWebhookUseCase } from '../../src/modules/payment/application/use-cases';
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { authHeader } from '../setup/bearer.helper';
+import { drainDomainEvents } from '../setup/domain-events';
 import {
+  authorizeAndRelay,
   buyerWithCart,
   checkout,
   placeAndOpenSession,
-  postWebhook,
+  postAuthorizationWebhook,
   readOrder,
   readPayment,
   readStock,
   seedSellableSku,
-  signOutcome,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
-import { resetDatabase } from '../setup/reset-database';
 
 const WEBHOOK_SECRET = 'whsec_e2e_order_cancel_secret_01234';
 const STOCK = 10;
 const QUANTITY = 2;
 const ABSENT_ID = testId();
 
-/**
- * The order half settles synchronously under a row lock; the money half rides the outbox to Payment.
- * The interesting cases are all in that gap: a buyer paying on the hosted page after pressing
- * cancel, and a consume that closes the session and then rolls back.
- */
 describe('Order cancel (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
   let gateway: FakeSignerGatewayAdapter;
-  let processor: DomainEventProcessor;
-  let refundOwed: ReturnType<typeof vi.spyOn>;
   let sku: SellableSku;
 
   beforeAll(async () => {
     ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
-    processor = app.get(DomainEventProcessor);
   });
   closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   beforeEach(async () => {
-    vi.restoreAllMocks();
-    await resetDatabase(pool);
-    // Spied rather than read off /metrics: a Prometheus counter is process-wide and shared with
-    // every other suite in this worker, so only a per-test spy can assert "exactly once".
-    refundOwed = vi.spyOn(app.get<MetricsPort>(METRICS), 'recordRefundOwed');
     sku = await seedSellableSku(app, { onHand: STOCK });
   });
 
-  const server = () => app.getHttpServer();
-
-  function cancel(token: string, orderId: string): request.Test {
-    return request(server()).post(`/orders/${orderId}/cancel`).set(authHeader(token));
-  }
-
-  /** The event the cancelling transaction actually wrote, as the consumer would receive it. */
-  async function cancelledJob(orderId: string): Promise<DomainEventJob> {
-    const [row] = await db
-      .select()
-      .from(schema.outbox)
-      .where(eq(schema.outbox.aggregateId, orderId))
-      // The UUIDv7 id breaks the tie: `created_at` is transaction start time, not statement time.
-      .orderBy(desc(schema.outbox.createdAt), desc(schema.outbox.id));
-    expect(row.eventType).toBe('order.cancelled');
-    return {
-      outboxId: row.id,
-      aggregateType: row.aggregateType,
-      aggregateId: row.aggregateId,
-      eventType: row.eventType,
-      payload: row.payload,
-      occurredAt: row.createdAt.toISOString(),
-      traceparent: null,
-    };
-  }
+  const cancel = (token: string, orderId: string) =>
+    request(app.getHttpServer()).post(`/orders/${orderId}/cancel`).set(authHeader(token));
 
   describe('POST /orders/:id/cancel', () => {
-    it('cancels a pending order and gives the stock back in the same transaction', async () => {
-      const token = await buyerWithCart(app, sku.variantId, QUANTITY);
-      const placed = await checkout(app, token).expect(201);
-      const orderId = placed.body.id as string;
+    it('cancels a pending order and gives the stock back before answering', async () => {
+      const order = await placeAndOpenSession(app, sku, QUANTITY);
       expect((await readStock(app, sku.variantId)).quantityReserved).toBe(QUANTITY);
 
-      const res = await cancel(token, orderId).expect(200);
+      const res = await cancel(order.token, order.orderId).expect(200);
 
-      expect(res.body).toMatchObject({ id: orderId, status: OrderStatus.CANCELLED });
-      const order = await readOrder(app, orderId);
-      expect(order.status).toBe(OrderStatus.CANCELLED);
-      expect(order.finalizeReason).toBe('user:cancel');
-      const stock = await readStock(app, sku.variantId);
-      expect(stock.quantityReserved).toBe(0);
-      expect(stock.quantityOnHand).toBe(STOCK); // released, not sold
+      expect(res.body).toMatchObject({ id: order.orderId, status: OrderStatus.CANCELLED });
+      const cancelled = await readOrder(app, order.orderId);
+      expect(cancelled).toMatchObject({ status: OrderStatus.CANCELLED, finalizeReason: 'user:cancel' });
+      expect(cancelled.finalizedAt).toBeInstanceOf(Date);
+      // Released, not sold.
+      expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
     });
 
     // A client that lost the first response must be able to retry without being told it did
     // something wrong.
     it('answers a repeated cancel the same way, releasing the stock only once', async () => {
-      const token = await buyerWithCart(app, sku.variantId, QUANTITY);
-      const orderId = (await checkout(app, token).expect(201)).body.id as string;
-      await cancel(token, orderId).expect(200);
-      const afterFirst = await readStock(app, sku.variantId);
+      const order = await placeAndOpenSession(app, sku, QUANTITY);
+      const first = await cancel(order.token, order.orderId).expect(200);
 
-      await cancel(token, orderId).expect(200);
+      const second = await cancel(order.token, order.orderId).expect(200);
 
-      expect(await readStock(app, sku.variantId)).toMatchObject({
-        quantityOnHand: afterFirst.quantityOnHand,
-        quantityReserved: afterFirst.quantityReserved,
-      });
-      // One settlement, so one event: a second would drive Payment's session close twice.
-      const events = await db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, orderId));
+      expect(second.body).toEqual(first.body);
+      expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
+      const events = await db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, order.orderId));
       expect(events.filter((e) => e.eventType === 'order.cancelled')).toHaveLength(1);
     });
 
     it('refuses to cancel an order the buyer has already paid for', async () => {
       const order = await placeAndOpenSession(app, sku, QUANTITY);
-      await postWebhook(
-        app,
-        signOutcome(WEBHOOK_SECRET, order.sessionId, order.charge, 'PAID', 'evt_cancel_paid'),
-      ).expect(200);
+      await authorizeAndRelay(app, gateway, order);
 
       // 409, not 200: unwinding a payment is a refund, which this shop does not do.
       await cancel(order.token, order.orderId).expect(409);
+
       expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.PAID);
     });
 
     // 404 rather than 403, so the endpoint cannot be used to discover which order ids are real.
     it("hides someone else's order behind the same 404 as an id that does not exist", async () => {
-      const token = await buyerWithCart(app, sku.variantId, QUANTITY);
-      const orderId = (await checkout(app, token).expect(201)).body.id as string;
+      const order = await placeAndOpenSession(app, sku, QUANTITY);
       const { accessToken: stranger } = await createTestPrincipal(app);
 
-      await cancel(stranger, orderId).expect(404);
+      await cancel(stranger, order.orderId).expect(404);
       await cancel(stranger, ABSENT_ID).expect(404);
 
-      expect((await readOrder(app, orderId)).status).toBe(OrderStatus.PENDING);
-    });
-  });
-
-  // The money half. Cancelling deliberately does not reach the gateway under an order row lock, so
-  // until this event is consumed the buyer's hosted page can still take money for released stock.
-  describe('the cancellation event Payment consumes', () => {
-    async function cancelledOrderWithSession(): Promise<{ orderId: string; sessionId: string }> {
-      const order = await placeAndOpenSession(app, sku, QUANTITY);
-      await cancel(order.token, order.orderId).expect(200);
-      return { orderId: order.orderId, sessionId: order.sessionId };
-    }
-
-    it('closes the checkout session and settles the payment EXPIRED', async () => {
-      const expire = vi.spyOn(gateway, 'expireSession');
-      const { orderId, sessionId } = await cancelledOrderWithSession();
-      expect(expire).not.toHaveBeenCalled(); // the cancel itself never asks
-
-      expect(await processor.process(await cancelledJob(orderId))).toBe('processed');
-
-      expect(expire).toHaveBeenCalledWith(sessionId);
-      expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
-      expect(refundOwed).not.toHaveBeenCalled();
+      expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.PENDING);
     });
 
-    // The whole reason this rides the queue: retry until the gateway answers. A failed consume must
-    // leave the payment untouched, so the redelivery closes the session for real.
-    it('fails the consume and writes nothing when the gateway is unreachable', async () => {
-      vi.spyOn(gateway, 'expireSession').mockRejectedValue(new Error('gateway unreachable'));
-      const { orderId } = await cancelledOrderWithSession();
+    it('hides a rejected checkout from its own buyer behind the same 404', async () => {
+      const lastUnit = await seedSellableSku(app, { onHand: 1 });
+      const token = await buyerWithCart(app, lastUnit.variantId, 2);
+      await checkout(app, token).expect(409);
+      const [{ id: orderId }] = await db.select({ id: schema.orders.id }).from(schema.orders);
 
-      await expect(processor.process(await cancelledJob(orderId))).rejects.toThrow('gateway unreachable');
+      await cancel(token, orderId).expect(404);
 
-      expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.PENDING);
-      // The inbox claim rolled back with it, or the redelivery would find it consumed.
-      expect(await db.select().from(schema.inbox)).toHaveLength(0);
-    });
-
-    // The effect commits alongside the inbox claim, so the second attempt is a no-op, and an
-    // already-closed session is not a refund alarm.
-    it('settles exactly once under redelivery, raising nothing on the second pass', async () => {
-      const { orderId } = await cancelledOrderWithSession();
-      const job = await cancelledJob(orderId);
-
-      expect(await processor.process(job)).toBe('processed');
-      expect(await processor.process(job)).toBe('duplicate');
-
-      expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
-      expect(refundOwed).not.toHaveBeenCalled();
-    });
-
-    it('finishes the write on a redelivery after the session was already closed', async () => {
-      const { orderId, sessionId } = await cancelledOrderWithSession();
-      const job = await cancelledJob(orderId);
-      // Close it out of band, then let the consume run for the first time: the same position a
-      // rolled-back attempt leaves behind.
-      expect(await gateway.expireSession(sessionId)).toBe('expired');
-
-      expect(await processor.process(job)).toBe('processed');
-
-      expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
-      expect(refundOwed).not.toHaveBeenCalled();
+      expect((await readOrder(app, orderId)).status).toBe(OrderStatus.REJECTED);
     });
   });
 
   // The race the cancel button makes routine: the buyer presses cancel with the hosted page still
-  // open in another tab, and pays on it. Stock is already released; the money is not.
+  // open in another tab, and pays on it. The stock is already released; the money is only held.
   describe('cancel racing a payment that has already gone through', () => {
-    it('raises the refund decision once and acknowledges the job', async () => {
+    it('voids the hold instead of taking the money, however late its webhook lands', async () => {
       const order = await placeAndOpenSession(app, sku, QUANTITY);
+      const intentId = gateway.authorize(order.sessionId);
+
       await cancel(order.token, order.orderId).expect(200);
-      // The gateway took the money after the order died, and the webhook has not arrived yet.
-      gateway.setPaymentStatus(order.sessionId, 'PAID');
+      await postAuthorizationWebhook(app, gateway, order);
+      await drainDomainEvents(app);
 
-      // Acknowledged, not retried: no redelivery un-pays a session, so this never reaches the DLQ.
-      expect(await processor.process(await cancelledJob(order.orderId))).toBe('processed');
-
-      expect(refundOwed).toHaveBeenCalledExactlyOnceWith('expire_session');
-      // Nothing written: recording EXPIRED here would log a settlement that never happened.
-      expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.PENDING);
-      expect(gateway.wasExpired(order.sessionId)).toBe(false);
-    });
-
-    // The same money arriving by its own route: the webhook settles the payment, then finds the
-    // order already terminal: a second observation of one stranded payment, hence the source label.
-    it('raises it again under the webhook source when payment lands after cancel', async () => {
-      const order = await placeAndOpenSession(app, sku, QUANTITY);
-      await cancel(order.token, order.orderId).expect(200);
-
-      await postWebhook(
-        app,
-        signOutcome(WEBHOOK_SECRET, order.sessionId, order.charge, 'PAID', 'evt_cancel_race'),
-      ).expect(200);
-
-      expect(refundOwed).toHaveBeenCalledWith('webhook_direct');
-      // The order does not move: the terminal guard is what keeps a cancelled order cancelled.
       expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.CANCELLED);
-      expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.SUCCEEDED);
-      // The stock stays released: the buyer is owed money, not the last unit.
+      expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.VOIDED);
+      expect(gateway.wasVoided(intentId)).toBe(true);
+      expect(gateway.captureCalls(intentId)).toBe(0);
       expect((await readStock(app, sku.variantId)).quantityReserved).toBe(0);
-    });
-
-    // The durable half of the same webhook: finalize re-run through the queue, counted separately.
-    it('raises it from the settlement event too, so a lost webhook still alarms', async () => {
-      const order = await placeAndOpenSession(app, sku, QUANTITY);
-      await cancel(order.token, order.orderId).expect(200);
-      const webhook = app.get(HandlePaymentWebhookUseCase);
-      const signed = signOutcome(WEBHOOK_SECRET, order.sessionId, order.charge, 'PAID', 'evt_cancel_event');
-      await webhook.execute(Buffer.from(signed.rawBody), signed.headers);
-
-      const [settlement] = await db
-        .select()
-        .from(schema.outbox)
-        .where(eq(schema.outbox.eventType, 'payment.succeeded'))
-        .orderBy(desc(schema.outbox.createdAt), desc(schema.outbox.id));
-
-      expect(
-        await processor.process({
-          outboxId: settlement.id,
-          aggregateType: settlement.aggregateType,
-          aggregateId: settlement.aggregateId,
-          eventType: settlement.eventType,
-          payload: settlement.payload,
-          occurredAt: settlement.createdAt.toISOString(),
-          traceparent: null,
-        }),
-      ).toBe('processed');
-
-      expect(refundOwed).toHaveBeenCalledWith('settlement_event');
-      expect((await readOrder(app, order.orderId)).status).toBe(OrderStatus.CANCELLED);
     });
   });
 });

@@ -1,8 +1,17 @@
-import { sql } from 'drizzle-orm';
 import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
-export const orderStatus = pgEnum('order_status', ['DRAFT', 'PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED']);
+export const orderStatus = pgEnum('order_status', [
+  'DRAFT',
+  'PENDING',
+  'PAID',
+  'FAILED',
+  'EXPIRED',
+  'CANCELLED',
+  'RESERVING',
+  'REJECTED',
+  'CONFIRMING',
+]);
 
 // No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
@@ -32,14 +41,15 @@ export const orders = pgTable(
     version: integer('version').notNull().default(0),
     // The client Idempotency-Key that created this order, stamped at checkout as the exit-defense
     // backstop for retry-safety. Scoped per user by the composite unique below, so two users may
-    // reuse the same key value without colliding.
+    // reuse the same key value without colliding. Cleared on REJECTED, so a retry under the same key
+    // places a new order.
     idempotencyKey: text('idempotency_key'),
-    // Set when DRAFT → PENDING; null while still a draft.
+    // Set when DRAFT → RESERVING; the payment deadline runs from it.
     placedAt: timestamp('placed_at', { withTimezone: true }),
-    // Stamped once, when the order settles; null while DRAFT/PENDING. Idempotency reads `status`,
-    // not these — they carry the when/why for reconciliation.
+    // Stamped once, when the order reaches a terminal status. Idempotency reads `status`, not
+    // these — they carry the when/why for reconciliation.
     finalizedAt: timestamp('finalized_at', { withTimezone: true }),
-    finalizeReason: text('finalize_reason'), // e.g. 'webhook:failed' | 'reconcile:paid' | 'expired'
+    finalizeReason: text('finalize_reason'), // e.g. 'try:out_of_stock' | 'payment:captured' | 'user:cancel'
     paymentRef: text('payment_ref'), // gateway transaction id, when a paid outcome carried one
     ...stamps,
   },
@@ -51,11 +61,6 @@ export const orders = pgTable(
     // (user, key). NULL keys don't collide (Postgres treats them as distinct), so pre-idempotency
     // orders are unaffected. The final backstop behind the per-key entry gate.
     uniqueIndex('uq_orders_user_idempotency_key').on(t.userId, t.idempotencyKey),
-    // Partial: the sweep's queue is only ever PENDING rows, so the index stays proportional to
-    // orders in flight rather than to every order ever placed.
-    index('idx_orders_pending_placed_at')
-      .on(t.placedAt)
-      .where(sql`${t.status} = 'PENDING'`),
   ],
 );
 

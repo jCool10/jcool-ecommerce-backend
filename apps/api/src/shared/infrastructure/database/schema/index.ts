@@ -3,6 +3,7 @@
 export * from '../../../../modules/product/infrastructure/catalog/schema/catalog.schema';
 export * from '../../../../modules/cart/infrastructure/schema/cart.schema';
 export * from '../../../../modules/order/infrastructure/schema/order.schema';
+export * from '../../../../modules/order/infrastructure/schema/checkout-saga.schema';
 export * from '../../../../modules/order/infrastructure/schema/idempotency-key.schema';
 export * from '../../../../modules/product/infrastructure/stock/schema/stock.schema';
 export * from '../../../../modules/payment/infrastructure/schema/payment.schema';

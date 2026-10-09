@@ -13,7 +13,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@jcool/platform/throttler';
 import { Public } from '@jcool/platform/rbac';
-import { HandlePaymentWebhookUseCase } from '../application/use-cases';
+import { ProcessWebhookEventUseCase } from '../application/use-cases';
 
 /**
  * `@Public()` — the caller is the payment gateway, authenticated by the HMAC signature over the raw
@@ -30,7 +30,7 @@ import { HandlePaymentWebhookUseCase } from '../application/use-cases';
 @ApiTags('payments')
 @Controller('webhooks')
 export class WebhookController {
-  constructor(private readonly handlePaymentWebhook: HandlePaymentWebhookUseCase) {}
+  constructor(private readonly processWebhookEvent: ProcessWebhookEventUseCase) {}
 
   @Public()
   // Both tiers must be named — bare `@SkipThrottle()` skips only `default`, leaving `account`. The
@@ -48,7 +48,7 @@ export class WebhookController {
       throw new UnauthorizedException('Missing webhook body');
     }
 
-    const result = await this.handlePaymentWebhook.execute(rawBody, req.headers as Record<string, string>);
+    const result = await this.processWebhookEvent.execute(rawBody, req.headers as Record<string, string>);
     if (result.outcome === 'rejected') {
       // The cause is logged, not sent: it tells a wrong secret apart from a clock or replay problem.
       throw new UnauthorizedException('Invalid webhook signature', {

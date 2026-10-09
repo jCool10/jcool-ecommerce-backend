@@ -11,6 +11,7 @@ import {
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
   STOCK_REPOSITORY,
+  type HoldOptions,
   type ReservationLine,
   type StockRepositoryPort,
 } from '../../src/modules/product/application/stock/ports/stock-repository.port';
@@ -25,8 +26,9 @@ const SKU = testId();
 const ORDER = testId();
 const STOCK = 10;
 const QUANTITY = 1;
+const EXPIRES_AT = new Date(Date.now() + 30 * 60_000);
 
-type Hold = (tx: DrizzleTx, orderId: string, lines: ReservationLine[]) => Promise<void>;
+type Hold = (tx: DrizzleTx, orderId: string, lines: ReservationLine[], options: HoldOptions) => Promise<void>;
 
 // A holds its transaction open until B is parked on the row lock, so B's dedup read has already run.
 async function raceDuplicateSubmission(
@@ -41,14 +43,14 @@ async function raceDuplicateSubmission(
   const aHeld = new Promise<void>((resolve) => (aHasHeld = resolve));
 
   const a = db.transaction(async (tx) => {
-    await hold(tx, ORDER, [line]);
+    await hold(tx, ORDER, [line], { expiresAt: EXPIRES_AT });
     aHasHeld();
     await aMayCommit;
   });
   await aHeld;
 
   const b = db.transaction(async (tx) => {
-    await hold(tx, ORDER, [line]);
+    await hold(tx, ORDER, [line], { expiresAt: EXPIRES_AT });
   });
   // Observed by the allSettled below; marked handled so an early rejection is not reported elsewhere.
   b.catch(() => {});

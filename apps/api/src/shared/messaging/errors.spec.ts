@@ -6,6 +6,6 @@ import { PermanentError, UnhandledEventError } from './errors';
 describe('messaging errors', () => {
   it('marks permanent failures as ones the transport will not retry', () => {
     expect(new PermanentError('bad envelope')).toBeInstanceOf(UnrecoverableError);
-    expect(new UnhandledEventError('payment.succeeded')).toBeInstanceOf(UnrecoverableError);
+    expect(new UnhandledEventError('payment.refunded')).toBeInstanceOf(UnrecoverableError);
   });
 });

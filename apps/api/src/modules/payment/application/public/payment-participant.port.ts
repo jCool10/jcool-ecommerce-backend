@@ -13,6 +13,14 @@ export type OpenSessionResult =
   | { outcome: 'OPENED'; paymentId: string; providerSessionId: string; redirectUrl?: string; clientSecret?: string }
   | { outcome: 'CLOSED' };
 
+/** `openSession` could not reach the gateway; nothing was opened that the caller must undo. */
+export class PaymentProviderUnavailableError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super('Payment provider is temporarily unavailable', options);
+    this.name = 'PaymentProviderUnavailableError';
+  }
+}
+
 export type CaptureOutcome = 'CAPTURED' | 'NOT_CAPTURABLE';
 
 export type CancelOutcome = 'CANCELLED' | 'FENCED' | 'CAPTURED_CONFLICT';

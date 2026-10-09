@@ -10,6 +10,7 @@ import {
   retentionConfig,
   throttleConfig,
 } from '@jcool/platform/config';
+import { CHECKOUT_SAGA_DEFAULTS as DEFAULTS } from './checkout-saga.defaults';
 
 export default () => ({
   ...appConfig(),
@@ -26,7 +27,7 @@ export default () => ({
     // Each job holds a pg connection for the length of its transaction, so this competes DIRECTLY
     // with the HTTP path for DB_POOL_MAX (default 10) — size the two together rather than raising
     // this alone.
-    workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, 5),
+    workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, DEFAULTS.QUEUE_WORKER_CONCURRENCY),
     // Deliveries before a message is dead-lettered, the first included. Capped at 10 in the env
     // schema: the backoff below doubles, so the tail grows faster than the count suggests. Eight
     // spans roughly two minutes, which an order expiry needs — past it the session that can still
@@ -93,29 +94,43 @@ export default () => ({
     // The one owner of a session's lower bound: Stripe's minimum lifetime, plus a margin because
     // Stripe checks `expires_at` against its own clock on receipt. The adapter stamps it on sessions
     // that carry no deadline; a deadline closer than it is refused before Stripe ever sees it.
-    sessionMinTtlSec: parseIntOr(process.env.PAYMENT_SESSION_MIN_TTL_SEC, 1_800),
-    sessionExpiryMarginSec: parseIntOr(process.env.PAYMENT_SESSION_EXPIRY_MARGIN_SEC, 120),
+    sessionMinTtlSec: parseIntOr(process.env.PAYMENT_SESSION_MIN_TTL_SEC, DEFAULTS.PAYMENT_SESSION_MIN_TTL_SEC),
+    sessionExpiryMarginSec: parseIntOr(
+      process.env.PAYMENT_SESSION_EXPIRY_MARGIN_SEC,
+      DEFAULTS.PAYMENT_SESSION_EXPIRY_MARGIN_SEC,
+    ),
     // Per request, never retried by the SDK: capture, void, and every call a cancel makes.
-    captureTimeoutMs: parseIntOr(process.env.PAYMENT_CAPTURE_TIMEOUT_MS, 10_000),
+    captureTimeoutMs: parseIntOr(process.env.PAYMENT_CAPTURE_TIMEOUT_MS, DEFAULTS.PAYMENT_CAPTURE_TIMEOUT_MS),
   },
   reconcile: {
     // Off for e2e suites, which drive the use case directly, and for one-off job containers.
     enabled: process.env.RECONCILE_ENABLED !== 'false',
     intervalMs: parseIntOr(process.env.RECONCILE_INTERVAL_MS, 60_000),
     batchSize: parseIntOr(process.env.RECONCILE_BATCH_SIZE, 50),
-    // Below this age an order is still waiting on a webhook probably in flight; polling burns a call.
+    // Below this age a payment is still waiting on a webhook probably in flight; polling burns a call.
     staleAfterSec: parseIntOr(process.env.ORDER_STALE_THRESHOLD_SEC, 120),
-    // Matches INVENTORY_RESERVATION_TTL, so an order never outlives the stock hold it depends on.
-    orderTtlSec: parseIntOr(process.env.ORDER_TTL_SEC, 900),
   },
-  reservationSweep: {
-    enabled: process.env.RESERVATION_SWEEP_ENABLED !== 'false',
-    intervalMs: parseIntOr(process.env.RESERVATION_SWEEP_INTERVAL_MS, 60_000),
-    batchSize: parseIntOr(process.env.RESERVATION_SWEEP_BATCH_SIZE, 50),
-    // Extra age past a hold's `expires_at` before this sweep expires the order. A full ORDER_TTL_SEC
-    // by default, so the gateway-driven reconcile — the only sweep that can also close the checkout
-    // session — always gets there first, and this one only clears what that could not settle.
-    graceSec: parseIntOr(process.env.RESERVATION_SWEEP_GRACE_SEC, 900),
+  checkout: {
+    // From placement: the session stops taking money here, and the saga expires the order once the
+    // authorization grace below has also run out.
+    paymentDeadlineSec: parseIntOr(process.env.CHECKOUT_PAYMENT_DEADLINE_SEC, DEFAULTS.CHECKOUT_PAYMENT_DEADLINE_SEC),
+    // /pay closes this long before the deadline, so every session it opens clears the gateway's minimum.
+    payCutoffSec: parseIntOr(process.env.CHECKOUT_PAY_CUTOFF_SEC, DEFAULTS.CHECKOUT_PAY_CUTOFF_SEC),
+    tryTimeoutMs: parseIntOr(process.env.CHECKOUT_TRY_TIMEOUT_MS, DEFAULTS.CHECKOUT_TRY_TIMEOUT_MS),
+    // How long past the deadline stock's own sweep leaves the hold alone.
+    holdSafetySec: parseIntOr(process.env.CHECKOUT_HOLD_SAFETY_SEC, DEFAULTS.CHECKOUT_HOLD_SAFETY_SEC),
+  },
+  saga: {
+    runnerEnabled: process.env.SAGA_RUNNER_ENABLED !== 'false',
+    runnerIntervalMs: parseIntOr(process.env.SAGA_RUNNER_INTERVAL_MS, DEFAULTS.SAGA_RUNNER_INTERVAL_MS),
+    runnerBatchSize: parseIntOr(process.env.SAGA_RUNNER_BATCH_SIZE, DEFAULTS.SAGA_RUNNER_BATCH_SIZE),
+    leaseMs: parseIntOr(process.env.SAGA_LEASE_MS, DEFAULTS.SAGA_LEASE_MS),
+    retryBaseMs: parseIntOr(process.env.SAGA_RETRY_BASE_MS, DEFAULTS.SAGA_RETRY_BASE_MS),
+    retryCapMs: parseIntOr(process.env.SAGA_RETRY_CAP_MS, DEFAULTS.SAGA_RETRY_CAP_MS),
+    // Each kick holds a pool connection while it runs, alongside the queue workers.
+    kickConcurrency: parseIntOr(process.env.SAGA_KICK_CONCURRENCY, DEFAULTS.SAGA_KICK_CONCURRENCY),
+    // Absorbs a late notice of money taken before the deadline; no money is taken after it.
+    authGraceSec: parseIntOr(process.env.SAGA_AUTH_GRACE_SEC, DEFAULTS.SAGA_AUTH_GRACE_SEC),
   },
   retention: {
     ...retentionConfig().retention,
@@ -130,6 +145,7 @@ export default () => ({
     // Must outlast the GATEWAY's redelivery window, not the queue's — this table is the replay
     // defence at ingress. Stripe retries for ~72h; floored at 14 days in env.validation.
     webhookEventDays: parseIntOr(process.env.RETENTION_WEBHOOK_EVENT_DAYS, 30),
+    rejectedOrderDays: parseIntOr(process.env.RETENTION_REJECTED_ORDER_DAYS, DEFAULTS.RETENTION_REJECTED_ORDER_DAYS),
   },
   catalog: {
     // Catalog's own fresh window; the stale window, jitter and lock bounds below are shared. The
@@ -195,17 +211,13 @@ export default () => ({
   inventory: {
     // 'pessimistic' (SELECT ... FOR UPDATE) or 'optimistic' (version CAS + retry).
     lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',
-    // How far ahead a HELD reservation stamps `expiresAt` — the deadline the expiry sweep reclaims
-    // an unpaid hold from.
-    reservationTtl: process.env.INVENTORY_RESERVATION_TTL ?? '15m',
     // Re-CAS attempts after losing a version race before giving up with a 409 (0 = never retry).
     // Real shortfalls never consume a retry. A NaN budget would leave the CAS loop unbounded, so
     // this must never fall through to a bare parseInt.
     optimisticMaxRetries: parseIntOr(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES, 3),
     // Budget for a whole participant call, from minting ids to the last statement; also bounds each
     // commit, release, restock and lapsed-hold release. Must stay below the caller's own Try timeout.
-    tryLockTimeoutMs: parseIntOr(process.env.INVENTORY_TRY_LOCK_TIMEOUT_MS, 2000),
-    // Participant holds only; legacy holds have no header and stay with the reservation sweep above.
+    tryLockTimeoutMs: parseIntOr(process.env.INVENTORY_TRY_LOCK_TIMEOUT_MS, DEFAULTS.INVENTORY_TRY_LOCK_TIMEOUT_MS),
     holdSweep: {
       enabled: process.env.INVENTORY_HOLD_SWEEP_ENABLED !== 'false',
       intervalMs: parseIntOr(process.env.INVENTORY_HOLD_SWEEP_INTERVAL_MS, 60_000),

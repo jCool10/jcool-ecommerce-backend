@@ -29,15 +29,13 @@ const PRODUCED_EVENT_TYPES = Object.keys({
   'order.failed': true,
   'order.expired': true,
   'order.cancelled': true,
-  'payment.succeeded': true,
-  'payment.failed': true,
+  'payment.authorized': true,
   'catalog.product.changed': true,
   'catalog.category.renamed': true,
 } satisfies Record<
   | OrderFinalizedEvent['eventName']
   | 'order.placed'
-  | 'payment.succeeded'
-  | 'payment.failed'
+  | 'payment.authorized'
   | 'catalog.product.changed'
   | 'catalog.category.renamed',
   true
@@ -53,7 +51,21 @@ describe('DomainEventDispatcher', () => {
     expect(PRODUCED_EVENT_TYPES.filter((type) => dispatcher.label(type) === 'unregistered')).toEqual([]);
   });
 
-  it('records an audit line for an order event it has nothing else to do for', async () => {
+  it.each(['order.placed', 'order.failed', 'order.expired', 'order.cancelled'])(
+    'records an audit line for %s and does nothing else with it',
+    async (eventType) => {
+      const info = vi.fn();
+      const event = job(eventType);
+
+      await expect(
+        run(dispatcherWith({ orderEvents: new OrderEventsHandler(fakePinoLogger({ info })) }), event),
+      ).resolves.toBeUndefined();
+
+      expect(info).toHaveBeenCalledWith(expect.objectContaining({ eventType }), expect.any(String));
+    },
+  );
+
+  it('records the audit line with the ids a reader correlates on', async () => {
     const info = vi.fn();
     const event = job('order.placed');
 
@@ -110,35 +122,15 @@ describe('DomainEventDispatcher', () => {
     await expect(dispatcher.prepare(job(eventType))).rejects.toBe(outage);
   });
 
-  it('runs each effectful event on its own handler inside the consumer transaction', async () => {
-    const settle = vi.fn();
-    const closeExpired = vi.fn();
-    const closeCancelled = vi.fn();
-    const dispatcher = dispatcherWith({ settle, closeExpired, closeCancelled });
+  it('routes payment.authorized to its handler, whose step runs inside the consumer transaction', async () => {
+    const step = vi.fn().mockResolvedValue(undefined);
+    const prepareAuthorized = vi.fn().mockResolvedValue(step);
+    const event = job('payment.authorized');
 
-    for (const eventType of ['order.expired', 'order.cancelled', 'payment.succeeded', 'payment.failed']) {
-      await run(dispatcher, job(eventType));
-    }
+    await run(dispatcherWith({ prepareAuthorized }), event);
 
-    const routed = (handler: typeof settle) =>
-      handler.mock.calls.map(([event, onTx]) => [(event as DomainEventJob).eventType, onTx === tx]);
-    expect({ expired: routed(closeExpired), cancelled: routed(closeCancelled), settled: routed(settle) }).toEqual({
-      expired: [['order.expired', true]],
-      cancelled: [['order.cancelled', true]],
-      settled: [
-        ['payment.succeeded', true],
-        ['payment.failed', true],
-      ],
-    });
-  });
-
-  // Swallowed, the inbox claim would commit and the checkout session would stay open for good.
-  it('fails the consume when the payment session cannot be closed', async () => {
-    const unreachable = () => vi.fn().mockRejectedValue(new Error('gateway unreachable'));
-    const dispatcher = dispatcherWith({ closeExpired: unreachable(), closeCancelled: unreachable() });
-
-    await expect(run(dispatcher, job('order.expired'))).rejects.toThrow('gateway unreachable');
-    await expect(run(dispatcher, job('order.cancelled'))).rejects.toThrow('gateway unreachable');
+    expect(prepareAuthorized).toHaveBeenCalledExactlyOnceWith(event);
+    expect(step).toHaveBeenCalledExactlyOnceWith(tx);
   });
 
   it('refuses an event it has no handler for', async () => {

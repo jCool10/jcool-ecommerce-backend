@@ -26,14 +26,9 @@ export const MESSAGING_CONSUME_TOTAL = 'messaging_consume_total';
 export const MESSAGING_CONSUME_RETRIES_TOTAL = 'messaging_consume_retries_total';
 export const MESSAGING_DLQ_TOTAL = 'messaging_dlq_total';
 
-// The steps are NOT nested — an order expired straight from its hold reaches finalize without ever
-// reaching payment_session — so read them as rates side by side; a subtraction can go negative.
+// Retries count again, so read the steps as rates side by side, never as a funnel to subtract.
 export const SAGA_STEP_TOTAL = 'saga_step_total';
 export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
-// Narrower than saga_compensation_total{trigger=ttl_expired}: only the orders the reservation sweep
-// itself claimed. The difference is what the gateway-driven reconcile expired first, so once
-// expiries are happening at all, the two rates converging means reconcile has stopped.
-export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
 // One per answered participant call, retries included: does not reconcile 1:1 with saga_step_total.
 export const TCC_BRANCH_TOTAL = 'tcc_branch_total';
 export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
@@ -142,17 +137,13 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: SAGA_STEP_TOTAL,
-    help: 'Checkout saga steps, by step (reserve/payment_session/finalize) and outcome. A settlement that moved nothing — a duplicate, or one conflicting with an order already terminal — is not counted: it repeats a step rather than adding one. Only the repeats arriving over the queue also show up in messaging_consume_total; one from the payment webhook or the reconcile sweep is in neither, and the "conflicting finalize ignored" log is the only place it appears.',
+    help: 'Checkout saga participant calls, by step (try_reserve/open_session/commit_stock/capture/compensate) and outcome: success = the step moved the order forward, failed = refused or no answer. Every retry counts again, and compensate counts each compensation tried.',
     labelNames: ['step', 'outcome'],
   }),
   makeCounterProvider({
     name: SAGA_COMPENSATION_TOTAL,
-    help: 'Orders that released their stock hold instead of committing it, by trigger (payment_failed/ttl_expired/cancelled).',
+    help: 'Checkout sagas that started undoing their order, by trigger (try_failed/expired/cancelled/commit_conflict/capture_failed/late_authorization/amount_mismatch). late_authorization counts money that arrived after the saga gave up on the order and must be voided.',
     labelNames: ['trigger'],
-  }),
-  makeCounterProvider({
-    name: RESERVATION_EXPIRY_TOTAL,
-    help: 'Orders the reservation sweep expired because their hold had lapsed. Orders, not reservation rows: a multi-line order is one hold to the sweep.',
   }),
   makeCounterProvider({
     name: TCC_BRANCH_TOTAL,
@@ -161,7 +152,7 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: PAYMENT_REFUND_OWED_TOTAL,
-    help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: expire_session = closing the checkout session found the money instead; webhook_direct and settlement_event = a successful payment landing on an order already cancelled or expired, seen by the in-process finalize and by its durable event. Observations, not refunds — one stranded payment normally raises two of these, so alert on the sum being non-zero and get the count from the database, never by summing this.',
+    help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: webhook_direct = a settled payment reported for a session opened outside the checkout saga, which nothing will capture or void. Observations, not refunds — a redelivered webhook raises it again, so alert on it being non-zero and get the count from the database, never by summing this.',
     labelNames: ['source'],
   }),
   makeCounterProvider({

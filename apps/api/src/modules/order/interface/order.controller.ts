@@ -1,5 +1,17 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import {
+  ApiBadGatewayResponse,
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
@@ -8,16 +20,20 @@ import {
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiParam,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiUnauthorizedResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { ORDER_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
+import type { Response } from 'express';
+import { ORDER_THROTTLE, PAYMENT_SESSION_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
 import { CurrentUser, type AuthenticatedUser } from '@jcool/platform/rbac';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
-import { CancelOrderUseCase, CheckoutOrderUseCase } from '../application/use-cases';
+import { CancelOrderUseCase, CheckoutOrderUseCase, PayOrderUseCase } from '../application/use-cases';
+import { CheckoutUnavailableException } from '../application/checkout-unavailable.exception';
 import { OrderQueryService } from '../application/order-query.service';
+import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
 import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto';
@@ -33,6 +49,7 @@ import { RequireIdempotencyKeyGuard } from './require-idempotency-key.guard';
 export class OrderController {
   constructor(
     private readonly checkoutOrder: CheckoutOrderUseCase,
+    private readonly payOrder: PayOrderUseCase,
     private readonly cancelOrder: CancelOrderUseCase,
     private readonly orderQueryService: OrderQueryService,
   ) {}
@@ -54,8 +71,39 @@ export class OrderController {
   @ApiBadRequestResponse({ description: 'Missing/invalid Idempotency-Key, or empty/unpurchasable cart' })
   @ApiConflictResponse({ description: 'Idempotency-Key already in progress, or insufficient stock' })
   @ApiUnprocessableEntityResponse({ description: 'Idempotency-Key reused with a different request' })
-  async create(@CurrentUser() user: AuthenticatedUser): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.checkoutOrder.execute(user.userId));
+  @ApiServiceUnavailableResponse({
+    description: 'Stock could not be confirmed in time; retry with the same key after Retry-After seconds',
+  })
+  async create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<OrderResponseDto> {
+    try {
+      return OrderResponseDto.fromView(await this.checkoutOrder.execute(user.userId));
+    } catch (error) {
+      // Set before rethrowing: the exception filter writes the body onto this same response.
+      if (error instanceof CheckoutUnavailableException) res.setHeader('Retry-After', String(error.retryAfterSec));
+      throw error;
+    }
+  }
+
+  @Post(':id/pay')
+  // Each attempt opens a session at the gateway, so this is throttled per authenticated user as
+  // well as per IP — one account can't turn a retry loop into outbound load we pay for.
+  @Throttle(PAYMENT_SESSION_THROTTLE)
+  @UseGuards(UserThrottlerGuard)
+  @ApiTags('payments')
+  @ApiParam({ name: 'id', example: '137465797020397179', description: 'Order id to pay' })
+  // Also 201 when a still-open session is handed back, as an idempotent replay would answer.
+  @ApiCreatedResponse({ type: CreatePaymentSessionResponseDto })
+  @ApiNotFoundResponse({ description: 'Order not found (or not owned by the caller)' })
+  @ApiConflictResponse({ description: 'Order is not PENDING, or its payment window has closed' })
+  @ApiBadGatewayResponse({ description: 'Payment provider is temporarily unavailable' })
+  async pay(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseSnowflakeIdPipe) orderId: string,
+  ): Promise<CreatePaymentSessionResponseDto> {
+    return CreatePaymentSessionResponseDto.from(await this.payOrder.execute(orderId, user.userId));
   }
 
   @Get()

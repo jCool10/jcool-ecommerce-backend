@@ -1,122 +1,100 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
+import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
-import {
-  STOCK_REPOSITORY,
-  type ReservationLine,
-  type StockRepositoryPort,
-} from '../../src/modules/product/application/stock/ports/stock-repository.port';
-import { InsufficientStockError } from '../../src/modules/product/domain/stock/errors/insufficient-stock.error';
-import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { authHeader } from '../setup/bearer.helper';
+import { idempotencyKeyHeader } from '../setup/idempotency.helper';
+import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
-import { readStock, reservationsFor } from '../setup/fixtures/order-flow.fixture';
+import { addToCart, readStock, reservationsFor } from '../setup/fixtures/order-flow.fixture';
+import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
-import { testId } from '../setup/id-service-stub';
 
-const SKU_A = testId();
-const SKU_B = testId();
-const ORDER_1 = testId();
-const ORDER_2 = testId();
-
-// Single-caller contract of both strategies. Races live in checkout-oversell and the
-// inventory-optimistic-* and inventory-mixed-strategy suites.
+// Each lock strategy is pinned at the participant (inventory-participant); races live in
+// checkout-oversell, inventory-optimistic-* and inventory-mixed-strategy.
 describe('Inventory reserve (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let db: DrizzleDB;
-  let repo: StockRepositoryPort;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool());
-    repo = app.get<StockRepositoryPort>(STOCK_REPOSITORY);
+    ({ app, pool } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  describe.each(['reservePessimistic', 'reserveOptimistic'] as const)('%s', (method) => {
-    const reserve = (orderId: string, lines: ReservationLine[]): Promise<void> =>
-      db.transaction((tx) => repo[method](tx, orderId, lines));
+  const server = () => app.getHttpServer();
 
-    it('holds stock for each order and bumps the version once per hold', async () => {
-      await seedStock(app, SKU_A, 10);
+  it('holds every line of a placed order', async () => {
+    const token = await newPrincipalToken(app);
+    const productA = await createTestProduct(app, { priceMinor: 100_000 });
+    const productB = await createTestProduct(app, { priceMinor: 50_000 });
+    await seedStock(app, productA.variantId, 10);
+    await seedStock(app, productB.variantId, 10);
+    await addToCart(app, token, productA.variantId, 3);
+    await addToCart(app, token, productB.variantId, 2);
 
-      await reserve(ORDER_1, [{ variantId: SKU_A, quantity: 3 }]);
-      await reserve(ORDER_2, [{ variantId: SKU_A, quantity: 2 }]);
+    const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
-      expect(await readStock(app, SKU_A)).toMatchObject({ quantityOnHand: 10, quantityReserved: 5, version: 2 });
-      const [held] = await reservationsFor(app, ORDER_1, SKU_A);
-      expect(held).toMatchObject({ status: 'HELD', quantity: 3 });
-      expect(held.expiresAt!.getTime()).toBeGreaterThan(Date.now());
-    });
+    expect(res.status).toBe(201);
+    expect(await readStock(app, productA.variantId)).toMatchObject({ quantityOnHand: 10, quantityReserved: 3 });
+    expect(await readStock(app, productB.variantId)).toMatchObject({ quantityOnHand: 10, quantityReserved: 2 });
+    expect(await reservationsFor(app, res.body.id, productA.variantId)).toEqual([
+      expect.objectContaining({ status: 'HELD', quantity: 3 }),
+    ]);
+    expect(await reservationsFor(app, res.body.id, productB.variantId)).toEqual([
+      expect.objectContaining({ status: 'HELD', quantity: 2 }),
+    ]);
+  });
 
-    it('refuses a shortfall and changes nothing', async () => {
-      await seedStock(app, SKU_A, 2);
+  it('rolls back every line when one line is short', async () => {
+    const token = await newPrincipalToken(app);
+    const productA = await createTestProduct(app, { priceMinor: 100_000 });
+    const productB = await createTestProduct(app, { priceMinor: 50_000 });
+    await seedStock(app, productA.variantId, 5);
+    await seedStock(app, productB.variantId, 1);
+    await addToCart(app, token, productA.variantId, 2);
+    await addToCart(app, token, productB.variantId, 3);
 
-      await expect(reserve(ORDER_1, [{ variantId: SKU_A, quantity: 3 }])).rejects.toMatchObject({
-        name: 'InsufficientStockError',
-        requested: 3,
-        available: 2,
-      });
+    const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
-      expect(await readStock(app, SKU_A)).toMatchObject({ quantityReserved: 0, version: 0 });
-      expect(await reservationsFor(app, ORDER_1, SKU_A)).toHaveLength(0);
-    });
+    expect(res.status).toBe(409);
+    expect(await readStock(app, productA.variantId)).toMatchObject({ quantityReserved: 0 });
+    expect(await readStock(app, productB.variantId)).toMatchObject({ quantityReserved: 0 });
+  });
 
-    // Creating a SKU writes no stock row, and the cart does not check stock, so checkout reaches this.
-    it('refuses a SKU that has no stock row', async () => {
-      await expect(reserve(ORDER_1, [{ variantId: SKU_A, quantity: 1 }])).rejects.toMatchObject({
-        name: 'InsufficientStockError',
-        requested: 1,
-        available: 0,
-      });
-    });
+  it('refuses a SKU that has no stock row', async () => {
+    const token = await newPrincipalToken(app);
+    const product = await createTestProduct(app, { priceMinor: 100_000 });
+    await addToCart(app, token, product.variantId, 1);
 
-    it('holds once when the same order reserves the same SKU again', async () => {
-      await seedStock(app, SKU_A, 10);
+    const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
-      await reserve(ORDER_1, [{ variantId: SKU_A, quantity: 3 }]);
-      await reserve(ORDER_1, [{ variantId: SKU_A, quantity: 3 }]);
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe('Insufficient stock');
+  });
 
-      expect(await readStock(app, SKU_A)).toMatchObject({ quantityReserved: 3, version: 1 });
-      expect(await reservationsFor(app, ORDER_1, SKU_A)).toHaveLength(1);
-    });
+  it('replays the placed order for a repeated key, holding its stock once', async () => {
+    const token = await newPrincipalToken(app);
+    const product = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, product.variantId, 5);
+    await addToCart(app, token, product.variantId, 2);
 
-    it('holds every line of a multi-SKU order', async () => {
-      await seedStock(app, SKU_A, 5);
-      await seedStock(app, SKU_B, 5);
+    const key = idempotencyKeyHeader();
+    const res1 = await request(server()).post('/orders').set(authHeader(token)).set(key);
+    const res2 = await request(server()).post('/orders').set(authHeader(token)).set(key);
 
-      await reserve(ORDER_1, [
-        { variantId: SKU_B, quantity: 2 },
-        { variantId: SKU_A, quantity: 1 },
-      ]);
-
-      expect((await readStock(app, SKU_A)).quantityReserved).toBe(1);
-      expect((await readStock(app, SKU_B)).quantityReserved).toBe(2);
-      expect(await reservationsFor(app, ORDER_1)).toHaveLength(2);
-    });
-
-    it('rolls back every line when a later line is short', async () => {
-      await seedStock(app, SKU_A, 5);
-      await seedStock(app, SKU_B, 1);
-
-      await expect(
-        reserve(ORDER_1, [
-          { variantId: SKU_A, quantity: 2 },
-          { variantId: SKU_B, quantity: 3 },
-        ]),
-      ).rejects.toBeInstanceOf(InsufficientStockError);
-
-      expect((await readStock(app, SKU_A)).quantityReserved).toBe(0);
-      expect(await reservationsFor(app, ORDER_1)).toHaveLength(0);
-    });
+    expect(res1.status).toBe(201);
+    expect(res2.status).toBe(201);
+    expect(res1.body.id).toBe(res2.body.id);
+    expect(await readStock(app, product.variantId)).toMatchObject({ quantityReserved: 2 });
   });
 
   it('refuses a direct write that reserves more than is on hand', async () => {
-    await seedStock(app, SKU_A, 2);
+    const product = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, product.variantId, 2);
 
-    // Raw pg: Drizzle moves the constraint name into `.cause`.
     await expect(
-      pool.query('UPDATE stock_levels SET quantity_reserved = 3 WHERE variant_id = $1', [SKU_A]),
+      pool.query('UPDATE stock_levels SET quantity_reserved = 3 WHERE variant_id = $1', [product.variantId]),
     ).rejects.toThrow(/ck_stock_no_oversell/);
   });
 });

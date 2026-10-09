@@ -2,10 +2,18 @@ import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import {
+  DRIZZLE,
+  PG_POOL,
+  type DrizzleDB,
+  type DrizzleTx,
+} from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { ReserveStockUseCase } from '../../src/modules/product/application/stock/reserve-stock.use-case';
-import { StockReservationError } from '../../src/modules/product/application/public/product-stock-reservation.port';
+import {
+  STOCK_REPOSITORY,
+  type StockRepositoryPort,
+} from '../../src/modules/product/application/stock/ports/stock-repository.port';
+import { InsufficientStockError } from '../../src/modules/product/domain/stock/errors/insufficient-stock.error';
 import {
   countHeldReservations,
   getStockView,
@@ -24,7 +32,22 @@ const LAST_UNIT = 1;
 
 interface Instance {
   db: DrizzleDB;
-  reserve: ReserveStockUseCase;
+  reserve: (tx: DrizzleTx, orderId: string) => Promise<void>;
+}
+
+// The participant picks the repository method from its instance's config; this is that choice, minus
+// the participant's own transaction, so the test can hold one open across the race.
+function instanceOf(app: INestApplication, strategy: 'pessimistic' | 'optimistic'): Instance {
+  const stock = app.get<StockRepositoryPort>(STOCK_REPOSITORY);
+  const lines = [{ variantId: SKU, quantity: LAST_UNIT }];
+  const options = { expiresAt: new Date(Date.now() + 30 * 60_000) };
+  return {
+    db: app.get<DrizzleDB>(DRIZZLE),
+    reserve: (tx, orderId) =>
+      strategy === 'pessimistic'
+        ? stock.reservePessimistic(tx, orderId, lines, options)
+        : stock.reserveOptimistic(tx, orderId, lines, options),
+  };
 }
 
 // The holder commits only once the contender is parked on its row lock, so the contender
@@ -40,15 +63,13 @@ async function raceForTheLastUnit(
   const holderHeld = new Promise<void>((resolve) => (holderHasHeld = resolve));
 
   const first = holder.db.transaction(async (tx) => {
-    await holder.reserve.reserve(tx, ORDER_A, [{ variantId: SKU, quantity: LAST_UNIT }]);
+    await holder.reserve(tx, ORDER_A);
     holderHasHeld();
     await holderMayCommit;
   });
   await holderHeld;
 
-  const second = contender.db.transaction(async (tx) => {
-    await contender.reserve.reserve(tx, ORDER_B, [{ variantId: SKU, quantity: LAST_UNIT }]);
-  });
+  const second = contender.db.transaction((tx) => contender.reserve(tx, ORDER_B));
   // Observed by the allSettled below; marked handled so an early rejection is not reported elsewhere.
   second.catch(() => {});
 
@@ -73,11 +94,8 @@ describe('Inventory reserve across a mixed-strategy fleet (integration, real Pos
     // Pinned against a local .env; with nothing available the shortfall throws before any retry.
     optimistic = await createTestApp({ INVENTORY_LOCK_STRATEGY: 'optimistic', INVENTORY_OPTIMISTIC_MAX_RETRIES: '3' });
     pool = pessimistic.get<Pool>(PG_POOL);
-    pessimisticInstance = {
-      db: pessimistic.get<DrizzleDB>(DRIZZLE),
-      reserve: pessimistic.get(ReserveStockUseCase),
-    };
-    optimisticInstance = { db: optimistic.get<DrizzleDB>(DRIZZLE), reserve: optimistic.get(ReserveStockUseCase) };
+    pessimisticInstance = instanceOf(pessimistic, 'pessimistic');
+    optimisticInstance = instanceOf(optimistic, 'optimistic');
   });
 
   afterAll(async () => {
@@ -93,8 +111,7 @@ describe('Inventory reserve across a mixed-strategy fleet (integration, real Pos
   async function expectSoldOutWithoutOverselling(result: PromiseSettledResult<void>): Promise<void> {
     expect(result.status).toBe('rejected');
     const reason = result.status === 'rejected' ? result.reason : undefined;
-    expect(reason).toBeInstanceOf(StockReservationError);
-    expect(reason).toMatchObject({ reason: 'OUT_OF_STOCK' });
+    expect(reason).toBeInstanceOf(InsufficientStockError);
 
     expect(await getStockView(pessimistic, SKU)).toEqual({ onHand: LAST_UNIT, reserved: LAST_UNIT, available: 0 });
     expect(await countHeldReservations(pessimistic, SKU)).toBe(1);

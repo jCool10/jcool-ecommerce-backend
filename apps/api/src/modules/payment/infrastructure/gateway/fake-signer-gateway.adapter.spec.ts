@@ -147,6 +147,24 @@ describe('FakeSignerGatewayAdapter', () => {
       }
     });
 
+    // What keeps a saga inside CAPTURING, under its lease, for as long as a test needs.
+    it('parks the next capture until released, then lets it through exactly once', async () => {
+      const { gateway, intentId } = await authorizedHold();
+      const parked = gateway.hangCapture(intentId);
+
+      let settled = false;
+      const capturing = gateway.capture(intentId, 'capture:p1:0').finally(() => (settled = true));
+      await parked.entered;
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(settled).toBe(false);
+      expect(gateway.captureCalls(intentId)).toBe(0);
+      parked.release();
+      await expect(capturing).resolves.toEqual({ kind: 'captured' });
+      expect(gateway.captureCalls(intentId)).toBe(1);
+      await expect(gateway.capture(intentId, 'capture:p1:1')).resolves.toEqual({ kind: 'captured' });
+    });
+
     it('refuses to capture a hold whose authorization lapsed', async () => {
       const { gateway, intentId } = await authorizedHold();
       gateway.failCapture(intentId, 'expired');

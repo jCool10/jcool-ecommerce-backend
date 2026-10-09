@@ -1,29 +1,27 @@
 import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
+import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
+  authorizeAndRelay,
   placeAndOpenSession,
   postWebhook,
   readOrder,
   readPayment,
+  readPaymentOrder,
   readReservation,
   readStock,
   seedSellableSku,
   type OpenOrder,
 } from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
-import {
-  checkoutSessionCompleted,
-  checkoutSessionExpired,
-  signWebhook,
-  type SessionCharge,
-  type SignedWebhook,
-} from '../setup/sign-webhook.helper';
+import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
+import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
+import { checkoutSessionCompleted, checkoutSessionExpired, signWebhookAs } from '../setup/sign-webhook.helper';
 
-// The app verifies offline against this secret, so every signature below is a real HMAC.
 const WEBHOOK_SECRET = 'whsec_e2e_test_secret_0123456789';
 const STOCK = 5;
 
@@ -31,9 +29,12 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
+  let gateway: FakeSignerGatewayAdapter;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }));
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
+    }));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
@@ -41,20 +42,12 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
   const openOrder = async (): Promise<OpenOrder> =>
     placeAndOpenSession(app, await seedSellableSku(app, { onHand: STOCK }));
 
-  const paid = (sessionId: string, charge: SessionCharge, eventId: string, paymentIntent = 'pi_e2e'): SignedWebhook =>
-    signWebhook({
-      secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(sessionId, charge, { eventId, paymentIntent }),
-    });
-  const expired = (sessionId: string, eventId: string): SignedWebhook =>
-    signWebhook({ secret: WEBHOOK_SECRET, event: checkoutSessionExpired(sessionId, { eventId }) });
-
   const webhookRows = () => db.select().from(schema.webhookEvents);
 
-  async function expectSettledPaid({ orderId, variantId }: OpenOrder): Promise<void> {
-    expect((await readOrder(app, orderId)).status).toBe('PAID');
-    expect((await readReservation(app, orderId, variantId)).status).toBe('COMMITTED');
-    expect(await readStock(app, variantId)).toMatchObject({ quantityOnHand: STOCK - 1, quantityReserved: 0 });
+  async function expectAuthorized({ orderId }: OpenOrder): Promise<void> {
+    expect((await readPayment(app, orderId)).status).toBe('AUTHORIZED');
+    expect((await readPaymentOrder(app, orderId)).status).toBe('AUTHORIZED');
+    expect((await readOrder(app, orderId)).status).toBe('PENDING');
   }
 
   async function expectUntouched({ orderId, variantId }: OpenOrder): Promise<void> {
@@ -63,40 +56,28 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     expect(await readStock(app, variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 1 });
   }
 
-  it('settles a paid delivery: payment, order and stock move together', async () => {
+  it('authorizes a payment behind its header, which the saga then captures once relayed', async () => {
     const order = await openOrder();
 
-    const res = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_ok_1', 'pi_e2e_123'));
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'processed' });
-    const [event] = await webhookRows();
-    expect(event).toMatchObject({ providerEventId: 'evt_ok_1', status: 'PROCESSED' });
-    expect(event.processedAt).not.toBeNull();
-    expect(await readPayment(app, order.orderId)).toMatchObject({
-      status: 'SUCCEEDED',
-      providerIntentId: 'pi_e2e_123',
+    const { intentId, drained } = await authorizeAndRelay(app, gateway, order, {
+      eventId: 'evt_ok_1',
     });
-    expect((await readOrder(app, order.orderId)).paymentRef).toBe('pi_e2e_123');
-    await expectSettledPaid(order);
-  });
 
-  it('settles an auto-capture payment to SUCCEEDED and emits payment.succeeded, never payment.authorized', async () => {
-    const order = await openOrder();
-
-    await postWebhook(app, paid(order.sessionId, order.charge, 'evt_auto_capture')).expect(200);
-
+    expect(gateway.captureCalls(intentId)).toBe(1);
     expect((await readPayment(app, order.orderId)).status).toBe('SUCCEEDED');
-    const paymentEvents = await db
-      .select({ eventType: schema.outbox.eventType })
-      .from(schema.outbox)
-      .where(eq(schema.outbox.aggregateType, 'Payment'));
-    expect(paymentEvents).toEqual([{ eventType: 'payment.succeeded' }]);
+    expect((await readOrder(app, order.orderId)).status).toBe('PAID');
+    expect((await readReservation(app, order.orderId, order.variantId)).status).toBe('COMMITTED');
+    expect(await readStock(app, order.variantId)).toMatchObject({ quantityOnHand: STOCK - 1, quantityReserved: 0 });
+    expect(drained.map((e) => e.eventType)).toContain('payment.authorized');
   });
 
   it('rejects a body changed after signing with 401 and writes nothing', async () => {
     const order = await openOrder();
-    const signed = paid(order.sessionId, order.charge, 'evt_tampered');
+    const intentId = gateway.authorize(order.sessionId);
+    const signed = signWebhookAs(
+      gateway,
+      checkoutSessionCompleted(order.sessionId, order.charge, { eventId: 'evt_tampered', paymentIntent: intentId }),
+    );
 
     const res = await postWebhook(app, { ...signed, rawBody: `${signed.rawBody} ` });
 
@@ -107,22 +88,30 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
 
   it('rejects a signature outside the tolerance window with 401', async () => {
     const order = await openOrder();
-    const signed = signWebhook({
-      secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(order.sessionId, order.charge),
-      timestampSec: Math.floor(Date.now() / 1000) - 3600,
-    });
+    const intentId = gateway.authorize(order.sessionId);
+    const signed = signWebhookAs(
+      gateway,
+      checkoutSessionCompleted(order.sessionId, order.charge, { eventId: 'evt_old_ts', paymentIntent: intentId }),
+    );
 
-    const res = await postWebhook(app, signed);
+    const timestamp = signed.headers['stripe-signature'].split(',')[0];
+    const oldTimestamp = `t=${Math.floor(Date.now() / 1000) - 3600}`;
+    const oldSig = signed.headers['stripe-signature'].replace(timestamp, oldTimestamp);
+
+    const res = await postWebhook(app, { ...signed, headers: { ...signed.headers, 'stripe-signature': oldSig } });
 
     expect(res.status).toBe(401);
     expect(await webhookRows()).toHaveLength(0);
     await expectUntouched(order);
   });
 
-  it('settles a redelivered event id once', async () => {
+  it('authorizes a redelivered event id once', async () => {
     const order = await openOrder();
-    const signed = paid(order.sessionId, order.charge, 'evt_dup_1');
+    const intentId = gateway.authorize(order.sessionId);
+    const signed = signWebhookAs(
+      gateway,
+      checkoutSessionCompleted(order.sessionId, order.charge, { eventId: 'evt_dup_1', paymentIntent: intentId }),
+    );
 
     const first = await postWebhook(app, signed);
     const second = await postWebhook(app, signed);
@@ -130,121 +119,108 @@ describe('Payment webhook (integration, real Postgres, real HMAC)', () => {
     expect([first.status, second.status]).toEqual([200, 200]);
     expect([first.body, second.body]).toEqual([{ status: 'processed' }, { status: 'duplicate' }]);
     expect(await webhookRows()).toHaveLength(1);
-    await expectSettledPaid(order);
+    await expectAuthorized(order);
   });
 
-  // The loser blocks on the winner's uncommitted insert behind UNIQUE(provider, event_id), then no-ops.
-  it('settles two concurrent deliveries of one event once', async () => {
+  it('authorizes two concurrent deliveries of one event once', async () => {
     const order = await openOrder();
-    const signed = paid(order.sessionId, order.charge, 'evt_race_1');
+    const intentId = gateway.authorize(order.sessionId);
+    const signed = signWebhookAs(
+      gateway,
+      checkoutSessionCompleted(order.sessionId, order.charge, { eventId: 'evt_race_1', paymentIntent: intentId }),
+    );
 
     const results = await Promise.all([postWebhook(app, signed), postWebhook(app, signed)]);
 
     expect(results.map((r) => r.status)).toEqual([200, 200]);
     expect(results.map((r) => r.body.status).sort()).toEqual(['duplicate', 'processed']);
     expect(await webhookRows()).toHaveLength(1);
-    await expectSettledPaid(order);
-  });
-
-  it('keeps a paid order when a failure arrives after it', async () => {
-    const order = await openOrder();
-    await postWebhook(app, paid(order.sessionId, order.charge, 'evt_win', 'pi_win')).expect(200);
-
-    const late = await postWebhook(app, expired(order.sessionId, 'evt_late_fail'));
-
-    expect(late.status).toBe(200);
-    expect(late.body).toEqual({ status: 'skipped' });
-    expect(await readPayment(app, order.orderId)).toMatchObject({ status: 'SUCCEEDED', providerIntentId: 'pi_win' });
-    const [lateRow] = await db
-      .select()
-      .from(schema.webhookEvents)
-      .where(eq(schema.webhookEvents.providerEventId, 'evt_late_fail'));
-    expect(lateRow.status).toBe('SKIPPED');
-    await expectSettledPaid(order);
-  });
-
-  it('keeps a failed order when a payment arrives after it', async () => {
-    const order = await openOrder();
-    await postWebhook(app, expired(order.sessionId, 'evt_fail_first')).expect(200);
-
-    const late = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_paid_late'));
-
-    expect(late.status).toBe(200);
-    expect(late.body).toEqual({ status: 'skipped' });
-    expect((await readOrder(app, order.orderId)).status).toBe('FAILED');
-    expect((await readReservation(app, order.orderId, order.variantId)).status).toBe('RELEASED');
-    expect(await readStock(app, order.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
-  });
-
-  it('fails the order and releases the hold on an expired session', async () => {
-    const order = await openOrder();
-
-    const res = await postWebhook(app, expired(order.sessionId, 'evt_fail_1'));
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'processed' });
-    expect((await readOrder(app, order.orderId)).status).toBe('FAILED');
-    expect((await readReservation(app, order.orderId, order.variantId)).status).toBe('RELEASED');
-    expect((await readStock(app, order.variantId)).quantityReserved).toBe(0);
-  });
-
-  // Stripe's async payment methods complete the session while it is still unpaid.
-  it('does not settle a completed session whose payment has not cleared', async () => {
-    const order = await openOrder();
-
-    const res = await postWebhook(
-      app,
-      paid(order.sessionId, { ...order.charge, paymentStatus: 'unpaid' }, 'evt_unpaid'),
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'skipped' });
-    await expectUntouched(order);
-  });
-
-  it('refuses a success reporting an amount that was never charged', async () => {
-    const order = await openOrder();
-
-    const res = await postWebhook(app, paid(order.sessionId, { ...order.charge, amountMinor: 1 }, 'evt_wrong_amount'));
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'skipped' });
-    await expectUntouched(order);
-  });
-
-  // Stripe reports real async clearance as checkout.session.async_payment_succeeded, which
-  // payment-webhook-contract shows is not applied. This only proves a skipped event id blocks nothing.
-  it('settles a paid completion that follows a skipped unpaid one', async () => {
-    const order = await openOrder();
-    await postWebhook(app, paid(order.sessionId, { ...order.charge, paymentStatus: 'unpaid' }, 'evt_unpaid')).expect(
-      200,
-    );
-
-    const res = await postWebhook(app, paid(order.sessionId, order.charge, 'evt_paid'));
-
-    expect(res.body).toEqual({ status: 'processed' });
-    await expectSettledPaid(order);
+    await expectAuthorized(order);
   });
 
   it('skips a delivery for a session with no local payment', async () => {
-    const order = await openOrder();
-
-    const res = await postWebhook(app, paid('cs_orphan_session', { amountMinor: 1, currency: 'VND' }, 'evt_orphan'));
+    const res = await postWebhook(
+      app,
+      signWebhookAs(
+        gateway,
+        checkoutSessionCompleted('cs_orphan_session', { amountMinor: 1, currency: 'VND' }, { eventId: 'evt_orphan' }),
+      ),
+    );
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'skipped' });
     expect(await webhookRows()).toMatchObject([{ providerEventId: 'evt_orphan', status: 'SKIPPED' }]);
-    await expectUntouched(order);
+  });
+
+  // A session opened before the saga took over checkout has no header: nothing will ever capture or
+  // void it, so its webhook changes nothing, and money it reports is a refund owed by hand.
+  describe('for a payment with no header', () => {
+    async function openWithoutHeader(): Promise<OpenOrder> {
+      const order = await openOrder();
+      await db.delete(schema.paymentOrders).where(eq(schema.paymentOrders.orderId, order.orderId));
+      return order;
+    }
+
+    async function refundsOwed(): Promise<number> {
+      const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
+      const line = text.split('\n').find((l) => l.startsWith('payment_refund_owed_total{source="webhook_direct"'));
+      return line ? Number(line.slice(line.lastIndexOf(' ') + 1)) : 0;
+    }
+
+    it('skips a paid completion without touching the payment, and counts the refund owed', async () => {
+      const order = await openWithoutHeader();
+      const before = await refundsOwed();
+
+      const res = await postWebhook(
+        app,
+        signWebhookAs(
+          gateway,
+          checkoutSessionCompleted(order.sessionId, order.charge, { eventId: 'evt_unfenced_paid' }),
+        ),
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: 'skipped' });
+      expect(await webhookRows()).toMatchObject([{ providerEventId: 'evt_unfenced_paid', status: 'SKIPPED' }]);
+      expect((await readPayment(app, order.orderId)).status).toBe('PENDING');
+      await expectUntouched(order);
+      expect(await refundsOwed()).toBe(before + 1);
+    });
+
+    it.each([
+      [
+        'an unpaid completion',
+        (order: OpenOrder) =>
+          checkoutSessionCompleted(
+            order.sessionId,
+            { ...order.charge, paymentStatus: 'unpaid' },
+            { eventId: 'evt_unfenced_unpaid' },
+          ),
+      ],
+      ['an expiry', (order: OpenOrder) => checkoutSessionExpired(order.sessionId, { eventId: 'evt_unfenced_expired' })],
+    ])('skips %s without counting a refund', async (_label, event) => {
+      const order = await openWithoutHeader();
+      const before = await refundsOwed();
+
+      const res = await postWebhook(app, signWebhookAs(gateway, event(order)));
+
+      expect(res.body).toEqual({ status: 'skipped' });
+      expect((await readPayment(app, order.orderId)).status).toBe('PENDING');
+      expect(await refundsOwed()).toBe(before);
+    });
   });
 
   it('ignores an event type it does not act on', async () => {
     const order = await openOrder();
-    const refund = signWebhook({
-      secret: WEBHOOK_SECRET,
-      event: { id: 'evt_refund', type: 'charge.refunded', data: { object: { id: order.sessionId } } },
-    });
 
-    const res = await postWebhook(app, refund);
+    const res = await postWebhook(
+      app,
+      signWebhookAs(gateway, {
+        id: 'evt_refund',
+        type: 'charge.refunded',
+        data: { object: { id: order.sessionId } },
+      }),
+    );
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ignored' });

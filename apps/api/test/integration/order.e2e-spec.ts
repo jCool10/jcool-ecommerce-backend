@@ -9,18 +9,21 @@ import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
-import { createTestPrincipal, newPrincipalToken } from '../setup/fixtures/principal.fixture';
+import { createTestPrincipal, newPrincipalToken, createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
+import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import * as schema from '../../src/shared/infrastructure/database/schema';
 
 const ABSENT_ID = testId();
 
 describe('Order (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let pool: Pool;
+  let db: DrizzleDB;
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithPool());
+    ({ app, pool, db } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
@@ -171,5 +174,76 @@ describe('Order (integration, real Postgres + Redis)', () => {
     expect(getByB.status).toBe(404);
     expect(unknown.status).toBe(404);
     expect(listB.body.items).toEqual([]);
+  });
+
+  it('hides RESERVING and REJECTED orders from the buyer in GET /orders and GET /orders/:id', async () => {
+    const token = await newPrincipalToken(app);
+    const { user } = await createTestPrincipal(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 0);
+
+    await addToCart(app, token, variantId, 1);
+    const rejectedRes = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
+    const rejectedOrderId = rejectedRes.body?.id;
+
+    const insertReservingOrderId = testId();
+    await db.insert(schema.orders).values({
+      id: insertReservingOrderId,
+      userId: user.id,
+      status: 'RESERVING',
+      currency: 'VND',
+      totalAmount: 100_000,
+      placedAt: new Date(),
+    });
+
+    const list = await request(server()).get('/orders').set(authHeader(token)).expect(200);
+    expect(list.body.items).toEqual([]);
+
+    if (rejectedOrderId) {
+      const byRejected = await request(server()).get(`/orders/${rejectedOrderId}`).set(authHeader(token));
+      expect([404, 400]).toContain(byRejected.status);
+    }
+  });
+
+  it('shows RESERVING and REJECTED orders to admin in GET /admin/orders with status filter', async () => {
+    const { user } = await createTestPrincipal(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 0);
+
+    const token = await newPrincipalToken(app);
+    await addToCart(app, token, variantId, 1);
+    const rejectedRes = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
+    const rejectedOrderId = rejectedRes.body?.id;
+
+    const insertReservingOrderId = testId();
+    await db.insert(schema.orders).values({
+      id: insertReservingOrderId,
+      userId: user.id,
+      status: 'RESERVING',
+      currency: 'VND',
+      totalAmount: 100_000,
+      placedAt: new Date(),
+    });
+
+    const { accessToken: adminToken } = await createTestAdminPrincipal(app);
+
+    const allOrders = await request(server()).get('/admin/orders').set(authHeader(adminToken)).expect(200);
+    const orderIds = allOrders.body.items.map((o: { id: string }) => o.id);
+    expect(orderIds).toContain(insertReservingOrderId);
+    if (rejectedOrderId) {
+      expect(orderIds).toContain(rejectedOrderId);
+    }
+
+    const reservingFiltered = await request(server())
+      .get('/admin/orders?status=RESERVING')
+      .set(authHeader(adminToken))
+      .expect(200);
+    expect(reservingFiltered.body.items.map((o: { id: string }) => o.id)).toContain(insertReservingOrderId);
+
+    const confirmingFiltered = await request(server())
+      .get('/admin/orders?status=CONFIRMING')
+      .set(authHeader(adminToken))
+      .expect(200);
+    expect(confirmingFiltered.body.items).toHaveLength(0);
   });
 });

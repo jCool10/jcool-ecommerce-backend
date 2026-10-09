@@ -38,9 +38,8 @@ describe('BusinessMetrics', () => {
     metrics.recordEventConsumed('order.placed', 'duplicate');
     metrics.recordConsumeRetry('order.paid');
     metrics.recordDeadLetter('order.paid', 'permanent');
-    metrics.recordSagaStep('payment_session', 'failed');
-    metrics.recordCompensation('ttl_expired');
-    metrics.recordReservationExpiry();
+    metrics.recordSagaStep('commit_stock', 'failed');
+    metrics.recordCompensation('late_authorization');
     metrics.recordTccBranch('inventory', 'release', 'fenced');
     metrics.recordRefundOwed('webhook_direct');
     metrics.recordCaptureConflict();
@@ -67,9 +66,8 @@ describe('BusinessMetrics', () => {
       'messaging_consume_total{event_type="order.placed",result="duplicate"} 1',
       'messaging_consume_retries_total{event_type="order.paid"} 1',
       'messaging_dlq_total{event_type="order.paid",reason="permanent"} 1',
-      'saga_step_total{step="payment_session",outcome="failed"} 1',
-      'saga_compensation_total{trigger="ttl_expired"} 1',
-      'reservation_expiry_total 1',
+      'saga_step_total{step="commit_stock",outcome="failed"} 1',
+      'saga_compensation_total{trigger="late_authorization"} 1',
       'tcc_branch_total{participant="inventory",op="release",outcome="fenced"} 1',
       'payment_refund_owed_total{source="webhook_direct"} 1',
       'payment_capture_conflict_total 1',

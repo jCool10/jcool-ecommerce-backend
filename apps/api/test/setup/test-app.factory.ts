@@ -48,7 +48,7 @@ export async function createTestApp(
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
-  process.env.RESERVATION_SWEEP_ENABLED = 'false';
+  process.env.SAGA_RUNNER_ENABLED = 'false';
   process.env.INVENTORY_HOLD_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window

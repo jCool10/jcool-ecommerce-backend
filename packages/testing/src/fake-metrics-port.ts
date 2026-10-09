@@ -30,7 +30,6 @@ const METHODS = [
   'recordOrderCreated',
   'recordRateLimitRejection',
   'recordRefundOwed',
-  'recordReservationExpiry',
   'recordRetentionSweep',
   'recordRetentionSweepFailure',
   'recordSagaStep',

@@ -9,10 +9,16 @@ import { OrderFailedEvent } from './events/order-failed.event';
 import { OrderExpiredEvent } from './events/order-expired.event';
 import { OrderCancelledEvent } from './events/order-cancelled.event';
 
-export type FinalizeOutcome =
+export type SettleOutcome =
   typeof OrderStatus.PAID | typeof OrderStatus.FAILED | typeof OrderStatus.EXPIRED | typeof OrderStatus.CANCELLED;
 
 export type OrderFinalizedEvent = OrderPaidEvent | OrderFailedEvent | OrderExpiredEvent | OrderCancelledEvent;
+
+interface Settlement {
+  finalizedAt: Date;
+  finalizeReason: string | null;
+  paymentRef: string | null;
+}
 
 /**
  * The transactional source of truth, and pure: no framework or DB imports. The total is computed
@@ -28,7 +34,7 @@ export class Order {
     public readonly items: readonly OrderItem[],
     public readonly totalAmountMinor: number,
     public readonly placedAt: Date | null,
-    // Stamped once, when the order settles; null while DRAFT/PENDING.
+    // Stamped once, when the order reaches a terminal status; null before that.
     public readonly finalizedAt: Date | null,
     public readonly finalizeReason: string | null,
     public readonly paymentRef: string | null,
@@ -97,46 +103,38 @@ export class Order {
     return Money.of(this.totalAmountMinor, this.currency);
   }
 
-  /** Throws `OrderTransitionError` from any non-DRAFT state; the use case maps that to a 409. */
-  place(now: Date): Order {
-    assertTransition(this.status, OrderStatus.PENDING);
-    return new Order(
-      this.id,
-      this.userId,
-      OrderStatus.PENDING,
-      this.currency,
-      this.items,
-      this.totalAmountMinor,
-      now,
-      null,
-      null,
-      null,
-    );
-  }
-
   isTerminal(): boolean {
     return isTerminal(this.status);
   }
 
-  /** Idempotency is the use case's job (terminal check + row lock) before it ever gets here. */
-  finalize(outcome: FinalizeOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
-    assertTransition(this.status, outcome);
-    return new Order(
-      this.id,
-      this.userId,
-      outcome,
-      this.currency,
-      this.items,
-      this.totalAmountMinor,
-      this.placedAt,
-      meta.now,
-      meta.reason ?? null,
-      meta.paymentRef ?? null,
-    );
+  /** `placedAt` is stamped here: the payment deadline runs from it, before the Try has answered. */
+  reserve(now: Date): Order {
+    return this.moveTo(OrderStatus.RESERVING, { placedAt: now });
+  }
+
+  confirmPlaced(): Order {
+    return this.moveTo(OrderStatus.PENDING);
+  }
+
+  reject(reason: string, now: Date): Order {
+    return this.moveTo(OrderStatus.REJECTED, { finalizedAt: now, finalizeReason: reason, paymentRef: null });
+  }
+
+  confirming(): Order {
+    return this.moveTo(OrderStatus.CONFIRMING);
+  }
+
+  /** Idempotency is the caller's job (row lock + saga version) before it ever gets here. */
+  settle(outcome: SettleOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
+    return this.moveTo(outcome, {
+      finalizedAt: meta.now,
+      finalizeReason: meta.reason ?? null,
+      paymentRef: meta.paymentRef ?? null,
+    });
   }
 
   toPlacedEvent(): OrderPlacedEvent {
-    if (this.id === null || this.placedAt === null) {
+    if (this.id === null || this.placedAt === null || this.status !== OrderStatus.PENDING) {
       throw new DomainError('Only a placed order can produce an OrderPlacedEvent');
     }
     return new OrderPlacedEvent(this.id, this.userId, this.totalAmountMinor, this.currency, this.placedAt);
@@ -165,5 +163,21 @@ export class Order {
       default:
         throw new DomainError(`Order in status ${this.status} has no finalization event`);
     }
+  }
+
+  private moveTo(to: OrderStatus, changes: Partial<Settlement> & { placedAt?: Date } = {}): Order {
+    assertTransition(this.status, to);
+    return new Order(
+      this.id,
+      this.userId,
+      to,
+      this.currency,
+      this.items,
+      this.totalAmountMinor,
+      changes.placedAt ?? this.placedAt,
+      changes.finalizedAt ?? this.finalizedAt,
+      changes.finalizeReason !== undefined ? changes.finalizeReason : this.finalizeReason,
+      changes.paymentRef !== undefined ? changes.paymentRef : this.paymentRef,
+    );
   }
 }

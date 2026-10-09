@@ -6,8 +6,8 @@ const LOG_CONTEXT = 'OrderEventsHandler';
 
 /**
  * Audit only, on purpose — not a placeholder. Every effect these events could trigger was already
- * applied by the transaction that emitted them (checkout holds the stock, finalize commits or
- * releases it), so a consumer that "reacted" would apply it twice.
+ * applied by the transaction that emitted them or by the checkout saga behind it (hold, commit,
+ * release, void), so a consumer that "reacted" would apply it twice.
  */
 @Injectable()
 export class OrderEventsHandler {

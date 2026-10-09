@@ -14,12 +14,11 @@ import { PAYMENT_REPOSITORY, type PaymentRepositoryPort } from '../ports/payment
 import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
 import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import { RecordAuthorizationUseCase, type RecordAuthorizationResult } from './record-authorization.use-case';
-import type { WebhookProcessResult } from './webhook-process-result';
+import type { WebhookProcessResult, WebhookSkipReason } from './webhook-process-result';
 
 type ValidEvent = Extract<VerifiedEvent, { kind: 'valid' }>;
-type SkipReason = Extract<WebhookProcessResult, { outcome: 'skipped' }>['reason'];
 
-const SKIP_REASON: Record<Extract<RecordAuthorizationResult, { outcome: 'skipped' }>['reason'], SkipReason> = {
+const SKIP_REASON: Record<Extract<RecordAuthorizationResult, { outcome: 'skipped' }>['reason'], WebhookSkipReason> = {
   not_authorized: 'awaiting_payment',
   payment_not_found: 'payment_not_found',
   already_recorded: 'already_settled',

@@ -17,9 +17,9 @@ import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from
 // lock / version-CAS actually contends. Each buyer has its own user, cart, and Idempotency-Key, so
 // the idempotency layer is transparent and only STOCK contends. Asserted on outcomes, not timing.
 //
-// > pool max (10) so the DB, not the app, is where the race is decided. No-deadlock rests on each
-// checkout using exactly one connection for its whole transaction (cart/catalog reads happen before
-// the tx opens; the contended stock-row lock is always held by a tx that waits on nothing else).
+// > pool max (10) so the DB, not the app, is where the race is decided. No-deadlock rests on a
+// checkout holding one connection at a time: its two order transactions and the stock Try between
+// them never nest, and the contended stock-row lock is held by a Try that waits on nothing else.
 const CONTENDERS = 16;
 
 const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
@@ -58,12 +58,14 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     return { variantId: product.variantId, statuses };
   }
 
-  async function orderLineCount(variantId: string): Promise<number> {
+  // A refused buyer's order survives as REJECTED, so the line count alone no longer tells winners apart.
+  async function orderStatuses(variantId: string): Promise<string[]> {
     const rows = await db
-      .select({ id: schema.orderItems.id })
+      .select({ status: schema.orders.status })
       .from(schema.orderItems)
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
       .where(eq(schema.orderItems.skuId, variantId));
-    return rows.length;
+    return rows.map(({ status }) => status).sort();
   }
 
   it('sells the last unit to exactly one of many buyers and 409s the rest', async () => {
@@ -78,8 +80,7 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     // Available pinned at exactly 0, never negative, and on-hand undecremented.
     expect(stock).toEqual({ onHand: 1, reserved: 1, available: 0 });
     expect(await countHeldReservations(app, variantId)).toBe(1);
-    // Every loser's checkout rolled fully back: exactly one order carries the SKU (the winner's).
-    expect(await orderLineCount(variantId)).toBe(1);
+    expect(await orderStatuses(variantId)).toEqual(['PENDING', ...Array<string>(CONTENDERS - 1).fill('REJECTED')]);
   });
 
   // K equals the default optimistic retry budget (3) on purpose: every CAS miss implies a rival's
@@ -96,6 +97,9 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     const stock = await getStockView(app, variantId);
     expect(stock).toEqual({ onHand: K, reserved: K, available: 0 });
     expect(await countHeldReservations(app, variantId)).toBe(K);
-    expect(await orderLineCount(variantId)).toBe(K);
+    expect(await orderStatuses(variantId)).toEqual([
+      ...Array<string>(K).fill('PENDING'),
+      ...Array<string>(CONTENDERS - K).fill('REJECTED'),
+    ]);
   });
 });

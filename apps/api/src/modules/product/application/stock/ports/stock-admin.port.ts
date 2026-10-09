@@ -5,7 +5,7 @@ import type { StockView } from './stock-repository.port';
 export type { StockView };
 
 /**
- * The operator's write side of stock, deliberately separate from PRODUCT_STOCK_RESERVATION — that port
+ * The operator's write side of stock, deliberately separate from INVENTORY_PARTICIPANT — that port
  * is the published language for Order (hold, commit, release), and putting a goods-receipt on
  * it would hand every consumer the ability to rewrite stock.
  */

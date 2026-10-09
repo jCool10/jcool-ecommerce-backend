@@ -40,7 +40,6 @@ import {
   PAYMENT_CAPTURE_CONFLICT_TOTAL,
   PAYMENT_REFUND_OWED_TOTAL,
   RATE_LIMIT_REJECTIONS_TOTAL,
-  RESERVATION_EXPIRY_TOTAL,
   RETENTION_ROWS_DELETED_TOTAL,
   RETENTION_SWEEP_DURATION_SECONDS,
   RETENTION_SWEEP_FAILURES_TOTAL,
@@ -73,7 +72,6 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(MESSAGING_DLQ_TOTAL) private readonly deadLetters: Counter<string>,
     @InjectMetric(SAGA_STEP_TOTAL) private readonly sagaSteps: Counter<string>,
     @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
-    @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
     @InjectMetric(TCC_BRANCH_TOTAL) private readonly tccBranches: Counter<string>,
     @InjectMetric(PAYMENT_REFUND_OWED_TOTAL) private readonly refundsOwed: Counter<string>,
     @InjectMetric(PAYMENT_CAPTURE_CONFLICT_TOTAL) private readonly captureConflicts: Counter<string>,
@@ -135,10 +133,6 @@ export class BusinessMetrics implements MetricsPort {
 
   recordCompensation(trigger: CompensationTrigger): void {
     this.safely('saga_compensation', () => this.compensations.inc({ trigger }));
-  }
-
-  recordReservationExpiry(): void {
-    this.safely('reservation_expiry', () => this.reservationExpiries.inc());
   }
 
   recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void {

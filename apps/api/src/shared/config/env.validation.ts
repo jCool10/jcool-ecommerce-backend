@@ -15,6 +15,7 @@ import {
   ThrottleEnv,
   validateEnv,
 } from '@jcool/platform/config';
+import { CHECKOUT_SAGA_DEFAULTS } from './checkout-saga.defaults';
 
 export enum InventoryLockStrategy {
   Pessimistic = 'pessimistic',
@@ -121,37 +122,83 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(0)
   ORDER_STALE_THRESHOLD_SEC?: number;
 
+  // Lower bounds only refuse nonsense: the fault suite runs a checkout end to end in under a minute.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  CHECKOUT_PAYMENT_DEADLINE_SEC?: number;
+
   @IsOptional()
   @StrictInt()
   @IsInt()
   @Min(0)
-  ORDER_TTL_SEC?: number;
+  CHECKOUT_PAY_CUTOFF_SEC?: number;
 
-  @IsOptional()
-  @IsStrictBoolean()
-  RESERVATION_SWEEP_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
   @IsOptional()
   @StrictInt()
   @IsInt()
-  @Min(1000)
-  RESERVATION_SWEEP_INTERVAL_MS?: number;
+  @Min(100)
+  @Max(60_000)
+  CHECKOUT_TRY_TIMEOUT_MS?: number;
 
-  // Capped because each distinct order in the batch costs a finalize transaction.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  CHECKOUT_HOLD_SAFETY_SEC?: number;
+
+  @IsOptional()
+  @IsStrictBoolean()
+  SAGA_RUNNER_ENABLED?: string;
+
+  // Below the 1000 floor the other sweeps use: the fault suite ticks every 500ms.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  @Max(3_600_000)
+  SAGA_RUNNER_INTERVAL_MS?: number;
+
   @IsOptional()
   @StrictInt()
   @IsInt()
   @Min(1)
   @Max(500)
-  RESERVATION_SWEEP_BATCH_SIZE?: number;
+  SAGA_RUNNER_BATCH_SIZE?: number;
 
-  // 0 is legal — e2e drives the sweep deterministically.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1000)
+  @Max(3_600_000)
+  SAGA_LEASE_MS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  SAGA_RETRY_BASE_MS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  @Max(3_600_000)
+  SAGA_RETRY_CAP_MS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  SAGA_KICK_CONCURRENCY?: number;
+
   @IsOptional()
   @StrictInt()
   @IsInt()
   @Min(0)
-  RESERVATION_SWEEP_GRACE_SEC?: number;
+  SAGA_AUTH_GRACE_SEC?: number;
 
   // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
@@ -181,6 +228,12 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsInt()
   @Min(14)
   RETENTION_WEBHOOK_EVENT_DAYS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  RETENTION_REJECTED_ORDER_DAYS?: number;
 
   // Min 1 — a 0 would make every entry stale the instant it is written, turning every read into a
   // stale serve plus a background rebuild.
@@ -318,12 +371,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsOptional()
   @IsEnum(InventoryLockStrategy)
   INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
-
-  // Duration form ("15m"/"1h").
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  INVENTORY_RESERVATION_TTL?: string;
 
   // Capped so a misconfig can't spin the CAS loop while it pins the stock row's write-lock.
   @IsOptional()
@@ -483,5 +530,46 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
   if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
     throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
   }
+  assertCheckoutSagaTimings(env);
   return env;
+}
+
+function assertCheckoutSagaTimings(env: EnvironmentVariables): void {
+  const value = (key: keyof typeof CHECKOUT_SAGA_DEFAULTS): number =>
+    (env[key as keyof EnvironmentVariables] as number | undefined) ?? CHECKOUT_SAGA_DEFAULTS[key];
+  const refuse = (keys: string, rule: string): never => {
+    throw new Error(`Environment validation failed -> ${keys}: ${rule}`);
+  };
+
+  const leaseMs = value('SAGA_LEASE_MS');
+  const captureMs = value('PAYMENT_CAPTURE_TIMEOUT_MS');
+  const tryMs = value('CHECKOUT_TRY_TIMEOUT_MS');
+  // Two advances holding one saga would both capture. A payment cancel is the slowest call a lease
+  // covers: up to four gateway requests of PAYMENT_CAPTURE_TIMEOUT_MS each.
+  if (leaseMs <= 4 * captureMs + 5_000) {
+    refuse('SAGA_LEASE_MS', `must exceed 4 × PAYMENT_CAPTURE_TIMEOUT_MS + 5000 (${4 * captureMs + 5_000})`);
+  }
+  if (leaseMs <= tryMs + 5_000) {
+    refuse('SAGA_LEASE_MS', `must exceed CHECKOUT_TRY_TIMEOUT_MS + 5000 (${tryMs + 5_000})`);
+  }
+  // A Try still running after the checkout gave up on it would hold a connection past the answer.
+  if (value('INVENTORY_TRY_LOCK_TIMEOUT_MS') >= tryMs) {
+    refuse('INVENTORY_TRY_LOCK_TIMEOUT_MS', 'must stay below CHECKOUT_TRY_TIMEOUT_MS');
+  }
+  if (value('SAGA_AUTH_GRACE_SEC') >= value('CHECKOUT_HOLD_SAFETY_SEC')) {
+    refuse('SAGA_AUTH_GRACE_SEC', 'must stay below CHECKOUT_HOLD_SAFETY_SEC, so the hold outlives the grace');
+  }
+  if (value('QUEUE_WORKER_CONCURRENCY') + value('SAGA_KICK_CONCURRENCY') >= value('DB_POOL_MAX')) {
+    refuse('QUEUE_WORKER_CONCURRENCY/SAGA_KICK_CONCURRENCY', 'together must stay below DB_POOL_MAX');
+  }
+  const sessionFloorSec = value('PAYMENT_SESSION_MIN_TTL_SEC') + value('PAYMENT_SESSION_EXPIRY_MARGIN_SEC');
+  if (value('CHECKOUT_PAY_CUTOFF_SEC') < sessionFloorSec + 30) {
+    refuse(
+      'CHECKOUT_PAY_CUTOFF_SEC',
+      `must be at least PAYMENT_SESSION_MIN_TTL_SEC + PAYMENT_SESSION_EXPIRY_MARGIN_SEC + 30 (${sessionFloorSec + 30})`,
+    );
+  }
+  if (value('CHECKOUT_PAYMENT_DEADLINE_SEC') <= value('CHECKOUT_PAY_CUTOFF_SEC')) {
+    refuse('CHECKOUT_PAYMENT_DEADLINE_SEC', 'must exceed CHECKOUT_PAY_CUTOFF_SEC');
+  }
 }

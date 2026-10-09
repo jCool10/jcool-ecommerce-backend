@@ -91,6 +91,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       'messaging:inbox',
       'messaging:outbox',
       'order:idempotency-keys',
+      'order:rejected-orders',
       'payment:webhook-events',
     ]);
   });

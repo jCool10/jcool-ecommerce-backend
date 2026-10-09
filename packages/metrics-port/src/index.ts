@@ -36,10 +36,17 @@ export type ConsumeResult = 'processed' | 'duplicate' | 'failed';
 
 export type DeadLetterReason = 'permanent' | 'attempts_exhausted';
 
-/** In the order the saga runs them. */
-export type SagaStep = 'reserve' | 'payment_session' | 'finalize';
+/** In the order the saga runs them; `compensate` counts each compensation tried. */
+export type SagaStep = 'try_reserve' | 'open_session' | 'commit_stock' | 'capture' | 'compensate';
 
-export type CompensationTrigger = 'payment_failed' | 'ttl_expired' | 'cancelled';
+export type CompensationTrigger =
+  | 'try_failed'
+  | 'expired'
+  | 'cancelled'
+  | 'commit_conflict'
+  | 'capture_failed'
+  | 'late_authorization'
+  | 'amount_mismatch';
 
 export type TccParticipant = 'inventory' | 'payment';
 
@@ -49,7 +56,7 @@ export type TccOp = 'try' | 'commit' | 'release' | 'restock' | 'open_session' | 
 export type TccBranchOutcome = 'ok' | 'idempotent' | 'conflict' | 'fenced' | 'rejected' | 'error';
 
 /** WHICH PATH noticed money on an order that will never ship — the observer, not the cause. */
-export type RefundOwedSource = 'expire_session' | 'webhook_direct' | 'settlement_event';
+export type RefundOwedSource = 'webhook_direct';
 
 export type MailKind = 'email_verification' | 'password_reset' | 'order_paid';
 
@@ -82,7 +89,7 @@ export interface MetricsPort {
   recordEventConsumed(eventType: string, result: ConsumeResult): void;
   recordConsumeRetry(eventType: string): void;
   recordDeadLetter(eventType: string, reason: DeadLetterReason): void;
-  /** Read as a funnel: orders holding stock that never reach `finalize` are what the sweep expires. */
+  /** `failed` covers both a refusal and a call with no answer; a compensation is counted per try. */
   recordSagaStep(step: SagaStep, outcome: 'success' | 'failed'): void;
   recordCompensation(trigger: CompensationTrigger): void;
   recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void;
@@ -90,7 +97,6 @@ export interface MetricsPort {
   recordRefundOwed(source: RefundOwedSource): void;
   /** A cancel that found the order's money already captured: someone must refund by hand. */
   recordCaptureConflict(): void;
-  recordReservationExpiry(): void;
   /** Nothing retries a failed send, so this counts mail actually lost, not mail delayed. */
   recordMailSendFailure(kind: MailKind): void;
   /** `sweep` is a fixed `context:table` name. Same for the two below. */

@@ -15,7 +15,6 @@ const LADDER_ENV = [
   'ORDER_PAID_CONSUMER_ATTEMPTS',
   'ORDER_PAID_CONSUMER_BACKOFF_CAP_MS',
 ];
-const SESSION_FLOOR_ENV = ['PAYMENT_SESSION_MIN_TTL_SEC', 'PAYMENT_SESSION_EXPIRY_MARGIN_SEC'];
 
 describe('retry ladders', () => {
   afterEach(() => {
@@ -40,21 +39,6 @@ describe('retry ladders', () => {
     expect(orderPaid).toBeGreaterThanOrEqual(30 * MINUTE_MS);
     expect(orderPaid).toBeLessThan(40 * MINUTE_MS);
   });
-
-  // order.expired/order.cancelled ride the same ladder as order.paid, and this is the property that
-  // fix depends on: a Checkout Session that outlives every retry must still die at Stripe's own clock
-  // before this ladder gives up, or a dead-lettered close leaves a payable page on released stock.
-  it('outlasts a Checkout Session lifetime, with margin, on the ladder order.expired and order.cancelled share with order.paid', () => {
-    for (const key of [...LADDER_ENV, ...SESSION_FLOOR_ENV]) vi.stubEnv(key, '');
-    const { queue, payment } = configuration();
-
-    const horizon = retryHorizonMs(queue.orderPaidAttempts, (n) =>
-      cappedBackoffMs(n, queue.consumerBackoffMs, queue.orderPaidBackoffCapMs),
-    );
-    const sessionLifetimeMs = (payment.sessionMinTtlSec + payment.sessionExpiryMarginSec) * 1000;
-
-    expect(horizon).toBeGreaterThan(sessionLifetimeMs);
-  });
 });
 
 describe('jobOptionsFor', () => {
@@ -70,13 +54,14 @@ describe('jobOptionsFor', () => {
 
   it('keeps order.paid on the long ladder without a priority and every other event on the defaults', () => {
     expect(jobOptionsFor('order.paid', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
-    expect(jobOptionsFor('order.placed', 15)).toEqual({});
+    for (const eventType of ['order.placed', 'order.expired', 'order.cancelled', 'order.failed']) {
+      expect(jobOptionsFor(eventType, 15), eventType).toEqual({});
+    }
   });
 
-  // The dead-letter fix: these two used to fall through to the short shared ladder (~2 minutes),
-  // dead-lettering long before a Stripe Checkout Session dies on its own.
-  it('gives order.expired and order.cancelled the same long ladder as order.paid', () => {
-    expect(jobOptionsFor('order.expired', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
-    expect(jobOptionsFor('order.cancelled', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
+  // On the short ladder (~2 minutes) a database blip dead-letters the hold, and the saga then expires
+  // an order the buyer has already paid for.
+  it('gives payment.authorized the same long ladder as order.paid', () => {
+    expect(jobOptionsFor('payment.authorized', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
   });
 });

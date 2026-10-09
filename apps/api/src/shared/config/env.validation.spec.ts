@@ -140,8 +140,95 @@ describe('env validation', () => {
         INVENTORY_HOLD_SWEEP_INTERVAL_MS: '3600000',
         INVENTORY_HOLD_SWEEP_BATCH_SIZE: '500',
         INVENTORY_TRY_LOCK_TIMEOUT_MS: '30000',
+        CHECKOUT_TRY_TIMEOUT_MS: '30001',
       }),
     ).not.toThrow();
+  });
+
+  describe('checkout saga', () => {
+    // The fault suite's short timings, as the api runs them while every participant is in-process.
+    const SHORT = {
+      PAYMENT_SESSION_MIN_TTL_SEC: '0',
+      PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '0',
+      PAYMENT_CAPTURE_TIMEOUT_MS: '1000',
+      INVENTORY_TRY_LOCK_TIMEOUT_MS: '600',
+      CHECKOUT_PAYMENT_DEADLINE_SEC: '45',
+      CHECKOUT_PAY_CUTOFF_SEC: '30',
+      CHECKOUT_TRY_TIMEOUT_MS: '1000',
+      CHECKOUT_HOLD_SAFETY_SEC: '30',
+      SAGA_RUNNER_INTERVAL_MS: '500',
+      SAGA_RETRY_BASE_MS: '200',
+      SAGA_RETRY_CAP_MS: '2000',
+      SAGA_LEASE_MS: '11000',
+      SAGA_AUTH_GRACE_SEC: '5',
+    };
+
+    it('boots on the defaults and on the short fault-suite timings', () => {
+      expect(() => validate(BASE_ENV)).not.toThrow();
+      expect(() => validate({ ...BASE_ENV, ...SHORT })).not.toThrow();
+    });
+
+    it('bounds each saga setting on its own', () => {
+      const refused: Array<[string, string]> = [
+        ['SAGA_RUNNER_ENABLED', '1'],
+        ['SAGA_RUNNER_INTERVAL_MS', '99'],
+        ['SAGA_RUNNER_BATCH_SIZE', '0'],
+        ['SAGA_RUNNER_BATCH_SIZE', '501'],
+        ['SAGA_LEASE_MS', '999'],
+        ['SAGA_RETRY_BASE_MS', '99'],
+        ['SAGA_RETRY_CAP_MS', '99'],
+        ['SAGA_KICK_CONCURRENCY', '0'],
+        ['SAGA_AUTH_GRACE_SEC', '-1'],
+        ['CHECKOUT_TRY_TIMEOUT_MS', '99'],
+        ['CHECKOUT_PAYMENT_DEADLINE_SEC', '0'],
+        ['CHECKOUT_HOLD_SAFETY_SEC', '0'],
+        ['RETENTION_REJECTED_ORDER_DAYS', '0'],
+      ];
+      for (const [key, value] of refused) {
+        expect(() => validate({ ...BASE_ENV, [key]: value }), `${key}=${value}`).toThrow(new RegExp(key));
+      }
+    });
+
+    it('keeps the lease longer than the slowest participant call it covers', () => {
+      // A payment cancel makes up to four gateway calls of PAYMENT_CAPTURE_TIMEOUT_MS each.
+      expect(() => validate({ ...BASE_ENV, PAYMENT_CAPTURE_TIMEOUT_MS: '13750', SAGA_LEASE_MS: '60000' })).toThrow(
+        /SAGA_LEASE_MS/,
+      );
+      expect(() =>
+        validate({ ...BASE_ENV, PAYMENT_CAPTURE_TIMEOUT_MS: '13749', SAGA_LEASE_MS: '60000' }),
+      ).not.toThrow();
+      expect(() => validate({ ...BASE_ENV, ...SHORT, CHECKOUT_TRY_TIMEOUT_MS: '6000' })).toThrow(/SAGA_LEASE_MS/);
+    });
+
+    it("keeps inventory's whole-Try budget inside the checkout's Try timeout", () => {
+      expect(() => validate({ ...BASE_ENV, INVENTORY_TRY_LOCK_TIMEOUT_MS: '3000' })).toThrow(
+        /INVENTORY_TRY_LOCK_TIMEOUT_MS/,
+      );
+      expect(() => validate({ ...BASE_ENV, INVENTORY_TRY_LOCK_TIMEOUT_MS: '2999' })).not.toThrow();
+    });
+
+    it('keeps the hold alive through the authorization grace', () => {
+      expect(() => validate({ ...BASE_ENV, SAGA_AUTH_GRACE_SEC: '3600' })).toThrow(/SAGA_AUTH_GRACE_SEC/);
+      expect(() => validate({ ...BASE_ENV, SAGA_AUTH_GRACE_SEC: '3599' })).not.toThrow();
+    });
+
+    it('leaves the HTTP path a connection when queue workers and saga kicks are all busy', () => {
+      expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '8' })).toThrow(/SAGA_KICK_CONCURRENCY/);
+      expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '7' })).not.toThrow();
+      expect(() => validate({ ...BASE_ENV, SAGA_KICK_CONCURRENCY: '4', DB_POOL_MAX: '12' })).not.toThrow();
+    });
+
+    it('closes /pay early enough for the shortest session the gateway accepts', () => {
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_PAY_CUTOFF_SEC: '1949' })).toThrow(/CHECKOUT_PAY_CUTOFF_SEC/);
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_PAY_CUTOFF_SEC: '1950' })).not.toThrow();
+    });
+
+    it('keeps the payment deadline past the /pay cutoff', () => {
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_PAYMENT_DEADLINE_SEC: '1980' })).toThrow(
+        /CHECKOUT_PAYMENT_DEADLINE_SEC/,
+      );
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_PAYMENT_DEADLINE_SEC: '1981' })).not.toThrow();
+    });
   });
 
   // The platform injects its own variables, and a retired key can linger in a deployment.

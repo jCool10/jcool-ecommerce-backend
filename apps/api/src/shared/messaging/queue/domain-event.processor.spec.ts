@@ -89,16 +89,16 @@ describe('DomainEventProcessor', () => {
   });
 
   it('counts a failed consume under a bounded event label', async () => {
-    const closeExpired = vi.fn().mockRejectedValue(new Error('handler exploded'));
-    const { processor, recordEventConsumed } = build({ handlers: { closeExpired } });
+    const step = vi.fn().mockRejectedValue(new Error('handler exploded'));
+    const { processor, recordEventConsumed } = build({ handlers: { prepareAuthorized: () => Promise.resolve(step) } });
 
-    await expect(processor.process(job({ eventType: 'order.expired' }))).rejects.toThrow('handler exploded');
+    await expect(processor.process(job({ eventType: 'payment.authorized' }))).rejects.toThrow('handler exploded');
     // A new id, because this fake keeps the claim a real rollback would release.
     const unknownEvent = job({ outboxId: sampleId(3), eventType: 'order.whatever' });
     await expect(processor.process(unknownEvent)).rejects.toBeInstanceOf(UnhandledEventError);
 
     expect(recordEventConsumed.mock.calls).toEqual([
-      ['order.expired', 'failed'],
+      ['payment.authorized', 'failed'],
       ['unregistered', 'failed'],
     ]);
   });

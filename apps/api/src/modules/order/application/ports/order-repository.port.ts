@@ -6,7 +6,7 @@ import { MAX_PENDING_ORDERS_PER_USER } from '../../order.constants';
 
 export const ORDER_REPOSITORY = Symbol('ORDER_REPOSITORY');
 
-/** Thrown by `createCheckout` before any stock hold, so a refusal leaves no order and no reservation. */
+/** Thrown by `createReserving` before any stock is asked for, so a refusal leaves nothing behind. */
 export class TooManyPendingOrdersError extends DomainError {
   constructor(
     public readonly userId: string,
@@ -17,16 +17,9 @@ export class TooManyPendingOrdersError extends DomainError {
   }
 }
 
-export interface CheckoutPersistResult {
-  orderId: string;
-  /** false = an earlier attempt already committed this order under the same key; returned untouched. */
-  created: boolean;
-}
-
-export interface StalePendingOrder {
-  id: string;
-  placedAt: Date;
-}
+/** `created: false`: an earlier attempt already placed an order under the same key; returned untouched. */
+export type CreateReservingResult<S> =
+  { orderId: string; created: true; saga: S } | { orderId: string; created: false };
 
 export interface OrderPageQuery {
   /** 1-based. */
@@ -47,56 +40,45 @@ export interface OrderPage {
 
 export interface OrderRepositoryPort {
   /**
-   * Order + stock hold + outbox event + idempotency flip commit or roll back together, in one
-   * transaction. An existing order under the same key returns `created: false` and runs none of the
-   * callbacks; the unique `orders.idempotency_key` still backstops a race that slips past that
-   * check. `appendEvent` runs only for a genuinely new order — a reclaim heal re-emits nothing.
-   * Serializes per user with `pg_advisory_xact_lock` before counting this user's PENDING orders,
-   * throwing `TooManyPendingOrdersError` at the cap instead of opening a new hold.
+   * Inserts the RESERVING order and, through `insertSaga`, its saga in one transaction. Serialized per
+   * user with `pg_advisory_xact_lock` before counting the user's open orders, throwing
+   * `TooManyPendingOrdersError` at the cap. An existing order under the same key returns
+   * `created: false` without calling `insertSaga`; the unique `(user_id, idempotency_key)` still
+   * backstops a race that slips past that check.
    */
-  createCheckout(
+  createReserving<S>(
     order: Order,
     idempotencyKey: string | null,
-    reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
-    appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
-    complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
-  ): Promise<CheckoutPersistResult>;
+    insertSaga: (tx: DrizzleTx, orderId: string) => Promise<S>,
+  ): Promise<CreateReservingResult<S>>;
 
   /**
-   * Run `fn` in one transaction — the application layer owns the finalize unit of work. A caller
-   * that already holds one passes it in and `fn` joins it instead, so a finalize driven from a
-   * message commits or rolls back with whatever else that transaction is protecting.
+   * A caller that already holds a transaction passes it in and `fn` joins it, so a write driven from
+   * a message commits or rolls back with that message's inbox claim.
    */
   withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>, join?: DrizzleTx): Promise<T>;
 
-  /**
-   * The row lock that serializes concurrent finalizers: the second waits, re-reads the now-terminal
-   * row, and no-ops. Not user-scoped — the caller authorizes against the aggregate itself.
-   */
+  /** Locked before the saga row, everywhere, so the two cannot deadlock. Not user-scoped. */
   findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null>;
 
-  /** Only ever called on a row already locked by `findByIdForUpdate`. */
-  persistFinalization(order: Order, tx: DrizzleTx): Promise<void>;
+  /** Status and settlement stamps; only ever called on a row locked by `findByIdForUpdate`. */
+  saveStatus(order: Order, tx: DrizzleTx): Promise<void>;
 
-  /** Null when the order is absent or owned by someone else — the two are indistinguishable. */
+  /** Frees the key of a rejected order, so a retry under it places a new one. */
+  clearIdempotencyKey(orderId: string, tx: DrizzleTx): Promise<void>;
+
+  /** Null when absent, owned by someone else, or not yet visible to the buyer. */
   findForUser(orderId: string, userId: string): Promise<Order | null>;
 
-  /** Not user-scoped — for cross-context callers that authorize ownership themselves. */
+  /** Not user-scoped, and sees every status — for callers that authorize and filter themselves. */
   findById(orderId: string): Promise<Order | null>;
 
-  /** Newest first. */
+  /** Newest first, buyer-visible statuses only. */
   findPageForUser(userId: string, query: OrderPageQuery): Promise<OrderPage>;
 
-  /**
-   * The same page unscoped, for the admin queue. Filtering by status has no index to use
-   * (`idx_orders_pending_placed_at` is partial on PENDING), so it is a scan the page size bounds.
-   */
+  /** The same page unscoped and unfiltered, for the admin queue: a scan the page size bounds. */
   findPage(query: AdminOrderPageQuery): Promise<OrderPage>;
 
-  /**
-   * The reconciliation sweep's work queue, read `FOR UPDATE SKIP LOCKED` so it never queues behind a
-   * finalize in progress. The lock lasts only for the statement, so two sweeps can still pick the
-   * same order — finalize's terminal guard, not this read, is what makes that harmless.
-   */
-  findStalePending(input: { placedBefore: Date; limit: number }): Promise<StalePendingOrder[]>;
+  /** Deletes up to `limit` REJECTED orders finalized before `cutoff`, with their items and saga. */
+  deleteRejectedBefore(cutoff: Date, limit: number): Promise<number>;
 }

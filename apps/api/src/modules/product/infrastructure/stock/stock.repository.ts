@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, eq, lt, sql } from 'drizzle-orm';
-import { durationToMs } from '@jcool/kernel';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
 import { InsufficientStockError } from '../../domain/stock/errors/insufficient-stock.error';
@@ -10,8 +9,6 @@ import { ReservationTimeoutError } from '../../domain/stock/errors/reservation-t
 import { ReservationOrderStatus } from '../../domain/stock/reservation-order-status';
 import { ReservationStatus } from '../../domain/stock/reservation-status';
 import type {
-  ExpiredHold,
-  ExpiredHoldQuery,
   HoldOptions,
   LapsedHeaderQuery,
   LapsedHold,
@@ -43,7 +40,6 @@ const LINE_MOVES: Record<LineTarget, { from: ReservationStatus; onHand: -1 | 0 |
 
 @Injectable()
 export class StockRepository implements StockRepositoryPort {
-  private readonly reservationTtlMs: number;
   private readonly maxRetries: number;
   private readonly bounds = new WeakMap<DrizzleTx, TransactionBound>();
 
@@ -52,7 +48,6 @@ export class StockRepository implements StockRepositoryPort {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
     config: ConfigService,
   ) {
-    this.reservationTtlMs = durationToMs(config.getOrThrow<string>('inventory.reservationTtl'));
     this.maxRetries = config.getOrThrow<number>('inventory.optimisticMaxRetries');
   }
 
@@ -115,7 +110,7 @@ export class StockRepository implements StockRepositoryPort {
     tx: DrizzleTx,
     orderId: string,
     lines: ReservationLine[],
-    { expiresAt, reservationIds }: HoldOptions = {},
+    { expiresAt, reservationIds }: HoldOptions,
   ): Promise<void> {
     const ids = reservationIds ?? (await this.mintReservationIds(lines));
     // Lock rows in a deterministic order so two orders holding the same SKUs can't deadlock.
@@ -159,7 +154,7 @@ export class StockRepository implements StockRepositoryPort {
     tx: DrizzleTx,
     orderId: string,
     lines: ReservationLine[],
-    { expiresAt, reservationIds }: HoldOptions = {},
+    { expiresAt, reservationIds }: HoldOptions,
   ): Promise<void> {
     const ids = reservationIds ?? (await this.mintReservationIds(lines));
     // A successful UPDATE still holds a row write-lock until the tx ends, so keep the same
@@ -190,7 +185,7 @@ export class StockRepository implements StockRepositoryPort {
     orderId: string,
     variantId: string,
     quantity: number,
-    expiresAt: Date = this.computeExpiry(),
+    expiresAt: Date,
   ): Promise<void> {
     await tx
       .insert(reservations)
@@ -319,31 +314,6 @@ export class StockRepository implements StockRepositoryPort {
     return { applied: true, alreadyResolved: false, count };
   }
 
-  async findExpiredHolds({ expiredBefore, limit }: ExpiredHoldQuery): Promise<ExpiredHold[]> {
-    // `SKIP LOCKED` steps over holds a finalize is already resolving instead of queueing behind its
-    // row lock; the lock itself lasts only this statement, so it dedupes nothing beyond that — the
-    // caller's terminal guard is what makes two sweeps picking the same order harmless.
-    const rows = await this.db
-      .select({ orderId: reservations.orderId, expiresAt: reservations.expiresAt })
-      .from(reservations)
-      .where(and(eq(reservations.status, ReservationStatus.HELD), lt(reservations.expiresAt, expiredBefore)))
-      .orderBy(asc(reservations.expiresAt))
-      .limit(limit)
-      .for('update', { skipLocked: true });
-
-    // An order's lines each carry their own row, so collapse them: the caller acts per order, and a
-    // wide order must not spend the whole batch. `expires_at < :t` already dropped NULLs.
-    const earliest = new Map<string, Date>();
-    for (const row of rows) {
-      const expiresAt = row.expiresAt as Date;
-      const seen = earliest.get(row.orderId);
-      if (seen === undefined || expiresAt < seen) {
-        earliest.set(row.orderId, expiresAt);
-      }
-    }
-    return [...earliest].map(([orderId, expiresAt]) => ({ orderId, expiresAt }));
-  }
-
   async insertHeader(tx: DrizzleTx, { orderId, status, holdUntil }: ReservationOrderHeader): Promise<boolean> {
     await this.spendBound(tx);
     const inserted = await tx
@@ -385,10 +355,6 @@ export class StockRepository implements StockRepositoryPort {
       .for('update', { skipLocked: true });
     // `hold_until < :t` already dropped NULLs.
     return rows.map(({ orderId, holdUntil }) => ({ orderId, holdUntil: holdUntil as Date }));
-  }
-
-  private computeExpiry(): Date {
-    return new Date(Date.now() + this.reservationTtlMs);
   }
 }
 

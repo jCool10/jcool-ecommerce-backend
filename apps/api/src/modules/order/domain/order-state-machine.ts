@@ -14,20 +14,24 @@ interface Transition {
 }
 
 const TRANSITIONS: readonly Transition[] = [
-  { from: OrderStatus.DRAFT, to: OrderStatus.PENDING, wired: true }, // place order
-  { from: OrderStatus.DRAFT, to: OrderStatus.CANCELLED, wired: true }, // discard a draft
-  { from: OrderStatus.PENDING, to: OrderStatus.PAID, wired: true }, // finalize: payment webhook success / reconcile paid
-  { from: OrderStatus.PENDING, to: OrderStatus.FAILED, wired: true }, // finalize: payment webhook failure / reconcile failed
-  { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // finalize: expiry sweep on an unpaid hold
-  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: true }, // finalize: user/admin cancel
+  { from: OrderStatus.DRAFT, to: OrderStatus.RESERVING, wired: true }, // checkout: stock Try about to go out
+  { from: OrderStatus.RESERVING, to: OrderStatus.PENDING, wired: true }, // Try held the stock
+  { from: OrderStatus.RESERVING, to: OrderStatus.REJECTED, wired: true }, // Try refused, timed out, or was abandoned
+  { from: OrderStatus.PENDING, to: OrderStatus.CONFIRMING, wired: true }, // authorization matched the total
+  { from: OrderStatus.PENDING, to: OrderStatus.FAILED, wired: true }, // authorization did not match the total
+  { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // deadline and grace passed unpaid
+  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: true }, // user/admin cancel
+  { from: OrderStatus.CONFIRMING, to: OrderStatus.PAID, wired: true }, // captured
+  { from: OrderStatus.CONFIRMING, to: OrderStatus.FAILED, wired: true }, // commit refused, or not capturable
 ];
 
-// The guard that turns an at-least-once webhook into an exactly-once effect: nothing leaves these.
+// The guard that turns an at-least-once event into an exactly-once effect: nothing leaves these.
 const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
   OrderStatus.PAID,
   OrderStatus.FAILED,
   OrderStatus.EXPIRED,
   OrderStatus.CANCELLED,
+  OrderStatus.REJECTED,
 ]);
 
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {

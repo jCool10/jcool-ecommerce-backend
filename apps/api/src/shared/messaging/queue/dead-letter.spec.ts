@@ -62,7 +62,7 @@ describe('DeadLetterRouter', () => {
   it('labels the reason and folds an unregistered event type', async () => {
     const { router, recordDeadLetter } = build();
 
-    await router.route(finishedJob(), new UnhandledEventError('payment.succeeded'));
+    await router.route(finishedJob(), new UnhandledEventError('payment.refunded'));
     await router.route(finishedJob({ name: 'attacker.controlled.name' }), new Error('database unavailable'));
 
     expect(recordDeadLetter.mock.calls).toEqual([

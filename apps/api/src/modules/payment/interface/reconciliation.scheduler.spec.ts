@@ -3,33 +3,17 @@ import type { ClsService } from 'nestjs-cls';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type {
-  ReconcileStaleOrdersUseCase,
-  ReconcileSummary,
-  ReconcileTccPaymentsUseCase,
-  ReconcileTccSummary,
-} from '../application/use-cases';
+import type { ReconcileTccPaymentsUseCase, ReconcileTccSummary } from '../application/use-cases';
 import { ReconciliationScheduler } from './reconciliation.scheduler';
 
 const CONFIG: Record<string, unknown> = {
   'reconcile.enabled': true,
   'reconcile.intervalMs': 60_000,
   'reconcile.staleAfterSec': 120,
-  'reconcile.orderTtlSec': 900,
   'reconcile.batchSize': 50,
 };
 
-const IDLE: ReconcileSummary = {
-  scanned: 0,
-  finalized: 0,
-  stillPending: 0,
-  alreadySettled: 0,
-  raced: 0,
-  unresolved: 0,
-  errors: 0,
-};
-
-const IDLE_TCC: ReconcileTccSummary = {
+const IDLE: ReconcileTccSummary = {
   scanned: 0,
   authorized: 0,
   expired: 0,
@@ -40,23 +24,18 @@ const IDLE_TCC: ReconcileTccSummary = {
   errors: 0,
 };
 
-function build(
-  overrides: Record<string, unknown> = {},
-  execute = vi.fn().mockResolvedValue(IDLE),
-  executeTcc = vi.fn().mockResolvedValue(IDLE_TCC),
-) {
+function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockResolvedValue(IDLE)) {
   const registry = { addInterval: vi.fn(), deleteInterval: vi.fn(), doesExist: vi.fn().mockReturnValue(true) };
   const error = vi.fn();
   const make = () =>
     new ReconciliationScheduler(
-      { execute } as unknown as ReconcileStaleOrdersUseCase,
-      { execute: executeTcc } as unknown as ReconcileTccPaymentsUseCase,
+      { execute } as unknown as ReconcileTccPaymentsUseCase,
       fakeConfigService({ ...CONFIG, ...overrides }),
       registry as unknown as SchedulerRegistry,
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
       fakePinoLogger({ error }),
     );
-  return { make, registry, error, execute, executeTcc };
+  return { make, registry, error, execute };
 }
 
 describe('ReconciliationScheduler', () => {
@@ -83,16 +62,15 @@ describe('ReconciliationScheduler', () => {
     }
   });
 
-  it('registers one timer that drives a sweep once the period elapses', async () => {
-    const { make, registry, execute, executeTcc } = build();
+  it('registers one timer that reconciles the TCC payments once the period elapses', async () => {
+    const { make, registry, execute } = build();
 
     make().onModuleInit();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(registry.addInterval).toHaveBeenCalledWith('payment-reconcile-stale-orders', expect.anything());
+    expect(registry.addInterval).toHaveBeenCalledWith('payment-reconcile-tcc', expect.anything());
     expect(vi.getTimerCount()).toBe(1);
-    expect(execute).toHaveBeenCalledWith({ staleAfterSec: 120, ttlSec: 900, batchSize: 50 });
-    expect(executeTcc).toHaveBeenCalledWith({ staleAfterSec: 120, batchSize: 50 });
+    expect(execute).toHaveBeenCalledExactlyOnceWith({ staleAfterSec: 120, batchSize: 50 });
   });
 
   it('registers nothing at all when disabled', () => {
@@ -106,7 +84,7 @@ describe('ReconciliationScheduler', () => {
 
   it('skips a tick while the previous sweep is still working', async () => {
     let release: () => void = () => {};
-    const execute = vi.fn(() => new Promise<ReconcileSummary>((resolve) => (release = () => resolve(IDLE))));
+    const execute = vi.fn(() => new Promise<ReconcileTccSummary>((resolve) => (release = () => resolve(IDLE))));
     const scheduler = build({}, execute).make();
 
     const first = scheduler.tick();
@@ -119,7 +97,7 @@ describe('ReconciliationScheduler', () => {
 
   // An unhandled rejection inside a timer callback takes the process down with it.
   it('swallows a sweep failure and frees the guard for the next tick', async () => {
-    const execute = vi.fn().mockRejectedValue(new Error('orders query failed'));
+    const execute = vi.fn().mockRejectedValue(new Error('payments query failed'));
     const { make, error } = build({}, execute);
     const scheduler = make();
 
@@ -128,20 +106,5 @@ describe('ReconciliationScheduler', () => {
 
     await scheduler.tick();
     expect(execute).toHaveBeenCalledTimes(2);
-  });
-
-  // Two independent backstops: one that cannot read orders must not stall the one releasing holds.
-  it('still sweeps fenced payments when the order sweep fails, and the other way round', async () => {
-    const failing = () => vi.fn().mockRejectedValue(new Error('query failed'));
-    const orderSweepDown = build({}, failing());
-    const tccSweepDown = build({}, undefined, failing());
-
-    await orderSweepDown.make().tick();
-    await tccSweepDown.make().tick();
-
-    expect(orderSweepDown.executeTcc).toHaveBeenCalledOnce();
-    expect(orderSweepDown.error).toHaveBeenCalledOnce();
-    expect(tccSweepDown.execute).toHaveBeenCalledOnce();
-    expect(tccSweepDown.error).toHaveBeenCalledOnce();
   });
 });

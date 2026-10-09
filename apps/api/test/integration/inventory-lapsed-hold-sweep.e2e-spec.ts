@@ -5,14 +5,9 @@ import {
   INVENTORY_PARTICIPANT,
   type InventoryParticipant,
 } from '../../src/modules/product/application/public/inventory-participant.port';
-import {
-  STOCK_REPOSITORY,
-  type StockRepositoryPort,
-} from '../../src/modules/product/application/stock/ports/stock-repository.port';
 import { ReleaseLapsedHoldsUseCase } from '../../src/modules/product/application/stock/release-lapsed-holds.use-case';
-import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { lapseHoldHeader, readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
-import { lapseReservation, readStock, reservationsFor } from '../setup/fixtures/order-flow.fixture';
+import { readStock, reservationsFor } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 
@@ -23,14 +18,13 @@ const SWEEP = { batchSize: 50 };
 describe('Lapsed participant hold sweep (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let db: DrizzleDB;
   let participant: InventoryParticipant;
   let sweep: ReleaseLapsedHoldsUseCase;
   let sku: string;
   let order: string;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool());
+    ({ app, pool } = await createTestAppWithPool());
     participant = app.get<InventoryParticipant>(INVENTORY_PARTICIPANT);
     sweep = app.get(ReleaseLapsedHoldsUseCase);
   });
@@ -84,18 +78,6 @@ describe('Lapsed participant hold sweep (integration, real Postgres)', () => {
 
     expect((await readReservationOrder(app, order)).status).toBe('HELD');
     expect((await readStock(app, sku)).quantityReserved).toBe(QUANTITY);
-  });
-
-  it('never touches a lapsed hold placed by the current checkout path', async () => {
-    const legacyOrder = testId();
-    const stock = app.get<StockRepositoryPort>(STOCK_REPOSITORY);
-    await db.transaction((tx) => stock.reservePessimistic(tx, legacyOrder, [{ variantId: sku, quantity: 1 }]));
-    await lapseReservation(app, legacyOrder);
-
-    expect(await sweep.execute(SWEEP)).toMatchObject({ scanned: 0, released: 0 });
-
-    expect((await reservationsFor(app, legacyOrder))[0].status).toBe('HELD');
-    expect((await readStock(app, sku)).quantityReserved).toBe(QUANTITY + 1);
   });
 
   it('refuses a commit that arrives after the sweep released the hold', async () => {

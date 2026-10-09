@@ -157,7 +157,7 @@ describe('Authorization webhook for a fenced payment (integration, real Postgres
     expect(await paymentEvents()).toHaveLength(0);
   });
 
-  // The legacy path would settle this as payment.failed, which nothing downstream of a saga expects.
+  // The expiry is the echo of the cancel's own close: the saga has already compensated, so it fails nothing.
   it('acknowledges the expiry Stripe sends after a cancel closed the session, emitting nothing', async () => {
     expect(await participant.cancel(order)).toEqual({ outcome: 'CANCELLED' });
 

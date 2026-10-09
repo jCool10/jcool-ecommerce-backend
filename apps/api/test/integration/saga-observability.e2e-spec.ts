@@ -1,50 +1,49 @@
 import type { INestApplication } from '@nestjs/common';
-import { PinoLogger } from 'nestjs-pino';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FinalizeOrderUseCase, SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
-import { OrderStatus } from '../../src/modules/order/domain/order-status';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { drainDomainEvents } from '../setup/domain-events';
 import {
-  lapseReservation,
+  authorizeAndRelay,
+  lapseSagaDeadline,
   placeAndOpenSession,
   postWebhook,
+  readOrder,
+  runSagaUntilSettled,
   seedSellableSku,
-  signOutcome,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
-import { createTestAppWithFakeGateway } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
-import { resetDatabase } from '../setup/reset-database';
+import { checkoutSessionCompleted, signWebhookAs } from '../setup/sign-webhook.helper';
 
 const WEBHOOK_SECRET = 'whsec_e2e_saga_observability_0123456789';
 const STOCK = 10;
 const QUANTITY = 2;
-const SWEEP_ALL = { graceSec: 0, batchSize: 50 };
+const TRIGGERS = [
+  'try_failed',
+  'expired',
+  'cancelled',
+  'commit_conflict',
+  'capture_failed',
+  'late_authorization',
+  'amount_mismatch',
+] as const;
 
 describe('Saga observability (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let sweep: SweepExpiredReservationsUseCase;
-  let finalize: FinalizeOrderUseCase;
+  let gateway: FakeSignerGatewayAdapter;
   let sku: SellableSku;
 
   beforeAll(async () => {
-    process.env.METRICS_TOKEN = E2E_METRICS_TOKEN;
-    ({ app, pool } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
-    sweep = app.get(SweepExpiredReservationsUseCase);
-    finalize = app.get(FinalizeOrderUseCase);
+    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, { METRICS_TOKEN: E2E_METRICS_TOKEN }));
   });
-
-  // Also clears the pinned token.
-  afterAll(async () => {
-    delete process.env.METRICS_TOKEN;
-    await app.close();
-  });
+  closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
 
   beforeEach(async () => {
-    vi.restoreAllMocks();
-    await resetDatabase(pool);
     sku = await seedSellableSku(app, { onHand: STOCK });
   });
 
@@ -53,12 +52,12 @@ describe('Saga observability (integration, real Postgres)', () => {
     return text;
   }
 
-  // 0 for an untouched series. Counters outlive `resetDatabase`, so every assertion is a delta.
-  function sample(text: string, name: string, labels: Record<string, string> = {}): number {
+  // 0 for an untouched series. Counters outlive the database reset, so every assertion is a delta.
+  function sample(text: string, name: string, labels: Record<string, string>): number {
     const pairs = Object.entries(labels);
     for (const line of text.split('\n')) {
       // Anchored on the delimiter after the name, so a longer series sharing the prefix never matches.
-      if (!line.startsWith(`${name}{`) && !line.startsWith(`${name} `)) continue;
+      if (!line.startsWith(`${name}{`)) continue;
       if (pairs.every(([key, value]) => line.includes(`${key}="${value}"`))) {
         return Number(line.slice(line.lastIndexOf(' ') + 1));
       }
@@ -66,44 +65,58 @@ describe('Saga observability (integration, real Postgres)', () => {
     return 0;
   }
 
-  const step = (text: string, name: string, outcome: string) =>
+  const step = (text: string, name: string, outcome: 'success' | 'failed') =>
     sample(text, 'saga_step_total', { step: name, outcome });
   const compensation = (text: string, trigger: string) => sample(text, 'saga_compensation_total', { trigger });
+  const compensations = (text: string) => TRIGGERS.map((trigger) => compensation(text, trigger));
 
-  it('counts a failed payment as a compensation, attributed to the payment', async () => {
+  it('counts each step of a paid checkout as a success and starts no compensation', async () => {
+    const before = await scrape();
+
+    const order = await placeAndOpenSession(app, sku, QUANTITY);
+    await authorizeAndRelay(app, gateway, order);
+
+    const after = await scrape();
+    for (const name of ['try_reserve', 'open_session', 'commit_stock', 'capture']) {
+      expect({ name, delta: step(after, name, 'success') - step(before, name, 'success') }).toEqual({ name, delta: 1 });
+    }
+    expect(compensations(after)).toEqual(compensations(before));
+  });
+
+  it('counts an expired order as one compensation, and each undo it ran as a step', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     const before = await scrape();
 
-    await postWebhook(
-      app,
-      signOutcome(WEBHOOK_SECRET, order.sessionId, order.charge, 'FAILED', 'evt_obs_failed'),
-    ).expect(200);
+    await lapseSagaDeadline(app, order.orderId);
+    await runSagaUntilSettled(app, order.orderId);
 
     const after = await scrape();
-    expect(step(after, 'finalize', 'success')).toBe(step(before, 'finalize', 'success') + 1);
-    expect(compensation(after, 'payment_failed')).toBe(compensation(before, 'payment_failed') + 1);
-    expect(compensation(after, 'ttl_expired')).toBe(compensation(before, 'ttl_expired'));
+    expect(compensation(after, 'expired') - compensation(before, 'expired')).toBe(1);
+    // RELEASE_STOCK and CANCEL_PAYMENT.
+    expect(step(after, 'compensate', 'success') - step(before, 'compensate', 'success')).toBe(2);
   });
 
-  // At-least-once delivery repeats settlements; counting every arrival would measure the transport.
-  it('counts one step for a settlement applied twice', async () => {
-    const { orderId } = await placeAndOpenSession(app, sku, QUANTITY);
+  it('counts money that arrives after the order expired as a late authorization of its own', async () => {
+    const order = await placeAndOpenSession(app, sku, QUANTITY);
+    gateway.authorize(order.sessionId);
+    const completed = checkoutSessionCompleted(order.sessionId, { ...order.charge, paymentStatus: 'unpaid' });
+    await postWebhook(app, signWebhookAs(gateway, completed)).expect(200);
+    await lapseSagaDeadline(app, order.orderId);
+    await runSagaUntilSettled(app, order.orderId);
     const before = await scrape();
 
-    await expect(finalize.execute({ orderId, outcome: OrderStatus.PAID })).resolves.toMatchObject({
-      status: 'finalized',
-    });
-    await expect(finalize.execute({ orderId, outcome: OrderStatus.PAID })).resolves.toMatchObject({ status: 'noop' });
+    await drainDomainEvents(app);
 
     const after = await scrape();
-    expect(step(after, 'finalize', 'success')).toBe(step(before, 'finalize', 'success') + 1);
+    expect(compensation(after, 'late_authorization') - compensation(before, 'late_authorization')).toBe(1);
+    expect(compensation(after, 'expired')).toBe(compensation(before, 'expired'));
+    expect((await readOrder(app, order.orderId)).status).toBe('EXPIRED');
   });
 
-  // Prometheus keeps a series per label combination, so an id in a label is a series per order.
   it('keeps the order id out of every saga label', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
-    await lapseReservation(app, order.orderId);
-    await sweep.execute(SWEEP_ALL);
+    await lapseSagaDeadline(app, order.orderId);
+    await runSagaUntilSettled(app, order.orderId);
 
     const series = (await scrape()).split('\n').filter((line) => line.startsWith('saga_'));
 
@@ -111,23 +124,5 @@ describe('Saga observability (integration, real Postgres)', () => {
     for (const line of series) {
       expect(line).not.toContain(order.orderId);
     }
-  });
-
-  // Asserts what the call site hands the logger; pino adds the correlation fields when it serializes.
-  it('warns with both statuses when it drops a conflicting late outcome', async () => {
-    const warn = vi.spyOn(PinoLogger.prototype, 'warn');
-    const { orderId } = await placeAndOpenSession(app, sku, QUANTITY);
-    await finalize.execute({ orderId, outcome: OrderStatus.PAID });
-
-    await finalize.execute({ orderId, outcome: OrderStatus.FAILED });
-
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        orderId,
-        current: OrderStatus.PAID,
-        incoming: OrderStatus.FAILED,
-      }),
-      'conflicting finalize ignored',
-    );
   });
 });

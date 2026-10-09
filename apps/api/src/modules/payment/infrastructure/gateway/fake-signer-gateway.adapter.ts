@@ -40,6 +40,7 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
   private readonly requests = new Map<string, CreateSessionInput>();
   private readonly manual = new Map<string, ManualSession>();
   private readonly holds = new FakePaymentIntents();
+  private readonly parkedCaptures = new Map<string, { arrive: () => void; released: Promise<void> }>();
   private createDelayMs = 0;
   private expireDelayMs = 0;
 
@@ -129,6 +130,16 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
   failCapture(intentId: string, mode: IntentFault | 'expired'): void {
     if (mode === 'expired') this.holds.setStatus(intentId, 'canceled');
     else this.holds.failNext('capture', intentId, mode);
+  }
+
+  /** Parks the next capture on an intent until `release`; `entered` resolves once it is parked. */
+  hangCapture(intentId: string): { entered: Promise<void>; release: () => void } {
+    let arrive = () => {};
+    let release = () => {};
+    const entered = new Promise<void>((resolve) => (arrive = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    this.parkedCaptures.set(intentId, { arrive, released });
+    return { entered, release };
   }
 
   failVoid(intentId: string, mode: IntentFault): void {
@@ -223,7 +234,13 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
     });
   }
 
-  capture(intentId: string, idempotencyKey: string): Promise<CaptureResult> {
+  async capture(intentId: string, idempotencyKey: string): Promise<CaptureResult> {
+    const parked = this.parkedCaptures.get(intentId);
+    if (parked) {
+      this.parkedCaptures.delete(intentId);
+      parked.arrive();
+      await parked.released;
+    }
     return this.holds.capture(intentId, idempotencyKey);
   }
 

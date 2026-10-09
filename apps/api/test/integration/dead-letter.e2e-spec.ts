@@ -4,10 +4,13 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { SagaKickExecutor } from '../../src/modules/order/application/saga/saga-kick.executor';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { PermanentError } from '../../src/shared/messaging/errors';
+import { PermanentError, UnhandledEventError } from '../../src/shared/messaging/errors';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
+import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
 import { replayDeadLetters } from '../../src/shared/messaging/queue/dead-letter.replay';
 import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
@@ -17,16 +20,25 @@ import {
   DOMAIN_EVENTS_DLQ_QUEUE,
   DOMAIN_EVENTS_QUEUE,
 } from '../../src/shared/messaging/queue/queue.constants';
+import { spyOnEffect } from '../setup/dispatcher-effect.helper';
+import {
+  placeAndOpenSession,
+  postWebhook,
+  readOrder,
+  readSaga,
+  seedSellableSku,
+} from '../setup/fixtures/order-flow.fixture';
 import {
   closeAppAfterAll,
-  createTestAppWithPool,
+  createTestAppWithFakeGateway,
   obliterateQueueBeforeEach,
   resetDatabaseBeforeEach,
 } from '../setup/harness';
-import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { testId } from '../setup/id-service-stub';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
+import { checkoutSessionCompleted, signWebhookAs } from '../setup/sign-webhook.helper';
 
+const WEBHOOK_SECRET = 'whsec_e2e_dead_letter_secret_01234';
 const ATTEMPTS = 3;
 // Collapsed from the shipped 1s so a whole budget elapses inside a test: 100ms, then 200ms.
 const BACKOFF_MS = '100';
@@ -44,6 +56,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   let dlq: Queue;
   let db: DrizzleDB;
   let pool: Pool;
+  let gateway: FakeSignerGatewayAdapter;
 
   const job = (overrides: Partial<DomainEventJob> = {}): DomainEventJob => ({
     outboxId: messageId(1),
@@ -87,7 +100,7 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   };
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
       METRICS_TOKEN: E2E_METRICS_TOKEN,
       QUEUE_WORKER_ENABLED: 'true',
       QUEUE_CONSUMER_ATTEMPTS: String(ATTEMPTS),
@@ -162,32 +175,40 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(dead.data.attemptsMade).toBe(1);
   });
 
-  // No consumer handles a hold yet, so none can claim and drop one; replay delivers it once one ships.
-  it('parks an authorized hold until its consumer ships, then replays it intact', async () => {
-    const authorized = job({
-      aggregateType: 'Payment',
-      aggregateId: messageId(2),
-      eventType: 'payment.authorized',
-      payload: {
-        paymentId: messageId(2),
-        orderId: ORDER_ID,
-        amountMinor: 150_000,
-        currency: 'VND',
-        authorizedAt: new Date().toISOString(),
-      },
-    });
-    await publish(authorized);
+  // A worker still on the previous release has no handler for an authorization, so it parks the event
+  // instead of dropping it; the replay into the current handler is what moves the saga on.
+  it('replays an authorization an older worker dead-lettered into the saga, which captures it once', async () => {
+    const order = await placeAndOpenSession(app, await seedSellableSku(app, { onHand: 5 }));
+    const intentId = gateway.authorize(order.sessionId);
+    const completed = checkoutSessionCompleted(order.sessionId, { ...order.charge, paymentStatus: 'unpaid' });
+    await postWebhook(app, signWebhookAs(gateway, completed)).expect(200);
+    const prepare = dispatcher.prepare.bind(dispatcher);
+    const olderWorker = vi
+      .spyOn(dispatcher, 'prepare')
+      .mockImplementation((delivered) =>
+        delivered.eventType === 'payment.authorized'
+          ? Promise.reject(new UnhandledEventError(delivered.eventType))
+          : prepare(delivered),
+      );
+
+    await app.get(OutboxRelay).runOnce(10);
 
     const [dead] = await waitForDeadLetter();
-    expect(dead.data).toMatchObject({ eventType: 'payment.authorized', payload: authorized.payload, attemptsMade: 1 });
+    expect(dead.data).toMatchObject({ eventType: 'payment.authorized', attemptsMade: 1 });
     expect(dead.data.failedReason).toMatch(/No handler registered/);
+    expect((await readSaga(app, order.orderId)).step).toBe('AWAITING_AUTH');
 
-    const shipped = spyOnEffect(dispatcher).mockResolvedValue(undefined);
+    olderWorker.mockRestore();
     const summary = await replayDeadLetters(queue, dlq, { ...replayGuards, dryRun: false });
 
     expect(summary).toMatchObject({ replayed: 1, skipped: 0 });
-    await vi.waitFor(async () => expect(await inboxRows()).toHaveLength(1), { timeout: 15_000, interval: 50 });
-    expect(shipped).toHaveBeenCalledWith(expect.objectContaining({ payload: authorized.payload }), expect.anything());
+    await vi.waitFor(async () => expect((await readOrder(app, order.orderId)).status).toBe('PAID'), {
+      timeout: 15_000,
+      interval: 50,
+    });
+    await app.get(SagaKickExecutor).drain();
+    expect((await readSaga(app, order.orderId)).step).toBe('COMPLETED');
+    expect(gateway.captureCalls(intentId)).toBe(1);
     expect(await deadLetters()).toHaveLength(0);
   });
 

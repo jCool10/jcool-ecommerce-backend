@@ -17,8 +17,5 @@ export const PaymentStatus = {
 
 export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 
-/** What a gateway event can settle an auto-capture payment to. */
-export type SettledPaymentStatus = typeof PaymentStatus.SUCCEEDED | typeof PaymentStatus.FAILED;
-
 /** Declaration order — the pg enum and exhaustive test iteration read this. */
 export const PAYMENT_STATUSES: readonly PaymentStatus[] = Object.values(PaymentStatus);

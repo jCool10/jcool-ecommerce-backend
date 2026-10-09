@@ -1,14 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import type {
-  CancelOutcome,
-  CaptureOutcome,
-  OpenSessionInput,
-  OpenSessionResult,
-  PaymentParticipant,
+import { PaymentGatewayError } from './ports/payment-gateway.port';
+import {
+  PaymentProviderUnavailableError,
+  type CancelOutcome,
+  type CaptureOutcome,
+  type OpenSessionInput,
+  type OpenSessionResult,
+  type PaymentParticipant,
 } from './public/payment-participant.port';
 import { CancelPaymentUseCase } from './use-cases/cancel-payment.use-case';
 import { CapturePaymentUseCase } from './use-cases/capture-payment.use-case';
-import { OpenPaymentSessionUseCase } from './use-cases/open-payment-session.use-case';
+import { ConcurrentSessionOpenError, OpenPaymentSessionUseCase } from './use-cases/open-payment-session.use-case';
 
 @Injectable()
 export class PaymentParticipantFacade implements PaymentParticipant {
@@ -18,8 +20,14 @@ export class PaymentParticipantFacade implements PaymentParticipant {
     private readonly cancelPayment: CancelPaymentUseCase,
   ) {}
 
-  openSession(input: OpenSessionInput): Promise<OpenSessionResult> {
-    return this.openPaymentSession.execute(input);
+  async openSession(input: OpenSessionInput): Promise<OpenSessionResult> {
+    try {
+      return await this.openOnce(input);
+    } catch (error) {
+      // The loser of two concurrent opens closed its own session; a second pass reuses the winner's.
+      if (error instanceof ConcurrentSessionOpenError) return this.openOnce(input);
+      throw error;
+    }
   }
 
   capture(orderId: string): Promise<{ outcome: CaptureOutcome }> {
@@ -28,5 +36,14 @@ export class PaymentParticipantFacade implements PaymentParticipant {
 
   cancel(orderId: string): Promise<{ outcome: CancelOutcome }> {
     return this.cancelPayment.execute(orderId);
+  }
+
+  private async openOnce(input: OpenSessionInput): Promise<OpenSessionResult> {
+    try {
+      return await this.openPaymentSession.execute(input);
+    } catch (error) {
+      if (error instanceof PaymentGatewayError) throw new PaymentProviderUnavailableError({ cause: error });
+      throw error;
+    }
   }
 }
