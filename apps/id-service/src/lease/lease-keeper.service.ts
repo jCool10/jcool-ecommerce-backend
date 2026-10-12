@@ -124,7 +124,7 @@ export class LeaseKeeper implements OnApplicationBootstrap, BeforeApplicationShu
         if (!this.floorRejectionReported) {
           this.logger.error(
             { nodeId: outcome.nodeId, aheadMs: outcome.aheadMs },
-            "node handed back: its previous holder's last timestamp is ahead of the database clock",
+            "node handed back: the floor its previous holder left is ahead of this replica's clock",
           );
         }
         this.floorRejectionReported = true;

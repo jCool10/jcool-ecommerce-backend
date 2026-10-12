@@ -25,6 +25,7 @@ Conventions used below:
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
+- [The id-service's etcd](#the-id-services-etcd)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
@@ -59,7 +60,7 @@ There are exactly two correct responses:
 - **Restore the original build**, the one whose `LAYOUT_VERSION` is the pinned one, and redeploy.
 - **Reset the database**, if and only if it holds nothing worth keeping.
 
-There is no third option. Do not edit or delete the pin row to make the message go away: it is the only evidence of which layout the existing ids were minted under, and nothing can rebuild it. The same holds for the api's and the id-service's databases, which carry no pin but hold ids and node leases from the same layout.
+There is no third option. Do not edit or delete the pin row to make the message go away: it is the only evidence of which layout the existing ids were minted under, and nothing can rebuild it. The same holds for the api's database and the id-service's etcd keyspace, which carry no pin but hold ids and node floors from the same layout.
 
 ---
 
@@ -81,7 +82,7 @@ CD deploys one service at a time (id-service → api → gateway → user-servic
 
 Nothing but those two migrations checks for the reset. The api holds no pin, and every layout-1 id clears the new floor, so a layout-1 row left behind would sit beside layout-2 ones unnoticed. A user-service database that already holds a pin refuses a build of another layout with the mismatch error above. An old caller sending `bucket` to `POST /v1/ids` gets `400`: the body is `{ "count"?: 1..1024 }`.
 
-**There is no rolling back one service.** An old build cannot read layout-2 ids, and an old id-service replica claims the new nodes above 30 first: node 31 was layout 1's scripts node, and on any higher one the replica never becomes ready. Rolling back repeats the steps above for the old builds: stop, restore the step-3 dumps into empty databases, flush Redis, shrink the id-service's node pool back, put `IDENTITY_BUCKET_KEY` back with its old value, and deploy the old builds.
+**There is no rolling back one service.** An old build cannot read layout-2 ids, and an old id-service replica claims the new nodes above 30 first: node 31 was layout 1's scripts node, and on any higher one the replica never becomes ready. Rolling back repeats the steps above for the old builds: stop, restore the step-3 dumps into empty databases, flush Redis, shrink the id-service's node pool back, put `IDENTITY_BUCKET_KEY` back with its old value, and deploy the old builds. Those builds predate the etcd lease store, so the id-service first goes back to `id-postgres` ([Roll back the cut-over](#roll-back-the-cut-over)), and the pool shrinks there:
 
 ```sql
 -- psql against id-service's DATABASE_URL, every replica stopped
@@ -94,10 +95,7 @@ ALTER TABLE node_leases ADD CONSTRAINT node_leases_node_id_range CHECK (node_id 
 
 ## Backup and restore
 
-Each service owns one database and is backed up on its own: the api's (catalog, cart, orders,
-payments, inventory, media, messaging), the user-service's (accounts, tokens, the layout pin), and the
-id-service's (node leases). They share no foreign keys, so there is no cross-database consistency to
-preserve.
+Each service owns one database and is backed up on its own: the api's (catalog, cart, orders, payments, inventory, media, messaging) and the user-service's (accounts, tokens, the layout pin). They share no foreign keys, so there is no cross-database consistency to preserve. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
 
 ### Back up
 
@@ -114,7 +112,7 @@ createdb jcool_restore
 pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges backup-….dump
 ```
 
-A user-service dump then needs the service booted against it by a build with the **id layout that dump was taken under**; the api's and the id-service's carry no pin.
+A user-service dump then needs the service booted against it by a build with the **id layout that dump was taken under**; the api's carries no pin.
 
 After restoring the api's database, [rebuild the search index](#rebuild-the-search-index) before
 catalog writes resume. A restore rewinds `products.search_version`, so the engine holds versions the
@@ -129,23 +127,6 @@ Consequences to plan for:
 - A layout-1 dump cannot be served by a layout-2 build, and its ids do not decode under layout 2. Restore it only under the build that took it.
 - A dump restored into a database that already has a *different* pin row will fail on the primary key of `identity_key_pin` during `pg_restore`, not at boot. Restore into an empty database.
 - Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the pinned layout; changing the pin makes the database lie about its own history.
-
-### Restoring or recreating the id-service database
-
-`id-postgres` holds only node leases. A restored dump, like a freshly migrated database, can sit behind ids the replicas already minted, and a new holder of a node would then mint at those timestamps again. Before any replica starts against it:
-
-1. Stop every id-service replica, then wait `ID_LEASE_TTL_MS` (5 minutes by default). No id was stamped past its holder's lease end, so once every lease the old rows knew of has ended, the database clock is above every id minted.
-2. Lift every floor to that clock:
-
-   ```sql
-   -- psql against id-service's DATABASE_URL
-   UPDATE node_leases
-   SET holder = NULL,
-       lease_until = LEAST(lease_until, now()),
-       max_ts_ms = GREATEST(COALESCE(max_ts_ms, 0), (extract(epoch FROM now()) * 1000)::bigint);
-   ```
-
-3. Start the replicas.
 
 ---
 
@@ -439,17 +420,16 @@ The compiled CLI fails loudly if its migrations directory resolves to a readable
 
 ### The id-type migrations only apply to empty tables
 
-Three migrations moved user ids from `uuid` to `bigint`, and they are written to fail rather than guess:
+Two migrations moved user ids from `uuid` to `bigint`, and they are written to fail rather than guess:
 
 | Service | Migration | What it does |
 | --- | --- | --- |
 | api | `0022_round_green_goblin.sql` | drops and re-adds `carts.user_id`, `orders.user_id`, `media_assets.uploaded_by` as `bigint NOT NULL`, then rebuilds the indexes over them |
 | user-service | `0000_users_baseline.sql` | the baseline itself was regenerated; there is no in-place step from the old one |
-| id-service | `0002_bright_dreadnoughts.sql` | deletes `node_leases` rows above 30 and narrows the range constraint to 1..30 |
 
 Postgres has no cast from `uuid` to `bigint`, so an `ALTER COLUMN … SET DATA TYPE` would be refused outright. `ADD COLUMN … NOT NULL` with no default succeeds on an empty table — every new environment and every CI run — and fails on a populated one. That failure is the correct outcome, not an obstacle: those rows point at user ids that no longer exist anywhere, and there is no mapping back.
 
-Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, added a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`), a floor of 2^22 under layout 1. They validate the rows already there, so either one fails on a database holding an id below that floor. No app writer produces such an id; a row like that was written by hand. Layout 2 lowers the floor to 2^18 (`>= 262144`) in api `0028_snowflake_layout_v2_id_floor.sql` and user-service `0003_snowflake_layout_v2_pin_and_id_floor.sql`, and the id-service's `0004_widen_node_pool.sql` widens `node_leases` to `1..254`; see [Changing the id layout](#changing-the-id-layout). The api and user-service ones refuse to run while any of their tables holds a row, since they assume the reset described there.
+Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, added a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`), a floor of 2^22 under layout 1. They validate the rows already there, so either one fails on a database holding an id below that floor. No app writer produces such an id; a row like that was written by hand. Layout 2 lowers the floor to 2^18 (`>= 262144`) in api `0028_snowflake_layout_v2_id_floor.sql` and user-service `0003_snowflake_layout_v2_pin_and_id_floor.sql`; see [Changing the id layout](#changing-the-id-layout). The api and user-service ones refuse to run while any of their tables holds a row, since they assume the reset described there.
 
 Two more move every remaining id to `bigint`, and these **delete data rather than fail**:
 
@@ -470,7 +450,7 @@ docker compose up -d postgres redis elasticsearch mailpit minio minio-init
 pnpm db:migrate && pnpm db:seed
 ```
 
-The user-service and id-service databases come back the same way — their containers run their own migrate step (`--profile user-service`, and the one-shot in front of the id-service replicas). Back up first if anything in there is worth keeping; see [Backup and restore](#backup-and-restore).
+The user-service's database comes back the same way — its container runs its own migrate step (`--profile user-service`). Back up first if anything in there is worth keeping; see [Backup and restore](#backup-and-restore). The id-service's etcd volume goes with them, and the `id-floors` one-shot in front of its replicas lifts the fresh keyspace's floors.
 
 ---
 
@@ -790,6 +770,50 @@ printf '%s\n%s\n' "$ELASTIC_PASSWORD" "$ELASTIC_PASSWORD" |
 ```
 
 The api is unaffected either way.
+
+---
+
+## The id-service's etcd
+
+`id-etcd` is a single etcd member declared in `.railway/railway.ts`, built from `infra/etcd/`, with its data on the `id-etcd-data` volume. It holds only the id-service's node owners and floors, under `/jcool/id-service/` ([how the lease works](./apps/id-service/README.md#the-node-lease)). Like Elasticsearch it is outside `cd.yml`: a config change is `railway up --ci --service id-etcd`, and as a service with a volume it never runs two deployments at once. It has no domain and no TCP proxy, and its image has no shell, so every operator action runs from an id-service replica's shell (`railway ssh --service id-service`), where `dist/lease/lift-floors-cli.js` lives.
+
+**While it is down** the replicas keep minting until their ceiling, `ID_LEASE_TTL_MS` past their last renew, less `ID_LEASE_FENCE_MARGIN_MS`: about four minutes with the defaults. Then they turn unready and the api answers 503 on writes. They come back on their own once it answers: a restart that keeps the volume keeps every owner, and etcd restarts each lease's TTL. So a redeploy of `id-etcd`, a minute or two, mints through. The signals are `node lease renew failed; minting until the fence` in the id-service's logs and `id_lease_lost_total` for an outage that outlasted the ceiling.
+
+### Cut over from Postgres
+
+The merge that brings etcd deletes `id-postgres`. The two stores do not see each other's leases, so no Postgres-era replica may mint once an etcd-era one does, and the etcd floors must start above every id a Postgres-era holder stamped. So the id-service is down from step 2 to step 5, about ten minutes: reads keep working and the api answers 503 on writes. Do it off-peak, from an up-to-date `main`:
+
+0. **Optionally [freeze checkout](#checkout-freeze)**, so buyers get `Retry-After` rather than a bare 503.
+1. **Merge**, then wait until the CD run fails at "Apply Railway config": the plan deletes `id-postgres` and its volume, which CD refuses. An apply of yours that lands first lets CD deploy the id-service ahead of etcd.
+2. **Stop the Postgres-era replicas**: `railway down --service id-service --yes`. Each drains, releases its node and exits. Then wait `ID_LEASE_TTL_MS` (5 minutes unless set): no id was stamped past its holder's lease end, so after that the clock is above every Postgres-era id.
+3. **Apply.**
+
+   ```bash
+   railway config plan    # id-postgres and its volume destroyed; id-etcd and id-etcd-data created;
+                          # id-service: DATABASE_URL deleted, ETCD_ENDPOINTS added, pre-deploy changed
+   railway config apply --confirm-destructive
+   ```
+
+   If the apply redeploys the id-service's last upload, that deployment fails at its pre-deploy step, since the Postgres-era image has no `lift-floors-cli.js`. That is expected: nothing mints.
+
+4. **Deploy etcd**: `railway up --ci --service id-etcd`, then wait until the deployment is live (its healthcheck is etcd's `/health`).
+5. **Deploy the rest**: re-run the failed CD job. The apply is now a no-op. The id-service's pre-deploy step finds a keyspace with no floors and lifts all 254 to its clock (`floors under /jcool/id-service/ lifted to …` in the deploy logs). The replicas then claim their nodes, and the api, the gateway and the user-service follow as usual.
+6. **Verify.** Each of the three replicas logs `node lease acquired` with its own `nodeId`, and a write through the api (add a cart item) answers 2xx. Lift the freeze if step 0 set it.
+
+### Roll back the cut-over
+
+Revert the merge on `main`. CD stops at the apply again, this time deleting `id-etcd` and its volume. Repeat steps 2 and 3 (stop, wait `ID_LEASE_TTL_MS`, plan, apply), then re-run the failed CD job. The Postgres-era pre-deploy migrates the new, empty `id-postgres`, and its replicas start above every etcd-era id because of the wait. Skipping the wait is what makes duplicate ids possible: a fresh `id-postgres` knows no floor.
+
+### The keyspace is lost
+
+Nothing backs `id-etcd` up, and nothing should: its floors are rebuilt from the clock. Never restore a snapshot into it either, since its marker would let the replicas claim against floors older than ids minted since it was taken. If that happened, stop the replicas at once and replace the volume.
+
+A new volume, or a keyspace wiped by hand, has no `initialized` marker, and the replicas refuse to claim on it. Their renews find no owner, so each stops minting at its next renew, and every acquire then fails with `etcd keyspace /jcool/id-service/ has no floors recorded; run the floor lift before any replica mints`. Readiness stays false and the api answers 503 on writes until:
+
+1. **Wait `ID_LEASE_TTL_MS`** from the moment etcd came back empty. A replica that could not reach it since may still be minting on its old node, up to its ceiling, and the lift would hand that node to another replica below it.
+2. **Lift the floors** from a replica's shell: `node dist/lease/lift-floors-cli.js`. It refuses while any node is held, writes the marker last, and the replicas claim within a second of it.
+
+With the replicas stopped (`railway down --service id-service --yes`) the wait still applies, and the next deploy's pre-deploy step does the lift.
 
 ---
 

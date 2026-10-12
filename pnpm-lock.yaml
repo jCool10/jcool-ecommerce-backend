@@ -494,18 +494,18 @@ importers:
       class-validator:
         specifier: ^0.15.1
         version: 0.15.1
-      drizzle-orm:
-        specifier: ^0.45.3
-        version: 0.45.3(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.23.1)
+      cockatiel:
+        specifier: ^3.2.1
+        version: 3.2.1
+      etcd3:
+        specifier: ^1.1.2
+        version: 1.1.2
       nestjs-cls:
         specifier: ^6.2.2
         version: 6.2.2(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       nestjs-pino:
         specifier: ^4.6.1
         version: 4.6.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(pino-http@11.0.0)(pino@10.3.1)(rxjs@7.8.2)
-      pg:
-        specifier: ^8.23.1
-        version: 8.23.1
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -534,7 +534,7 @@ importers:
       '@swc/core':
         specifier: ^1.16.13
         version: 1.16.13
-      '@testcontainers/postgresql':
+      '@testcontainers/etcd':
         specifier: ^12.2.0
         version: 12.2.0(supports-color@8.1.1)
       '@types/express':
@@ -543,9 +543,6 @@ importers:
       '@types/node':
         specifier: ^24.19.1
         version: 24.19.1
-      '@types/pg':
-        specifier: ^8.23.1
-        version: 8.23.1
       '@types/supertest':
         specifier: ^7.0.0
         version: 7.2.1
@@ -555,9 +552,6 @@ importers:
       dependency-cruiser:
         specifier: ^18.5.0
         version: 18.5.0
-      drizzle-kit:
-        specifier: ^0.31.11
-        version: 0.31.11
       eslint:
         specifier: ^10.11.0
         version: 10.11.0(supports-color@8.1.1)
@@ -3306,6 +3300,9 @@ packages:
   '@testcontainers/elasticsearch@12.2.0':
     resolution: {integrity: sha512-H2U+x5xn1UeWKukC3j1eLGDHAUEmUwZhhLImFXW/oIeWc23vqAuM9Im8gBo+Zt+C1+ApnyMzsUCnIGC7aOzd/A==}
 
+  '@testcontainers/etcd@12.2.0':
+    resolution: {integrity: sha512-QZq2Fn8JYhPysfuR506aLJ2cCHBvpCV9kkyMCmCl6qccwD2A79DWkfixClKENtLypALmjK+mEzU1ltTPDoCu9A==}
+
   '@testcontainers/minio@12.2.0':
     resolution: {integrity: sha512-nmH6f75hrVf4TNwgKg3ijPjHVwvxZRqSqn4/aeg8A5+U+4JcVW8PUoQQ2S8MGKy01+HQWMtDfWMwxlmKuggOVg==}
 
@@ -4096,6 +4093,10 @@ packages:
     resolution: {integrity: sha512-rwHwUfXL40Chm1r08yrhU3qpUvdVlgkKNeyeGPOxnW8/SyVDvgRaed/Uz54AqWNaTCAThlj6QAs3TZcKI0xDEw==}
     engines: {node: '>=0.10.0'}
 
+  cockatiel@3.2.1:
+    resolution: {integrity: sha512-gfrHV6ZPkquExvMh9IOkKsBzNDk6sDuZ6DdBGUBkvFnTCqCxzpuq48RySgP0AnaqQkw2zynOFj9yly6T1Q2G5Q==}
+    engines: {node: '>=16'}
+
   color-convert@2.0.1:
     resolution: {integrity: sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==}
     engines: {node: '>=7.0.0'}
@@ -4604,6 +4605,10 @@ packages:
   etag@1.8.1:
     resolution: {integrity: sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg==}
     engines: {node: '>= 0.6'}
+
+  etcd3@1.1.2:
+    resolution: {integrity: sha512-YIampCz1/OmrVo/tR3QltAVUtYCQQOSFoqmHKKeoHbalm+WdXe3l4rhLIylklu8EzR/I3PBiOF4dC847dDskKg==}
+    engines: {node: '>=16'}
 
   event-target-shim@5.0.1:
     resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
@@ -8865,6 +8870,15 @@ snapshots:
       - react-native-b4a
       - supports-color
 
+  '@testcontainers/etcd@12.2.0(supports-color@8.1.1)':
+    dependencies:
+      testcontainers: 12.2.0(supports-color@8.1.1)
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - react-native-b4a
+      - supports-color
+
   '@testcontainers/minio@12.2.0(supports-color@8.1.1)':
     dependencies:
       testcontainers: 12.2.0(supports-color@8.1.1)
@@ -9791,6 +9805,8 @@ snapshots:
 
   cluster-key-slot@1.1.1: {}
 
+  cockatiel@3.2.1: {}
+
   color-convert@2.0.1:
     dependencies:
       color-name: 1.1.4
@@ -10268,6 +10284,13 @@ snapshots:
   esutils@2.0.3: {}
 
   etag@1.8.1: {}
+
+  etcd3@1.1.2:
+    dependencies:
+      '@grpc/grpc-js': 1.14.5
+      '@grpc/proto-loader': 0.7.15
+      bignumber.js: 9.3.1
+      cockatiel: 3.2.1
 
   event-target-shim@5.0.1: {}
 

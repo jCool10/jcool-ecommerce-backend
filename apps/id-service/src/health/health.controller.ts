@@ -15,7 +15,7 @@ export class HealthController {
     return this.health.check([]);
   }
 
-  // The lease alone: a replica holding an unfenced node can mint whether or not Postgres answers.
+  // The lease alone: a replica holding an unfenced node can mint whether or not etcd answers.
   @Get('ready')
   @HealthCheck()
   ready(): Promise<HealthCheckResult> {

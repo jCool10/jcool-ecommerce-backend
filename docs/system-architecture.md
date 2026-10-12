@@ -8,13 +8,13 @@ Current boundaries and the decision ledger behind them. The diagram, the bounded
 
 Four processes: `apps/api` (the modular monolith, five bounded contexts — [README → Architecture](../README.md#architecture)), `apps/user-service` (`/auth`, sessions, token signing), `apps/id-service` (id minting, N replicas behind a leased node id) and `apps/gateway` (Caddy — public entry plus the id-service's private load balancer, [README → Project layout](../README.md#project-layout)). `packages/` holds what they share.
 
-Each service owns one Postgres database and there is no foreign key between any two of them; what a restore of one does to the others is in [RUNBOOK → Backup and restore](../RUNBOOK.md#backup-and-restore). Within `apps/api` itself, the same rule holds context to context ([README → Bounded contexts](../README.md#bounded-contexts)).
+Each service owns its own store, a Postgres database for the api and the user-service and an etcd keyspace for the id-service, and there is no foreign key between any two of them; what a restore of one does to the others is in [RUNBOOK → Backup and restore](../RUNBOOK.md#backup-and-restore). Within `apps/api` itself, the same rule holds context to context ([README → Bounded contexts](../README.md#bounded-contexts)).
 
 | Service | Owning schema |
 | --- | --- |
 | api | [`shared/infrastructure/database/schema`](../apps/api/src/shared/infrastructure/database/schema) (barrel over every context's tables) |
 | user-service | [`modules/user/infrastructure/schema/user.schema.ts`](../apps/user-service/src/modules/user/infrastructure/schema/user.schema.ts) |
-| id-service | [`database/schema.ts`](../apps/id-service/src/database/schema.ts) (`node_leases` only) |
+| id-service | no Postgres; an etcd keyspace, `/jcool/id-service/nodes/NNN/owner` and `floor` per node plus `initialized`, defined in [`etcd-lease-keyspace.ts`](../apps/id-service/src/lease/etcd-lease-keyspace.ts) |
 
 ### Auth trust flow
 
@@ -73,6 +73,14 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 - **Rejected alternatives:** an in-process leased generator per app (duplicates the lease and clock fencing this now centralizes); the previous 128-bit UUIDv8 with random bits (dropped for a 63-bit integer that fits a Postgres `bigint`).
 - **Consequences:** every write depends on the id-service's reachability — a write answers `503` rather than mint locally when no id is available ([README → Known limits](../README.md#known-limits)).
 - **Revisit when:** the 254-node lease pool or the 1024-id-per-node-millisecond ceiling becomes the binding constraint — already documented as a data migration behind a `LAYOUT_VERSION` bump, not a service-topology change.
+
+### Node lease on etcd
+
+- **Decision:** the id-service's node-id lease lives in a single-member etcd (`id-etcd`, private network only, no auth or TLS) instead of its own Postgres. Each node has an owner key, attached to an etcd lease, and a floor key, a timestamp in the id domain; a claim is one transaction guarded by owner-absent and floor-unchanged that raises the floor to the ceiling `max(now, floor) + TTL`, and no id is stamped past the ceiling. The keyspace is defined in [`etcd-lease-keyspace.ts`](../apps/id-service/src/lease/etcd-lease-keyspace.ts), the protocol in [`etcd-lease-store.ts`](../apps/id-service/src/lease/etcd-lease-store.ts) and the [id-service README](../apps/id-service/README.md#the-node-lease).
+- **Why:** a lease is etcd's own primitive: the server drops an abandoned owner when its lease's TTL runs out, and the lease id it grants lets a replica recognise a claim whose commit it never saw, so re-adopting no longer trusts a holder name to be unique per process. Revision-guarded transactions are the compare-and-set for claim, renew and release. etcd has no clock a client can read, so the lease rests on a floor written in the ids' own domain rather than on the store's time. The next holder starts above the previous ceiling, which covers whatever a crashed holder minted after its last renew, so the quarantine window is gone: a released node is free at once and a crashed holder's node frees when etcd expires its lease, at most the TTL later. The id-service no longer needs a database, migrations or a schema of its own.
+- **Rejected alternatives:** keeping the dedicated Postgres, with its migrations, its quarantine window and a re-adopt keyed on the holder name; a three-member etcd cluster, whose availability the replicas' fence already covers for a restart or a redeploy of the single member.
+- **Consequences:** an empty keyspace carries no floors, so replicas refuse to claim until [`lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts) lifts every floor to the clock and writes the `initialized` marker; it runs as the pre-deploy step with `--if-uninitialized`. Losing the keyspace is recovered the same way and a snapshot is never restored into it ([RUNBOOK → The keyspace is lost](../RUNBOOK.md#the-keyspace-is-lost)). The cut-over from Postgres is manual and costs about ten minutes of write downtime ([RUNBOOK → Cut over from Postgres](../RUNBOOK.md#cut-over-from-postgres)); Postgres-era and etcd-era replicas must never run together.
+- **Revisit when:** a single etcd member's availability becomes the limit on writes, since with etcd down the replicas stop minting once their fence is reached.
 
 ### 63-bit snowflake layout: `45 ts_ms │ 8 node │ 10 seq`
 

@@ -1,10 +1,29 @@
-import { IsInt, IsOptional, Min } from 'class-validator';
-import { AppEnv, DatabaseEnv, EmptyEnv, ObservabilityEnv, StrictInt, validateEnv } from '@jcool/platform/config';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { AppEnv, EmptyEnv, ObservabilityEnv, StrictInt, validateEnv } from '@jcool/platform/config';
 
-const PlatformEnv = ObservabilityEnv(DatabaseEnv(AppEnv(EmptyEnv)));
+const PlatformEnv = ObservabilityEnv(AppEnv(EmptyEnv));
 
 /** Bounds only; defaults live in configuration.ts, and how the timings relate is checked by LeaseKeeper. */
 export class EnvironmentVariables extends PlatformEnv {
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^https?:\/\/[^\s,]+(\s*,\s*https?:\/\/[^\s,]+)*$/, {
+    message: 'ETCD_ENDPOINTS must be a comma-separated list of http(s):// URLs',
+  })
+  ETCD_ENDPOINTS!: string;
+
+  // Every key the service writes sits under it, so two deployments can share one etcd.
+  @IsOptional()
+  @Matches(/^\/(?:[^/\s]+\/)+$/, { message: 'ETCD_KEY_PREFIX must start and end with "/"' })
+  ETCD_KEY_PREFIX?: string;
+
+  // 0 would leave a renew against a hung etcd waiting forever, which stalls the keeper.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  ETCD_REQUEST_TIMEOUT_MS?: number;
+
   @IsOptional()
   @StrictInt()
   @IsInt()
@@ -20,12 +39,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsOptional()
   @StrictInt()
   @IsInt()
-  @Min(0)
-  ID_LEASE_QUARANTINE_MS?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
   @Min(100)
   ID_LEASE_FENCE_MARGIN_MS?: number;
 
@@ -34,20 +47,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsInt()
   @Min(0)
   ID_LEASE_MAX_FLOOR_AHEAD_MS?: number;
-
-  // The platform allows 0 (pg waits forever); a renew that never settles would stall the keeper.
-  // Redeclared whole: class-validator drops a parent's validators on a property the child redeclares.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  declare DB_QUERY_TIMEOUT_MS?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  declare DB_POOL_CONNECTION_TIMEOUT_MS?: number;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

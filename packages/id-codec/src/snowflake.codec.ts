@@ -28,7 +28,7 @@ export const MAX_TIMESTAMP_MS = EPOCH_MS + 2 ** TIMESTAMP_BITS - 1;
 export const MIN_TIMESTAMP_MS = EPOCH_MS + 1;
 
 export interface SnowflakeFields {
-  /** Absolute wall clock, the same unit as `node_leases.max_ts_ms` and the generator's `floorMs`. */
+  /** Absolute wall clock, the same unit as the id-service's etcd floors and the generator's `floorMs`. */
   tsMs: number;
   nodeId: number;
   sequence: number;

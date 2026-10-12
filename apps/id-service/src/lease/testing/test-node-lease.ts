@@ -5,7 +5,6 @@ export const TEST_LEASE_CONFIG: LeaseConfig = {
   holder: 'replica-a/host/1',
   ttlMs: 300_000,
   renewEveryMs: 60_000,
-  quarantineMs: 10_000,
   fenceMarginMs: 15_000,
   maxFloorAheadMs: 15_000,
 };

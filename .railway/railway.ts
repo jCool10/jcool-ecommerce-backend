@@ -6,6 +6,7 @@ const API_SERVICE = 'jcool-ecommerce-backend';
 const API_PORT = '8080';
 const ID_SERVICE_PORT = '3000';
 const ID_LB_PORT = '4000';
+const ID_ETCD_PORT = '2379';
 const USER_SERVICE_PORT = '3000';
 const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
@@ -111,10 +112,19 @@ export default defineRailway(() => {
     },
   });
 
-  // postgres() would pick 18; the tests and compose run 16.
-  const idPostgres = database('id-postgres', 'postgres', {
-    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
-    defaultMountPath: '/var/lib/postgresql/data',
+  // The node floors live here, so a lost volume means the RUNBOOK's floor lift before any replica mints.
+  const idEtcdData = volume('id-etcd-data', { sizeMB: 1_000, region: 'iad' });
+
+  // No domain and no TCP proxy: only the id-service talks to it, over the private network.
+  const idEtcd = service('id-etcd', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/etcd/Dockerfile' },
+    deploy: { numReplicas: 1, healthcheckPath: '/health', healthcheckTimeout: 60, restartPolicyMaxRetries: 5 },
+    volumeMounts: { '/var/lib/etcd': idEtcdData },
+    env: {
+      // Read by Railway's healthcheck only; etcd listens where infra/etcd/Dockerfile says.
+      PORT: ID_ETCD_PORT,
+      ETCD_ADVERTISE_CLIENT_URLS: `http://\${{RAILWAY_PRIVATE_DOMAIN}}:${ID_ETCD_PORT}`,
+    },
   });
 
   // No source: CD uploads each build with `railway up`, so nothing deploys on its own.
@@ -122,7 +132,8 @@ export default defineRailway(() => {
     build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/id-service/Dockerfile' },
     deploy: {
       numReplicas: 3,
-      preDeployCommand: ['node dist/database/migrate-cli.js'],
+      // A no-op once the keyspace has floors; on an empty one it lifts them to now (RUNBOOK cut-over).
+      preDeployCommand: ['node dist/lease/lift-floors-cli.js --if-uninitialized'],
       healthcheckPath: '/health/ready',
       healthcheckTimeout: 60,
       restartPolicyMaxRetries: 5,
@@ -133,7 +144,7 @@ export default defineRailway(() => {
     env: {
       NODE_ENV: 'production',
       PORT: ID_SERVICE_PORT,
-      DATABASE_URL: idPostgres.env.DATABASE_URL,
+      ETCD_ENDPOINTS: `http://\${{id-etcd.RAILWAY_PRIVATE_DOMAIN}}:${ID_ETCD_PORT}`,
       SHUTDOWN_GRACE_PERIOD_MS: '8000',
       LOKI_URL,
     },
@@ -287,7 +298,8 @@ export default defineRailway(() => {
   return project('jcool ecommerce backend', {
     resources: [
       api,
-      idPostgres,
+      idEtcdData,
+      idEtcd,
       idService,
       gateway,
       userPostgres,

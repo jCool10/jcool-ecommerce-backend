@@ -106,7 +106,6 @@ const SHORT_LEASE = {
   ID_LEASE_TTL_MS: '6000',
   ID_LEASE_RENEW_EVERY_MS: '1000',
   ID_LEASE_FENCE_MARGIN_MS: '2000',
-  ID_LEASE_QUARANTINE_MS: '1000',
 };
 
 function timestampsOn(nodeId: number, run: MintRun): number[] {
