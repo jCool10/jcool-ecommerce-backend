@@ -21,10 +21,9 @@ export interface NodeLeaseOptions {
   /** For diagnosis only. A holder is recognised by the generation it was granted. */
   holder: string;
   ttlMs: number;
-  quarantineMs: number;
   /** How long before the store would expire the lease this process stops minting on its own. */
   fenceMarginMs: number;
-  /** How far an inherited floor may sit ahead of the store's clock. Defaults to `fenceMarginMs`. */
+  /** How far an inherited floor may sit ahead of the grant's clock. Defaults to `fenceMarginMs`. */
   maxFloorAheadMs?: number;
 }
 
@@ -46,16 +45,16 @@ interface Held {
   generator: SnowflakeGenerator;
   /** Taken before the store call that granted or extended the lease, so the deadline errs early. */
   anchor: ClockReading;
-  /** On the store's clock. No id is stamped past it, which is what the next holder's floor relies on. */
+  /** The ceiling the store last confirmed. No id is stamped past it, which is what the next holder's floor relies on. */
   leaseUntilMs: number;
 }
 
 type Phase = 'idle' | 'acquiring' | 'held' | 'lost' | 'exhausted' | 'released';
 
 /**
- * Mints only under a node id the store has leased to this process, and stops on its own clock
- * before the store's clock could hand that id to someone else. The fence is checked on every mint,
- * so no timer has to fire for it to hold.
+ * Mints only under a node id the store has leased to this process, never above the ceiling the
+ * store last confirmed, and stops on its own clock before the store would hand the node to someone
+ * else. The fence is checked on every mint, so no timer has to fire for it to hold.
  *
  * One store operation at a time: the caller owns the schedule and must not overlap them.
  */
@@ -72,15 +71,12 @@ export class NodeLease {
     private readonly options: NodeLeaseOptions,
     private readonly clock: IdentityClock,
   ) {
-    const { holder, ttlMs, quarantineMs, fenceMarginMs } = options;
+    const { holder, ttlMs, fenceMarginMs } = options;
     this.maxFloorAheadMs = options.maxFloorAheadMs ?? fenceMarginMs;
     if (holder === '') throw new RangeError('Lease holder must not be empty');
     if (!Number.isInteger(ttlMs) || ttlMs <= 0) throw new RangeError('Lease ttlMs must be a positive integer');
     if (!Number.isInteger(fenceMarginMs) || fenceMarginMs <= 0 || fenceMarginMs >= ttlMs) {
       throw new RangeError('Lease fenceMarginMs must be a positive integer below ttlMs');
-    }
-    if (!Number.isInteger(quarantineMs) || quarantineMs < 0) {
-      throw new RangeError('Lease quarantineMs must be a non-negative integer');
     }
     if (!Number.isInteger(this.maxFloorAheadMs) || this.maxFloorAheadMs < 0) {
       throw new RangeError('Lease maxFloorAheadMs must be a non-negative integer');
@@ -126,25 +122,24 @@ export class NodeLease {
     }
     return this.exclusive(async () => {
       this.phase = 'acquiring';
-      const { store, holder, ttlMs, quarantineMs } = this.options;
+      const { store, holder, ttlMs } = this.options;
       const anchor = this.read();
-      const grant = await store.acquire({ holder, ttlMs, quarantineMs });
+      const grant = await store.acquire({ holder, ttlMs });
       if (grant === null) {
         this.phase = 'exhausted';
         return { kind: 'exhausted' };
       }
 
-      const { nodeId, generation, floorMs, prevUntilMs, leaseUntilMs, dbNowMs } = grant;
-      if (floorMs !== null && floorMs - dbNowMs > this.maxFloorAheadMs) {
+      const { nodeId, generation, floorMs, leaseUntilMs, nowMs } = grant;
+      if (floorMs !== null && floorMs - nowMs > this.maxFloorAheadMs) {
         await store.release({ nodeId, holder, generation, lastMs: null });
-        return { kind: 'floor_rejected', nodeId, aheadMs: floorMs - dbNowMs };
+        return { kind: 'floor_rejected', nodeId, aheadMs: floorMs - nowMs };
       }
 
       const generator = SnowflakeGenerator.createWithClock({
         nodeId,
         clock: this.clock,
-        // `prevUntilMs` covers what the previous holder minted after its last report, whatever its clock said.
-        floorMs: Math.max(floorMs ?? 0, prevUntilMs, this.retiredLastMs),
+        floorMs: Math.max(floorMs ?? 0, this.retiredLastMs),
       });
       this.held = { nodeId, generation, generator, anchor, leaseUntilMs };
       this.phase = 'held';
@@ -208,7 +203,7 @@ export class NodeLease {
   // Both clocks, because each fails alone: the monotonic one stands still through a host suspend,
   // and the wall one can step backwards. A wall clock running ahead of the monotonic one by more
   // than the margin is itself a suspend, which only a successful renew can clear. The last check
-  // needs no clock agreement at all: an id stamped past the lease end.
+  // needs no clock agreement at all: an id stamped past the ceiling.
   private fenced(): boolean {
     if (this.held === null) return true;
     const { ttlMs, fenceMarginMs } = this.options;

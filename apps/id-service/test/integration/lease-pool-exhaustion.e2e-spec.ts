@@ -2,24 +2,23 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { decode } from '@jcool/id-codec';
-import { freshDatabase, holdAllNodesExcept, type LeaseDatabase, openLeaseDatabase } from '../setup/databases';
 import { eventually } from '../setup/eventually';
+import { TestKeyspace } from '../setup/keyspaces';
 import { createTestApp } from '../setup/test-app';
 
 describe('an exhausted node pool', () => {
-  let leases: LeaseDatabase;
+  let keyspace: TestKeyspace;
   let app: INestApplication;
 
   beforeAll(async () => {
-    const url = await freshDatabase();
-    leases = await openLeaseDatabase(url);
-    await holdAllNodesExcept(leases.pool);
-    app = await createTestApp(url, { ID_LEASE_QUARANTINE_MS: '0' });
+    keyspace = await TestKeyspace.open();
+    await keyspace.holdAllNodesExcept();
+    app = await createTestApp(keyspace.prefix);
   });
 
   afterAll(async () => {
     await app?.close();
-    await leases?.close();
+    keyspace?.close();
   });
 
   it('keeps the replica alive but not ready', async () => {
@@ -35,7 +34,7 @@ describe('an exhausted node pool', () => {
   });
 
   it('recovers on its own once a node frees up', async () => {
-    await leases.pool.query(`UPDATE node_leases SET lease_until = now() - interval '1 second' WHERE node_id = 7`);
+    await keyspace.expire(7);
 
     await eventually(async () => {
       const res = await request(app.getHttpServer()).get('/health/ready');

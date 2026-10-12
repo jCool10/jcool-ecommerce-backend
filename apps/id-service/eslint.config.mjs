@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['eslint.config.mjs', 'dist/**', 'drizzle.config.ts', 'test/**/*.mts'],
+    ignores: ['eslint.config.mjs', 'dist/**', 'test/**/*.mts'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -66,9 +66,9 @@ export default tseslint.config(
     files: ['src/main.ts'],
     rules: { 'no-restricted-imports': 'off' },
   },
-  // Migrations run outside Nest, with no logger to inject.
+  // The floor lift runs outside Nest, with no logger to inject.
   {
-    files: ['src/**/*.spec.ts', 'test/**/*.ts', 'src/database/migrate.ts', 'src/database/migrate-cli.ts'],
+    files: ['src/**/*.spec.ts', 'test/**/*.ts', 'src/lease/lift-floors-cli.ts'],
     rules: { 'no-console': 'off' },
   },
   // `getHttpServer()` is typed `any`, so every supertest call trips the unsafe-* family.

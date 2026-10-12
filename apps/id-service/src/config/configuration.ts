@@ -1,8 +1,8 @@
 import { hostname } from 'node:os';
-import { appConfig, databaseConfig, observabilityConfig, parseIntOr } from '@jcool/platform/config';
+import { appConfig, observabilityConfig } from '@jcool/platform/config';
 
 // Railway's replica id is a UUID with no order to it, so the host and pid ride along for whoever reads
-// the table while debugging. Nothing identifies a holder by this string: the lease generation does.
+// the keyspace while debugging. Nothing identifies a holder by this string: its etcd lease does.
 function leaseHolder(): string {
   return [process.env.RAILWAY_REPLICA_ID ?? 'local', hostname(), process.pid].join('/');
 }
@@ -12,21 +12,34 @@ function msEnv(raw: string | undefined, fallback: number): number {
   return raw === undefined || raw === '' ? fallback : Number(raw);
 }
 
+export const DEFAULT_ETCD_KEY_PREFIX = '/jcool/id-service/';
+
+/** Shared with the floor-lift CLI, which runs outside Nest. */
+export function etcdConfig() {
+  return {
+    endpoints: (process.env.ETCD_ENDPOINTS ?? '')
+      .split(',')
+      .map((endpoint) => endpoint.trim())
+      .filter(Boolean),
+    keyPrefix: process.env.ETCD_KEY_PREFIX || DEFAULT_ETCD_KEY_PREFIX,
+    // A renew stuck on an etcd that stopped answering would outlive the fence; bounded by default.
+    requestTimeoutMs: msEnv(process.env.ETCD_REQUEST_TIMEOUT_MS, 2_000),
+  };
+}
+
+export type EtcdConfig = ReturnType<typeof etcdConfig>;
 export type LeaseConfig = ReturnType<typeof configuration>['lease'];
 
 export default function configuration() {
-  const { database } = databaseConfig();
   const fenceMarginMs = msEnv(process.env.ID_LEASE_FENCE_MARGIN_MS, 15_000);
   return {
     ...appConfig(),
     ...observabilityConfig({ serviceName: 'jcool-id-service' }),
-    // A renew stuck on a database that stopped answering would outlive the fence; bounded by default.
-    database: { ...database, queryTimeoutMs: parseIntOr(process.env.DB_QUERY_TIMEOUT_MS, 2_000) },
+    etcd: etcdConfig(),
     lease: {
       holder: leaseHolder(),
       ttlMs: msEnv(process.env.ID_LEASE_TTL_MS, 300_000),
       renewEveryMs: msEnv(process.env.ID_LEASE_RENEW_EVERY_MS, 60_000),
-      quarantineMs: msEnv(process.env.ID_LEASE_QUARANTINE_MS, 10_000),
       fenceMarginMs,
       maxFloorAheadMs: msEnv(process.env.ID_LEASE_MAX_FLOOR_AHEAD_MS, fenceMarginMs),
     },

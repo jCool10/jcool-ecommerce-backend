@@ -205,40 +205,40 @@ services:
     networks:
       - jcool-net
 
-  # The id-service's own database: it holds the node leases and nothing else.
-  id-postgres:
-    image: postgres:16-alpine
-    container_name: jcool-id-postgres
+  # The id-service's node leases and nothing else. A single member, as on Railway.
+  id-etcd:
+    build:
+      context: .
+      dockerfile: infra/etcd/Dockerfile
+    container_name: jcool-id-etcd
     restart: unless-stopped
-    # Loopback only, as with the other databases: for running the id-service from the host.
+    # Loopback only, as with the databases: for running the id-service from the host.
     ports:
-      - "127.0.0.1:${ID_POSTGRES_HOST_PORT:-5435}:5432"
+      - "127.0.0.1:${ID_ETCD_HOST_PORT:-2379}:2379"
     environment:
-      POSTGRES_USER: ids
-      POSTGRES_PASSWORD: ${ID_POSTGRES_PASSWORD:-ids}
-      POSTGRES_DB: ids
+      ETCD_ADVERTISE_CLIENT_URLS: http://id-etcd:2379
     volumes:
-      - idpgdata:/var/lib/postgresql/data
+      - idetcddata:/var/lib/etcd
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ids -d ids"]
+      test: ["CMD", "etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "health"]
       interval: 5s
       timeout: 3s
       retries: 10
     networks:
       - jcool-net
 
-  # The pre-deploy step: a migration that fails keeps the replicas from starting.
-  id-migrate:
+  # The pre-deploy step: gives a fresh keyspace its floors, and is a no-op on one that has them.
+  id-floors:
     build:
       context: .
       dockerfile: apps/id-service/Dockerfile
     image: jcool-id-service:local
-    container_name: jcool-id-migrate
-    command: ['node', 'dist/database/migrate-cli.js']
+    container_name: jcool-id-floors
+    command: ['node', 'dist/lease/lift-floors-cli.js', '--if-uninitialized']
     environment:
-      DATABASE_URL: postgresql://ids:${ID_POSTGRES_PASSWORD:-ids}@id-postgres:5432/ids
+      ETCD_ENDPOINTS: http://id-etcd:2379
     depends_on:
-      id-postgres:
+      id-etcd:
         condition: service_healthy
     networks:
       - jcool-net
@@ -254,12 +254,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://ids:${ID_POSTGRES_PASSWORD:-ids}@id-postgres:5432/ids
+      ETCD_ENDPOINTS: http://id-etcd:2379
       # Keeps minting this long after SIGTERM, then releases its node; stop_grace_period must outlast it.
       SHUTDOWN_GRACE_PERIOD_MS: 8000
     stop_grace_period: 20s
     depends_on:
-      id-migrate:
+      id-floors:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -465,7 +465,7 @@ services:
 
 volumes:
   pgdata:
-  idpgdata:
+  idetcddata:
   userpgdata:
   redisdata:
   esdata:

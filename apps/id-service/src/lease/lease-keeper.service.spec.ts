@@ -114,8 +114,8 @@ describe('LeaseKeeper', () => {
     expect(clockMetrics.bindIdentityClockMetrics).toHaveBeenLastCalledWith(lease.generator);
   });
 
-  // With every free node's floor ahead (a database clock stepped back), an immediate retry would spin
-  // through the pool, and with no quarantine on the same node forever.
+  // With every free node's floor ahead (a previous holder's clock ran fast), an immediate retry would
+  // spin through the pool without pause.
   it('hands back nodes whose floor runs too far ahead, pausing between tries', async () => {
     const { store, lease, keeper, counters, log } = setup();
     const ahead = START_MS + LEASE.maxFloorAheadMs + 1;

@@ -3,29 +3,28 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { decode } from '@jcool/id-codec';
 import { MAX_IDS_PER_REQUEST } from '../../src/mint/mint.request';
-import { freshDatabase, type LeaseDatabase, openLeaseDatabase } from '../setup/databases';
 import { sleep } from '../setup/eventually';
+import { TestKeyspace } from '../setup/keyspaces';
 import { createTestApp } from '../setup/test-app';
 
 const GRACE_MS = 500;
 
 describe('POST /v1/ids', () => {
-  let leases: LeaseDatabase;
+  let keyspace: TestKeyspace;
   let app: INestApplication;
   let closing: Promise<void> | undefined;
   let nodeId: number;
 
   beforeAll(async () => {
-    const url = await freshDatabase();
-    leases = await openLeaseDatabase(url);
-    app = await createTestApp(url, { SHUTDOWN_GRACE_PERIOD_MS: String(GRACE_MS) });
+    keyspace = await TestKeyspace.open();
+    app = await createTestApp(keyspace.prefix, { SHUTDOWN_GRACE_PERIOD_MS: String(GRACE_MS) });
     const ready = await request(app.getHttpServer()).get('/health/ready').expect(200);
     nodeId = ready.body.info.lease.nodeId as number;
   });
 
   afterAll(async () => {
     await (closing ?? app?.close());
-    await leases?.close();
+    keyspace?.close();
   });
 
   const mint = (body: object, caller?: string) => {
@@ -73,18 +72,17 @@ describe('POST /v1/ids', () => {
     expect(text).toMatch(/^id_clock_drift_ms \d+/m);
   });
 
-  it('keeps minting while draining, then releases the node with its last timestamp', async () => {
+  it('keeps minting while draining, then releases the node with its floor brought down to its last id', async () => {
     closing = app.close();
     await sleep(GRACE_MS / 5);
     const res = await mint({}).expect(200);
     const lastMs = decode((res.body.ids as string[])[0] ?? '').tsMs;
     await closing;
 
-    const { rows } = await leases.pool.query<{ holder: string | null; max_ts_ms: string; live: boolean }>(
-      'SELECT holder, max_ts_ms, lease_until > now() AS live FROM node_leases WHERE node_id = $1',
-      [nodeId],
-    );
-    expect(rows[0]).toMatchObject({ holder: null, live: false });
-    expect(Number(rows[0]?.max_ts_ms)).toBeGreaterThanOrEqual(lastMs);
+    expect(await keyspace.owner(nodeId)).toBeUndefined();
+    const floorMs = await keyspace.floor(nodeId);
+    expect(floorMs).toBeGreaterThanOrEqual(lastMs);
+    // Down from the ceiling a TTL ahead to what was really stamped.
+    expect(floorMs).toBeLessThan(lastMs + 60_000);
   });
 });

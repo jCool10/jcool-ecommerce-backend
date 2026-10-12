@@ -1,34 +1,15 @@
-import { PostgreSqlContainer } from '@testcontainers/postgresql';
-import { Client } from 'pg';
-import { runMigrations } from '../../src/database/migrate';
-import { POSTGRES_IMAGE, TEMPLATE_DATABASE, withDatabase } from './databases';
+import { EtcdContainer } from '@testcontainers/etcd';
+import { ETCD_IMAGE } from './keyspaces';
 
-// Migrated once into a template; every spec clones its own database from it.
+// One etcd for every spec; each spec works under a key prefix of its own.
 export default async function setup({
   provide,
 }: {
-  provide: (key: 'PG_ADMIN_URL', value: string) => void;
+  provide: (key: 'ETCD_URL', value: string) => void;
 }): Promise<() => Promise<void>> {
-  // The contention spec holds one connection per leasable node at once, past the default of 100.
-  const postgres = await new PostgreSqlContainer(POSTGRES_IMAGE)
-    .withCommand(['postgres', '-c', 'max_connections=400'])
-    .start();
-  try {
-    const adminUrl = postgres.getConnectionUri();
-    const admin = new Client({ connectionString: adminUrl });
-    await admin.connect();
-    try {
-      await admin.query(`CREATE DATABASE "${TEMPLATE_DATABASE}"`);
-    } finally {
-      await admin.end();
-    }
-    await runMigrations(withDatabase(adminUrl, TEMPLATE_DATABASE));
-    provide('PG_ADMIN_URL', adminUrl);
-  } catch (error) {
-    await postgres.stop();
-    throw error;
-  }
+  const etcd = await new EtcdContainer(ETCD_IMAGE).start();
+  provide('ETCD_URL', etcd.getClientEndpoint());
   return async () => {
-    await postgres.stop();
+    await etcd.stop();
   };
 }

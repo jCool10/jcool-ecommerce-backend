@@ -51,10 +51,10 @@ export const LEASE_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: ID_LEASE_LOST_TOTAL,
-    help: 'Renewals that found the lease expired or taken; minting stopped at once and a new node was sought.',
+    help: 'Renewals that found the owner gone or replaced; minting stopped at once and a new node was sought.',
   }),
   makeCounterProvider({
     name: ID_LEASE_FLOOR_REJECTIONS_TOTAL,
-    help: "Nodes handed back at acquire because a previous holder's last timestamp sat too far ahead of the database clock.",
+    help: "Nodes handed back at acquire because the floor a previous holder left sat too far ahead of this replica's clock.",
   }),
 ];

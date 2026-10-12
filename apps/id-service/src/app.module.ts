@@ -2,13 +2,12 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ClsModule } from 'nestjs-cls';
-import { DrizzleModule } from '@jcool/platform/database';
 import { HttpExceptionFilter } from '@jcool/platform/interface';
 import { HttpMetricsModule } from '@jcool/platform/metrics';
 import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } from '@jcool/platform/observability';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
-import * as schema from './database/schema';
+import { EtcdModule } from './etcd/etcd.module';
 import { HealthModule } from './health/health.module';
 import { MintModule } from './mint/mint.module';
 
@@ -21,7 +20,7 @@ import { MintModule } from './mint/mint.module';
     ClsModule.forRoot(clsModuleOptions),
     ObservabilityLoggerModule,
     HttpMetricsModule,
-    DrizzleModule.forRoot({ schema }),
+    EtcdModule,
     MintModule,
     HealthModule,
   ],
