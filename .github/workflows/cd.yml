@@ -8,7 +8,7 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    # PR runs never start this workflow; a red run on main starts it only to skip the job below,
+    # PR runs never start this workflow; a red run on main starts it only to skip every job below,
     # since GitHub cannot filter a workflow_run trigger on the run's conclusion.
     branches: [main]
 
@@ -20,9 +20,13 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Pinned: an unattended deploy should not pick up CLI behaviour changes on its own.
+  RAILWAY_CLI_VERSION: 5.49.6
+
 jobs:
-  deploy:
-    name: Deploy to Railway
+  plan:
+    name: Plan Railway config
     # `workflow_run` hands this job the repository's secrets, so the trigger is narrowed to a push
     # that landed on main in this repo. A pull_request-triggered CI run reports the fork's branch
     # and is excluded here.
@@ -32,10 +36,13 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     environment: production
+    outputs:
+      change-set-hash: ${{ steps.plan.outputs.change-set-hash }}
+      destructive: ${{ steps.plan.outputs.destructive }}
+    # Environment-level variables, so they resolve only in a job that names `production`.
     # RAILWAY_TOKEN is scoped to the steps that call Railway, so install scripts never see it.
     env:
       RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
-      RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT || 'production' }}
       APP_PUBLIC_URL: ${{ vars.APP_PUBLIC_URL }}
     steps:
       - name: Check deploy configuration
@@ -55,10 +62,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-
-      # Pinned: an unattended deploy should not pick up CLI behaviour changes on its own.
-      - run: npm install -g @railway/cli@5.49.6
-
+      - run: npm install -g "@railway/cli@$RAILWAY_CLI_VERSION"
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -67,12 +71,103 @@ jobs:
       # Root only: .railway/railway.ts imports the Railway SDK; the app itself is built by Railway.
       - run: pnpm install --frozen-lockfile --filter .
 
-      # Without --confirm-destructive, a plan that would delete a resource or variable is refused, so
-      # a variable missing from .railway/railway.ts stops the deploy instead of being wiped.
-      - name: Apply Railway config
+      # The summary is what a reviewer reads before approving a destroy. Values stay redacted: never
+      # add --show-values or --decrypt-variables, since this repo's run pages are public.
+      - name: Plan Railway config
+        id: plan
+        shell: bash
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway config apply --yes
+        run: |
+          pin="$RUNNER_TEMP/railway-plan.json"
+          railway config plan --out "$pin" | tee "$RUNNER_TEMP/railway-plan.txt"
+          hash=$(jq -er '.changeSetHash' "$pin")
+          destructive=$(jq -r 'if .destructive == true then "true" elif .destructive == false then "false"
+            else error("the pinned plan has no destructive flag") end' "$pin")
+          echo "change-set-hash=$hash" >> "$GITHUB_OUTPUT"
+          echo "destructive=$destructive" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Railway plan'
+            echo '```'
+            cat "$RUNNER_TEMP/railway-plan.txt"
+            echo '```'
+            echo "Change set \`$hash\`, destructive: $destructive"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  confirm-destructive:
+    name: Confirm destructive Railway changes
+    needs: plan
+    if: needs.plan.outputs.destructive == 'true'
+    runs-on: ubuntu-latest
+    # Holds the run for a required reviewer. The environment has no secrets; it exists for that rule.
+    environment: production-destructive
+    steps:
+      # GitHub creates a missing environment on first use with no rules, so a renamed or deleted
+      # environment would otherwise wave every destroy through.
+      - name: Require a reviewer on this environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_HASH: ${{ needs.plan.outputs.change-set-hash }}
+        run: |
+          rules=$(gh api "repos/$GITHUB_REPOSITORY/environments/production-destructive" \
+            --jq '[.protection_rules[].type] | join(",")')
+          case ",$rules," in
+            *,required_reviewers,*) echo "Approved change set $APPROVED_HASH" ;;
+            *) echo "::error::environment production-destructive has no required reviewer"; exit 1 ;;
+          esac
+
+  deploy:
+    name: Deploy to Railway
+    needs: [plan, confirm-destructive]
+    # A skipped need skips this job too unless the condition says otherwise.
+    if: >-
+      !cancelled() && needs.plan.result == 'success' && (
+        needs.confirm-destructive.result == 'success' ||
+        (needs.confirm-destructive.result == 'skipped' && needs.plan.outputs.destructive == 'false')
+      )
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+      RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT || 'production' }}
+      APP_PUBLIC_URL: ${{ vars.APP_PUBLIC_URL }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: npm install -g "@railway/cli@$RAILWAY_CLI_VERSION"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter .
+
+      # Applies only the change set the plan job showed (and, for a destroy, a reviewer approved).
+      # Anything that moved in between changes the hash and stops here; `apply --plan` itself also
+      # refuses once the live environment's etag moves. An empty plan means an operator already
+      # applied it by hand, which some runbook procedures do on purpose.
+      - name: Apply the reviewed Railway config
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          APPROVED_HASH: ${{ needs.plan.outputs.change-set-hash }}
+          DESTRUCTIVE: ${{ needs.plan.outputs.destructive }}
+        run: |
+          pin="$RUNNER_TEMP/railway-plan.json"
+          railway config plan --out "$pin"
+          if [ "$(jq '.changeSet.changes | length' "$pin")" -eq 0 ]; then
+            echo "No pending Railway config changes."
+            exit 0
+          fi
+          hash=$(jq -er '.changeSetHash' "$pin")
+          if [ "$hash" != "$APPROVED_HASH" ]; then
+            echo "::error::the Railway plan changed after review ($APPROVED_HASH, now $hash); re-run all jobs for a fresh plan"
+            exit 1
+          fi
+          flags=(--plan "$pin" --yes)
+          if [ "$DESTRUCTIVE" = true ]; then flags+=(--confirm-destructive); fi
+          railway config apply "${flags[@]}"
 
       # Exit 2 means something is still pending: the apply did not land (token scope, staged
       # changes), and `railway up` would deploy on the old settings.
