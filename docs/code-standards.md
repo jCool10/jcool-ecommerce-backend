@@ -52,7 +52,7 @@ Framework and infrastructure handles keep their short names, because each is one
 
 ## Migrations
 
-Schema changes are generated, never typed into an existing file: edit the Drizzle schema, run the project's `db:generate`, and commit the emitted `.sql` together with its `meta/_journal.json` entry. This applies per service — `apps/api`, `apps/user-service` and `apps/id-service` each own a schema, a `drizzle.config.ts` and a migrations journal.
+Schema changes are generated, never typed into an existing file: edit the Drizzle schema, run the project's `db:generate`, and commit the emitted `.sql` together with its `meta/_journal.json` entry. This applies per Postgres-backed service — `apps/api` and `apps/user-service` each own a schema, a `drizzle.config.ts` and a migrations journal; `apps/id-service` keeps its state in etcd and has none.
 
 A migration that has been merged is immutable. Drizzle records each file's hash in the journal, so an edited file no longer matches what every database that already applied it ran — a correction is a new migration, never an edit.
 

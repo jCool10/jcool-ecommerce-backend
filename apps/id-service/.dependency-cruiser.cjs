@@ -11,9 +11,12 @@ module.exports = {
       name: 'lease-store-behind-port',
       severity: 'error',
       comment:
-        'Only the Postgres store and the migration runner talk SQL; everything else goes through NodeLease. The root module only hands the schema to Drizzle.',
-      from: { path: '^src/', pathNot: '^src/(lease/postgres-lease-store|database/|app\\.module)|\\.spec\\.ts$' },
-      to: { path: '^node_modules/(drizzle-orm|pg)/|^src/database/' },
+        'Only the etcd module, the etcd store, its keyspace and the floor lift talk to etcd; everything else goes through NodeLease. The lease module only hands the client to the store.',
+      from: {
+        path: '^src/',
+        pathNot: '^src/(etcd/|lease/(etcd-lease-|lift-floors|lease\\.module)|app\\.module)|\\.spec\\.ts$',
+      },
+      to: { path: '^node_modules/(etcd3|cockatiel)/|^src/etcd/' },
     },
   ],
   options: {

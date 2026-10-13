@@ -26,6 +26,7 @@ Conventions used below:
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
+- [The id-service's etcd](#the-id-services-etcd)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [Checkout freeze](#checkout-freeze)
 - [Checkout saga cut-over](#checkout-saga-cut-over)
@@ -64,7 +65,7 @@ There are exactly two correct responses:
 - **Restore the original build**, the one whose `LAYOUT_VERSION` is the pinned one, and redeploy.
 - **Reset the database**, if and only if it holds nothing worth keeping.
 
-There is no third option. Do not edit or delete the pin row to make the message go away: it is the only evidence of which layout the existing ids were minted under, and nothing can rebuild it. The same holds for the api's and the id-service's databases, which carry no pin but hold ids and node leases from the same layout.
+There is no third option. Do not edit or delete the pin row to make the message go away: it is the only evidence of which layout the existing ids were minted under, and nothing can rebuild it. The same holds for the api's database and the id-service's etcd keyspace, which carry no pin but hold ids and node floors from the same layout.
 
 ---
 
@@ -78,7 +79,7 @@ CD deploys one service at a time (id-service → api → gateway → user-servic
 2. **Close open checkouts.** Every `PENDING` payment (`SELECT id, order_id, provider_session_id FROM payments WHERE status = 'PENDING'`) has a hosted checkout page that can still take money for an order the reset deletes. Expire each session in the payment gateway's dashboard and refund any that already read `paid`, as in [A refund is owed](#a-refund-is-owed).
 3. **Back up, then reset** the api's and the user-service's databases to empty ([Backup and restore](#backup-and-restore)); a layout-2 build cannot serve the dumps. The api's `0028_snowflake_layout_v2_id_floor.sql` and the user-service's `0003_snowflake_layout_v2_pin_and_id_floor.sql` refuse to run while any of their tables holds a row (`id layout 2 needs a reset database: table … is not empty`), so a database that was missed stops the deploy at its pre-deploy step.
 4. **Flush the shared Redis** (`railway connect <redis service>`, then `FLUSHALL`). Its queued and dead-lettered jobs, its `auth:epoch:*` and `auth:denylist:*` keys and its cached catalog pages all name layout-1 ids, and a `queue:replay-dlq --apply` would put those jobs back on the queues.
-5. **Remove `IDENTITY_BUCKET_KEY`** now: `.railway/railway.ts` no longer lists it, so CD's apply would stop at the delete. From this change's checkout, run `railway config plan` (the only destroy must be that variable), then `railway config apply --confirm-destructive` ([Change Railway service config](#change-railway-service-config)). Keep its value with the step-3 dumps: a rollback needs it back.
+5. **Remove `IDENTITY_BUCKET_KEY`** now: `.railway/railway.ts` no longer lists it, so CD would otherwise hold the deploy for a [destructive review](#review-a-destructive-change). From this change's checkout, run `railway config plan` (the only destroy must be that variable), then `railway config apply --confirm-destructive` ([Change Railway service config](#change-railway-service-config)). Keep its value with the step-3 dumps: a rollback needs it back.
 6. **Set `IDENTITY_PIN_BOOTSTRAP=true`** on the user-service, so its first boot pins the empty database at layout 2.
 7. **Merge.** The id-service's `0004_widen_node_pool.sql` widens the leasable node pool to `1..254`; `0028` and `0003` move every `ck_<table>_<column>_routable` floor to `>= 262144` (2^18), and `0003` drops the old pin fingerprint.
 8. **Check the pin** before anything writes a user: the user-service logs `id layout pinned — no layout was pinned here before`, and `SELECT layout_version FROM identity_key_pin` returns `2`. Then unset `IDENTITY_PIN_BOOTSTRAP`.
@@ -86,7 +87,7 @@ CD deploys one service at a time (id-service → api → gateway → user-servic
 
 Nothing but those two migrations checks for the reset. The api holds no pin, and every layout-1 id clears the new floor, so a layout-1 row left behind would sit beside layout-2 ones unnoticed. A user-service database that already holds a pin refuses a build of another layout with the mismatch error above. An old caller sending `bucket` to `POST /v1/ids` gets `400`: the body is `{ "count"?: 1..1024 }`.
 
-**There is no rolling back one service.** An old build cannot read layout-2 ids, and an old id-service replica claims the new nodes above 30 first: node 31 was layout 1's scripts node, and on any higher one the replica never becomes ready. Rolling back repeats the steps above for the old builds: stop, restore the step-3 dumps into empty databases, flush Redis, shrink the id-service's node pool back, put `IDENTITY_BUCKET_KEY` back with its old value, and deploy the old builds.
+**There is no rolling back one service.** An old build cannot read layout-2 ids, and an old id-service replica claims the new nodes above 30 first: node 31 was layout 1's scripts node, and on any higher one the replica never becomes ready. Rolling back repeats the steps above for the old builds: stop, restore the step-3 dumps into empty databases, flush Redis, shrink the id-service's node pool back, put `IDENTITY_BUCKET_KEY` back with its old value, and deploy the old builds. Those builds predate the etcd lease store, so the id-service first goes back to `id-postgres` ([Roll back the cut-over](#roll-back-the-cut-over)), and the pool shrinks there:
 
 ```sql
 -- psql against id-service's DATABASE_URL, every replica stopped
@@ -99,10 +100,7 @@ ALTER TABLE node_leases ADD CONSTRAINT node_leases_node_id_range CHECK (node_id 
 
 ## Backup and restore
 
-Each service owns one database and is backed up on its own: the api's (catalog, cart, orders,
-payments, inventory, media, messaging), the user-service's (accounts, tokens, the layout pin), and the
-id-service's (node leases). They share no foreign keys, so there is no cross-database consistency to
-preserve.
+Each service owns one database and is backed up on its own: the api's (catalog, cart, orders, payments, inventory, media, messaging) and the user-service's (accounts, tokens, the layout pin). They share no foreign keys, so there is no cross-database consistency to preserve. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
 
 ### Back up
 
@@ -119,7 +117,7 @@ createdb jcool_restore
 pg_restore --dbname="postgres://…/jcool_restore" --no-owner --no-privileges backup-….dump
 ```
 
-A user-service dump then needs the service booted against it by a build with the **id layout that dump was taken under**; the api's and the id-service's carry no pin.
+A user-service dump then needs the service booted against it by a build with the **id layout that dump was taken under**; the api's carries no pin.
 
 After restoring the api's database, [rebuild the search index](#rebuild-the-search-index) before
 catalog writes resume. A restore rewinds `products.search_version`, so the engine holds versions the
@@ -134,23 +132,6 @@ Consequences to plan for:
 - A layout-1 dump cannot be served by a layout-2 build, and its ids do not decode under layout 2. Restore it only under the build that took it.
 - A dump restored into a database that already has a *different* pin row will fail on the primary key of `identity_key_pin` during `pg_restore`, not at boot. Restore into an empty database.
 - Never "fix" a mismatch by updating `identity_key_pin`. Every existing id was minted under the pinned layout; changing the pin makes the database lie about its own history.
-
-### Restoring or recreating the id-service database
-
-`id-postgres` holds only node leases. A restored dump, like a freshly migrated database, can sit behind ids the replicas already minted, and a new holder of a node would then mint at those timestamps again. Before any replica starts against it:
-
-1. Stop every id-service replica, then wait `ID_LEASE_TTL_MS` (5 minutes by default). No id was stamped past its holder's lease end, so once every lease the old rows knew of has ended, the database clock is above every id minted.
-2. Lift every floor to that clock:
-
-   ```sql
-   -- psql against id-service's DATABASE_URL
-   UPDATE node_leases
-   SET holder = NULL,
-       lease_until = LEAST(lease_until, now()),
-       max_ts_ms = GREATEST(COALESCE(max_ts_ms, 0), (extract(epoch FROM now()) * 1000)::bigint);
-   ```
-
-3. Start the replicas.
 
 ---
 
@@ -442,17 +423,16 @@ The compiled CLI fails loudly if its migrations directory resolves to a readable
 
 ### The id-type migrations only apply to empty tables
 
-Three migrations moved user ids from `uuid` to `bigint`, and they are written to fail rather than guess:
+Two migrations moved user ids from `uuid` to `bigint`, and they are written to fail rather than guess:
 
 | Service | Migration | What it does |
 | --- | --- | --- |
 | api | `0022_round_green_goblin.sql` | drops and re-adds `carts.user_id`, `orders.user_id`, `media_assets.uploaded_by` as `bigint NOT NULL`, then rebuilds the indexes over them |
 | user-service | `0000_users_baseline.sql` | the baseline itself was regenerated; there is no in-place step from the old one |
-| id-service | `0002_bright_dreadnoughts.sql` | deletes `node_leases` rows above 30 and narrows the range constraint to 1..30 |
 
 Postgres has no cast from `uuid` to `bigint`, so an `ALTER COLUMN … SET DATA TYPE` would be refused outright. `ADD COLUMN … NOT NULL` with no default succeeds on an empty table — every new environment and every CI run — and fails on a populated one. That failure is the correct outcome, not an obstacle: those rows point at user ids that no longer exist anywhere, and there is no mapping back.
 
-Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, added a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`), a floor of 2^22 under layout 1. They validate the rows already there, so either one fails on a database holding an id below that floor. No app writer produces such an id; a row like that was written by hand. Layout 2 lowers the floor to 2^18 (`>= 262144`) in api `0028_snowflake_layout_v2_id_floor.sql` and user-service `0003_snowflake_layout_v2_pin_and_id_floor.sql`, and the id-service's `0004_widen_node_pool.sql` widens `node_leases` to `1..254`; see [Changing the id layout](#changing-the-id-layout). The api and user-service ones refuse to run while any of their tables holds a row, since they assume the reset described there.
+Two later migrations, api `0023_same_winter_soldier.sql` and user-service `0001_yellow_tomas.sql`, added a `CHECK (… >= 4194304)` to every snowflake id column (`ck_<table>_<column>_routable`), a floor of 2^22 under layout 1. They validate the rows already there, so either one fails on a database holding an id below that floor. No app writer produces such an id; a row like that was written by hand. Layout 2 lowers the floor to 2^18 (`>= 262144`) in api `0028_snowflake_layout_v2_id_floor.sql` and user-service `0003_snowflake_layout_v2_pin_and_id_floor.sql`; see [Changing the id layout](#changing-the-id-layout). The api and user-service ones refuse to run while any of their tables holds a row, since they assume the reset described there.
 
 Two more move every remaining id to `bigint`, and these **delete data rather than fail**:
 
@@ -473,28 +453,50 @@ docker compose up -d postgres redis elasticsearch mailpit minio minio-init
 pnpm db:migrate && pnpm db:seed
 ```
 
-The user-service and id-service databases come back the same way — their containers run their own migrate step (`--profile user-service`, and the one-shot in front of the id-service replicas). Back up first if anything in there is worth keeping; see [Backup and restore](#backup-and-restore).
+The user-service's database comes back the same way — its container runs its own migrate step (`--profile user-service`). Back up first if anything in there is worth keeping; see [Backup and restore](#backup-and-restore). The id-service's etcd volume goes with them, and the `id-floors` one-shot in front of its replicas lifts the fresh keyspace's floors.
 
 ---
 
 ## Change Railway service config
 
-`.railway/railway.ts` owns every service's build and deploy settings and the **names** of their variables. Values set by hand stay in Railway (`preserve()`); the rest are literals or references in the file. CD runs `railway config apply --yes` before every deploy, so:
+`.railway/railway.ts` owns every service's build and deploy settings and the **names** of their variables. Values set by hand stay in Railway (`preserve()`); the rest are literals or references in the file. Before every deploy, CD plans that file, writes the plan to the run summary, and applies exactly the change set it showed, so:
 
 - **Settings** (healthcheck, pre-deploy command, overlap, replicas) change only in that file. A dashboard edit is reverted by the next deploy.
 - **Deploys** go id-service → api → gateway → user-service, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`). Only the api has a repo source, so only CD's `railway up` deploys the others; a dashboard redeploy rebuilds their last upload.
-- **New variable**: add its name to the service's `env` (for the api, `API_VARIABLES`) in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the apply into a delete, which CD refuses: the deploy stops at "Apply Railway config". This includes one set by hand during an incident.
-- **Removing a variable** is the one destructive path. Drop the name and merge. CD then stops at the apply. From an up-to-date `main`, run:
+- **New variable**: add its name to the service's `env` (for the api, `API_VARIABLES`) in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the plan into a delete, and the deploy waits for review (below). This includes one set by hand during an incident: reject that run, add the name to the file, and merge.
+- **Removing a variable**, a service, a volume or a database is the destructive path. Drop it from the file and merge.
+
+### Review a destructive change
+
+When the plan deletes anything, the "Confirm destructive Railway changes" job waits on the `production-destructive` environment until a required reviewer acts on it from the run page (**Review deployments**):
+
+1. Read the "Plan Railway config" job's summary. The only destroys must be the ones the merge meant.
+2. **Approve** to apply that change set and deploy. **Reject** to stop with nothing applied.
+
+The deploy job plans again and applies only if the change set still hashes to the one shown in the summary; otherwise it stops with `the Railway plan changed after review`, and **Re-run all jobs** plans afresh for a new review. An empty plan means the change already landed, so the job skips the apply and deploys. That is how a procedure that must apply by hand between the merge and the deploy works: leave the run waiting, apply from a checkout of `main`, then approve it.
 
 ```bash
 # local, after `railway link` to the production service
-railway config plan                          # the only destroy must be that variable
+railway config plan
 railway config apply --confirm-destructive
 ```
 
-Then re-run the failed CD job.
+A waiting run holds every later CD run behind it (`concurrency: cd-production`), so approve or reject it rather than leaving it open.
 
-Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs.
+`production-destructive` has no secrets; it exists for the reviewer rule, and the job refuses to pass if the rule is missing, since GitHub creates an environment a job names with no rules at all. To create it:
+
+```bash
+gh api -X PUT repos/jCool10/jcool-ecommerce-backend/environments/production-destructive --input - <<'JSON'
+{"wait_timer":0,"prevent_self_review":false,"reviewers":[{"type":"User","id":84013644}],
+ "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+JSON
+gh api -X POST repos/jCool10/jcool-ecommerce-backend/environments/production-destructive/deployment-branch-policies \
+  -f name=main -f type=branch
+```
+
+`prevent_self_review` stays `false` while one person both merges and approves.
+
+Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs and run summaries.
 
 ---
 
@@ -673,15 +675,16 @@ until es -o /dev/null localhost:9200/_security/_authenticate 2>/dev/null; do sle
 
 ### First release
 
-The merge that adds this service also removes api variables, so CD stops at "Apply Railway config"
-before it deploys anything. Finish from an up-to-date `main`, in this order:
+The merge that adds this service also removes api variables, so CD waits at "Confirm destructive
+Railway changes" before it deploys anything. Finish from an up-to-date `main`, in this order:
 
 0. **Record the api's `SEARCH_ENABLED` and `SEARCH_URL`** from the dashboard (neither is a secret).
    Step 8 and the rollback depend on them. Step 3 deletes `SEARCH_API_KEY`: if search is on today and
    the engine it names should come back after a rollback, keep its key wherever secrets live first.
 1. **Back up** the api's database ([Back up](#back-up)).
-2. **Merge**, then wait until the CD run fails at "Apply Railway config". An apply of yours that
-   lands first turns CD's into a no-op, and CD then deploys the api ahead of the engine.
+2. **Merge**, then wait until the CD run waits at "Confirm destructive Railway changes", and leave
+   it waiting. Approving it, or an apply of yours that lands before CD plans, deploys the api ahead
+   of the engine.
 3. **Apply.**
 
    ```bash
@@ -724,7 +727,7 @@ before it deploys anything. Finish from an up-to-date `main`, in this order:
      es -X PUT localhost:9200/_security/user/jcool_api --data-binary @-
    ```
 
-7. **Deploy the api:** re-run the failed CD job. The apply is now a no-op, the pre-deploy step applies
+7. **Deploy the api:** approve the waiting CD run. The plan is now empty, so it skips the apply; the pre-deploy step applies
    the two migrations (`products.search_version`, and dropping `idx_products_active_id`), and the api
    creates `products_v0` behind the `products` alias at boot.
 8. **Enable search** if step 0 found it off: `railway variable set SEARCH_ENABLED=true --service
@@ -765,9 +768,8 @@ before it deploys anything. Finish from an up-to-date `main`, in this order:
      ```
 
   2. Revert the merge on `main`. The revert's config removes this service, its volume,
-     `SEARCH_USERNAME` and `SEARCH_PASSWORD`, so CD stops at the apply again; finish it with
-     `railway config plan` and `railway config apply --confirm-destructive`, then re-run the failed
-     CD job.
+     `SEARCH_USERNAME` and `SEARCH_PASSWORD`, so CD waits for a [destructive
+     review](#review-a-destructive-change) again; check those are the only destroys and approve it.
   3. Keep both migrations: the previous release ignores `search_version`, and its active-products
      scan works without `idx_products_active_id`, only slower. `catalog.*` rows still in the outbox
      dead-letter under it; drop them. Turn search back on only for an engine that still exists and
@@ -810,6 +812,50 @@ printf '%s\n%s\n' "$ELASTIC_PASSWORD" "$ELASTIC_PASSWORD" |
 ```
 
 The api is unaffected either way.
+
+---
+
+## The id-service's etcd
+
+`id-etcd` is a single etcd member declared in `.railway/railway.ts`, built from `infra/etcd/`, with its data on the `id-etcd-data` volume. It holds only the id-service's node owners and floors, under `/jcool/id-service/` ([how the lease works](./apps/id-service/README.md#the-node-lease)). Like Elasticsearch it is outside `cd.yml`: a config change is `railway up --ci --service id-etcd`, and as a service with a volume it never runs two deployments at once. It has no domain and no TCP proxy, and its image has no shell, so every operator action runs from an id-service replica's shell (`railway ssh --service id-service`), where `dist/lease/lift-floors-cli.js` lives.
+
+**While it is down** the replicas keep minting until their ceiling, `ID_LEASE_TTL_MS` past their last renew, less `ID_LEASE_FENCE_MARGIN_MS`: about four minutes with the defaults. Then they turn unready and the api answers 503 on writes. They come back on their own once it answers: a restart that keeps the volume keeps every owner, and etcd restarts each lease's TTL. So a redeploy of `id-etcd`, a minute or two, mints through. The signals are `node lease renew failed; minting until the fence` in the id-service's logs and `id_lease_lost_total` for an outage that outlasted the ceiling.
+
+### Cut over from Postgres
+
+The merge that brings etcd deletes `id-postgres`. The two stores do not see each other's leases, so no Postgres-era replica may mint once an etcd-era one does, and the etcd floors must start above every id a Postgres-era holder stamped. So the id-service is down from step 2 to step 5, about ten minutes: reads keep working and the api answers 503 on writes. Do it off-peak, from an up-to-date `main`:
+
+0. **Optionally [freeze checkout](#checkout-freeze)**, so buyers get `Retry-After` rather than a bare 503.
+1. **Merge**, then wait until the CD run waits at "Confirm destructive Railway changes": the plan deletes `id-postgres` and its volume. Leave it waiting. Approving it now, or an apply of yours that lands before CD plans, deploys the id-service ahead of etcd and with Postgres-era replicas still minting.
+2. **Stop the Postgres-era replicas**: `railway down --service id-service --yes`. Each drains, releases its node and exits. Then wait `ID_LEASE_TTL_MS` (5 minutes unless set): no id was stamped past its holder's lease end, so after that the clock is above every Postgres-era id.
+3. **Apply.**
+
+   ```bash
+   railway config plan    # id-postgres and its volume destroyed; id-etcd and id-etcd-data created;
+                          # id-service: DATABASE_URL deleted, ETCD_ENDPOINTS added, pre-deploy changed
+   railway config apply --confirm-destructive
+   ```
+
+   If the apply redeploys the id-service's last upload, that deployment fails at its pre-deploy step, since the Postgres-era image has no `lift-floors-cli.js`. That is expected: nothing mints.
+
+4. **Deploy etcd**: `railway up --ci --service id-etcd`, then wait until the deployment is live (its healthcheck is etcd's `/health`).
+5. **Deploy the rest**: approve the waiting CD run. The plan is now empty, so it skips the apply. The id-service's pre-deploy step finds a keyspace with no floors and lifts all 254 to its clock (`floors under /jcool/id-service/ lifted to …` in the deploy logs). The replicas then claim their nodes, and the api, the gateway and the user-service follow as usual.
+6. **Verify.** Each of the three replicas logs `node lease acquired` with its own `nodeId`, and a write through the api (add a cart item) answers 2xx. Lift the freeze if step 0 set it.
+
+### Roll back the cut-over
+
+Revert the merge on `main`. CD waits for review again, this time to delete `id-etcd` and its volume; leave it waiting. Repeat steps 2 and 3 (stop, wait `ID_LEASE_TTL_MS`, plan, apply), then approve the waiting run. The Postgres-era pre-deploy migrates the new, empty `id-postgres`, and its replicas start above every etcd-era id because of the wait. Skipping the wait is what makes duplicate ids possible: a fresh `id-postgres` knows no floor.
+
+### The keyspace is lost
+
+Nothing backs `id-etcd` up, and nothing should: its floors are rebuilt from the clock. Never restore a snapshot into it either, since its marker would let the replicas claim against floors older than ids minted since it was taken. If that happened, stop the replicas at once and replace the volume.
+
+A new volume, or a keyspace wiped by hand, has no `initialized` marker, and the replicas refuse to claim on it. Their renews find no owner, so each stops minting at its next renew, and every acquire then fails with `etcd keyspace /jcool/id-service/ has no floors recorded; run the floor lift before any replica mints`. Readiness stays false and the api answers 503 on writes until:
+
+1. **Wait `ID_LEASE_TTL_MS`** from the moment etcd came back empty. A replica that could not reach it since may still be minting on its old node, up to its ceiling, and the lift would hand that node to another replica below it.
+2. **Lift the floors** from a replica's shell: `node dist/lease/lift-floors-cli.js`. It refuses while any node is held, writes the marker last, and the replicas claim within a second of it.
+
+With the replicas stopped (`railway down --service id-service --yes`) the wait still applies, and the next deploy's pre-deploy step does the lift.
 
 ---
 

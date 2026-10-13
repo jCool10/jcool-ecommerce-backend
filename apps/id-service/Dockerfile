@@ -16,9 +16,6 @@ WORKDIR /app
 COPY --from=builder /out/package.json ./
 COPY --from=builder /out/node_modules ./node_modules
 COPY --from=builder /repo/apps/id-service/dist ./dist
-# tsc leaves the .sql files behind; applied by `node dist/database/migrate-cli.js` as a pre-deploy step.
-COPY --from=builder /repo/apps/id-service/src/database/migrations ./migrations
-ENV MIGRATIONS_DIR=/app/migrations
 EXPOSE 3000
 USER node
 # Exec form with node as PID 1, so SIGTERM reaches Nest and the lease is drained and released.

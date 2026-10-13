@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { Client } from 'pg';
+import { EtcdContainer, type StartedEtcdContainer } from '@testcontainers/etcd';
+import { Etcd3 } from 'etcd3';
 import { GenericContainer, Network, type StartedNetwork, type StartedTestContainer, Wait } from 'testcontainers';
 import { decode } from '@jcool/id-codec';
+import { LEASED_NODE_MAX } from '@jcool/id-generator';
 
 /** Small, as callers mint, so the load arrives as many concurrent requests rather than a few large ones. */
 export const IDS_PER_REQUEST = 32;
@@ -10,8 +11,11 @@ export const IDS_PER_REQUEST = 32;
 const REPO_ROOT = resolve(__dirname, '../../../..');
 const ID_SERVICE_IMAGE = 'jcool-id-service:system-test';
 const GATEWAY_IMAGE = 'jcool-gateway:system-test';
+const ETCD_IMAGE = 'gcr.io/etcd-development/etcd:v3.6.5';
 const ID_SERVICE_ALIAS = 'id-service';
-const DATABASE_URL = 'postgresql://ids:ids@id-postgres:5432/ids';
+const ETCD_ENDPOINTS = 'http://id-etcd:2379';
+// The image's default, which the replicas below run under.
+const KEY_PREFIX = '/jcool/id-service/';
 const LB_PORT = 4000;
 export const SHUTDOWN_GRACE_MS = 3_000;
 
@@ -26,7 +30,7 @@ export async function buildImages(): Promise<void> {
 
 export interface Stack {
   network: StartedNetwork;
-  postgres: StartedPostgreSqlContainer;
+  etcd: StartedEtcdContainer;
   gateway: StartedTestContainer;
   replicas: StartedTestContainer[];
   lbUrl: string;
@@ -39,23 +43,17 @@ export interface StackOptions {
   freeNodes?: number;
 }
 
-/** Postgres migrated by the image's own pre-deploy command, `count` replicas, and the gateway in front. */
+/** etcd given floors by the image's own pre-deploy command, `count` replicas, and the gateway in front. */
 export async function startStack(count = 3, { env = {}, freeNodes }: StackOptions = {}): Promise<Stack> {
   const network = await new Network().start();
-  const postgres = await new PostgreSqlContainer('postgres:16-alpine')
-    .withNetwork(network)
-    .withNetworkAliases('id-postgres')
-    .withDatabase('ids')
-    .withUsername('ids')
-    .withPassword('ids')
-    .start();
+  const etcd = await new EtcdContainer(ETCD_IMAGE).withNetwork(network).withNetworkAliases('id-etcd').start();
   await new GenericContainer(ID_SERVICE_IMAGE)
     .withNetwork(network)
-    .withEnvironment({ DATABASE_URL })
-    .withCommand(['node', 'dist/database/migrate-cli.js'])
+    .withEnvironment({ ETCD_ENDPOINTS })
+    .withCommand(['node', 'dist/lease/lift-floors-cli.js', '--if-uninitialized'])
     .withWaitStrategy(Wait.forOneShotStartup())
     .start();
-  if (freeNodes !== undefined) await reserveNodesAbove(postgres, freeNodes);
+  if (freeNodes !== undefined) await reserveNodesAbove(etcd, freeNodes);
 
   const replicas = await startReplicas(network, count, env);
   const gateway = await new GenericContainer(GATEWAY_IMAGE)
@@ -74,7 +72,7 @@ export async function startStack(count = 3, { env = {}, freeNodes }: StackOption
     .withWaitStrategy(Wait.forHttp('/health/live', 8080))
     .start();
   const lbUrl = `http://${gateway.getHost()}:${gateway.getMappedPort(LB_PORT)}`;
-  return { network, postgres, gateway, replicas, lbUrl };
+  return { network, etcd, gateway, replicas, lbUrl };
 }
 
 export function startReplicas(
@@ -89,7 +87,7 @@ export function startReplicas(
         .withNetworkAliases(ID_SERVICE_ALIAS)
         .withEnvironment({
           NODE_ENV: 'production',
-          DATABASE_URL,
+          ETCD_ENDPOINTS,
           LOG_LEVEL: 'warn',
           SHUTDOWN_GRACE_PERIOD_MS: String(SHUTDOWN_GRACE_MS),
           ...env,
@@ -101,15 +99,18 @@ export function startReplicas(
   );
 }
 
-async function reserveNodesAbove(postgres: StartedPostgreSqlContainer, freeNodes: number): Promise<void> {
-  const client = new Client({ connectionString: postgres.getConnectionUri() });
-  await client.connect();
+// Written the way a holder writes its owner key, under a lease that outlives the test.
+async function reserveNodesAbove(etcd: StartedEtcdContainer, freeNodes: number): Promise<void> {
+  const client = new Etcd3({ hosts: etcd.getClientEndpoint() });
   try {
-    await client.query(`UPDATE node_leases SET holder = 'reserved', lease_until = 'infinity' WHERE node_id > $1`, [
-      freeNodes,
-    ]);
+    const { ID } = await client.leaseClient.leaseGrant({ TTL: 3_600 });
+    const owner = Buffer.from(JSON.stringify({ holder: 'reserved', claimFloorMs: null }));
+    for (let nodeId = freeNodes + 1; nodeId <= LEASED_NODE_MAX; nodeId++) {
+      const key = Buffer.from(`${KEY_PREFIX}nodes/${String(nodeId).padStart(3, '0')}/owner`);
+      await client.kv.put({ key, value: owner, lease: ID });
+    }
   } finally {
-    await client.end();
+    client.close();
   }
 }
 
@@ -123,7 +124,7 @@ export async function readiness(replica: StartedTestContainer): Promise<{ status
 export async function stopStack(stack: Stack | undefined): Promise<void> {
   if (stack === undefined) return;
   await Promise.allSettled([stack.gateway.stop(), ...stack.replicas.map((replica) => replica.stop({ timeout: 0 }))]);
-  await stack.postgres.stop();
+  await stack.etcd.stop();
   await stack.network.stop();
 }
 

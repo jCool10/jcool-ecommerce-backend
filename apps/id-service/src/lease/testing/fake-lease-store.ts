@@ -36,17 +36,16 @@ export class FakeLeaseStore implements LeaseStore {
   }
 
   acquire(request: AcquireRequest): Promise<LeaseGrant | null> {
-    const dbNowMs = this.nowMs();
-    this.acquisitions.push(dbNowMs);
+    const nowMs = this.nowMs();
+    this.acquisitions.push(nowMs);
     const answer = this.answers.shift() ?? null;
     if (answer instanceof Error) return Promise.reject(answer);
     if (answer === null) return Promise.resolve(null);
     return Promise.resolve({
       ...answer,
       generation: ++this.generation,
-      prevUntilMs: 0,
-      leaseUntilMs: dbNowMs + request.ttlMs,
-      dbNowMs,
+      leaseUntilMs: nowMs + request.ttlMs,
+      nowMs,
     });
   }
 

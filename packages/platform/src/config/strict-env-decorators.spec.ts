@@ -48,8 +48,8 @@ describe('StrictInt', () => {
     );
   });
 
-  // A redeclared field (id-service's DB_QUERY_TIMEOUT_MS) carries this decorator from both the
-  // platform mixin and the subclass; class-transformer runs both, so the second pass must not
+  // A field a subclass redeclares carries this decorator from both the platform mixin and the
+  // subclass; class-transformer runs both, so the second pass must not
   // re-reject the number the first pass already produced.
   it('is idempotent when applied twice to the same value', () => {
     class TwiceEnv extends EmptyEnv {

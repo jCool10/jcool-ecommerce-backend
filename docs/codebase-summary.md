@@ -21,7 +21,7 @@ CLIs (each also has a `:prod` twin that runs the compiled `dist/` file — see [
 | DLQ replay | [`apps/api/src/shared/messaging/queue/replay-dlq.cli.ts`](../apps/api/src/shared/messaging/queue/replay-dlq.cli.ts) |
 | search reindex | [`apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts`](../apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts) |
 | storage verify | [`apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts`](../apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts) |
-| id-service migrate | [`apps/id-service/src/database/migrate-cli.ts`](../apps/id-service/src/database/migrate-cli.ts) |
+| id-service floor lift (pre-deploy form: `--if-uninitialized`) | [`apps/id-service/src/lease/lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts) |
 | user-service migrate | [`apps/user-service/src/database/migrate-cli.ts`](../apps/user-service/src/database/migrate-cli.ts) |
 
 ## Bounded contexts
@@ -34,12 +34,11 @@ Cross-context wiring and the outbox/inbox backbone live in [`apps/api/src/shared
 
 ## Schema and migrations
 
-Each service owns its own schema and migration set against its own Postgres:
+Each Postgres-backed service owns its own schema and migration set against its own Postgres. The id-service has none; its etcd keyspace is defined in [`apps/id-service/src/lease/etcd-lease-keyspace.ts`](../apps/id-service/src/lease/etcd-lease-keyspace.ts):
 
 | Service | Schema barrel | Migrations |
 | --- | --- | --- |
 | api | [`apps/api/src/shared/infrastructure/database/schema/index.ts`](../apps/api/src/shared/infrastructure/database/schema/index.ts) | [`apps/api/src/shared/infrastructure/database/migrations/`](../apps/api/src/shared/infrastructure/database/migrations/) |
-| id-service | [`apps/id-service/src/database/schema.ts`](../apps/id-service/src/database/schema.ts) | [`apps/id-service/src/database/migrations/`](../apps/id-service/src/database/migrations/) |
 | user-service | [`apps/user-service/src/database/schema.ts`](../apps/user-service/src/database/schema.ts) | [`apps/user-service/src/database/migrations/`](../apps/user-service/src/database/migrations/) |
 
 Migrations are Drizzle-generated (`pnpm db:generate`); the current set is whatever is committed under each `migrations/` directory — list it directly rather than trusting a count here.

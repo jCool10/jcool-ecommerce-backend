@@ -4,18 +4,23 @@ import configuration from './configuration';
 describe('id-service configuration', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('defaults the lease timings and bounds database queries', () => {
-    vi.stubEnv('DB_QUERY_TIMEOUT_MS', undefined);
+  it('defaults the lease timings and bounds etcd calls', () => {
+    vi.stubEnv('ETCD_REQUEST_TIMEOUT_MS', undefined);
+    vi.stubEnv('ETCD_KEY_PREFIX', undefined);
     const config = configuration();
 
     expect(config.lease).toMatchObject({
       ttlMs: 300_000,
       renewEveryMs: 60_000,
-      quarantineMs: 10_000,
       fenceMarginMs: 15_000,
       maxFloorAheadMs: 15_000,
     });
-    expect(config.database.queryTimeoutMs).toBe(2_000);
+    expect(config.etcd).toMatchObject({ keyPrefix: '/jcool/id-service/', requestTimeoutMs: 2_000 });
+  });
+
+  it('reads every etcd endpoint from a comma-separated list', () => {
+    vi.stubEnv('ETCD_ENDPOINTS', 'http://etcd-a:2379, http://etcd-b:2379,');
+    expect(configuration().etcd.endpoints).toEqual(['http://etcd-a:2379', 'http://etcd-b:2379']);
   });
 
   it('lets the floor tolerance follow a configured fence margin unless set itself', () => {

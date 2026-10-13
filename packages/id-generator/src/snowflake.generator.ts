@@ -19,9 +19,9 @@ const NO_STALL = -1;
  * Synchronous by design and lint-enforced to stay that way — an await between reading the clock and
  * stamping the sequence lets two callers emit the same `(timestamp, node, sequence)` triple.
  *
- * This layout carries no random bits, so uniqueness rests entirely on the lease: a node id belongs
- * to one holder at a time, and `NodeLease` floors each new holder past the previous holder's whole
- * lease window, not merely past what it last reported minting. A generator built outside that
+ * This layout carries no random bits, so uniqueness rests entirely on the lease: a holder never
+ * stamps past the ceiling it reserved for its node, and `NodeLease` floors each new holder past that
+ * ceiling, not merely past what the previous holder last minted. A generator built outside that
  * discipline — the two reserved node ids — must never run twice at once.
  */
 export class SnowflakeGenerator {

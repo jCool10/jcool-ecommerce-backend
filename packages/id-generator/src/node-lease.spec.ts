@@ -7,7 +7,6 @@ import type { IdentityClock } from './snowflake.generator';
 const START_MS = 1_800_000_000_000;
 const TTL_MS = 300_000;
 const FENCE_MARGIN_MS = 15_000;
-const QUARANTINE_MS = 10_000;
 const HOLDER = 'replica-a/host/1';
 
 interface FakeClock {
@@ -57,9 +56,9 @@ function fakeClock(): FakeClock {
 type AcquireRequest = Parameters<LeaseStore['acquire']>[0];
 type RenewRequest = Parameters<LeaseStore['renew']>[0];
 type ReleaseRequest = Parameters<LeaseStore['release']>[0];
-type ScriptedGrant = Pick<LeaseGrant, 'nodeId' | 'floorMs' | 'prevUntilMs'> & { dbNowMs?: number };
+type ScriptedGrant = Pick<LeaseGrant, 'nodeId' | 'floorMs'> & { grantNowMs?: number };
 
-/** `nowMs` is the database's clock: it stamps grants and the lease end a renew answers with. */
+/** `nowMs` is the store's clock: it stamps grants and the ceiling a renew answers with. */
 class FakeLeaseStore implements LeaseStore {
   readonly grants: (ScriptedGrant | null)[] = [];
   readonly renewals: RenewRequest[] = [];
@@ -69,11 +68,8 @@ class FakeLeaseStore implements LeaseStore {
 
   constructor(private readonly nowMs: () => number = () => START_MS) {}
 
-  grant(
-    nodeId: number,
-    { floorMs = null, prevUntilMs = 0, dbNowMs }: Partial<Omit<ScriptedGrant, 'nodeId'>> = {},
-  ): this {
-    this.grants.push({ nodeId, floorMs, prevUntilMs, dbNowMs });
+  grant(nodeId: number, { floorMs = null, grantNowMs }: Partial<Omit<ScriptedGrant, 'nodeId'>> = {}): this {
+    this.grants.push({ nodeId, floorMs, grantNowMs });
     return this;
   }
 
@@ -86,12 +82,13 @@ class FakeLeaseStore implements LeaseStore {
     if (this.grants.length === 0) throw new Error('no grant scripted');
     const grant = this.grants.shift() ?? null;
     if (grant === null) return Promise.resolve(null);
-    const dbNowMs = grant.dbNowMs ?? this.nowMs();
+    const nowMs = grant.grantNowMs ?? this.nowMs();
     return Promise.resolve({
-      ...grant,
+      nodeId: grant.nodeId,
+      floorMs: grant.floorMs,
       generation: ++this.generation,
-      leaseUntilMs: dbNowMs + request.ttlMs,
-      dbNowMs,
+      leaseUntilMs: nowMs + request.ttlMs,
+      nowMs,
     });
   }
 
@@ -112,7 +109,6 @@ function leaseWith(store: LeaseStore, fake: FakeClock, overrides: Partial<NodeLe
     store,
     holder: HOLDER,
     ttlMs: TTL_MS,
-    quarantineMs: QUARANTINE_MS,
     fenceMarginMs: FENCE_MARGIN_MS,
     clock: fake.clock,
     ...overrides,
@@ -169,7 +165,7 @@ describe('NodeLease', () => {
     expect(store.renewals[0]).toMatchObject({ nodeId: 7, holder: HOLDER, generation: 1, ttlMs: TTL_MS, lastMs: tsMs });
   });
 
-  // A lost database is not a lost lease: the row is still ours until it expires, so the replica
+  // An unreachable store is not a lost lease: the node is still ours until it expires, so the replica
   // keeps serving on the time it has left and stops short of the expiry by the margin.
   it('keeps minting through failed renewals until the fence deadline, then refuses', async () => {
     const { lease, store, fake } = await heldLease();
@@ -223,25 +219,9 @@ describe('NodeLease', () => {
     expect(decode(lease.generate()).tsMs).toBeGreaterThan(floorMs);
   });
 
-  // A holder that died between renewals never reported its last ids, and its clock may have run ahead
-  // of this one. Neither matters: it never stamped past its lease end, and this holder starts above it.
-  it("starts a new holder above where the previous holder's lease ended", async () => {
-    const prevUntilMs = START_MS + 20_000;
-    const store = new FakeLeaseStore().grant(3, {
-      floorMs: START_MS - 60_000,
-      prevUntilMs,
-      dbNowMs: prevUntilMs + QUARANTINE_MS,
-    });
-    const lease = leaseWith(store, fakeClock());
-
-    await lease.acquire();
-
-    expect(decode(lease.generate()).tsMs).toBeGreaterThan(prevUntilMs);
-  });
-
-  it('refuses an id stamped past its lease end, until a renew moves the end on', async () => {
+  it('refuses an id stamped past its ceiling, until a renew moves the ceiling on', async () => {
     const fake = fakeClock();
-    // This replica's clock runs 250s ahead of the database's, so the lease ends long before its fence.
+    // This replica's clock runs 250s ahead of the store's, so the ceiling comes long before its fence.
     const store = new FakeLeaseStore(() => fake.realMs() - 250_000).grant(7);
     const lease = leaseWith(store, fake);
     await lease.acquire();
@@ -258,14 +238,14 @@ describe('NodeLease', () => {
   it('refuses an id when the process froze between checking the fence and stamping it', async () => {
     const { lease, fake } = await heldLease();
 
-    fake.pauseAfter(2, TTL_MS + QUARANTINE_MS);
+    fake.pauseAfter(2, TTL_MS);
 
     expectRefused(lease, 'fenced');
   });
 
   // A previous holder whose clock ran far ahead left a floor that would drag every id this replica
   // mints into the future. The node is handed back instead, and the caller retries.
-  it('hands back a node whose floor sits too far ahead of the database clock', async () => {
+  it("hands back a node whose floor sits too far ahead of the store's clock", async () => {
     const aheadMs = FENCE_MARGIN_MS + 1;
     const store = new FakeLeaseStore().grant(3, { floorMs: START_MS + aheadMs });
     const lease = leaseWith(store, fakeClock());
@@ -276,7 +256,7 @@ describe('NodeLease', () => {
     expectRefused(lease, 'acquiring');
   });
 
-  it('accepts a floor ahead of the database clock by no more than the configured bound', async () => {
+  it("accepts a floor ahead of the store's clock by no more than the configured bound", async () => {
     const store = new FakeLeaseStore().grant(3, { floorMs: START_MS + 60_000 });
     const lease = leaseWith(store, fakeClock(), { maxFloorAheadMs: 60_000 });
 
@@ -292,11 +272,11 @@ describe('NodeLease', () => {
   });
 
   // The monotonic clock stops while a host is suspended, so it alone would wake up believing no time
-  // had passed and mint on a node the database handed to someone else in the meantime.
+  // had passed and mint on a node the store handed to someone else in the meantime.
   it('fences on the wall clock when a suspend outlasts the lease', async () => {
     const { lease, fake } = await heldLease();
 
-    fake.stepWallBy(TTL_MS + QUARANTINE_MS);
+    fake.stepWallBy(TTL_MS);
 
     expectRefused(lease, 'fenced');
   });
@@ -366,7 +346,6 @@ describe('NodeLease', () => {
       store: new FakeLeaseStore(Date.now).grant(5),
       holder: HOLDER,
       ttlMs: TTL_MS,
-      quarantineMs: QUARANTINE_MS,
       fenceMarginMs: FENCE_MARGIN_MS,
     });
 
@@ -382,7 +361,6 @@ describe('NodeLease', () => {
       { ttlMs: 0 },
       { fenceMarginMs: 0 },
       { fenceMarginMs: TTL_MS },
-      { quarantineMs: -1 },
       { maxFloorAheadMs: -1 },
     ];
     for (const overrides of invalid) {

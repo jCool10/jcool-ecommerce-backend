@@ -38,7 +38,7 @@ Where each environment runs, what owns each deploy target's config, and the rati
 Two facts none of those files state:
 
 - **id-service deploys first** because the api mints every row id through it, and a dependency goes live before its dependents ([`README.md#known-limits`](../README.md#known-limits)).
-- **Every Node service migrates its own database as a Railway `preDeployCommand`**, not just the api the README walks through; see each service's `deploy` block in [`.railway/railway.ts`](../.railway/railway.ts).
+- **Every Node service runs a Railway `preDeployCommand`**, not just the api the README walks through: the api and the user-service migrate their own databases, and the id-service lifts its etcd floors if the keyspace is empty ([`lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts)); see each service's `deploy` block in [`.railway/railway.ts`](../.railway/railway.ts).
 
 ## Production-required settings
 

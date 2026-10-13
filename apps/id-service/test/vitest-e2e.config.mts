@@ -11,8 +11,8 @@ export default defineConfig({
     env: {
       NODE_ENV: 'test',
       LOG_LEVEL: 'warn',
-      // Import-time placeholder for env validation; each app points at its own cloned database.
-      DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
+      // Import-time placeholder for env validation; each app points at the shared etcd under a prefix of its own.
+      ETCD_ENDPOINTS: 'http://127.0.0.1:2379',
       SHUTDOWN_GRACE_PERIOD_MS: '0',
     },
     server: { deps: { external: [/\/packages\/[^/]+\/dist\//] } },

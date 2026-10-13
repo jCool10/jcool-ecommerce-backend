@@ -1,1 +1,0 @@
-ALTER TABLE "node_leases" ADD COLUMN "prior_lease_until" timestamp with time zone;

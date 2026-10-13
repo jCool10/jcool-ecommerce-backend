@@ -13,7 +13,7 @@ export default defineConfig({
       provider: 'v8',
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
-      // The store, the migration runner, the Nest wiring and the mint endpoint are covered by the e2e tier.
+      // The etcd store, the floor lift, the Nest wiring and the mint endpoint are covered by the e2e tier.
       exclude: [
         'src/**/*.spec.ts',
         'src/**/testing/**',
@@ -21,8 +21,9 @@ export default defineConfig({
         'src/main.ts',
         'src/app.setup.ts',
         'src/health/health.controller.ts',
-        'src/database/**',
-        'src/lease/postgres-lease-store.ts',
+        'src/etcd/**',
+        'src/lease/etcd-lease-*.ts',
+        'src/lease/lift-floors*.ts',
         'src/mint/mint.controller.ts',
         'src/mint/lease-not-held.filter.ts',
         'src/mint/mint.request.ts',
