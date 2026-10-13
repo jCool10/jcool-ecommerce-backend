@@ -68,10 +68,7 @@ class FakeLeaseStore implements LeaseStore {
 
   constructor(private readonly nowMs: () => number = () => START_MS) {}
 
-  grant(
-    nodeId: number,
-    { floorMs = null, grantNowMs }: Partial<Omit<ScriptedGrant, 'nodeId'>> = {},
-  ): this {
+  grant(nodeId: number, { floorMs = null, grantNowMs }: Partial<Omit<ScriptedGrant, 'nodeId'>> = {}): this {
     this.grants.push({ nodeId, floorMs, grantNowMs });
     return this;
   }
