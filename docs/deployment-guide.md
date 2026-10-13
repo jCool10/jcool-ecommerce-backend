@@ -6,7 +6,7 @@ Where each environment runs, what owns each deploy target's config, and the rati
 
 | Environment | What runs | Start |
 | --- | --- | --- |
-| Local dev | Compose infrastructure only (Postgres, Redis, Elasticsearch, Mailpit, MinIO) plus the api on the host | [`README.md#quick-start`](../README.md#quick-start) |
+| Local dev | Compose infrastructure only (Postgres, Redis, Elasticsearch, Mailpit, MinIO, Temporal) plus the api on the host | [`README.md#quick-start`](../README.md#quick-start) |
 | Full stack, in Compose | Every service containerized, reached through the gateway; the user-service is opt-in via a Compose profile | [`README.md#quick-start`](../README.md#quick-start) |
 | Railway (production) | The service topology below, deployed by `cd.yml` | this document |
 
@@ -19,6 +19,7 @@ Where each environment runs, what owns each deploy target's config, and the rati
 | id-service image | [`apps/id-service/Dockerfile`](../apps/id-service/Dockerfile) |
 | user-service image | [`apps/user-service/Dockerfile`](../apps/user-service/Dockerfile) |
 | gateway image | [`apps/gateway/Dockerfile`](../apps/gateway/Dockerfile) |
+| Temporal server image, shared by Compose and Railway (schema, namespace and search attributes are created by its entrypoint) | [`infra/temporal/Dockerfile`](../infra/temporal/Dockerfile), [`infra/temporal/entrypoint.sh`](../infra/temporal/entrypoint.sh) |
 | gateway routing — public site plus the private id-service load balancer | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) |
 | Production deploy pipeline | [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) |
 | Gate CD deploys from | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
@@ -39,6 +40,7 @@ Two facts none of those files state:
 
 - **id-service deploys first** because the api mints every row id through it, and a dependency goes live before its dependents ([`README.md#known-limits`](../README.md#known-limits)).
 - **Every Node service runs a Railway `preDeployCommand`**, not just the api the README walks through: the api and the user-service migrate their own databases, and the id-service lifts its etcd floors if the keyspace is empty ([`lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts)); see each service's `deploy` block in [`.railway/railway.ts`](../.railway/railway.ts).
+- **The `temporal` service is deployed by hand, not by CD.** It has no repo source, so `cd.yml` never uploads it; config apply creates it and the `temporal-postgres` database, and `railway up --ci --service temporal` ships the image ([RUNBOOK → Temporal](../RUNBOOK.md#temporal)). The api needs it up before the code that starts sagas goes live, since checkout answers `503` without it.
 
 ## Production-required settings
 
@@ -52,3 +54,4 @@ Every manual operation is in [`RUNBOOK.md`](../RUNBOOK.md), indexed by its own c
 - a variable to add, remove or flip on a Railway service → [Change Railway service config](../RUNBOOK.md#change-railway-service-config)
 - a migration that must not wait for the next deploy → [Apply migrations out of band](../RUNBOOK.md#apply-migrations-out-of-band)
 - moving the public domain onto the gateway → [Put the gateway in front of the api](../RUNBOOK.md#put-the-gateway-in-front-of-the-api)
+- the checkout saga's server, its cut-over and its rollback → [Temporal](../RUNBOOK.md#temporal), [Checkout saga cut-over](../RUNBOOK.md#checkout-saga-cut-over), [Checkout saga rollback](../RUNBOOK.md#checkout-saga-rollback)

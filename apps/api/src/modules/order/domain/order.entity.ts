@@ -34,6 +34,7 @@ export class Order {
     public readonly items: readonly OrderItem[],
     public readonly totalAmountMinor: number,
     public readonly placedAt: Date | null,
+    public readonly paymentDeadlineAt: Date | null,
     // Stamped once, when the order reaches a terminal status; null before that.
     public readonly finalizedAt: Date | null,
     public readonly finalizeReason: string | null,
@@ -69,6 +70,7 @@ export class Order {
       null,
       null,
       null,
+      null,
     );
   }
 
@@ -81,6 +83,7 @@ export class Order {
     items: OrderItem[];
     totalAmountMinor: number;
     placedAt: Date | null;
+    paymentDeadlineAt?: Date | null;
     finalizedAt?: Date | null;
     finalizeReason?: string | null;
     paymentRef?: string | null;
@@ -93,6 +96,7 @@ export class Order {
       props.items,
       props.totalAmountMinor,
       props.placedAt,
+      props.paymentDeadlineAt ?? null,
       props.finalizedAt ?? null,
       props.finalizeReason ?? null,
       props.paymentRef ?? null,
@@ -107,9 +111,9 @@ export class Order {
     return isTerminal(this.status);
   }
 
-  /** `placedAt` is stamped here: the payment deadline runs from it, before the Try has answered. */
-  reserve(now: Date): Order {
-    return this.moveTo(OrderStatus.RESERVING, { placedAt: now });
+  /** Both stamps are set before the Try answers, so the deadline never depends on how long it took. */
+  reserve(now: Date, paymentDeadlineAt: Date): Order {
+    return this.moveTo(OrderStatus.RESERVING, { placedAt: now, paymentDeadlineAt });
   }
 
   confirmPlaced(): Order {
@@ -124,7 +128,7 @@ export class Order {
     return this.moveTo(OrderStatus.CONFIRMING);
   }
 
-  /** Idempotency is the caller's job (row lock + saga version) before it ever gets here. */
+  /** Idempotency is the caller's job (row lock + status CAS) before it ever gets here. */
   settle(outcome: SettleOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
     return this.moveTo(outcome, {
       finalizedAt: meta.now,
@@ -165,7 +169,10 @@ export class Order {
     }
   }
 
-  private moveTo(to: OrderStatus, changes: Partial<Settlement> & { placedAt?: Date } = {}): Order {
+  private moveTo(
+    to: OrderStatus,
+    changes: Partial<Settlement> & { placedAt?: Date; paymentDeadlineAt?: Date } = {},
+  ): Order {
     assertTransition(this.status, to);
     return new Order(
       this.id,
@@ -175,6 +182,7 @@ export class Order {
       this.items,
       this.totalAmountMinor,
       changes.placedAt ?? this.placedAt,
+      changes.paymentDeadlineAt ?? this.paymentDeadlineAt,
       changes.finalizedAt ?? this.finalizedAt,
       changes.finalizeReason !== undefined ? changes.finalizeReason : this.finalizeReason,
       changes.paymentRef !== undefined ? changes.paymentRef : this.paymentRef,

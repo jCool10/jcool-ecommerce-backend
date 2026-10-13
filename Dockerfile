@@ -1,5 +1,6 @@
 # Node 24: current deps require Node >=22 (undici, testcontainers, dependency-cruiser, commander).
-FROM node:24-alpine AS builder
+# Debian, not Alpine: Temporal's native core-bridge ships glibc binaries only.
+FROM node:24-slim AS builder
 WORKDIR /repo
 # pnpm version comes from the root `packageManager` field.
 RUN corepack enable
@@ -10,7 +11,7 @@ RUN pnpm install --offline --frozen-lockfile
 RUN pnpm turbo run build --filter=@jcool/api
 RUN pnpm deploy --filter=@jcool/api --prod /out
 
-FROM node:24-alpine AS runtime
+FROM node:24-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 # Only the manifest and prod node_modules from the deploy dir: it also carries the app's sources.

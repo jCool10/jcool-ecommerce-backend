@@ -176,6 +176,9 @@ services:
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: jcool
+      TEMPORAL_TASK_QUEUE: checkout-saga
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -190,7 +193,10 @@ services:
         condition: service_completed_successfully
       gateway:
         condition: service_started
-    # Probes with node (present in the image) because alpine has no curl/wget.
+      # The worker connects at boot, and the checkout route starts workflows on it.
+      temporal:
+        condition: service_healthy
+    # Probes with node (present in the image); the image has no curl/wget.
     healthcheck:
       test:
         [
@@ -274,6 +280,76 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    networks:
+      - jcool-net
+
+  # The checkout saga's state. Not rebuildable from anything else, so the volume is a system of record.
+  temporal-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-temporal-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      POSTGRES_DB: postgres
+    volumes:
+      - temporalpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # One image for compose and Railway: its entrypoint creates the schema, the namespace and the
+  # search attributes, so there is no separate setup job. NUM_HISTORY_SHARDS cannot change after the
+  # first start.
+  temporal:
+    build:
+      context: .
+      dockerfile: infra/temporal/Dockerfile
+    container_name: jcool-temporal
+    restart: unless-stopped
+    # For an api run on the host (`pnpm dev`); the containerised api uses temporal:7233.
+    ports:
+      - "127.0.0.1:${TEMPORAL_HOST_PORT:-7233}:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: temporal-postgres
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      SQL_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      BIND_ON_IP: 0.0.0.0
+      NUM_HISTORY_SHARDS: 4
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/dynamicconfig/production.yaml
+      TEMPORAL_NAMESPACE_RETENTION: 7d
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks:
+      - jcool-net
+
+  # Local only: on Railway the temporal CLI over `railway ssh` does this job.
+  temporal-ui:
+    image: temporalio/ui:2.55.0
+    container_name: jcool-temporal-ui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_HOST_PORT:-8233}:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_DEFAULT_NAMESPACE: jcool
+    depends_on:
+      temporal:
+        condition: service_healthy
     networks:
       - jcool-net
 
@@ -468,6 +544,7 @@ volumes:
   pgdata:
   idetcddata:
   userpgdata:
+  temporalpgdata:
   redisdata:
   esdata:
   miniodata:

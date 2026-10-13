@@ -1,25 +1,25 @@
-import { ConflictException, HttpException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { CheckoutSagaStep, Compensation } from '../../domain/checkout-saga-step';
-import type { SagaTransition } from '../../domain/checkout-saga';
 import { Order } from '../../domain/order.entity';
 import { OrderItem } from '../../domain/order-item.entity';
 import { OrderStatus } from '../../domain/order-status';
-import type { CheckoutSaga, CheckoutSagaRepositoryPort } from '../ports/checkout-saga-repository.port';
+import { checkoutSagaSettings } from '../../testing/checkout-saga-settings.double';
+import { CheckoutUnavailableException } from '../checkout-unavailable.exception';
+import {
+  CheckoutEngineUnavailableError,
+  CheckoutNotCancellableError,
+  type CheckoutSagaEnginePort,
+} from '../ports/checkout-saga-engine.port';
 import type { OrderRepositoryPort } from '../ports/order-repository.port';
-import type { CheckoutSagaWriter } from '../saga/checkout-saga.writer';
-import type { AdvanceCheckoutSagaUseCase } from './advance-checkout-saga.use-case';
 import { CancelOrderUseCase } from './cancel-order.use-case';
 
 const ORDER_ID = '900001';
 const OWNER = 'u-owner';
 const STRANGER = 'u-stranger';
-const EVENT_ID = '800001';
-const TX = { tx: true } as unknown as DrizzleTx;
+const settings = checkoutSagaSettings({ cancelWaitMs: 10_000 });
 
-const orderIn = (status: OrderStatus): Order =>
+const orderIn = (status: OrderStatus, reason: string | null = null): Order =>
   Order.rehydrate({
     id: ORDER_ID,
     userId: OWNER,
@@ -28,156 +28,103 @@ const orderIn = (status: OrderStatus): Order =>
     items: [OrderItem.of('sku-1', 'Widget', 100_000, 1)],
     totalAmountMinor: 100_000,
     placedAt: new Date('2026-03-01T09:00:00.000Z'),
+    paymentDeadlineAt: new Date('2026-03-01T10:00:00.000Z'),
+    finalizedAt: reason ? new Date('2026-03-01T09:10:00.000Z') : null,
+    finalizeReason: reason,
   });
 
-const saga: CheckoutSaga = {
-  orderId: ORDER_ID,
-  step: CheckoutSagaStep.AWAITING_AUTH,
-  pendingCompensations: [],
-  deadlineAt: new Date('2026-03-01T10:00:00.000Z'),
-  nextAttemptAt: new Date('2026-03-01T10:03:00.000Z'),
-  attempts: 0,
-  leaseUntil: null,
-  lastError: null,
-  version: 4,
-};
-
-function build(found: Order | null) {
-  const log: string[] = [];
-  const orders = {
-    withTransaction: vi.fn(async <T>(fn: (tx: DrizzleTx) => Promise<T>) => {
-      log.push('begin');
-      const result = await fn(TX);
-      log.push('commit');
-      return result;
-    }),
-    findByIdForUpdate: vi.fn(() => {
-      log.push('lock order');
-      return Promise.resolve(found);
-    }),
-  };
-  const sagas = {
-    findForUpdate: vi.fn(() => {
-      log.push('lock saga');
-      return Promise.resolve(saga);
-    }),
-  };
-  const writer = {
-    rewrite: vi.fn((_tx: DrizzleTx, order: Order, _saga: CheckoutSaga, transition: SagaTransition) => {
-      log.push('rewrite');
-      const change = transition.order;
-      return Promise.resolve(
-        change && 'reason' in change && change.status === OrderStatus.CANCELLED
-          ? order.settle(OrderStatus.CANCELLED, { now: new Date(), reason: change.reason })
-          : order,
-      );
-    }),
-    reportCommitted: vi.fn(() => log.push('report')),
-  };
-  const advance = {
-    execute: vi.fn(() => {
-      log.push('advance');
-      return Promise.resolve();
-    }),
-  };
-  const ids = {
-    mint: vi.fn(() => {
-      log.push('mint');
-      return Promise.resolve([EVENT_ID]);
-    }),
-  };
-  const logError = vi.fn();
+/** `rows` are what each successive read of the order returns. */
+function build(...rows: (Order | null)[]) {
+  const orders = { findById: vi.fn<OrderRepositoryPort['findById']>() };
+  for (const row of rows) orders.findById.mockResolvedValueOnce(row);
+  const engine = { cancel: vi.fn<CheckoutSagaEnginePort['cancel']>(() => Promise.resolve('accepted')) };
   const useCase = new CancelOrderUseCase(
     orders as unknown as OrderRepositoryPort,
-    sagas as unknown as CheckoutSagaRepositoryPort,
-    writer as unknown as CheckoutSagaWriter,
-    advance as unknown as AdvanceCheckoutSagaUseCase,
-    ids,
-    fakePinoLogger({ error: logError }),
+    engine as unknown as CheckoutSagaEnginePort,
+    settings,
+    fakePinoLogger(),
   );
-  const rewritten = () => writer.rewrite.mock.calls[0]?.[3];
-  return { useCase, writer, advance, logError, log, rewritten };
+  return { useCase, orders, engine };
 }
 
-const statusOf = (promise: Promise<unknown>) =>
-  promise.then(
-    () => 'resolved',
-    (error: unknown) => (error instanceof HttpException ? error.getStatus() : error),
-  );
-
 describe('CancelOrderUseCase', () => {
-  it('cancels under both row locks, then awaits the compensation before answering', async () => {
-    const { useCase, writer, log, rewritten } = build(orderIn(OrderStatus.PENDING));
+  it.each([
+    ['a stranger', orderIn(OrderStatus.PENDING), STRANGER],
+    ['the owner of a reserving order', orderIn(OrderStatus.RESERVING), OWNER],
+    ['the owner of a rejected order', orderIn(OrderStatus.REJECTED), OWNER],
+    ['anyone, for an order that does not exist', null, OWNER],
+  ])('answers 404 to %s without asking the saga', async (_label, row, userId) => {
+    const { useCase, engine } = build(row);
 
-    const view = await useCase.cancelOwn(ORDER_ID, OWNER);
-
-    expect(view).toMatchObject({ id: ORDER_ID, status: OrderStatus.CANCELLED });
-    expect(log).toEqual(['mint', 'begin', 'lock order', 'lock saga', 'rewrite', 'commit', 'report', 'advance']);
-    expect(writer.rewrite).toHaveBeenCalledWith(TX, orderIn(OrderStatus.PENDING), saga, expect.anything(), {
-      now: expect.any(Date) as unknown,
-      eventId: EVENT_ID,
-    });
-    expect(rewritten()).toMatchObject({
-      step: CheckoutSagaStep.COMPENSATING,
-      pendingCompensations: [Compensation.RELEASE_STOCK, Compensation.CANCEL_PAYMENT],
-      wake: 'now',
-      order: { status: OrderStatus.CANCELLED, reason: 'user:cancel' },
-    });
+    await expect(useCase.cancelOwn(ORDER_ID, userId)).rejects.toBeInstanceOf(NotFoundException);
+    expect(engine.cancel).not.toHaveBeenCalled();
   });
 
-  it('records an admin cancel under its own reason', async () => {
-    const { useCase, rewritten } = build(orderIn(OrderStatus.PENDING));
-
-    await useCase.cancelAsAdmin(ORDER_ID);
-
-    expect(rewritten()?.order).toEqual({ status: OrderStatus.CANCELLED, reason: 'admin:cancel' });
-  });
-
-  it('still answers with the cancelled order when the compensation fails, leaving it to the runner', async () => {
-    const { useCase, advance, logError } = build(orderIn(OrderStatus.PENDING));
-    advance.execute.mockRejectedValueOnce(new Error('gateway unavailable'));
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
-    expect(logError).toHaveBeenCalled();
-  });
-
-  it('answers a repeat cancel with the cancelled order and nothing else', async () => {
-    const { useCase, writer, advance } = build(orderIn(OrderStatus.CANCELLED));
-
-    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
-    expect(writer.rewrite).not.toHaveBeenCalled();
-    expect(advance.execute).not.toHaveBeenCalled();
-  });
-
-  it.each([OrderStatus.CONFIRMING, OrderStatus.PAID, OrderStatus.FAILED, OrderStatus.EXPIRED])(
-    'refuses an order in %s with 409',
+  it.each([OrderStatus.CONFIRMING, OrderStatus.PAID, OrderStatus.EXPIRED, OrderStatus.FAILED])(
+    'answers 409 for an order already %s without asking the saga',
     async (status) => {
-      const { useCase, writer } = build(orderIn(status));
+      const { useCase, engine } = build(orderIn(status));
 
       await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toBeInstanceOf(ConflictException);
-      expect(writer.rewrite).not.toHaveBeenCalled();
+      expect(engine.cancel).not.toHaveBeenCalled();
     },
   );
 
-  it("answers 404 to a buyer for someone else's order, a missing one, or one they cannot see yet", async () => {
-    const cases = [
-      [orderIn(OrderStatus.PENDING), STRANGER],
-      [null, OWNER],
-      [orderIn(OrderStatus.RESERVING), OWNER],
-      [orderIn(OrderStatus.REJECTED), OWNER],
-    ] as const;
+  it('answers a repeat cancel with the cancelled order, without asking the saga', async () => {
+    const { useCase, engine } = build(orderIn(OrderStatus.CANCELLED, 'user:cancel'));
 
-    const statuses = await Promise.all(
-      cases.map(([found, user]) => statusOf(build(found).useCase.cancelOwn(ORDER_ID, user))),
-    );
-
-    expect(statuses).toEqual([404, 404, 404, 404]);
+    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
+    expect(engine.cancel).not.toHaveBeenCalled();
   });
 
-  it('lets an admin see a reserving order but not cancel it', async () => {
-    const { useCase } = build(orderIn(OrderStatus.RESERVING));
+  it.each([
+    ['buyer', 'user', 'user:cancel'],
+    ['admin', 'admin', 'admin:cancel'],
+  ] as const)('cancels for the %s through the saga, then answers the row it wrote', async (_label, by, reason) => {
+    const { useCase, orders, engine } = build(orderIn(OrderStatus.PENDING), orderIn(OrderStatus.CANCELLED, reason));
 
-    await expect(useCase.cancelAsAdmin(ORDER_ID)).rejects.toBeInstanceOf(ConflictException);
-    await expect(build(null).useCase.cancelAsAdmin(ORDER_ID)).rejects.toBeInstanceOf(NotFoundException);
+    const view = by === 'user' ? await useCase.cancelOwn(ORDER_ID, OWNER) : await useCase.cancelAsAdmin(ORDER_ID);
+
+    expect(engine.cancel).toHaveBeenCalledExactlyOnceWith(ORDER_ID, by);
+    expect(orders.findById).toHaveBeenCalledTimes(2);
+    expect(view).toMatchObject({ id: ORDER_ID, status: OrderStatus.CANCELLED });
+  });
+
+  // The row can still read PENDING while the saga already holds an authorization.
+  it('answers 409 when the saga refuses, because the money is already moving', async () => {
+    const { useCase, engine } = build(orderIn(OrderStatus.PENDING), orderIn(OrderStatus.CONFIRMING));
+    engine.cancel.mockRejectedValueOnce(new CheckoutNotCancellableError(ORDER_ID));
+
+    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('answers 200 when the saga refuses only because a concurrent cancel won', async () => {
+    const { useCase, engine } = build(orderIn(OrderStatus.PENDING), orderIn(OrderStatus.CANCELLED, 'admin:cancel'));
+    engine.cancel.mockRejectedValueOnce(new CheckoutNotCancellableError(ORDER_ID));
+
+    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
+  });
+
+  it.each([
+    ['expired', orderIn(OrderStatus.EXPIRED, 'deadline'), ConflictException],
+    ['cancelled', orderIn(OrderStatus.CANCELLED, 'user:cancel'), undefined],
+  ] as const)('answers from the row once the saga has closed and the order is %s', async (_label, row, rejection) => {
+    const { useCase, engine } = build(orderIn(OrderStatus.PENDING), row);
+    engine.cancel.mockResolvedValueOnce('closed');
+
+    const outcome = useCase.cancelOwn(ORDER_ID, OWNER);
+
+    if (rejection) await expect(outcome).rejects.toBeInstanceOf(rejection);
+    else await expect(outcome).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
+  });
+
+  it('answers 503 with Retry-After when the saga cannot be reached', async () => {
+    const { useCase, engine } = build(orderIn(OrderStatus.PENDING));
+    engine.cancel.mockRejectedValueOnce(new CheckoutEngineUnavailableError('cancel'));
+
+    const error = await useCase.cancelOwn(ORDER_ID, OWNER).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(CheckoutUnavailableException);
+    expect((error as CheckoutUnavailableException).retryAfterSec).toBe(10);
   });
 });

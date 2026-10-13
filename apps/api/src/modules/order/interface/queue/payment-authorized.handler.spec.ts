@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MetricsPort } from '@jcool/metrics-port';
-import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { DrizzleDB, DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { PermanentError } from '@shared/messaging/errors';
@@ -9,101 +8,96 @@ import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '@shared/messaging/queue/domain-event.processor';
 import { dispatcherWith } from '@shared/messaging/testing/domain-event-dispatcher.double';
 import { sampleId } from '@shared/testing/id-generator.double';
-import { SagaKickExecutor } from '../../application/saga/saga-kick.executor';
-import type { AdvanceCheckoutSagaUseCase } from '../../application/use-cases/advance-checkout-saga.use-case';
-import {
-  AuthorizationBeforePlacementError,
-  type OnPaymentAuthorizedUseCase,
-} from '../../application/use-cases/on-payment-authorized.use-case';
+import type { OnPaymentAuthorizedUseCase } from '../../application/use-cases/on-payment-authorized.use-case';
 import { PaymentAuthorizedHandler } from './payment-authorized.handler';
 
 const ORDER_ID = sampleId(2);
-const EVENT_ID = sampleId(3);
+const PAYMENT_ID = sampleId(4);
+const AUTHORIZED_AT = '2026-03-01T09:30:00.000Z';
 const TX = { tx: true } as unknown as DrizzleTx;
 
-function job(payload: Record<string, unknown> = { orderId: ORDER_ID, amountMinor: 240_000, currency: 'VND' }) {
+function job(overrides: Record<string, unknown> = {}): DomainEventJob {
   return {
     outboxId: sampleId(1),
     aggregateType: 'Payment',
-    aggregateId: sampleId(4),
+    aggregateId: PAYMENT_ID,
     eventType: 'payment.authorized',
-    payload: { paymentId: sampleId(4), authorizedAt: '2026-03-01T09:30:00.000Z', ...payload },
-    occurredAt: '2026-03-01T09:30:00.000Z',
+    payload: {
+      paymentId: PAYMENT_ID,
+      orderId: ORDER_ID,
+      amountMinor: 240_000,
+      currency: 'VND',
+      authorizedAt: AUTHORIZED_AT,
+      ...overrides,
+    },
+    occurredAt: AUTHORIZED_AT,
     traceparent: null,
-  } satisfies DomainEventJob;
+  };
 }
 
-function build(execute: OnPaymentAuthorizedUseCase['execute'] = vi.fn(() => Promise.resolve(null))) {
-  const mint = vi.fn(() => Promise.resolve([EVENT_ID]));
-  const handler = new PaymentAuthorizedHandler({ execute } as unknown as OnPaymentAuthorizedUseCase, { mint });
-  return { handler, mint, execute };
+function build(execute = vi.fn<OnPaymentAuthorizedUseCase['execute']>(() => Promise.resolve())) {
+  const handler = new PaymentAuthorizedHandler({ execute } as unknown as OnPaymentAuthorizedUseCase);
+  return { handler, execute };
+}
+
+function processorFor(handler: PaymentAuthorizedHandler, claim = vi.fn(() => Promise.resolve(true))) {
+  const transaction = vi.fn((run: (tx: unknown) => unknown) => Promise.resolve(run(TX)));
+  const processor = new DomainEventProcessor(
+    { transaction } as unknown as DrizzleDB,
+    { recordEventConsumed: vi.fn() } as unknown as MetricsPort,
+    { claim } as unknown as InboxStore,
+    dispatcherWith({ applyAuthorized: (event) => handler.apply(event) }),
+    fakePinoLogger(),
+  );
+  return { processor, transaction, claim };
 }
 
 describe('PaymentAuthorizedHandler', () => {
   it.each([
+    ['no payment id', { paymentId: undefined }],
     ['no order id', { orderId: undefined }],
     ['a fractional amount', { amountMinor: 1.5 }],
     ['an amount as text', { amountMinor: '240000' }],
     ['no currency', { currency: undefined }],
-  ])('refuses %s for good, before minting anything', async (_label, broken) => {
-    const { handler, mint } = build();
+    ['an unparseable authorization time', { authorizedAt: 'yesterday' }],
+  ])('refuses %s for good, without reaching the saga', async (_label, broken) => {
+    const { handler, execute } = build();
 
-    await expect(
-      handler.prepare(job({ orderId: ORDER_ID, amountMinor: 240_000, currency: 'VND', ...broken })),
-    ).rejects.toBeInstanceOf(PermanentError);
-    expect(mint).not.toHaveBeenCalled();
-  });
-
-  it('mints the event id before the transaction and applies the authorization inside it', async () => {
-    const { handler, mint, execute } = build();
-
-    const step = await handler.prepare(job());
-    expect(mint).toHaveBeenCalledOnce();
+    await expect(handler.apply(job(broken))).rejects.toBeInstanceOf(PermanentError);
     expect(execute).not.toHaveBeenCalled();
-
-    await expect(step(TX)).resolves.toBeUndefined();
-    expect(execute).toHaveBeenCalledWith({ orderId: ORDER_ID, amountMinor: 240_000, currency: 'VND' }, TX, EVENT_ID);
   });
 
-  it('leaves an authorization that beat its placement to be redelivered, not dead-lettered', async () => {
-    const { handler } = build(vi.fn(() => Promise.reject(new AuthorizationBeforePlacementError(ORDER_ID))));
+  it('hands the authorization to the use case with its time as a Date', async () => {
+    const { handler, execute } = build();
 
-    const error = await (await handler.prepare(job()))(TX).catch((e: unknown) => e);
+    await handler.apply(job());
 
-    expect(error).toBeInstanceOf(AuthorizationBeforePlacementError);
-    expect(error).not.toBeInstanceOf(PermanentError);
+    expect(execute).toHaveBeenCalledExactlyOnceWith({
+      paymentId: PAYMENT_ID,
+      orderId: ORDER_ID,
+      amountMinor: 240_000,
+      currency: 'VND',
+      authorizedAt: new Date(AUTHORIZED_AT),
+    });
   });
 
-  it('hands back what must wait for the commit as the effect', async () => {
-    const afterCommit = vi.fn();
-    const { handler } = build(vi.fn(() => Promise.resolve(afterCommit)));
-
-    const effect = await (await handler.prepare(job()))(TX);
-    expect(afterCommit).not.toHaveBeenCalled();
-    await (effect as () => Promise<void>)();
-
-    expect(afterCommit).toHaveBeenCalledOnce();
-  });
-
-  // The effect runs inside the BullMQ job and holds a slot of the shared queue for as long as it awaits.
-  it('lets the consume finish while the saga it kicked is still waiting on a participant', async () => {
-    const advance = { execute: vi.fn(() => new Promise<void>(() => undefined)) };
-    const kicks = new SagaKickExecutor(
-      advance as unknown as AdvanceCheckoutSagaUseCase,
-      fakeConfigService({ 'saga.kickConcurrency': 1 }),
-      fakePinoLogger(),
-    );
-    const { handler } = build(vi.fn(() => Promise.resolve(() => kicks.submit(ORDER_ID))));
-    const processor = new DomainEventProcessor(
-      { transaction: (run: (tx: unknown) => unknown) => Promise.resolve(run(TX)) } as unknown as DrizzleDB,
-      { recordEventConsumed: vi.fn() } as unknown as MetricsPort,
-      { claim: () => Promise.resolve(true) } as unknown as InboxStore,
-      dispatcherWith({ prepareAuthorized: (event) => handler.prepare(event) }),
-      fakePinoLogger(),
-    );
+  it('signals before the inbox claim, leaving nothing to do inside the transaction', async () => {
+    const { handler, execute } = build();
+    const { processor, claim } = processorFor(handler);
 
     await processor.process(job());
 
-    expect(advance.execute).toHaveBeenCalledWith(ORDER_ID);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.invocationCallOrder[0]).toBeLessThan(claim.mock.invocationCallOrder[0]);
+  });
+
+  it('fails the claiming transaction when the saga cannot be reached, so the message is redelivered', async () => {
+    const outage = new Error('temporal unavailable');
+    const { handler } = build(vi.fn(() => Promise.reject(outage)));
+    const { processor, transaction } = processorFor(handler);
+
+    await expect(processor.process(job())).rejects.toBe(outage);
+
+    await expect(transaction.mock.results[0]?.value).rejects.toBe(outage);
   });
 });

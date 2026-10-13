@@ -28,14 +28,10 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
-  async createReserving<S>(
-    order: Order,
-    idempotencyKey: string | null,
-    insertSaga: (tx: DrizzleTx, orderId: string) => Promise<S>,
-  ): Promise<CreateReservingResult<S>> {
+  async createReserving(order: Order, idempotencyKey: string | null): Promise<CreateReservingResult> {
     // Before the transaction, so no lock waits on the id service. A replayed key wastes them.
     const [orderId, ...itemIds] = await this.idGenerator.mint(1 + order.items.length);
-    return this.db.transaction(async (tx): Promise<CreateReservingResult<S>> => {
+    return this.db.transaction(async (tx): Promise<CreateReservingResult> => {
       // One checkout per user at a time, so the open-order count below is race-safe.
       await tx.execute(sql`select pg_advisory_xact_lock(${order.userId}::bigint)`);
 
@@ -69,6 +65,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
         totalAmount: order.totalAmountMinor,
         idempotencyKey,
         placedAt: order.placedAt,
+        paymentDeadlineAt: order.paymentDeadlineAt,
       });
 
       await tx.insert(orderItems).values(
@@ -82,7 +79,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
         })),
       );
 
-      return { orderId, created: true, saga: await insertSaga(tx, orderId) };
+      return { orderId, created: true };
     });
   }
 
@@ -146,8 +143,18 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     return this.readPage(filters.length > 0 ? and(...filters) : undefined, query);
   }
 
+  async findReservingPlacedBefore(cutoff: Date, limit: number): Promise<Order[]> {
+    const rows = await this.db
+      .select()
+      .from(orders)
+      .where(and(eq(orders.status, OrderStatus.RESERVING), lt(orders.placedAt, cutoff)))
+      .orderBy(asc(orders.placedAt))
+      .limit(limit);
+    return Promise.all(rows.map(async (row) => toDomainOrder(row, await this.readItems(this.db, row.id))));
+  }
+
   async deleteRejectedBefore(cutoff: Date, limit: number): Promise<number> {
-    // Items and the saga row go with the order through their ON DELETE CASCADE.
+    // Items go with the order through their ON DELETE CASCADE.
     const batch = this.db
       .select({ id: orders.id })
       .from(orders)
@@ -217,6 +224,7 @@ function toDomainOrder(row: OrderRow, itemRows: OrderItemRow[]): Order {
     currency: row.currency,
     totalAmountMinor: row.totalAmount,
     placedAt: row.placedAt,
+    paymentDeadlineAt: row.paymentDeadlineAt,
     finalizedAt: row.finalizedAt,
     finalizeReason: row.finalizeReason,
     paymentRef: row.paymentRef,

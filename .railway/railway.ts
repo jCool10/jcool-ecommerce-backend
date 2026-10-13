@@ -12,6 +12,7 @@ const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
 const LOKI_PORT = '3100';
 const ELASTICSEARCH_PORT = '9200';
+const TEMPORAL_PORT = '7233';
 
 // Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
 const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
@@ -112,6 +113,11 @@ export default defineRailway(() => {
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,
       SEARCH_USERNAME: 'jcool_api',
       SEARCH_PASSWORD: '${{elasticsearch.API_SEARCH_PASSWORD}}',
+      TEMPORAL_ADDRESS: `\${{temporal.RAILWAY_PRIVATE_DOMAIN}}:${TEMPORAL_PORT}`,
+      TEMPORAL_NAMESPACE: 'jcool',
+      TEMPORAL_TASK_QUEUE: 'checkout-saga',
+      // The worker stops before the readiness hold, and grace + 5s force + that hold must fit drainingSeconds.
+      TEMPORAL_WORKER_SHUTDOWN_GRACE_MS: '4000',
     },
   });
 
@@ -235,6 +241,33 @@ export default defineRailway(() => {
     },
   });
 
+  // The checkout saga's state: workflow histories live only here.
+  const temporalPostgres = database('temporal-postgres', 'postgres', {
+    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    defaultMountPath: '/var/lib/postgresql/data',
+  });
+
+  // No source: deployed by hand with `railway up --ci --service temporal`. No domain, and no
+  // healthcheck path since the frontend speaks gRPC; the entrypoint creates the schema, namespace
+  // and search attributes. NUM_HISTORY_SHARDS cannot change after the first start.
+  const temporal = service('temporal', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/temporal/Dockerfile' },
+    deploy: { numReplicas: 1, restartPolicyMaxRetries: 5 },
+    env: {
+      ...preserved(['TEMPORAL_NAMESPACE_RETENTION']),
+      DB: 'postgres12',
+      DB_PORT: '${{temporal-postgres.PGPORT}}',
+      POSTGRES_SEEDS: '${{temporal-postgres.PGHOST}}',
+      POSTGRES_USER: '${{temporal-postgres.PGUSER}}',
+      POSTGRES_PWD: '${{temporal-postgres.PGPASSWORD}}',
+      SQL_PASSWORD: '${{temporal-postgres.PGPASSWORD}}',
+      NUM_HISTORY_SHARDS: '4',
+      // Private networking is IPv6.
+      BIND_ON_IP: '::',
+      DYNAMIC_CONFIG_FILE_PATH: '/etc/temporal/dynamicconfig/production.yaml',
+    },
+  });
+
   // The tsdb outlives a deploy; the retention window is set in railway-entrypoint.sh.
   const prometheusData = volume('prometheus-data', { sizeMB: 5_000, region: 'iad' });
 
@@ -313,6 +346,8 @@ export default defineRailway(() => {
       gateway,
       userPostgres,
       userService,
+      temporalPostgres,
+      temporal,
       elasticsearchData,
       elasticsearch,
       prometheusData,

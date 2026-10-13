@@ -18,8 +18,10 @@ export class TooManyPendingOrdersError extends DomainError {
 }
 
 /** `created: false`: an earlier attempt already placed an order under the same key; returned untouched. */
-export type CreateReservingResult<S> =
-  { orderId: string; created: true; saga: S } | { orderId: string; created: false };
+export interface CreateReservingResult {
+  orderId: string;
+  created: boolean;
+}
 
 export interface OrderPageQuery {
   /** 1-based. */
@@ -40,17 +42,12 @@ export interface OrderPage {
 
 export interface OrderRepositoryPort {
   /**
-   * Inserts the RESERVING order and, through `insertSaga`, its saga in one transaction. Serialized per
-   * user with `pg_advisory_xact_lock` before counting the user's open orders, throwing
-   * `TooManyPendingOrdersError` at the cap. An existing order under the same key returns
-   * `created: false` without calling `insertSaga`; the unique `(user_id, idempotency_key)` still
-   * backstops a race that slips past that check.
+   * Inserts the RESERVING order. Serialized per user with `pg_advisory_xact_lock` before counting the
+   * user's open orders, throwing `TooManyPendingOrdersError` at the cap. An existing order under the
+   * same key returns `created: false`; the unique `(user_id, idempotency_key)` still backstops a race
+   * that slips past that check.
    */
-  createReserving<S>(
-    order: Order,
-    idempotencyKey: string | null,
-    insertSaga: (tx: DrizzleTx, orderId: string) => Promise<S>,
-  ): Promise<CreateReservingResult<S>>;
+  createReserving(order: Order, idempotencyKey: string | null): Promise<CreateReservingResult>;
 
   /**
    * A caller that already holds a transaction passes it in and `fn` joins it, so a write driven from
@@ -58,7 +55,7 @@ export interface OrderRepositoryPort {
    */
   withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>, join?: DrizzleTx): Promise<T>;
 
-  /** Locked before the saga row, everywhere, so the two cannot deadlock. Not user-scoped. */
+  /** Not user-scoped. */
   findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null>;
 
   /** Status and settlement stamps; only ever called on a row locked by `findByIdForUpdate`. */
@@ -79,6 +76,9 @@ export interface OrderRepositoryPort {
   /** The same page unscoped and unfiltered, for the admin queue: a scan the page size bounds. */
   findPage(query: AdminOrderPageQuery): Promise<OrderPage>;
 
-  /** Deletes up to `limit` REJECTED orders finalized before `cutoff`, with their items and saga. */
+  /** Oldest first: RESERVING orders whose checkout may never have reached the saga. */
+  findReservingPlacedBefore(cutoff: Date, limit: number): Promise<Order[]>;
+
+  /** Deletes up to `limit` REJECTED orders finalized before `cutoff`, with their items. */
   deleteRejectedBefore(cutoff: Date, limit: number): Promise<number>;
 }

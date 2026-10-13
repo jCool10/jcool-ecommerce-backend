@@ -3,15 +3,16 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { authHeader } from '../setup/bearer.helper';
 import { drainDomainEvents } from '../setup/domain-events';
 import {
   authorizeAndRelay,
-  lapseSagaDeadline,
   placeAndOpenSession,
   postWebhook,
   readOrder,
-  runSagaUntilSettled,
   seedSellableSku,
+  waitForSagaClosed,
+  type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
@@ -21,6 +22,17 @@ import { checkoutSessionCompleted, signWebhookAs } from '../setup/sign-webhook.h
 const WEBHOOK_SECRET = 'whsec_e2e_saga_observability_0123456789';
 const STOCK = 10;
 const QUANTITY = 2;
+// The shortest deadline the config rules allow: the saga's timers live on the Temporal server, so
+// expiry is waited for rather than forced.
+const SHORT_DEADLINES = {
+  CHECKOUT_PAYMENT_DEADLINE_SEC: '31',
+  CHECKOUT_PAY_CUTOFF_SEC: '30',
+  CHECKOUT_HOLD_SAFETY_SEC: '30',
+  SAGA_AUTH_GRACE_SEC: '1',
+  PAYMENT_SESSION_MIN_TTL_SEC: '0',
+  PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '0',
+};
+const EXPIRY_WAIT_MS = 50_000;
 const TRIGGERS = [
   'try_failed',
   'expired',
@@ -38,7 +50,10 @@ describe('Saga observability (integration, real Postgres)', () => {
   let sku: SellableSku;
 
   beforeAll(async () => {
-    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, { METRICS_TOKEN: E2E_METRICS_TOKEN }));
+    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+      ...SHORT_DEADLINES,
+      METRICS_TOKEN: E2E_METRICS_TOKEN,
+    }));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
@@ -65,6 +80,9 @@ describe('Saga observability (integration, real Postgres)', () => {
     return 0;
   }
 
+  const cancelOrder = (order: OpenOrder) =>
+    request(app.getHttpServer()).post(`/orders/${order.orderId}/cancel`).set(authHeader(order.token));
+
   const step = (text: string, name: string, outcome: 'success' | 'failed') =>
     sample(text, 'saga_step_total', { step: name, outcome });
   const compensation = (text: string, trigger: string) => sample(text, 'saga_compensation_total', { trigger });
@@ -87,8 +105,7 @@ describe('Saga observability (integration, real Postgres)', () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     const before = await scrape();
 
-    await lapseSagaDeadline(app, order.orderId);
-    await runSagaUntilSettled(app, order.orderId);
+    await waitForSagaClosed(app, order.orderId, { timeoutMs: EXPIRY_WAIT_MS });
 
     const after = await scrape();
     expect(compensation(after, 'expired') - compensation(before, 'expired')).toBe(1);
@@ -96,27 +113,40 @@ describe('Saga observability (integration, real Postgres)', () => {
     expect(step(after, 'compensate', 'success') - step(before, 'compensate', 'success')).toBe(2);
   });
 
-  it('counts money that arrives after the order expired as a late authorization of its own', async () => {
+  it('counts a cancelled order as one compensation, and each undo it ran as a step', async () => {
+    const order = await placeAndOpenSession(app, sku, QUANTITY);
+    const before = await scrape();
+
+    await cancelOrder(order).expect(200);
+    await waitForSagaClosed(app, order.orderId);
+
+    const after = await scrape();
+    expect(compensation(after, 'cancelled') - compensation(before, 'cancelled')).toBe(1);
+    expect(step(after, 'compensate', 'success') - step(before, 'compensate', 'success')).toBe(2);
+  });
+
+  it('counts money that arrives after the order was given up as a late authorization of its own', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     gateway.authorize(order.sessionId);
     const completed = checkoutSessionCompleted(order.sessionId, { ...order.charge, paymentStatus: 'unpaid' });
     await postWebhook(app, signWebhookAs(gateway, completed)).expect(200);
-    await lapseSagaDeadline(app, order.orderId);
-    await runSagaUntilSettled(app, order.orderId);
+    // The authorization is recorded but not yet delivered to the saga when the buyer cancels.
+    await cancelOrder(order).expect(200);
+    await waitForSagaClosed(app, order.orderId);
     const before = await scrape();
 
     await drainDomainEvents(app);
 
     const after = await scrape();
     expect(compensation(after, 'late_authorization') - compensation(before, 'late_authorization')).toBe(1);
-    expect(compensation(after, 'expired')).toBe(compensation(before, 'expired'));
-    expect((await readOrder(app, order.orderId)).status).toBe('EXPIRED');
+    expect(compensation(after, 'cancelled')).toBe(compensation(before, 'cancelled'));
+    expect((await readOrder(app, order.orderId)).status).toBe('CANCELLED');
   });
 
   it('keeps the order id out of every saga label', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
-    await lapseSagaDeadline(app, order.orderId);
-    await runSagaUntilSettled(app, order.orderId);
+    await cancelOrder(order).expect(200);
+    await waitForSagaClosed(app, order.orderId);
 
     const series = (await scrape()).split('\n').filter((line) => line.startsWith('saga_'));
 

@@ -95,14 +95,15 @@ describe('DomainEventDispatcher', () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
-  const catalogEvents = [
+  const beforeClaimEvents = [
     ['catalog.product.changed', 'applyProductChanged'],
     ['catalog.category.renamed', 'applyCategoryRenamed'],
+    ['payment.authorized', 'applyAuthorized'],
   ] as const;
 
-  // A post-commit effect runs after the claim and is never retried; a failed index write must retry.
-  it.each(catalogEvents)(
-    'writes %s to the search engine before the transaction and leaves the step empty',
+  // A post-commit effect runs after the claim and is never retried; work that must land retries instead.
+  it.each(beforeClaimEvents)(
+    'applies %s before the transaction and leaves the step empty',
     async (eventType, double) => {
       const apply = vi.fn().mockResolvedValue(undefined);
       const dispatcher = dispatcherWith({ [double]: apply });
@@ -115,22 +116,21 @@ describe('DomainEventDispatcher', () => {
     },
   );
 
-  it.each(catalogEvents)('fails the prepare when %s cannot be written', async (eventType, double) => {
-    const outage = new Error('search engine unavailable');
+  // The processor rethrows a failed prepare inside the claim's transaction, so the claim rolls back and the job retries.
+  it.each(beforeClaimEvents)('fails the prepare when %s cannot be applied', async (eventType, double) => {
+    const outage = new Error('downstream unavailable');
     const dispatcher = dispatcherWith({ [double]: vi.fn().mockRejectedValue(outage) });
 
     await expect(dispatcher.prepare(job(eventType))).rejects.toBe(outage);
   });
 
-  it('routes payment.authorized to its handler, whose step runs inside the consumer transaction', async () => {
-    const step = vi.fn().mockResolvedValue(undefined);
-    const prepareAuthorized = vi.fn().mockResolvedValue(step);
+  it('routes payment.authorized to its handler with the job as delivered', async () => {
+    const applyAuthorized = vi.fn().mockResolvedValue(undefined);
     const event = job('payment.authorized');
 
-    await run(dispatcherWith({ prepareAuthorized }), event);
+    await run(dispatcherWith({ applyAuthorized }), event);
 
-    expect(prepareAuthorized).toHaveBeenCalledExactlyOnceWith(event);
-    expect(step).toHaveBeenCalledExactlyOnceWith(tx);
+    expect(applyAuthorized).toHaveBeenCalledExactlyOnceWith(event);
   });
 
   it('refuses an event it has no handler for', async () => {

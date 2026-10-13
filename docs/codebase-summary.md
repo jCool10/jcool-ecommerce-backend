@@ -11,6 +11,7 @@ Navigation only — "where to look for X". For what each context owns, the layer
 | `id-service` | [`apps/id-service/src/main.ts`](../apps/id-service/src/main.ts) |
 | `user-service` | [`apps/user-service/src/main.ts`](../apps/user-service/src/main.ts) |
 | `gateway` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) (not a Node process) |
+| checkout saga workflow (runs in the `api` process; the Temporal server is [`infra/temporal/`](../infra/temporal)) | [`apps/api/src/modules/order/saga/workflows/checkout-saga.workflow.ts`](../apps/api/src/modules/order/saga/workflows/checkout-saga.workflow.ts), worker [`checkout-saga.worker.ts`](../apps/api/src/modules/order/interface/temporal/checkout-saga.worker.ts), prebuilt by [`bundle-workflows.ts`](../apps/api/scripts/bundle-workflows.ts) |
 
 CLIs (each also has a `:prod` twin that runs the compiled `dist/` file — see [`README.md#scripts`](../README.md#scripts) for the `pnpm` names):
 

@@ -10,14 +10,15 @@ import { drainDomainEvents } from '../setup/domain-events';
 import {
   auditLedgerInvariants,
   authorizeAndRelay,
+  describeSaga,
   placeAndOpenSession,
   postAuthorizationWebhook,
   readOrder,
   readPayment,
   readReservationOrder,
-  readSaga,
+  readSagaState,
   readStock,
-  runSagaUntilSettled,
+  sagaStepAttribute,
   seedSellableSku,
   type OpenOrder,
   type SellableSku,
@@ -27,7 +28,7 @@ import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach
 const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_capture_failures_01';
 const ON_HAND = 5;
 
-describe('Checkout saga, capture and void failures (integration, real Postgres, real HMAC)', () => {
+describe('Checkout saga, capture and void failures (integration, real Postgres, real Temporal, real HMAC)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
@@ -35,7 +36,10 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
   let sku: SellableSku;
 
   beforeAll(async () => {
-    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+      SAGA_RETRY_BASE_MS: '200',
+      SAGA_RETRY_CAP_MS: '2000',
+    }));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
@@ -53,9 +57,15 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
     return intentId;
   }
 
+  async function expectSettled(order: OpenOrder, step: 'COMPLETED' | 'COMPENSATED'): Promise<void> {
+    expect(await readSagaState(app, order.orderId)).toMatchObject({ step, pendingCompensations: [] });
+    expect(await sagaStepAttribute(app, order.orderId)).toBe(step);
+    expect((await describeSaga(app, order.orderId))?.status.name).toBe('COMPLETED');
+  }
+
   async function expectPaidWithoutCompensation(order: OpenOrder, intentId: string): Promise<void> {
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
-    expect(await readSaga(app, order.orderId)).toMatchObject({ step: 'COMPLETED', pendingCompensations: [] });
+    await expectSettled(order, 'COMPLETED');
     expect((await readPayment(app, order.orderId)).status).toBe('SUCCEEDED');
     expect(gateway.captureCalls(intentId)).toBe(1);
     expect(gateway.wasVoided(intentId)).toBe(false);
@@ -71,13 +81,12 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
   describe('a capture with no definite answer is retried, never compensated', () => {
     it('resends a capture that timed out under the same key', async () => {
       const order = await placeAndOpenSession(app, sku);
-      const intentId = await authorizeThen(order, (id) => gateway.failCapture(id, 'timeout'));
       const { stripeKeyGen } = await readPayment(app, order.orderId);
-      expect(await readSaga(app, order.orderId)).toMatchObject({ step: 'CAPTURING', lastError: expect.any(String) });
 
-      await runSagaUntilSettled(app, order.orderId);
+      const intentId = await authorizeThen(order, (id) => gateway.failCapture(id, 'timeout'));
 
       const [first, retry] = gateway.requestKeys(intentId);
+      expect(gateway.requestKeys(intentId)).toHaveLength(2);
       expect(retry).toBe(first);
       expect((await readPayment(app, order.orderId)).stripeKeyGen).toBe(stripeKeyGen);
       await expectPaidWithoutCompensation(order, intentId);
@@ -85,12 +94,11 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
 
     it('resends a capture refused in flight under the same key', async () => {
       const order = await placeAndOpenSession(app, sku);
-      const intentId = await authorizeThen(order, (id) => gateway.failCapture(id, 'idempotency_in_flight'));
-      expect((await readSaga(app, order.orderId)).step).toBe('CAPTURING');
 
-      await runSagaUntilSettled(app, order.orderId);
+      const intentId = await authorizeThen(order, (id) => gateway.failCapture(id, 'idempotency_in_flight'));
 
       const [first, retry] = gateway.requestKeys(intentId);
+      expect(gateway.requestKeys(intentId)).toHaveLength(2);
       expect(retry).toBe(first);
       await expectPaidWithoutCompensation(order, intentId);
     });
@@ -99,14 +107,13 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
     it('rotates the key after a 500 that left the hold capturable, and captures once under the new one', async () => {
       const order = await placeAndOpenSession(app, sku);
       const { stripeKeyGen } = await readPayment(app, order.orderId);
-      const intentId = await authorizeThen(order, (id) => gateway.failCapture(id, 'server_error'));
-      expect((await readSaga(app, order.orderId)).step).toBe('CAPTURING');
-      expect((await readPayment(app, order.orderId)).stripeKeyGen).toBe(stripeKeyGen + 1);
 
-      await runSagaUntilSettled(app, order.orderId);
+      const intentId = await authorizeThen(order, (id) => gateway.failCapture(id, 'server_error'));
 
       const [first, retry] = gateway.requestKeys(intentId);
+      expect(gateway.requestKeys(intentId)).toHaveLength(2);
       expect(retry).not.toBe(first);
+      expect((await readPayment(app, order.orderId)).stripeKeyGen).toBe(stripeKeyGen + 1);
       await expectPaidWithoutCompensation(order, intentId);
     });
 
@@ -131,7 +138,7 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
       status: 'FAILED',
       finalizeReason: 'payment:not_capturable',
     });
-    expect(await readSaga(app, order.orderId)).toMatchObject({ step: 'COMPENSATED', pendingCompensations: [] });
+    await expectSettled(order, 'COMPENSATED');
     expect(await readReservationOrder(app, order.orderId)).toMatchObject({ status: 'RESTOCKED' });
     expect((await readPayment(app, order.orderId)).status).toBe('FAILED');
     expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: ON_HAND, quantityReserved: 0 });
@@ -158,7 +165,7 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
         status: 'FAILED',
         finalizeReason: 'stock:commit_conflict',
       });
-      expect(await readSaga(app, order.orderId)).toMatchObject({ step: 'COMPENSATED', pendingCompensations: [] });
+      await expectSettled(order, 'COMPENSATED');
       expect(await readReservationOrder(app, order.orderId)).toMatchObject({ status: 'RELEASED' });
       expect((await readPayment(app, order.orderId)).status).toBe('VOIDED');
       expect(gateway.wasVoided(intentId)).toBe(true);
@@ -172,16 +179,11 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
 
       const intentId = await authorizeThen(order, (id) => gateway.failVoid(id, 'server_error'));
 
-      expect((await readOrder(app, order.orderId)).status).toBe('FAILED');
-      const saga = await readSaga(app, order.orderId);
-      expect(saga).toMatchObject({ step: 'COMPENSATING', pendingCompensations: ['CANCEL_PAYMENT'] });
-      expect(saga.lastError).toEqual(expect.any(String));
-      expect(gateway.wasVoided(intentId)).toBe(false);
-
-      await runSagaUntilSettled(app, order.orderId);
-
       const [first, retry] = gateway.requestKeys(intentId);
+      expect(gateway.requestKeys(intentId)).toHaveLength(2);
       expect(retry).not.toBe(first);
+      expect((await readOrder(app, order.orderId)).status).toBe('FAILED');
+      await expectSettled(order, 'COMPENSATED');
       expect(gateway.wasVoided(intentId)).toBe(true);
       expect((await readPayment(app, order.orderId)).status).toBe('VOIDED');
       expect(gateway.captureCalls(intentId)).toBe(0);
@@ -206,7 +208,7 @@ describe('Checkout saga, capture and void failures (integration, real Postgres, 
       status: 'FAILED',
       finalizeReason: 'payment:amount_mismatch',
     });
-    expect(await readSaga(app, order.orderId)).toMatchObject({ step: 'COMPENSATED', pendingCompensations: [] });
+    await expectSettled(order, 'COMPENSATED');
     expect(await readReservationOrder(app, order.orderId)).toMatchObject({ status: 'RELEASED' });
     expect(gateway.wasVoided(intentId)).toBe(true);
     expect(gateway.captureCalls(intentId)).toBe(0);

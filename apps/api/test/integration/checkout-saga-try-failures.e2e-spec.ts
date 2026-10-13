@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CheckoutSagaRunnerScheduler } from '../../src/modules/order/interface/checkout-saga-runner.scheduler';
 import {
   INVENTORY_PARTICIPANT,
   type InventoryParticipant,
@@ -19,9 +18,10 @@ import {
   buyerWithCart,
   readOrder,
   readReservationOrder,
-  readSaga,
+  readSagaState,
   readStock,
   seedSellableSku,
+  waitForSagaClosed,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
@@ -77,6 +77,7 @@ describe('Checkout saga, a Try that does not hold (integration, real Postgres)',
     const seen = await request(server()).get(`/admin/orders/${rejected.id}`).set(authHeader(admin)).expect(200);
     expect(seen.body.status).toBe('REJECTED');
 
+    await waitForSagaClosed(app, rejected.id);
     await seedStock(app, sku.variantId, 5);
     const placed = await placeOrder(token, key).expect(201);
 
@@ -110,7 +111,7 @@ describe('Checkout saga, a Try that does not hold (integration, real Postgres)',
     expect(unavailable.headers['retry-after']).toMatch(/^\d+$/);
     const rejected = await onlyOrder();
     expect(rejected).toMatchObject({ status: 'REJECTED', finalizeReason: 'try:timeout' });
-    expect(await readSaga(app, rejected.id)).toMatchObject({ step: 'COMPENSATED', pendingCompensations: [] });
+    expect(await readSagaState(app, rejected.id)).toMatchObject({ step: 'COMPENSATED', pendingCompensations: [] });
     expect(await readReservationOrder(app, rejected.id)).toMatchObject({ status: 'FENCED' });
 
     openGate();
@@ -118,6 +119,7 @@ describe('Checkout saga, a Try that does not hold (integration, real Postgres)',
     await expect(lateTry).resolves.toMatchObject({ outcome: 'CONFLICT' });
     expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: 5, quantityReserved: 0 });
     expect(await heldHeaders()).toEqual([]);
+    await waitForSagaClosed(app, rejected.id);
     await expect(auditLedgerInvariants(app, { [sku.variantId]: 5 })).resolves.toEqual({
       orders: 1,
       pending: [],
@@ -153,8 +155,7 @@ describe('Checkout saga, a Try that does not hold (integration, real Postgres)',
     const rejected = await onlyOrder();
     expect(rejected).toMatchObject({ status: 'REJECTED', finalizeReason: 'try:contended' });
 
-    await app.get(CheckoutSagaRunnerScheduler).tick();
-
+    expect((await waitForSagaClosed(app, rejected.id)).status.name).toBe('COMPLETED');
     expect((await readOrder(app, rejected.id)).status).toBe('REJECTED');
     expect(await heldHeaders()).toEqual([]);
     expect(await readStock(app, free.variantId)).toMatchObject({ quantityReserved: 0 });

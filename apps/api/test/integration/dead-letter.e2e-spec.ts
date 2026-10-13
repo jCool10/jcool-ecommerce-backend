@@ -4,7 +4,6 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { SagaKickExecutor } from '../../src/modules/order/application/saga/saga-kick.executor';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
@@ -25,8 +24,10 @@ import {
   placeAndOpenSession,
   postWebhook,
   readOrder,
-  readSaga,
+  readSagaState,
+  sagaStepAttribute,
   seedSellableSku,
+  waitForSagaClosed,
 } from '../setup/fixtures/order-flow.fixture';
 import {
   closeAppAfterAll,
@@ -196,18 +197,18 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     const [dead] = await waitForDeadLetter();
     expect(dead.data).toMatchObject({ eventType: 'payment.authorized', attemptsMade: 1 });
     expect(dead.data.failedReason).toMatch(/No handler registered/);
-    expect((await readSaga(app, order.orderId)).step).toBe('AWAITING_AUTH');
+    expect((await readSagaState(app, order.orderId)).step).toBe('AWAITING_AUTH');
 
     olderWorker.mockRestore();
     const summary = await replayDeadLetters(queue, dlq, { ...replayGuards, dryRun: false });
 
     expect(summary).toMatchObject({ replayed: 1, skipped: 0 });
-    await vi.waitFor(async () => expect((await readOrder(app, order.orderId)).status).toBe('PAID'), {
+    await vi.waitFor(async () => expect(await sagaStepAttribute(app, order.orderId)).toBe('COMPLETED'), {
       timeout: 15_000,
       interval: 50,
     });
-    await app.get(SagaKickExecutor).drain();
-    expect((await readSaga(app, order.orderId)).step).toBe('COMPLETED');
+    await waitForSagaClosed(app, order.orderId);
+    expect((await readOrder(app, order.orderId)).status).toBe('PAID');
     expect(gateway.captureCalls(intentId)).toBe(1);
     expect(await deadLetters()).toHaveLength(0);
   });

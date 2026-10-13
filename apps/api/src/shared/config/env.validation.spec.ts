@@ -21,9 +21,15 @@ const STRIPE_ENV = {
   STRIPE_SUCCESS_URL: 'https://shop.jcool.test/payments/success?session_id={CHECKOUT_SESSION_ID}',
 };
 
+const TEMPORAL_ENV = {
+  TEMPORAL_ADDRESS: 'temporal.railway.internal:7233',
+  TEMPORAL_NAMESPACE: 'jcool',
+  TEMPORAL_TASK_QUEUE: 'checkout-saga',
+};
+
 describe('env validation', () => {
   it('refuses to boot in production until TRUST_PROXY is set to anything', () => {
-    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production };
+    const production = { ...BASE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production };
 
     expect(() => validate(production)).toThrow(/TRUST_PROXY/);
     for (const value of ['fd12::/16', '1', 'false']) {
@@ -37,7 +43,7 @@ describe('env validation', () => {
 
   // Railway never sets PAYMENT_PROVIDER, so a guard keyed on it would never run there.
   it('refuses to boot in production without a Stripe key and success URL, whatever the provider says', () => {
-    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: '1' };
+    const production = { ...BASE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: '1' };
 
     expect(() => validate(production)).toThrow(/STRIPE_SECRET_KEY/);
     expect(() => validate({ ...production, STRIPE_SECRET_KEY: STRIPE_ENV.STRIPE_SECRET_KEY })).toThrow(
@@ -71,6 +77,7 @@ describe('env validation', () => {
         NODE_ENV: NodeEnv.Production,
         TRUST_PROXY: '1',
         ...STRIPE_ENV,
+        ...TEMPORAL_ENV,
         PAYMENT_SESSION_MIN_TTL_SEC: '0',
         PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '0',
         PAYMENT_CAPTURE_TIMEOUT_MS: '1000',
@@ -141,6 +148,7 @@ describe('env validation', () => {
         INVENTORY_HOLD_SWEEP_BATCH_SIZE: '500',
         INVENTORY_TRY_LOCK_TIMEOUT_MS: '30000',
         CHECKOUT_TRY_TIMEOUT_MS: '30001',
+        CHECKOUT_RESERVE_WAIT_MS: '32001',
       }),
     ).not.toThrow();
   });
@@ -156,11 +164,15 @@ describe('env validation', () => {
       CHECKOUT_PAY_CUTOFF_SEC: '30',
       CHECKOUT_TRY_TIMEOUT_MS: '1000',
       CHECKOUT_HOLD_SAFETY_SEC: '30',
-      SAGA_RUNNER_INTERVAL_MS: '500',
+      CHECKOUT_RESERVE_WAIT_MS: '3000',
+      CHECKOUT_CANCEL_WAIT_MS: '1000',
+      CHECKOUT_REAPER_INTERVAL_MS: '500',
+      CHECKOUT_RESERVING_ORPHAN_SEC: '4',
+      SAGA_ACTIVITY_TIMEOUT_MS: '9001',
       SAGA_RETRY_BASE_MS: '200',
       SAGA_RETRY_CAP_MS: '2000',
-      SAGA_LEASE_MS: '11000',
       SAGA_AUTH_GRACE_SEC: '5',
+      TEMPORAL_WORKER_SHUTDOWN_GRACE_MS: '0',
     };
 
     it('boots on the defaults and on the short fault-suite timings', () => {
@@ -170,15 +182,21 @@ describe('env validation', () => {
 
     it('bounds each saga setting on its own', () => {
       const refused: Array<[string, string]> = [
-        ['SAGA_RUNNER_ENABLED', '1'],
-        ['SAGA_RUNNER_INTERVAL_MS', '99'],
-        ['SAGA_RUNNER_BATCH_SIZE', '0'],
-        ['SAGA_RUNNER_BATCH_SIZE', '501'],
-        ['SAGA_LEASE_MS', '999'],
+        ['CHECKOUT_RESERVE_WAIT_MS', '999'],
+        ['CHECKOUT_CANCEL_WAIT_MS', '999'],
+        ['CHECKOUT_REAPER_ENABLED', '1'],
+        ['CHECKOUT_REAPER_INTERVAL_MS', '499'],
+        ['CHECKOUT_RESERVING_ORPHAN_SEC', '0'],
+        ['SAGA_ACTIVITY_TIMEOUT_MS', '999'],
+        ['SAGA_ACTIVITY_TIMEOUT_MS', '3600001'],
+        ['SAGA_ACTIVITY_CONCURRENCY', '0'],
+        ['SAGA_ACTIVITY_CONCURRENCY', '51'],
         ['SAGA_RETRY_BASE_MS', '99'],
         ['SAGA_RETRY_CAP_MS', '99'],
-        ['SAGA_KICK_CONCURRENCY', '0'],
         ['SAGA_AUTH_GRACE_SEC', '-1'],
+        ['TEMPORAL_ADDRESS', ''],
+        ['TEMPORAL_WORKER_ENABLED', '0'],
+        ['TEMPORAL_WORKER_SHUTDOWN_GRACE_MS', '600001'],
         ['CHECKOUT_TRY_TIMEOUT_MS', '99'],
         ['CHECKOUT_PAYMENT_DEADLINE_SEC', '0'],
         ['CHECKOUT_HOLD_SAFETY_SEC', '0'],
@@ -189,15 +207,41 @@ describe('env validation', () => {
       }
     });
 
-    it('keeps the lease longer than the slowest participant call it covers', () => {
-      // A payment cancel makes up to four gateway calls of PAYMENT_CAPTURE_TIMEOUT_MS each.
-      expect(() => validate({ ...BASE_ENV, PAYMENT_CAPTURE_TIMEOUT_MS: '13750', SAGA_LEASE_MS: '60000' })).toThrow(
-        /SAGA_LEASE_MS/,
-      );
+    it('refuses to boot in production without a Temporal to run the saga on', () => {
+      const production = {
+        ...BASE_ENV,
+        ...STRIPE_ENV,
+        ...TEMPORAL_ENV,
+        NODE_ENV: NodeEnv.Production,
+        TRUST_PROXY: '1',
+      };
+
+      for (const key of Object.keys(TEMPORAL_ENV)) {
+        expect(() => validate({ ...production, [key]: undefined }), key).toThrow(new RegExp(key));
+      }
+      expect(() => validate(production)).not.toThrow();
+    });
+
+    // A payment cancel makes up to four gateway calls of PAYMENT_CAPTURE_TIMEOUT_MS each.
+    it('lets an activity outlive the slowest participant call it makes', () => {
       expect(() =>
-        validate({ ...BASE_ENV, PAYMENT_CAPTURE_TIMEOUT_MS: '13749', SAGA_LEASE_MS: '60000' }),
+        validate({ ...BASE_ENV, PAYMENT_CAPTURE_TIMEOUT_MS: '13750', SAGA_ACTIVITY_TIMEOUT_MS: '60000' }),
+      ).toThrow(/SAGA_ACTIVITY_TIMEOUT_MS/);
+      expect(() =>
+        validate({ ...BASE_ENV, PAYMENT_CAPTURE_TIMEOUT_MS: '13749', SAGA_ACTIVITY_TIMEOUT_MS: '60000' }),
       ).not.toThrow();
-      expect(() => validate({ ...BASE_ENV, ...SHORT, CHECKOUT_TRY_TIMEOUT_MS: '6000' })).toThrow(/SAGA_LEASE_MS/);
+    });
+
+    it('waits on the reserve long enough for a Try that used its whole budget', () => {
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_RESERVE_WAIT_MS: '4999' })).toThrow(/CHECKOUT_RESERVE_WAIT_MS/);
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_RESERVE_WAIT_MS: '5000' })).not.toThrow();
+    });
+
+    it('never reaps a reserving order whose request may still be waiting on it', () => {
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_RESERVING_ORPHAN_SEC: '6' })).toThrow(
+        /CHECKOUT_RESERVING_ORPHAN_SEC/,
+      );
+      expect(() => validate({ ...BASE_ENV, CHECKOUT_RESERVING_ORPHAN_SEC: '7' })).not.toThrow();
     });
 
     it("keeps inventory's whole-Try budget inside the checkout's Try timeout", () => {
@@ -212,10 +256,10 @@ describe('env validation', () => {
       expect(() => validate({ ...BASE_ENV, SAGA_AUTH_GRACE_SEC: '3599' })).not.toThrow();
     });
 
-    it('leaves the HTTP path a connection when queue workers and saga kicks are all busy', () => {
-      expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '8' })).toThrow(/SAGA_KICK_CONCURRENCY/);
+    it('leaves the HTTP path a connection when queue workers and saga activities are all busy', () => {
+      expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '8' })).toThrow(/SAGA_ACTIVITY_CONCURRENCY/);
       expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '7' })).not.toThrow();
-      expect(() => validate({ ...BASE_ENV, SAGA_KICK_CONCURRENCY: '4', DB_POOL_MAX: '12' })).not.toThrow();
+      expect(() => validate({ ...BASE_ENV, SAGA_ACTIVITY_CONCURRENCY: '4', DB_POOL_MAX: '12' })).not.toThrow();
     });
 
     it('closes /pay early enough for the shortest session the gateway accepts', () => {

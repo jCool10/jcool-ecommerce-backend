@@ -9,20 +9,22 @@ import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrast
 import {
   auditLedgerInvariants,
   authorizeAndRelay,
+  describeSaga,
   placeAndOpenSession,
   readOrder,
   readPayment,
   readPaymentOrder,
   readReservationOrder,
-  readSaga,
+  readSagaState,
   readStock,
+  sagaStepAttribute,
   seedSellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 
 const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_happy_path_01';
 
-describe('Checkout saga, happy path (integration, real Postgres, real HMAC)', () => {
+describe('Checkout saga, happy path (integration, real Postgres, real Temporal, real HMAC)', () => {
   let app: INestApplication;
   let pool: Pool;
   let gateway: FakeSignerGatewayAdapter;
@@ -38,17 +40,23 @@ describe('Checkout saga, happy path (integration, real Postgres, real HMAC)', ()
 
     const order = await placeAndOpenSession(app, sku, 2);
 
-    const saga = await readSaga(app, order.orderId);
+    const { paymentDeadlineAt, status } = await readOrder(app, order.orderId);
     const { holdSafetyMs } = app.get<CheckoutSagaSettings>(CHECKOUT_SAGA_SETTINGS);
-    expect((await readOrder(app, order.orderId)).status).toBe('PENDING');
-    expect(saga).toMatchObject({ step: 'AWAITING_AUTH', leaseUntil: null, pendingCompensations: [] });
+    expect(status).toBe('PENDING');
+    expect(paymentDeadlineAt).toBeInstanceOf(Date);
+    expect(await readSagaState(app, order.orderId)).toEqual({
+      step: 'AWAITING_AUTH',
+      pendingCompensations: [],
+      deadlineAt: paymentDeadlineAt!.toISOString(),
+    });
+    expect(await sagaStepAttribute(app, order.orderId)).toBe('AWAITING_AUTH');
     expect(await readReservationOrder(app, order.orderId)).toMatchObject({
       status: 'HELD',
-      holdUntil: new Date(saga.deadlineAt.getTime() + holdSafetyMs),
+      holdUntil: new Date(paymentDeadlineAt!.getTime() + holdSafetyMs),
     });
     expect(gateway.sessionRequest(order.sessionId)).toMatchObject({
       captureMethod: 'manual',
-      expiresAt: saga.deadlineAt,
+      expiresAt: paymentDeadlineAt,
     });
     expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: 5, quantityReserved: 2 });
   });
@@ -60,7 +68,8 @@ describe('Checkout saga, happy path (integration, real Postgres, real HMAC)', ()
     const { intentId, drained } = await authorizeAndRelay(app, gateway, order);
 
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
-    expect((await readSaga(app, order.orderId)).step).toBe('COMPLETED');
+    expect((await describeSaga(app, order.orderId))?.status.name).toBe('COMPLETED');
+    expect(await sagaStepAttribute(app, order.orderId)).toBe('COMPLETED');
     expect((await readPayment(app, order.orderId)).status).toBe('SUCCEEDED');
     expect((await readReservationOrder(app, order.orderId)).status).toBe('COMMITTED');
     expect((await readPaymentOrder(app, order.orderId)).status).toBe('CAPTURED');

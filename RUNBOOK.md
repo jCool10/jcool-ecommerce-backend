@@ -32,6 +32,7 @@ Conventions used below:
 - [Checkout saga cut-over](#checkout-saga-cut-over)
 - [Checkout saga rollback](#checkout-saga-rollback)
 - [Operating the checkout saga](#operating-the-checkout-saga)
+- [Temporal](#temporal)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [Standing exceptions](#standing-exceptions)
@@ -301,7 +302,7 @@ Every window is sized by **what still has to be able to retry against the row**,
 | `messaging:outbox` | `outbox` | `published_at` older than the window | **Any row with `published_at IS NULL`, at any age** — that is an unsent event, not a stale record | `RETENTION_OUTBOX_DAYS` (30) |
 | `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
 | `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
-| `order:rejected-orders` | `orders` (their lines and saga row go with them) | `REJECTED` and `finalized_at` older than the window | Any order in another status | `RETENTION_REJECTED_ORDER_DAYS` (30) |
+| `order:rejected-orders` | `orders` (their lines go with them) | `REJECTED` and `finalized_at` older than the window | Any order in another status | `RETENTION_REJECTED_ORDER_DAYS` (30) |
 | `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
 | `auth-tokens:email-verification` *(user-service)* | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
 | `auth-tokens:password-reset` *(user-service)* | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
@@ -968,7 +969,7 @@ Turn it off by setting `false` and redeploying the gateway the same way.
 
 ## Checkout saga cut-over
 
-The deploy that replaces the single-transaction settlement with the checkout saga cannot overlap with an order in flight: an order placed by the old code has no saga row, and its payment session auto-captures. So the cut-over drains the old path behind the [checkout freeze](#checkout-freeze) before the merge. It needs the public domain to go through the gateway ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)), since the freeze lives there. You run it by hand.
+The deploy that replaces the single-transaction settlement with the checkout saga cannot overlap with an order in flight: an order placed by the old code has no saga workflow, and its payment session auto-captures. So the cut-over drains the old path behind the [checkout freeze](#checkout-freeze) before the merge. The saga runs on a Temporal server that CD does not deploy, so the server goes up first, by hand ([Temporal](#temporal)). It needs the public domain to go through the gateway ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)), since the freeze lives there. You run it by hand.
 
 1. **Back up** the api's database ([Backup and restore](#backup-and-restore)).
 2. **Freeze.** Set `CHECKOUT_WRITE_FREEZE=true` on the gateway and redeploy it, as in [Checkout freeze](#checkout-freeze).
@@ -993,17 +994,33 @@ The deploy that replaces the single-transaction settlement with the checkout sag
    - **Holds without a header.** These are holds the old checkout took. Find their owners with `SELECT r.order_id, r.variant_id, r.expires_at, o.status AS order_status FROM reservations r LEFT JOIN orders o ON o.id = r.order_id WHERE r.status = 'HELD' AND NOT EXISTS (SELECT 1 FROM reservation_orders h WHERE h.order_id = r.order_id)`. A `PENDING` owner is handled above. A hold whose order is already terminal or missing is stranded: the new code's sweep reads only holds that have a header, so nothing will ever free it. Do not merge over one; reconcile that stock by hand first.
 
 5. **Refund candidates.** Run the candidate query in [A refund is owed](#a-refund-is-owed). Rows there do not block the merge, but check every session as that section says; most `PENDING` rows are buyers who never paid, and their sessions read `expired`.
-6. **Probe again**, immediately before the merge, as in step 3.
-7. **Merge** and let CD deploy. The migrations in the pre-deploy step add the new order statuses and the `checkout_sagas` table.
-8. **Check before lifting the freeze.** `/health/ready` answers, the three counts above are still `0`, and no `PENDING` order lacks a saga:
+6. **Apply Temporal.** This only creates things, so it can run before the freeze to keep the freeze short. From a checkout of the branch rebased onto `main`, `railway config plan` must show creates for `temporal-postgres` and `temporal` and updates to the api's `TEMPORAL_*` variables, and no destroy; then `railway config apply --yes`. Ship the server and wait for it, then check it from inside ([Temporal](#temporal)):
 
-   ```sql
-   SELECT count(*) FROM orders o WHERE o.status = 'PENDING'
-     AND NOT EXISTS (SELECT 1 FROM checkout_sagas s WHERE s.order_id = o.id);
+   ```bash
+   railway up --ci --service temporal
+   scripts/railway-wait-for-rollout.sh temporal
+   railway ssh --service temporal
+   # inside: both must list the namespace and the two search attributes
+   temporal operator namespace describe jcool
+   temporal operator search-attribute list --namespace jcool
    ```
 
-   Any count above `0` means keep the freeze and clean up as in step 4. An order without a saga row cannot be cancelled through the api, because cancel needs the row: expire its session in the gateway dashboard and resolve the order by hand.
-9. **Lift the freeze.** Set `CHECKOUT_WRITE_FREEZE=false`, redeploy the gateway, and place one order at once. If that fails, freeze again, wait for every saga to close (the query in [Operating the checkout saga](#operating-the-checkout-saga) returns no rows), then fix forward or follow [Checkout saga rollback](#checkout-saga-rollback).
+   Finally `railway config plan --detailed-exit-code` must exit `0`. The apply redeploys the api on the code that is still live, which ignores `TEMPORAL_*`.
+7. **Probe again**, immediately before the merge, as in step 3.
+8. **Merge** and let CD deploy. The migrations in the pre-deploy step add the new order statuses and the `orders.payment_deadline_at` column.
+9. **Check before lifting the freeze.**
+   - `/health/ready` answers, and it includes Temporal.
+   - The api is polling: `temporal task-queue describe --task-queue checkout-saga --namespace jcool`, from `railway ssh --service temporal`, lists a poller for each api replica.
+   - The three counts from step 4 are still `0`, and so is the count of orders still open, which also means none lacks a workflow:
+
+     ```sql
+     SELECT count(*) FROM orders WHERE status IN ('RESERVING', 'PENDING', 'CONFIRMING');
+     ```
+
+   Any check that fails means keep the freeze and clean up as in step 4. An open order without a `Running` workflow cannot be cancelled through the api, because cancel is an update on that workflow: expire its session in the gateway dashboard and resolve the order by hand.
+10. **Lift the freeze.** Set `CHECKOUT_WRITE_FREEZE=false`, redeploy the gateway, and place one order at once. The order must be `PENDING` and `temporal workflow describe --workflow-id checkout-<orderId> --namespace jcool` must show it `Running` with `CheckoutStep` `AWAITING_AUTH`. If that fails, freeze again, wait for every saga to close (the count in [Operating the checkout saga](#operating-the-checkout-saga) is `0`), then fix forward or follow [Checkout saga rollback](#checkout-saga-rollback).
+
+After the cut-over, the same gate catches a workflow lost from the server: an open order with no `Running` workflow. Compare `SELECT id FROM orders WHERE status IN ('RESERVING', 'PENDING', 'CONFIRMING')` against `temporal workflow list --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'`, whose ids read `checkout-<orderId>`.
 
 ---
 
@@ -1013,38 +1030,126 @@ Roll back by committing forward, never by reverting a merge, and **never with `-
 
 1. **Back up** the api's database first ([Backup and restore](#backup-and-restore)).
 2. **Freeze** checkout ([Checkout freeze](#checkout-freeze)).
-3. **Wait for every saga to close.** The query in [Operating the checkout saga](#operating-the-checkout-saga) must return no rows.
+3. **Wait for every saga to close.** The count of `Running` `CheckoutSaga` workflows (the query in [Operating the checkout saga](#operating-the-checkout-saga)) must reach `0`. One stuck at `COMPENSATING` needs handling first, as described there and in [A refund is owed](#a-refund-is-owed).
 4. **Settle each authorized hold by hand.** `SELECT order_id FROM payment_orders WHERE status = 'AUTHORIZED'` lists the holds that were never captured or voided; capture or void each in the Stripe dashboard.
-5. **Delete the `REJECTED` orders.** The old code cannot read that status, and their lines and saga rows go with them: `DELETE FROM orders WHERE status = 'REJECTED'`.
-6. **Commit the rollback forward.** Restore the application code and checkout tests from before the cut-over: use cases, adapters, module wiring, the pay route in the payment module, config and metrics. Keep everything the infrastructure already applied: the `@checkoutFrozen` matcher in `apps/gateway/Caddyfile`, its entry in `.railway/railway.ts`, its entry in `scripts/check-railway-flip-vars.mjs`, the saga migrations with their `_journal.json` entries, the Drizzle schema for `checkout_sagas` and the new enum values (so `pnpm db:generate` does not generate a drop), and `infra/`. CD's apply is then a no-op.
+5. **Delete the `REJECTED` orders.** The old code cannot read that status, and their lines go with them: `DELETE FROM orders WHERE status = 'REJECTED'`.
+6. **Commit the rollback forward.** Restore the application code and checkout tests from before the cut-over: use cases, adapters, module wiring, the pay route in the payment module, config and metrics. Keep everything the infrastructure already applied: the `@checkoutFrozen` matcher in `apps/gateway/Caddyfile`, its entry in `.railway/railway.ts`, its entry in `scripts/check-railway-flip-vars.mjs`, the saga migrations with their `_journal.json` entries, the Drizzle schema for `orders.payment_deadline_at` and the new enum values (so `pnpm db:generate` does not generate a drop), `infra/` including `infra/temporal/`, and the `temporal-postgres` and `temporal` services in `.railway/railway.ts` with the api's `TEMPORAL_*` variables, which the old code ignores. CD's apply is then a no-op. Never use `--confirm-destructive` for this: if `railway config plan` shows any destroy, the commit is wrong.
 7. **Merge**, let CD deploy, and check `/health/ready`. Lift the freeze by setting `CHECKOUT_WRITE_FREEZE=false` and redeploying the gateway, not by reverting, then place one order.
 
-The new enum values and the `checkout_sagas` table stay in the database. That is harmless: the old code never reads them, and after steps 3 and 5 no order uses the new statuses.
+The new enum values and `orders.payment_deadline_at` stay in the database. That is harmless: the old code never reads them, and after steps 3 and 5 no order uses the new statuses. Temporal keeps running with no worker polling it. Removing it is a separate decision after the rollback, and it goes through a reviewed `--confirm-destructive` on purpose ([Review a destructive change](#review-a-destructive-change)).
 
 ---
 
 ## Operating the checkout saga
 
-Every order has one row in `checkout_sagas`, written with the order. The saga moves it through `RESERVING`, `AWAITING_AUTH` (parked until the buyer authorizes a hold, or until the payment deadline plus `SAGA_AUTH_GRACE_SEC` passes), `COMMITTING_STOCK` and `CAPTURING` to `COMPLETED`, or through `COMPENSATING` to `COMPENSATED`. The decision record is [Checkout saga](./docs/system-architecture.md#checkout-saga-orchestration-tcc-on-stock-and-payment-stripe-manual-capture); the tunables, with defaults, are in the "Checkout saga" section of [`.env.example`](./.env.example).
+Every order has one Temporal workflow, `CheckoutSaga`, with the workflow id `checkout-<orderId>`, started when the order is placed. Its state lives in Temporal, not in a table. The saga moves through `RESERVING`, `AWAITING_AUTH` (parked on a durable timer until the buyer authorizes a hold, or until the payment deadline plus `SAGA_AUTH_GRACE_SEC` passes), `COMMITTING_STOCK` and `CAPTURING` to `COMPLETED`, or through `COMPENSATING` to `COMPENSATED`. The current step is the `CheckoutStep` search attribute and the payment deadline is `CheckoutDeadlineAt`. The decision record is [Checkout saga](./docs/system-architecture.md#checkout-saga-orchestration-tcc-on-stock-and-payment-stripe-manual-capture); the tunables, with defaults, are in the "Checkout saga" and "Temporal" sections of [`.env.example`](./.env.example).
 
-A request, a post-commit kick and a runner all drive sagas through the same conditional claim, so they cannot work one saga at once. The runner is the backstop for everything else: a lost kick, a request that died mid-checkout, an unpaid order past its deadline, a step waiting out a backoff. `SAGA_RUNNER_ENABLED` (on by default; every replica may run it) switches it off for a one-off container. With it off everywhere, unpaid orders never expire and a failed step is never retried.
+Nothing here needs a runner or a schedule: the workflow waits on its own timer, retries a participant call that fails with exponential backoff from `SAGA_RETRY_BASE_MS` up to `SAGA_RETRY_CAP_MS` and no attempt limit, and a worker inside every api replica executes it. A `RESERVING` order whose request died before the workflow started is the one case that needs help, and a reaper on each replica (`CHECKOUT_REAPER_ENABLED`, on by default) gives it to the saga after `CHECKOUT_RESERVING_ORPHAN_SEC`; the saga is already past its Try budget, so it rejects the order and releases whatever the Try may have held. With the reaper off everywhere, such an order stays `RESERVING`. The commands below run from `railway ssh --service temporal`, as set out in [Temporal](#temporal).
 
-Find the sagas that are not finished:
+Find the sagas that are not finished, and count them:
 
-```sql
-SELECT order_id, step, attempts, last_error, next_attempt_at, lease_until
-FROM checkout_sagas
-WHERE step NOT IN ('COMPLETED', 'COMPENSATED')
-ORDER BY next_attempt_at;
+```bash
+temporal workflow list --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'
+temporal workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'
 ```
 
-How to read a row:
+Narrow by step with `AND CheckoutStep="COMPENSATING"`, or find the overdue ones with `AND CheckoutStep="AWAITING_AUTH" AND CheckoutDeadlineAt < "<ISO time one grace period ago>"`. For one order:
 
-- **`AWAITING_AUTH` with `next_attempt_at` in the future** is healthy: an order waiting to be paid, due at its deadline plus the grace.
-- **`next_attempt_at` in the past and `lease_until` empty or past** is overdue. The runner is off or failing; check `SAGA_RUNNER_ENABLED` and the api's logs for `checkout saga advance failed`.
-- **`attempts` above `0` with a `last_error`** means a participant did not answer (a timeout, an unreachable gateway or database). The runner retries with exponential backoff from `SAGA_RETRY_BASE_MS` up to `SAGA_RETRY_CAP_MS`, with no attempt limit, and the row clears by itself once the participant answers.
-- **`COMPENSATING` with a `last_error`** means a compensation failed or was refused. `last_error` reads `RELEASE_STOCK`, `RESTOCK` or `CANCEL_PAYMENT`, then the error, or a conflict: `CONFLICT` for stock, `CAPTURED_CONFLICT` for payment. A failure heals on its own like any other. A conflict does not: the participant's state contradicts the compensation, the api logs `compensation conflicts with participant state`, and every retry gets the same answer. The order is already in its final status (`CANCELLED`, `EXPIRED`, `FAILED` or `REJECTED`) and the buyer has been told. `CAPTURED_CONFLICT` means the money was taken, so it is a refund owed: follow [A refund is owed](#a-refund-is-owed). Retrying is harmless, since every call is idempotent, and the row stays in this query until the participant's state changes.
-- **`RESERVING` past its lease** is a checkout request that died between inserting the order and finishing the stock Try. The runner rejects the order and releases whatever the Try may have held.
+```bash
+temporal workflow describe --namespace jcool --workflow-id checkout-<orderId>
+temporal workflow query --namespace jcool --workflow-id checkout-<orderId> --type state
+```
+
+`describe` shows the status, the pending activity with its attempt count and last failure, and the search attributes. The `state` query returns the step, the compensations still pending and the deadline.
+
+How to read what you find:
+
+- **`AWAITING_AUTH` with the deadline plus grace in the future** is healthy: an order waiting to be paid.
+- **`AWAITING_AUTH` past the deadline plus grace** is overdue, so nothing is executing the workflow. Check that the api is polling (`temporal task-queue describe --task-queue checkout-saga --namespace jcool` lists pollers), that `/health/ready` is up, and that `TEMPORAL_WORKER_ENABLED` is not `false` on every replica.
+- **A pending activity with attempts above `1` and a last failure** means a participant did not answer (a timeout, an unreachable gateway or database). It retries with no attempt limit and clears by itself once the participant answers; the api logs the cause.
+- **`COMPENSATING` with a pending compensation activity failing** means a compensation failed or was refused. Its name is `RELEASE_STOCK`, `RESTOCK` or `CANCEL_PAYMENT`, and the failure is the error or a conflict: `CONFLICT` for stock, `CAPTURED_CONFLICT` for payment. A failure heals on its own like any other. A conflict does not: the participant's state contradicts the compensation, the api logs `compensation conflicts with participant state`, and every retry gets the same answer. The order is already in its final status (`CANCELLED`, `EXPIRED`, `FAILED` or `REJECTED`) and the buyer has been told. `CAPTURED_CONFLICT` means the money was taken, so it is a refund owed: follow [A refund is owed](#a-refund-is-owed). Retrying is harmless, since every call is idempotent, and the workflow stays `Running` until the participant's state changes and the retry succeeds.
+- **`RESERVING` for longer than the Try budget** is a checkout request that died between inserting the order and finishing the stock Try. The saga rejects the order and releases the hold on its own; if the order has no workflow at all, that is the reaper's case above.
+
+---
+
+## Temporal
+
+The checkout saga runs on a self-hosted Temporal server. Two Railway services make it up, both declared in [`.railway/railway.ts`](./.railway/railway.ts): `temporal-postgres`, a Postgres 16 that holds every workflow history, and `temporal`, built from [`infra/temporal/Dockerfile`](./infra/temporal/Dockerfile) with one replica. Neither has a public domain, and `temporal` has no healthcheck path because its frontend speaks gRPC. The api reaches it over the private network through `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE` (`jcool`) and `TEMPORAL_TASK_QUEUE` (`checkout-saga`), and runs the worker in its own process. There is no Temporal UI on Railway; locally it is <http://localhost:8233> (`TEMPORAL_UI_HOST_PORT`), brought up by the `temporal-ui` Compose service.
+
+[`infra/temporal/entrypoint.sh`](./infra/temporal/entrypoint.sh) does the setup on every start and is safe to repeat: it creates or updates the two databases' schema, starts the server, creates the `jcool` namespace (or updates its retention), and creates the `CheckoutStep` (Keyword) and `CheckoutDeadlineAt` (Datetime) search attributes if they are missing. `NUM_HISTORY_SHARDS` is fixed by the first start and cannot be changed afterwards.
+
+**`temporal` is not deployed by CD.** It has no repo source, so a merge never ships it. `railway config apply` creates the services, and the image goes up by hand, then you wait for it:
+
+```bash
+# local, after `railway link` to the production environment
+railway up --ci --service temporal
+scripts/railway-wait-for-rollout.sh temporal
+```
+
+`temporal-postgres` is not part of [Backup and restore](#backup-and-restore). It holds the state of every open saga, so losing it leaves open orders with no workflow; the cross-check at the end of [Checkout saga cut-over](#checkout-saga-cut-over) finds them.
+
+### Get a shell and use the CLI
+
+The image carries the `temporal` CLI, and the server listens on loopback inside the container, so the default address works:
+
+```bash
+railway ssh --service temporal
+# inside, always with the namespace
+temporal operator cluster health
+temporal workflow list --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'
+temporal workflow describe --namespace jcool --workflow-id checkout-<orderId>
+temporal workflow show --namespace jcool --workflow-id checkout-<orderId>
+temporal workflow query --namespace jcool --workflow-id checkout-<orderId> --type state
+```
+
+- **`list --query`** filters on `WorkflowType`, `ExecutionStatus` and the search attributes `CheckoutStep` and `CheckoutDeadlineAt`; [Operating the checkout saga](#operating-the-checkout-saga) has the useful ones.
+- **`describe`** shows status, pending activities with their attempts and last failure, and the search attributes. **`show`** prints the event history, which is where a stuck run explains itself.
+- **`query --type state`** returns the step, the compensations still pending and the deadline.
+- **`signal`** delivers `paymentAuthorized` with `{ paymentId, amountMinor, currency, authorizedAt }`. Use it only for an authorization whose event dead-lettered and cannot be replayed ([Replay the dead-letter queue](#replay-the-dead-letter-queue) is the normal path), and only to a workflow that is still `Running`. The api's own path also opens a run to void an authorization that arrives after the saga closed; the CLI signal does not, so a closed workflow needs the event replayed instead.
+- **`terminate`** ends a workflow at once without running any compensation, so the order's stock hold, any authorized payment hold and the order's status are left as they were. Treat it as a last resort, and only with the manual cleanup in the same sitting: release the order's `HELD` reservations, void or capture its hold in the Stripe dashboard (`SELECT order_id FROM payment_orders WHERE status = 'AUTHORIZED'`), and move the order to a final status by hand. A workflow that is merely retrying a failing step should be fixed at its cause instead, since it resumes on its own.
+
+### Check the namespace and the search attributes
+
+After a first deploy, a restore or a server upgrade:
+
+```bash
+temporal operator namespace describe jcool
+temporal operator search-attribute list --namespace jcool
+temporal task-queue describe --task-queue checkout-saga --namespace jcool
+```
+
+The namespace must exist with the retention you expect, the list must show `CheckoutStep` as Keyword and `CheckoutDeadlineAt` as Datetime, and the task queue must list a poller for each api replica that runs the worker. A missing namespace or attribute is recreated by restarting `temporal` (`railway redeploy --service temporal --yes`), since the entrypoint ensures both on every start. No pollers with a healthy server means the api is not running its worker: check `TEMPORAL_WORKER_ENABLED`, the api's logs for `CheckoutSagaWorker`, and `/health/ready`.
+
+### When Temporal is down
+
+- **Checkout and cancel answer `503` with `Retry-After`**, and the buyer retries. The api's `/health/ready` reports the Temporal check as down.
+- **Running workflows are durable.** They hold their state in `temporal-postgres`; when the server returns they resume, timers that came due while it was away fire, and any activity that was mid-flight is retried. Participant calls are idempotent, so the retry is safe.
+- **The reaper needs nothing by hand.** Orders left `RESERVING` by a checkout that got no answer are handed to the saga once the server is back.
+- **Authorizations are not lost.** A `payment.authorized` event that cannot be signalled is retried by BullMQ on the long ladder (about 33 minutes at the defaults); past it the event dead-letters and you replay it ([Replay the dead-letter queue](#replay-the-dead-letter-queue)).
+
+To see how far behind it is once back, count the `Running` workflows and look for the overdue ones as in [Operating the checkout saga](#operating-the-checkout-saga).
+
+### Retention
+
+Closed workflows are deleted after the namespace's retention; running ones are never touched. `TEMPORAL_NAMESPACE_RETENTION` sets it (default `7d`, set by hand in Railway and kept across applies), and the entrypoint writes it to the namespace on every start. Change it by setting the variable and redeploying `temporal`:
+
+```bash
+railway variable set TEMPORAL_NAMESPACE_RETENTION=14d --service temporal --skip-deploys
+railway redeploy --service temporal --yes
+```
+
+A `temporal operator namespace update --retention` run by hand is overwritten by the variable at the next start. Retention is only the window in which a closed saga can still be inspected; the order's own row is the record of the outcome.
+
+### Upgrade the server
+
+The server and its tools image are pinned in [`infra/temporal/Dockerfile`](./infra/temporal/Dockerfile), and the SDK in `apps/api/package.json`. Upgrade one minor version at a time, never skipping, and read that version's release notes first for schema, dynamic-config and CLI changes.
+
+1. Back up `temporal-postgres` (a `pg_dump` against its connection string, as in [Back up](#back-up)).
+2. Bump the tags in the Dockerfile and try it locally with `docker compose up -d --build temporal`; the entrypoint applies the schema update on start.
+3. Ship it with `railway up --ci --service temporal` and `scripts/railway-wait-for-rollout.sh temporal`.
+4. Run the three checks in [Check the namespace and the search attributes](#check-the-namespace-and-the-search-attributes), then the `Running` count in [Operating the checkout saga](#operating-the-checkout-saga): it must not have dropped except by sagas closing.
+
+A change to the workflow code in the api is a separate risk. In-flight workflows replay their history on the new code, so reordering or removing steps can break them; [`checkout-saga.workflow-replay.spec.ts`](./apps/api/src/modules/order/saga/workflows/checkout-saga.workflow-replay.spec.ts) guards that and has to pass.
 
 ---
 

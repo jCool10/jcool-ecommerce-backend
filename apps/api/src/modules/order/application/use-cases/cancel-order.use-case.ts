@@ -1,33 +1,35 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import { toError } from '@jcool/kernel';
-import { ID_GENERATOR, mintOne, type IdGeneratorPort } from '@shared/identity/id-generator.port';
-import { onCancelRequested, type SagaTransition } from '../../domain/checkout-saga';
 import type { Order } from '../../domain/order.entity';
 import { BUYER_HIDDEN_STATUSES, OrderStatus } from '../../domain/order-status';
+import { CheckoutUnavailableException } from '../checkout-unavailable.exception';
 import { toView, type OrderView } from '../order-view.mapper';
-import { CHECKOUT_SAGA_REPOSITORY, type CheckoutSagaRepositoryPort } from '../ports/checkout-saga-repository.port';
+import {
+  CHECKOUT_SAGA_ENGINE,
+  CheckoutEngineUnavailableError,
+  CheckoutNotCancellableError,
+  type CheckoutSagaEnginePort,
+} from '../ports/checkout-saga-engine.port';
 import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
-import { CheckoutSagaWriter } from '../saga/checkout-saga.writer';
-import { AdvanceCheckoutSagaUseCase } from './advance-checkout-saga.use-case';
+import { CHECKOUT_SAGA_SETTINGS, type CheckoutSagaSettings } from '../saga/checkout-saga.settings';
 
 const LOG_CONTEXT = 'CancelOrder';
 
 /**
- * Authorization runs under the order's row lock, the same one the cancel is written under, so the
- * order cannot settle some other way in between. The compensation runs after commit, awaited because
- * this is a request rather than a queue slot; if it fails the runner finishes it, and the cancel stands.
+ * The saga decides: its cancel update is refused once an authorization has arrived, even if the
+ * order row still reads PENDING. The answer waits for the compensation, bounded by the saga.
  */
 @Injectable()
 export class CancelOrderUseCase {
+  private readonly retryAfterSec: number;
+
   constructor(
     @Inject(ORDER_REPOSITORY) private readonly orders: OrderRepositoryPort,
-    @Inject(CHECKOUT_SAGA_REPOSITORY) private readonly sagas: CheckoutSagaRepositoryPort,
-    private readonly writer: CheckoutSagaWriter,
-    private readonly advance: AdvanceCheckoutSagaUseCase,
-    @Inject(ID_GENERATOR) private readonly ids: IdGeneratorPort,
+    @Inject(CHECKOUT_SAGA_ENGINE) private readonly engine: CheckoutSagaEnginePort,
+    @Inject(CHECKOUT_SAGA_SETTINGS) settings: CheckoutSagaSettings,
     private readonly logger: PinoLogger,
   ) {
+    this.retryAfterSec = Math.max(1, Math.ceil(settings.cancelWaitMs / 1000));
     logger.setContext(LOG_CONTEXT);
   }
 
@@ -46,35 +48,39 @@ export class CancelOrderUseCase {
   }
 
   private async cancel(orderId: string, by: 'user' | 'admin', authorize?: (order: Order) => void): Promise<OrderView> {
-    // Before the transaction, so no row lock waits on the id service. A repeat cancel wastes it.
-    const eventId = await mintOne(this.ids);
-    const { view, transition } = await this.orders.withTransaction(async (tx) => {
-      const order = await this.orders.findByIdForUpdate(orderId, tx);
-      if (!order) throw new NotFoundException(`Order not found: ${orderId}`);
-      authorize?.(order);
+    const order = await this.orders.findById(orderId);
+    if (!order) throw new NotFoundException(`Order not found: ${orderId}`);
+    authorize?.(order);
+    // Re-cancelling is the same request answered again, not a conflict: a client that lost the
+    // first response must be able to retry it.
+    if (order.status === OrderStatus.CANCELLED) return toView(order);
+    if (order.status !== OrderStatus.PENDING) throw notCancellable(order.status);
 
-      // Re-cancelling is the same request answered again, not a conflict: a client that lost the
-      // first response must be able to retry it.
-      if (order.status === OrderStatus.CANCELLED) return { view: toView(order), transition: null };
-      // CONFIRMING included: the money is already being taken, and unwinding that is a refund.
-      if (order.status !== OrderStatus.PENDING) {
-        throw new ConflictException(`Order cannot be cancelled in status ${order.status}`);
+    let answer: 'accepted' | 'closed';
+    try {
+      answer = await this.engine.cancel(orderId, by);
+    } catch (error) {
+      if (error instanceof CheckoutNotCancellableError) return this.reread(orderId);
+      if (error instanceof CheckoutEngineUnavailableError) {
+        this.logger.error({ err: error, orderId, by }, 'checkout saga engine did not answer a cancel');
+        throw new CheckoutUnavailableException('Cancel is temporarily unavailable; try again', this.retryAfterSec);
       }
-      const saga = await this.sagas.findForUpdate(tx, orderId);
-      if (!saga) throw new Error(`Pending order ${orderId} has no checkout saga`);
-
-      const cancelling: SagaTransition = onCancelRequested(saga, by);
-      const cancelled = await this.writer.rewrite(tx, order, saga, cancelling, { now: new Date(), eventId });
-      return { view: toView(cancelled), transition: cancelling };
-    });
-
-    if (transition) {
-      this.writer.reportCommitted(transition);
-      this.logger.info({ orderId, by }, 'order cancelled');
-      await this.advance.execute(orderId).catch((error: unknown) => {
-        this.logger.error({ err: toError(error), orderId }, 'cancel compensation failed; the runner takes it over');
-      });
+      throw error;
     }
-    return view;
+    if (answer === 'accepted') this.logger.info({ orderId, by }, 'order cancelled');
+    return this.reread(orderId);
   }
+
+  /** After the saga answered, the row is the truth: cancelled is a 200, anything else lost the race. */
+  private async reread(orderId: string): Promise<OrderView> {
+    const order = await this.orders.findById(orderId);
+    if (!order) throw new NotFoundException(`Order not found: ${orderId}`);
+    if (order.status !== OrderStatus.CANCELLED) throw notCancellable(order.status);
+    return toView(order);
+  }
+}
+
+// CONFIRMING included: the money is already being taken, and unwinding that is a refund.
+function notCancellable(status: OrderStatus): ConflictException {
+  return new ConflictException(`Order cannot be cancelled in status ${status}`);
 }

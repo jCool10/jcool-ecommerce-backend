@@ -2,27 +2,25 @@ import { BadGatewayException, ConflictException, NotFoundException } from '@nest
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import { CheckoutSagaStep } from '../../domain/checkout-saga-step';
 import { Order } from '../../domain/order.entity';
 import { OrderItem } from '../../domain/order-item.entity';
 import { OrderStatus } from '../../domain/order-status';
-import type { CheckoutSaga, CheckoutSagaRepositoryPort } from '../ports/checkout-saga-repository.port';
+import { checkoutSagaSettings } from '../../testing/checkout-saga-settings.double';
 import type { OrderRepositoryPort } from '../ports/order-repository.port';
 import {
   PaymentUnavailableError,
   type OpenSessionAnswer,
   type PaymentTccPort,
 } from '../ports/payment-participant.port';
-import type { CheckoutSagaSettings } from '../saga/checkout-saga.settings';
 import { PayOrderUseCase } from './pay-order.use-case';
 
 const ORDER_ID = '900001';
 const DEADLINE = new Date('2026-03-01T10:00:00.000Z');
 const CUTOFF_MS = 1_980_000;
-const settings = { payCutoffMs: CUTOFF_MS } as CheckoutSagaSettings;
+const settings = checkoutSagaSettings({ payCutoffMs: CUTOFF_MS });
 const SESSION = { paymentId: '800001', providerSessionId: 'cs_test_1', redirectUrl: 'https://pay.test/cs_test_1' };
 
-const orderIn = (status: OrderStatus): Order =>
+const orderIn = (status: OrderStatus, paymentDeadlineAt: Date | null = DEADLINE): Order =>
   Order.rehydrate({
     id: ORDER_ID,
     userId: 'u1',
@@ -31,30 +29,17 @@ const orderIn = (status: OrderStatus): Order =>
     items: [OrderItem.of('sku-1', 'Widget', 120_000, 2)],
     totalAmountMinor: 240_000,
     placedAt: new Date('2026-03-01T09:00:00.000Z'),
+    paymentDeadlineAt,
   });
-
-const saga: CheckoutSaga = {
-  orderId: ORDER_ID,
-  step: CheckoutSagaStep.AWAITING_AUTH,
-  pendingCompensations: [],
-  deadlineAt: DEADLINE,
-  nextAttemptAt: DEADLINE,
-  attempts: 0,
-  leaseUntil: null,
-  lastError: null,
-  version: 3,
-};
 
 function build(order: Order | null = orderIn(OrderStatus.PENDING)) {
   const orders = { findForUser: vi.fn().mockResolvedValue(order) };
-  const sagas = { findByOrderId: vi.fn().mockResolvedValue(saga) };
   const payment = {
     openSession: vi.fn((): Promise<OpenSessionAnswer> => Promise.resolve({ outcome: 'OPENED', session: SESSION })),
   };
   const metrics = fakeMetricsPort();
   const useCase = new PayOrderUseCase(
     orders as unknown as OrderRepositoryPort,
-    sagas as unknown as CheckoutSagaRepositoryPort,
     payment as unknown as PaymentTccPort,
     settings,
     metrics,
@@ -103,6 +88,13 @@ describe('PayOrderUseCase', () => {
       expect(payment.openSession).not.toHaveBeenCalled();
     },
   );
+
+  it('fails loud on a pending order that carries no payment deadline', async () => {
+    const { useCase, payment } = build(orderIn(OrderStatus.PENDING, null));
+
+    await expect(useCase.execute(ORDER_ID, 'u1')).rejects.toThrow('has no payment deadline');
+    expect(payment.openSession).not.toHaveBeenCalled();
+  });
 
   it('answers 409 from the pay cutoff on, without asking the gateway', async () => {
     vi.setSystemTime(DEADLINE.getTime() - CUTOFF_MS);

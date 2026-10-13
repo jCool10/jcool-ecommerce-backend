@@ -2,6 +2,7 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer } from '@testcontainers/redis';
 import { Client } from 'pg';
 import { runMigrations } from '../../src/shared/infrastructure/database/migrate';
+import { bundleWorkflowsOnce, startTemporalServer } from './temporal-server';
 import {
   MAX_REDIS_DB_INDEX,
   TEMPLATE_DATABASE,
@@ -26,15 +27,20 @@ declare module 'vitest' {
     PG_BASE_URL: string;
     /** No logical-db index: each worker appends its own. */
     REDIS_BASE_URL: string;
+    /** One dev server for the run; each spec file polls its own task queue on it. */
+    TEMPORAL_ADDRESS: string;
+    TEMPORAL_WORKFLOW_BUNDLE_PATH: string;
   }
 }
+
+type ProvidedKey = 'PG_BASE_URL' | 'REDIS_BASE_URL' | 'TEMPORAL_ADDRESS' | 'TEMPORAL_WORKFLOW_BUNDLE_PATH';
 
 // Runs once per test:e2e in its own process; URLs reach workers via provide()/inject(), which is
 // run-global; the per-worker scoping is applied worker-side in worker-resources.ts.
 export default async function setup({
   provide,
 }: {
-  provide: (key: 'PG_BASE_URL' | 'REDIS_BASE_URL', value: string) => void;
+  provide: (key: ProvidedKey, value: string) => void;
 }): Promise<() => Promise<void>> {
   // Before any `docker run`: the Redis cap is knowable here, and `assertWorkerBudget` can only
   // report it per worker, i.e. after both containers are up, the template is migrated and N
@@ -50,39 +56,50 @@ export default async function setup({
 
   // allSettled, not Promise.all: a one-sided failure must still expose the container that did
   // start, or it is orphaned.
-  const [pgResult, redisResult] = await Promise.allSettled([
+  const [pgResult, redisResult, temporalResult, bundleResult] = await Promise.allSettled([
     new PostgreSqlContainer(POSTGRES_IMAGE)
       .withCommand(['postgres', '-c', `max_connections=${MAX_CONNECTIONS}`])
       .start(),
     // The api refuses to boot on a Redis that could lose revocation state.
     new RedisContainer(REDIS_IMAGE).withCommand(['redis-server', '--appendonly', 'yes']).start(),
+    startTemporalServer(),
+    bundleWorkflowsOnce(),
   ]);
 
-  if (pgResult.status === 'rejected' || redisResult.status === 'rejected') {
-    await Promise.allSettled([
+  const teardown = () =>
+    Promise.allSettled([
       pgResult.status === 'fulfilled' ? pgResult.value.stop() : undefined,
       redisResult.status === 'fulfilled' ? redisResult.value.stop() : undefined,
+      temporalResult.status === 'fulfilled' ? temporalResult.value.stop() : undefined,
+      bundleResult.status === 'fulfilled' ? bundleResult.value.remove() : undefined,
     ]);
-    if (pgResult.status === 'rejected') throw pgResult.reason;
-    if (redisResult.status === 'rejected') throw redisResult.reason;
+
+  if (
+    pgResult.status === 'rejected' ||
+    redisResult.status === 'rejected' ||
+    temporalResult.status === 'rejected' ||
+    bundleResult.status === 'rejected'
+  ) {
+    await teardown();
+    const failed = [pgResult, redisResult, temporalResult, bundleResult].find((r) => r.status === 'rejected');
+    throw (failed as PromiseRejectedResult).reason;
   }
 
-  const postgres = pgResult.value;
-  const redis = redisResult.value;
-
   try {
-    const baseUrl = postgres.getConnectionUri();
+    const baseUrl = pgResult.value.getConnectionUri();
     await createWorkerDatabases(baseUrl);
     provide('PG_BASE_URL', baseUrl);
-    provide('REDIS_BASE_URL', redis.getConnectionUrl());
+    provide('REDIS_BASE_URL', redisResult.value.getConnectionUrl());
+    provide('TEMPORAL_ADDRESS', temporalResult.value.address);
+    provide('TEMPORAL_WORKFLOW_BUNDLE_PATH', bundleResult.value.path);
   } catch (error) {
-    await Promise.allSettled([postgres.stop(), redis.stop()]);
+    await teardown();
     throw error;
   }
 
+  // Dropping the Postgres container drops every worker database with it.
   return async () => {
-    // Dropping the container drops every worker database with it.
-    await Promise.allSettled([postgres.stop(), redis.stop()]);
+    await teardown();
   };
 }
 

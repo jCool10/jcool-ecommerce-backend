@@ -1,5 +1,5 @@
 {
-  "id": "d99e8a46-f972-4d29-855e-4fa683a1b339",
+  "id": "d5a1cd88-8b84-40e8-af43-3b84bc8f5f39",
   "prevId": "0481767a-a77c-46e8-86c0-82e7afc864d4",
   "version": "7",
   "dialect": "postgresql",
@@ -923,6 +923,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "payment_deadline_at": {
+          "name": "payment_deadline_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "finalized_at": {
           "name": "finalized_at",
           "type": "timestamp with time zone",
@@ -972,6 +978,27 @@
           "method": "btree",
           "with": {}
         },
+        "idx_orders_status_placed_at": {
+          "name": "idx_orders_status_placed_at",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "placed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "uq_orders_user_idempotency_key": {
           "name": "uq_orders_user_idempotency_key",
           "columns": [
@@ -1006,127 +1033,6 @@
         "ck_orders_user_id_routable": {
           "name": "ck_orders_user_id_routable",
           "value": "\"orders\".\"user_id\" >= 262144"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.checkout_sagas": {
-      "name": "checkout_sagas",
-      "schema": "",
-      "columns": {
-        "order_id": {
-          "name": "order_id",
-          "type": "bigint",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "step": {
-          "name": "step",
-          "type": "checkout_saga_step",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "pending_compensations": {
-          "name": "pending_compensations",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
-        "deadline_at": {
-          "name": "deadline_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "next_attempt_at": {
-          "name": "next_attempt_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "lease_until": {
-          "name": "lease_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_error": {
-          "name": "last_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "idx_checkout_sagas_due": {
-          "name": "idx_checkout_sagas_due",
-          "columns": [
-            {
-              "expression": "next_attempt_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"checkout_sagas\".\"step\" NOT IN ('COMPLETED', 'COMPENSATED')",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "checkout_sagas_order_id_orders_id_fk": {
-          "name": "checkout_sagas_order_id_orders_id_fk",
-          "tableFrom": "checkout_sagas",
-          "tableTo": "orders",
-          "columnsFrom": [
-            "order_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ck_checkout_sagas_order_id_routable": {
-          "name": "ck_checkout_sagas_order_id_routable",
-          "value": "\"checkout_sagas\".\"order_id\" >= 262144"
         }
       },
       "isRLSEnabled": false
@@ -2219,19 +2125,6 @@
         "RESERVING",
         "REJECTED",
         "CONFIRMING"
-      ]
-    },
-    "public.checkout_saga_step": {
-      "name": "checkout_saga_step",
-      "schema": "public",
-      "values": [
-        "RESERVING",
-        "AWAITING_AUTH",
-        "COMMITTING_STOCK",
-        "CAPTURING",
-        "COMPLETED",
-        "COMPENSATING",
-        "COMPENSATED"
       ]
     },
     "public.idempotency_status": {

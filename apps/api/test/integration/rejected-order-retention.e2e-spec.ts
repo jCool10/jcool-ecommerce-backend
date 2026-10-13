@@ -70,12 +70,6 @@ describe('Rejected order retention sweep (integration, real Postgres)', () => {
       { id: testId(), orderId: otherId, skuId: testId(), productName: 'C', unitPrice: 100_000, quantity: 1 },
     ]);
 
-    await db.insert(schema.checkoutSagas).values([
-      { orderId: oldOrderId, step: 'COMPENSATED', deadlineAt: daysAgo(31), nextAttemptAt: new Date(), version: 1 },
-      { orderId: recentOrderId, step: 'COMPENSATED', deadlineAt: daysAgo(29), nextAttemptAt: new Date(), version: 1 },
-      { orderId: otherId, step: 'AWAITING_AUTH', deadlineAt: new Date(), nextAttemptAt: new Date(), version: 1 },
-    ]);
-
     const deleted = await sweepNamed('order:rejected-orders').sweep(500);
 
     expect(deleted).toBe(1);
@@ -84,9 +78,6 @@ describe('Rejected order retention sweep (integration, real Postgres)', () => {
 
     const items = await db.select({ orderId: schema.orderItems.orderId }).from(schema.orderItems);
     expect(items.map((r) => r.orderId)).toEqual(expect.not.arrayContaining([oldOrderId]));
-
-    const sagas = await db.select({ orderId: schema.checkoutSagas.orderId }).from(schema.checkoutSagas);
-    expect(sagas.map((r) => r.orderId)).toEqual(expect.not.arrayContaining([oldOrderId]));
   });
 
   it('deletes no more than the batch allows', async () => {

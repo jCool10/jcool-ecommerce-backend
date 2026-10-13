@@ -10,7 +10,7 @@ import {
   retentionConfig,
   throttleConfig,
 } from '@jcool/platform/config';
-import { CHECKOUT_SAGA_DEFAULTS as DEFAULTS } from './checkout-saga.defaults';
+import { CHECKOUT_SAGA_DEFAULTS as DEFAULTS, TEMPORAL_DEFAULTS as TEMPORAL } from './checkout-saga.defaults';
 
 export default () => ({
   ...appConfig(),
@@ -119,18 +119,36 @@ export default () => ({
     tryTimeoutMs: parseIntOr(process.env.CHECKOUT_TRY_TIMEOUT_MS, DEFAULTS.CHECKOUT_TRY_TIMEOUT_MS),
     // How long past the deadline stock's own sweep leaves the hold alone.
     holdSafetySec: parseIntOr(process.env.CHECKOUT_HOLD_SAFETY_SEC, DEFAULTS.CHECKOUT_HOLD_SAFETY_SEC),
+    // How long POST /orders waits on the saga's Try before answering 503 with the order kept.
+    reserveWaitMs: parseIntOr(process.env.CHECKOUT_RESERVE_WAIT_MS, DEFAULTS.CHECKOUT_RESERVE_WAIT_MS),
+    // How long a cancel waits for its compensation; the client adds 5s for the round trips.
+    cancelWaitMs: parseIntOr(process.env.CHECKOUT_CANCEL_WAIT_MS, DEFAULTS.CHECKOUT_CANCEL_WAIT_MS),
+    reaperEnabled: process.env.CHECKOUT_REAPER_ENABLED !== 'false',
+    reaperIntervalMs: parseIntOr(process.env.CHECKOUT_REAPER_INTERVAL_MS, DEFAULTS.CHECKOUT_REAPER_INTERVAL_MS),
+    // A RESERVING order older than this lost its request; the reaper hands it to the saga.
+    reservingOrphanSec: parseIntOr(process.env.CHECKOUT_RESERVING_ORPHAN_SEC, DEFAULTS.CHECKOUT_RESERVING_ORPHAN_SEC),
   },
   saga: {
-    runnerEnabled: process.env.SAGA_RUNNER_ENABLED !== 'false',
-    runnerIntervalMs: parseIntOr(process.env.SAGA_RUNNER_INTERVAL_MS, DEFAULTS.SAGA_RUNNER_INTERVAL_MS),
-    runnerBatchSize: parseIntOr(process.env.SAGA_RUNNER_BATCH_SIZE, DEFAULTS.SAGA_RUNNER_BATCH_SIZE),
-    leaseMs: parseIntOr(process.env.SAGA_LEASE_MS, DEFAULTS.SAGA_LEASE_MS),
+    // Every activity but the Try; must outlast the slowest participant call, or two attempts overlap.
+    activityTimeoutMs: parseIntOr(process.env.SAGA_ACTIVITY_TIMEOUT_MS, DEFAULTS.SAGA_ACTIVITY_TIMEOUT_MS),
+    // Each running activity may hold a pool connection, alongside the queue workers.
+    activityConcurrency: parseIntOr(process.env.SAGA_ACTIVITY_CONCURRENCY, DEFAULTS.SAGA_ACTIVITY_CONCURRENCY),
     retryBaseMs: parseIntOr(process.env.SAGA_RETRY_BASE_MS, DEFAULTS.SAGA_RETRY_BASE_MS),
     retryCapMs: parseIntOr(process.env.SAGA_RETRY_CAP_MS, DEFAULTS.SAGA_RETRY_CAP_MS),
-    // Each kick holds a pool connection while it runs, alongside the queue workers.
-    kickConcurrency: parseIntOr(process.env.SAGA_KICK_CONCURRENCY, DEFAULTS.SAGA_KICK_CONCURRENCY),
     // Absorbs a late notice of money taken before the deadline; no money is taken after it.
     authGraceSec: parseIntOr(process.env.SAGA_AUTH_GRACE_SEC, DEFAULTS.SAGA_AUTH_GRACE_SEC),
+  },
+  temporal: {
+    address: process.env.TEMPORAL_ADDRESS ?? TEMPORAL.TEMPORAL_ADDRESS,
+    namespace: process.env.TEMPORAL_NAMESPACE ?? TEMPORAL.TEMPORAL_NAMESPACE,
+    taskQueue: process.env.TEMPORAL_TASK_QUEUE ?? TEMPORAL.TEMPORAL_TASK_QUEUE,
+    workerEnabled: process.env.TEMPORAL_WORKER_ENABLED !== 'false',
+    workerShutdownGraceMs: parseIntOr(
+      process.env.TEMPORAL_WORKER_SHUTDOWN_GRACE_MS,
+      DEFAULTS.TEMPORAL_WORKER_SHUTDOWN_GRACE_MS,
+    ),
+    // Relative to the working directory; `pnpm build` writes it, a dev run without it bundles at boot.
+    workflowBundlePath: process.env.TEMPORAL_WORKFLOW_BUNDLE_PATH ?? TEMPORAL.TEMPORAL_WORKFLOW_BUNDLE_PATH,
   },
   retention: {
     ...retentionConfig().retention,

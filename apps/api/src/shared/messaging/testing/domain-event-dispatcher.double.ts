@@ -9,7 +9,7 @@ import { OrderEventsHandler } from '../handlers/order-events.handler';
 
 export interface DispatcherHandlerDoubles {
   orderEvents?: OrderEventsHandler;
-  prepareAuthorized?: PaymentAuthorizedHandler['prepare'];
+  applyAuthorized?: PaymentAuthorizedHandler['apply'];
   prepareMail?: OrderPaidMailHandler['prepare'];
   applyProductChanged?: ProductChangedHandler['apply'];
   applyCategoryRenamed?: CategoryRenamedHandler['apply'];
@@ -22,7 +22,7 @@ export interface DispatcherHandlerDoubles {
 export function dispatcherWith(doubles: DispatcherHandlerDoubles = {}): DomainEventDispatcher {
   return new DomainEventDispatcher(
     doubles.orderEvents ?? new OrderEventsHandler(fakePinoLogger()),
-    { prepare: doubles.prepareAuthorized ?? vi.fn() } as unknown as PaymentAuthorizedHandler,
+    { apply: doubles.applyAuthorized ?? vi.fn() } as unknown as PaymentAuthorizedHandler,
     { prepare: doubles.prepareMail ?? vi.fn() } as unknown as OrderPaidMailHandler,
     { apply: doubles.applyProductChanged ?? vi.fn() } as unknown as ProductChangedHandler,
     { apply: doubles.applyCategoryRenamed ?? vi.fn() } as unknown as CategoryRenamedHandler,

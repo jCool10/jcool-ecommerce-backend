@@ -5,12 +5,14 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { expect } from 'vitest';
+import { expect, inject } from 'vitest';
 import { AppModule } from '../../src/app.module';
+import { CheckoutSagaWorker } from '../../src/modules/order/interface/temporal/checkout-saga.worker';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
 import { idServiceStub } from './id-service-stub';
 import { waitForRedisReady } from './redis-ready';
+import { TEMPORAL_E2E_NAMESPACE } from './temporal-server';
 import { userServiceStub } from './user-service-stub';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
 
@@ -48,7 +50,7 @@ export async function createTestApp(
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
-  process.env.SAGA_RUNNER_ENABLED = 'false';
+  process.env.CHECKOUT_REAPER_ENABLED = 'false';
   process.env.INVENTORY_HOLD_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
@@ -56,6 +58,15 @@ export async function createTestApp(
   // every app in every file 8 seconds of doing nothing. Nothing asserts on the window's length:
   // `health-shutdown.e2e-spec.ts` reads the readiness flag, which flips before the wait.
   process.env.SHUTDOWN_GRACE_PERIOD_MS = '0';
+  // The saga worker is the one background driver left on: checkout cannot answer without it. One
+  // task queue per spec file keeps parallel files off each other's workflows; a file that opens two
+  // apps with different fakes gives the second its own queue through envOverrides.
+  process.env.TEMPORAL_ADDRESS = inject('TEMPORAL_ADDRESS');
+  process.env.TEMPORAL_NAMESPACE = TEMPORAL_E2E_NAMESPACE;
+  process.env.TEMPORAL_TASK_QUEUE = sagaTaskQueueForCurrentSpec();
+  process.env.TEMPORAL_WORKER_ENABLED = 'true';
+  process.env.TEMPORAL_WORKFLOW_BUNDLE_PATH = inject('TEMPORAL_WORKFLOW_BUNDLE_PATH');
+  process.env.TEMPORAL_WORKER_SHUTDOWN_GRACE_MS = '0';
   // Both URLs are placeholders in vitest-e2e.config.mts; only the stub's port is known this late.
   const userService = await userServiceStub();
   process.env.AUTH_JWKS_URL = userService.jwksUrl;
@@ -125,8 +136,11 @@ export async function createTestApp(
       // Bind a real port. supertest ephemeral-listens a non-listening server per request and tears
       // that listener down again; firing a herd of concurrent requests races those binds and
       // surfaces as `read ECONNRESET`, moving the race off the DB/cache/lock under test.
-      await app.listen(0);
+      // Loopback, not `::`: macOS lets a wildcard socket share a port with another worker's stub on
+      // 127.0.0.1, and supertest's requests to 127.0.0.1 then land on the stub.
+      await app.listen(0, '127.0.0.1');
       await waitForRedisReady(app.get(RedisService).getClient());
+      await waitForSagaWorker(app.get(CheckoutSagaWorker));
       return app;
     } catch (error) {
       // Providers are constructed by the time init can fail, so the pool and Redis socket are open
@@ -145,8 +159,28 @@ export async function createTestApp(
   }
 }
 
+function currentSpecName(): string | undefined {
+  const testPath = expect.getState().testPath;
+  return testPath ? basename(testPath, '.e2e-spec.ts') : undefined;
+}
+
 // Spec filenames are unique, so the prefix is stable within a file and distinct across files.
 function queuePrefixForCurrentSpec(): string {
-  const testPath = expect.getState().testPath;
-  return testPath ? `bull:${basename(testPath, '.e2e-spec.ts')}` : 'bull';
+  const spec = currentSpecName();
+  return spec ? `bull:${spec}` : 'bull';
+}
+
+export function sagaTaskQueueForCurrentSpec(suffix?: string): string {
+  return ['checkout-saga', currentSpecName(), suffix].filter(Boolean).join('-');
+}
+
+const SAGA_WORKER_START_TIMEOUT_MS = 30_000;
+
+// Readiness reports down until the worker polls, and a checkout fired before then waits on it.
+async function waitForSagaWorker(worker: CheckoutSagaWorker): Promise<void> {
+  const deadline = Date.now() + SAGA_WORKER_START_TIMEOUT_MS;
+  while (!worker.isReady()) {
+    if (Date.now() > deadline) throw new Error('checkout saga worker did not start polling');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }

@@ -1,9 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
-import { asc, eq, sql } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { CheckoutSagaRunnerScheduler } from '../../src/modules/order/interface/checkout-saga-runner.scheduler';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
@@ -18,10 +17,12 @@ import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import {
   authorizeAndRelay,
   buyerWithCart,
+  describeSaga,
   placeAndOpenSession,
   postWebhook,
   readOrder,
   readReservationOrder,
+  readSagaState,
   readStock,
   seedSellableSku,
 } from '../setup/fixtures/order-flow.fixture';
@@ -55,7 +56,7 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   const readOutbox = (orderId: string) =>
     db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, orderId)).orderBy(asc(schema.outbox.createdAt));
 
-  it('appends exactly one unpublished order.placed row in the checkout transaction', async () => {
+  it('appends exactly one unpublished order.placed row in the transaction that places the order', async () => {
     const sku = await seedSellableSku(app, { onHand: STOCK, priceMinor: PRICE });
     const token = await buyerWithCart(app, sku.variantId, 2);
 
@@ -151,44 +152,70 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
 });
 
 // A placement whose event cannot be recorded must never stand: the order stays unplaced, and the
-// runner takes the abandoned checkout back once its lease runs out.
+// saga keeps retrying the write until the outbox accepts it.
 describe('Outbox append failure on placement (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
+  let outboxDown = true;
 
-  // A second boot, not a second test: the throwing writer is injected when the module compiles, and
-  // the suite above needs the real one on the same routes.
+  // A second boot, not a second test: the failing writer is injected when the module compiles, and
+  // the suite above needs the real one on the same routes. Once healthy it appends like the real one.
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({}, [
+    ({ app, pool, db } = await createTestAppWithPool(
       {
-        provide: OUTBOX_WRITER,
-        useValue: {
-          append: () => Promise.reject(new Error('outbox unavailable')),
-        },
+        CHECKOUT_TRY_TIMEOUT_MS: '1000',
+        INVENTORY_TRY_LOCK_TIMEOUT_MS: '500',
+        CHECKOUT_RESERVE_WAIT_MS: '3000',
+        SAGA_RETRY_BASE_MS: '200',
+        SAGA_RETRY_CAP_MS: '2000',
       },
-    ]));
+      [
+        {
+          provide: OUTBOX_WRITER,
+          useValue: {
+            append: async (tx, record, id) => {
+              if (outboxDown) throw new Error('outbox unavailable');
+              await tx.insert(schema.outbox).values({ id: id ?? testId(), ...record });
+            },
+          } satisfies OutboxWriterPort,
+        },
+      ],
+    ));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 
-  it('leaves no placed order, no event and, once reclaimed, no stock hold when the append throws', async () => {
+  beforeEach(() => {
+    outboxDown = true;
+  });
+
+  it('leaves the order unplaced, with no event, while the append throws, and places it once the outbox recovers', async () => {
     const sku = await seedSellableSku(app, { onHand: STOCK, priceMinor: PRICE });
     const token = await buyerWithCart(app, sku.variantId, 2);
 
-    await request(app.getHttpServer()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(500);
+    const response = await request(app.getHttpServer())
+      .post('/orders')
+      .set(authHeader(token))
+      .set(idempotencyKeyHeader())
+      .expect(503);
 
+    expect(response.headers['retry-after']).toBeDefined();
     const [order] = await db.select().from(schema.orders);
     expect(order.status).toBe('RESERVING');
-    await db
-      .update(schema.checkoutSagas)
-      .set({ leaseUntil: sql`now() - interval '1 second'`, nextAttemptAt: sql`now() - interval '1 second'` })
-      .where(eq(schema.checkoutSagas.orderId, order.id));
-    await app.get(CheckoutSagaRunnerScheduler).tick();
-
-    expect(await readOrder(app, order.id)).toMatchObject({ status: 'REJECTED', finalizedAt: expect.any(Date) });
-    expect(await readReservationOrder(app, order.id)).toMatchObject({ status: 'RELEASED' });
-    expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
     expect(await db.select().from(schema.outbox)).toHaveLength(0);
+    expect((await describeSaga(app, order.id))?.status.name).toBe('RUNNING');
+
+    outboxDown = false;
+    await vi.waitFor(async () => expect((await readOrder(app, order.id)).status).toBe('PENDING'), {
+      timeout: 15_000,
+      interval: 100,
+    });
+
+    expect(await readSagaState(app, order.id)).toMatchObject({ step: 'AWAITING_AUTH' });
+    expect(await readReservationOrder(app, order.id)).toMatchObject({ status: 'HELD' });
+    expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 2 });
+    const events = await db.select().from(schema.outbox);
+    expect(events.map((row) => row.eventType)).toEqual(['order.placed']);
   });
 });

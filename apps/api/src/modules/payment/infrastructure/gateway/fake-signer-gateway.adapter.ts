@@ -100,6 +100,10 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
     this.unexpirable.add(ref);
   }
 
+  restoreExpireSession(ref: string): void {
+    this.unexpirable.delete(ref);
+  }
+
   wasExpired(ref: string): boolean {
     return this.expired.has(ref);
   }

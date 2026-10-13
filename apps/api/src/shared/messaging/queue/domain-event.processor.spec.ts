@@ -89,8 +89,9 @@ describe('DomainEventProcessor', () => {
   });
 
   it('counts a failed consume under a bounded event label', async () => {
-    const step = vi.fn().mockRejectedValue(new Error('handler exploded'));
-    const { processor, recordEventConsumed } = build({ handlers: { prepareAuthorized: () => Promise.resolve(step) } });
+    const { processor, recordEventConsumed } = build({
+      handlers: { applyAuthorized: vi.fn().mockRejectedValue(new Error('handler exploded')) },
+    });
 
     await expect(processor.process(job({ eventType: 'payment.authorized' }))).rejects.toThrow('handler exploded');
     // A new id, because this fake keeps the claim a real rollback would release.

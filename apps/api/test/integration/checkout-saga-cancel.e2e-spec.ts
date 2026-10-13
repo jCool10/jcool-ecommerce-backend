@@ -3,7 +3,6 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { SagaKickExecutor } from '../../src/modules/order/application/saga/saga-kick.executor';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
@@ -15,9 +14,11 @@ import {
   postAuthorizationWebhook,
   readOrder,
   readReservationOrder,
-  readSaga,
+  readSagaState,
   readStock,
+  sagaStepAttribute,
   seedSellableSku,
+  waitForSagaClosed,
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
@@ -59,7 +60,8 @@ describe('Checkout saga, cancel (integration, real Postgres, real HMAC)', () => 
   /** The cancel awaits its compensation, so all of it is visible the moment the answer is. */
   async function expectCompensated(order: OpenOrder, reason: string): Promise<void> {
     expect(await readOrder(app, order.orderId)).toMatchObject({ status: 'CANCELLED', finalizeReason: reason });
-    expect(await readSaga(app, order.orderId)).toMatchObject({ step: 'COMPENSATED', pendingCompensations: [] });
+    expect(await readSagaState(app, order.orderId)).toMatchObject({ step: 'COMPENSATED', pendingCompensations: [] });
+    expect(await sagaStepAttribute(app, order.orderId)).toBe('COMPENSATED');
     expect(await readReservationOrder(app, order.orderId)).toMatchObject({ status: 'RELEASED' });
     expect(gateway.wasExpired(order.sessionId)).toBe(true);
     expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: ON_HAND, quantityReserved: 0 });
@@ -68,7 +70,7 @@ describe('Checkout saga, cancel (integration, real Postgres, real HMAC)', () => 
     ]);
   }
 
-  it("compensates a pending order before answering the buyer's cancel, with no runner tick", async () => {
+  it("compensates a pending order before answering the buyer's cancel", async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
 
     await cancel(order.token, order.orderId).expect(200);
@@ -106,8 +108,8 @@ describe('Checkout saga, cancel (integration, real Postgres, real HMAC)', () => 
       expect(refused.body.message).toBe('Order cannot be cancelled in status CONFIRMING');
     } finally {
       capture.release();
-      await app.get(SagaKickExecutor).drain();
     }
+    await waitForSagaClosed(app, order.orderId);
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
     expect(gateway.captureCalls(intentId)).toBe(1);
     expect(gateway.wasVoided(intentId)).toBe(false);

@@ -149,30 +149,49 @@ export class EnvironmentVariables extends PlatformEnv {
   CHECKOUT_HOLD_SAFETY_SEC?: number;
 
   @IsOptional()
-  @IsStrictBoolean()
-  SAGA_RUNNER_ENABLED?: string;
+  @StrictInt()
+  @IsInt()
+  @Min(1_000)
+  @Max(600_000)
+  CHECKOUT_RESERVE_WAIT_MS?: number;
 
-  // Below the 1000 floor the other sweeps use: the fault suite ticks every 500ms.
   @IsOptional()
   @StrictInt()
   @IsInt()
-  @Min(100)
+  @Min(1_000)
+  @Max(600_000)
+  CHECKOUT_CANCEL_WAIT_MS?: number;
+
+  @IsOptional()
+  @IsStrictBoolean()
+  CHECKOUT_REAPER_ENABLED?: string;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(500)
   @Max(3_600_000)
-  SAGA_RUNNER_INTERVAL_MS?: number;
+  CHECKOUT_REAPER_INTERVAL_MS?: number;
 
   @IsOptional()
   @StrictInt()
   @IsInt()
   @Min(1)
-  @Max(500)
-  SAGA_RUNNER_BATCH_SIZE?: number;
+  CHECKOUT_RESERVING_ORPHAN_SEC?: number;
 
   @IsOptional()
   @StrictInt()
   @IsInt()
-  @Min(1000)
+  @Min(1_000)
   @Max(3_600_000)
-  SAGA_LEASE_MS?: number;
+  SAGA_ACTIVITY_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  SAGA_ACTIVITY_CONCURRENCY?: number;
 
   @IsOptional()
   @StrictInt()
@@ -190,15 +209,39 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsOptional()
   @StrictInt()
   @IsInt()
-  @Min(1)
-  @Max(50)
-  SAGA_KICK_CONCURRENCY?: number;
+  @Min(0)
+  SAGA_AUTH_GRACE_SEC?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  TEMPORAL_ADDRESS?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  TEMPORAL_NAMESPACE?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  TEMPORAL_TASK_QUEUE?: string;
+
+  @IsOptional()
+  @IsStrictBoolean()
+  TEMPORAL_WORKER_ENABLED?: string;
 
   @IsOptional()
   @StrictInt()
   @IsInt()
   @Min(0)
-  SAGA_AUTH_GRACE_SEC?: number;
+  @Max(600_000)
+  TEMPORAL_WORKER_SHUTDOWN_GRACE_MS?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  TEMPORAL_WORKFLOW_BUNDLE_PATH?: string;
 
   // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
@@ -530,6 +573,13 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
   if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
     throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
   }
+  // A default address in production would point every replica at a Temporal that is not there.
+  const missingTemporal = (['TEMPORAL_ADDRESS', 'TEMPORAL_NAMESPACE', 'TEMPORAL_TASK_QUEUE'] as const).filter(
+    (key) => !env[key],
+  );
+  if (env.NODE_ENV === NodeEnv.Production && missingTemporal.length > 0) {
+    throw new Error(`Environment validation failed -> ${missingTemporal.join('/')}: required in production`);
+  }
   assertCheckoutSagaTimings(env);
   return env;
 }
@@ -541,26 +591,31 @@ function assertCheckoutSagaTimings(env: EnvironmentVariables): void {
     throw new Error(`Environment validation failed -> ${keys}: ${rule}`);
   };
 
-  const leaseMs = value('SAGA_LEASE_MS');
   const captureMs = value('PAYMENT_CAPTURE_TIMEOUT_MS');
   const tryMs = value('CHECKOUT_TRY_TIMEOUT_MS');
-  // Two advances holding one saga would both capture. A payment cancel is the slowest call a lease
-  // covers: up to four gateway requests of PAYMENT_CAPTURE_TIMEOUT_MS each.
-  if (leaseMs <= 4 * captureMs + 5_000) {
-    refuse('SAGA_LEASE_MS', `must exceed 4 × PAYMENT_CAPTURE_TIMEOUT_MS + 5000 (${4 * captureMs + 5_000})`);
+  const reserveWaitMs = value('CHECKOUT_RESERVE_WAIT_MS');
+  // Temporal starts a new attempt without stopping a slow one, and two overlapping captures collide.
+  // A payment cancel is the slowest call: up to four gateway requests of PAYMENT_CAPTURE_TIMEOUT_MS.
+  if (value('SAGA_ACTIVITY_TIMEOUT_MS') <= 4 * captureMs + 5_000) {
+    refuse('SAGA_ACTIVITY_TIMEOUT_MS', `must exceed 4 × PAYMENT_CAPTURE_TIMEOUT_MS + 5000 (${4 * captureMs + 5_000})`);
   }
-  if (leaseMs <= tryMs + 5_000) {
-    refuse('SAGA_LEASE_MS', `must exceed CHECKOUT_TRY_TIMEOUT_MS + 5000 (${tryMs + 5_000})`);
+  // Room for tx B and the inline release after a Try that used its whole budget.
+  if (reserveWaitMs < tryMs + 2_000) {
+    refuse('CHECKOUT_RESERVE_WAIT_MS', `must be at least CHECKOUT_TRY_TIMEOUT_MS + 2000 (${tryMs + 2_000})`);
   }
-  // A Try still running after the checkout gave up on it would hold a connection past the answer.
+  // Below it the reaper would start the saga of a checkout whose request is still waiting on it.
+  if (value('CHECKOUT_RESERVING_ORPHAN_SEC') * 1000 <= reserveWaitMs) {
+    refuse('CHECKOUT_RESERVING_ORPHAN_SEC', 'must exceed CHECKOUT_RESERVE_WAIT_MS once in milliseconds');
+  }
+  // A Try still running after the saga gave up on it would hold a connection past the answer.
   if (value('INVENTORY_TRY_LOCK_TIMEOUT_MS') >= tryMs) {
     refuse('INVENTORY_TRY_LOCK_TIMEOUT_MS', 'must stay below CHECKOUT_TRY_TIMEOUT_MS');
   }
   if (value('SAGA_AUTH_GRACE_SEC') >= value('CHECKOUT_HOLD_SAFETY_SEC')) {
     refuse('SAGA_AUTH_GRACE_SEC', 'must stay below CHECKOUT_HOLD_SAFETY_SEC, so the hold outlives the grace');
   }
-  if (value('QUEUE_WORKER_CONCURRENCY') + value('SAGA_KICK_CONCURRENCY') >= value('DB_POOL_MAX')) {
-    refuse('QUEUE_WORKER_CONCURRENCY/SAGA_KICK_CONCURRENCY', 'together must stay below DB_POOL_MAX');
+  if (value('QUEUE_WORKER_CONCURRENCY') + value('SAGA_ACTIVITY_CONCURRENCY') >= value('DB_POOL_MAX')) {
+    refuse('QUEUE_WORKER_CONCURRENCY/SAGA_ACTIVITY_CONCURRENCY', 'together must stay below DB_POOL_MAX');
   }
   const sessionFloorSec = value('PAYMENT_SESSION_MIN_TTL_SEC') + value('PAYMENT_SESSION_EXPIRY_MARGIN_SEC');
   if (value('CHECKOUT_PAY_CUTOFF_SEC') < sessionFloorSec + 30) {

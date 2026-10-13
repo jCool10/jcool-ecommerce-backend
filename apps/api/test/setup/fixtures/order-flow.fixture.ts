@@ -1,21 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { SchedulerRegistry } from '@nestjs/schedule';
-import { and, desc, eq, sql } from 'drizzle-orm';
-import { ClsService } from 'nestjs-cls';
-import { PinoLogger } from 'nestjs-pino';
+import { and, desc, eq } from 'drizzle-orm';
 import request from 'supertest';
-import { CHECKOUT_SAGA_REPOSITORY } from '../../../src/modules/order/application/ports/checkout-saga-repository.port';
-import {
-  CHECKOUT_SAGA_SETTINGS,
-  type CheckoutSagaSettings,
-} from '../../../src/modules/order/application/saga/checkout-saga.settings';
-import { AdvanceCheckoutSagaUseCase } from '../../../src/modules/order/application/use-cases/advance-checkout-saga.use-case';
-import { CheckoutSagaRunnerScheduler } from '../../../src/modules/order/interface/checkout-saga-runner.scheduler';
+import { isTerminalSagaStep, type CheckoutSagaStep } from '../../../src/modules/order/domain/checkout-saga-step';
 import type { FakeSignerGatewayAdapter } from '../../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../bearer.helper';
+import { sagaStepAttribute } from '../checkout-sagas';
 import { drainDomainEvents, type DrainedEvent } from '../domain-events';
 import { idempotencyKeyHeader } from '../idempotency.helper';
 import {
@@ -29,6 +20,16 @@ import {
 import { createTestProduct } from './catalog.fixture';
 import { seedStock } from './inventory.fixture';
 import { newPrincipalToken } from './principal.fixture';
+
+export {
+  describeSaga,
+  readSagaState,
+  sagaHandle,
+  sagaStepAttribute,
+  waitForSagaClosed,
+  waitForSagaState,
+  waitForSagaStep,
+} from '../checkout-sagas';
 
 export interface SellableSku {
   variantId: string;
@@ -131,7 +132,7 @@ export async function postAuthorizationWebhook(
 
 /**
  * The buyer pays: Stripe places the hold (for the session's charge unless `held` says otherwise), the
- * webhook lands, and `payment.authorized` is relayed to the saga, whose kick runs to the end.
+ * webhook lands, `payment.authorized` is relayed to the saga, and the drain waits for it to close.
  */
 export async function authorizeAndRelay(
   app: INestApplication,
@@ -144,61 +145,10 @@ export async function authorizeAndRelay(
   return { intentId, drained: await drainDomainEvents(app) };
 }
 
-export async function readSaga(app: INestApplication, orderId: string) {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const [row] = await db.select().from(schema.checkoutSagas).where(eq(schema.checkoutSagas.orderId, orderId));
-  return row;
-}
-
 export async function readReservationOrder(app: INestApplication, orderId: string) {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const [row] = await db.select().from(schema.reservationOrders).where(eq(schema.reservationOrders.orderId, orderId));
   return row;
-}
-
-/** Past the deadline AND the authorization grace, and due now: the next advance expires the order. */
-export async function lapseSagaDeadline(app: INestApplication, orderId: string): Promise<void> {
-  const { timing } = app.get<CheckoutSagaSettings>(CHECKOUT_SAGA_SETTINGS);
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  await db
-    .update(schema.checkoutSagas)
-    .set({
-      deadlineAt: new Date(Date.now() - timing.authGraceMs - 60_000),
-      nextAttemptAt: new Date(Date.now() - 1_000),
-    })
-    .where(eq(schema.checkoutSagas.orderId, orderId));
-}
-
-/**
- * Advances one saga until it comes to rest, pulling each backoff forward instead of waiting it out.
- * A live lease is left alone, so a saga someone else holds makes no progress and the loop throws.
- */
-export async function runSagaUntilSettled(app: INestApplication, orderId: string, maxTicks = 10) {
-  const advance = app.get(AdvanceCheckoutSagaUseCase);
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  for (let tick = 0; tick < maxTicks; tick += 1) {
-    const saga = await readSaga(app, orderId);
-    if (saga.step === 'COMPLETED' || saga.step === 'COMPENSATED') return saga;
-    await db
-      .update(schema.checkoutSagas)
-      .set({ nextAttemptAt: sql`now()` })
-      .where(eq(schema.checkoutSagas.orderId, orderId));
-    await advance.execute(orderId);
-  }
-  const saga = await readSaga(app, orderId);
-  throw new Error(`saga ${orderId} still ${saga.step} after ${maxTicks} ticks (last error: ${saga.lastError})`);
-}
-
-/** A second replica's runner: its own tick state over the same database and use cases. */
-export async function newRunnerInstance(app: INestApplication): Promise<CheckoutSagaRunnerScheduler> {
-  return new CheckoutSagaRunnerScheduler(
-    app.get(CHECKOUT_SAGA_REPOSITORY),
-    app.get(AdvanceCheckoutSagaUseCase),
-    app.get(ConfigService),
-    new SchedulerRegistry(),
-    app.get(ClsService),
-    await app.resolve(PinoLogger),
-  );
 }
 
 export async function readOrder(app: INestApplication, orderId: string) {
@@ -267,7 +217,7 @@ export interface LedgerAuditReport {
   violations: string[];
 }
 
-const SAGA_STEPS_FOR: Record<string, readonly string[]> = {
+const SAGA_STEPS_FOR: Record<string, readonly CheckoutSagaStep[]> = {
   RESERVING: ['RESERVING'],
   PENDING: ['AWAITING_AUTH'],
   CONFIRMING: ['COMMITTING_STOCK', 'CAPTURING'],
@@ -289,21 +239,23 @@ export async function auditLedgerInvariants(
   seededOnHand: Record<string, number> = {},
 ): Promise<LedgerAuditReport> {
   const db = app.get<DrizzleDB>(DRIZZLE);
-  const [orders, sagas, reservations, stockHeaders, payments, paymentHeaders, stock] = await Promise.all([
+  const [orders, reservations, stockHeaders, payments, paymentHeaders, stock] = await Promise.all([
     db.select().from(schema.orders),
-    db.select().from(schema.checkoutSagas),
     db.select().from(schema.reservations),
     db.select().from(schema.reservationOrders),
     db.select().from(schema.payments),
     db.select().from(schema.paymentOrders),
     db.select().from(schema.stockLevels),
   ]);
+  const sagaSteps = new Map(
+    await Promise.all(orders.map(async (order) => [order.id, await sagaStepAttribute(app, order.id)] as const)),
+  );
 
   const violations: string[] = [];
   const pending: string[] = [];
 
   for (const order of orders) {
-    const saga = sagas.find((s) => s.orderId === order.id);
+    const sagaStep = sagaSteps.get(order.id) ?? null;
     const holds = reservations.filter((r) => r.orderId === order.id);
     const stockHeader = stockHeaders.find((h) => h.orderId === order.id);
     const linked = payments.filter((p) => p.orderId === order.id);
@@ -332,12 +284,14 @@ export async function auditLedgerInvariants(
       flag('sits in a status this audit does not know how to check');
       continue;
     }
-    if (!saga) {
-      flag('has no checkout saga');
+    if (sagaStep === null) {
+      // Tx A committed but the start never reached Temporal; the reaper owns it from here.
+      if (order.status === 'RESERVING') pending.push(order.id);
+      else flag('has no checkout saga');
       continue;
     }
-    if (!expectedSteps.includes(saga.step)) flag(`has its saga at ${saga.step}`);
-    if (saga.step !== 'COMPLETED' && saga.step !== 'COMPENSATED') {
+    if (!expectedSteps.includes(sagaStep)) flag(`has its saga at ${sagaStep}`);
+    if (!isTerminalSagaStep(sagaStep)) {
       pending.push(order.id);
       continue;
     }

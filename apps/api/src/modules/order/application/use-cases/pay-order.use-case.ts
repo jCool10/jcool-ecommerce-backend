@@ -2,7 +2,6 @@ import { BadGatewayException, ConflictException, Inject, Injectable, NotFoundExc
 import { PinoLogger } from 'nestjs-pino';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OrderStatus } from '../../domain/order-status';
-import { CHECKOUT_SAGA_REPOSITORY, type CheckoutSagaRepositoryPort } from '../ports/checkout-saga-repository.port';
 import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
 import {
   PAYMENT_TCC,
@@ -23,7 +22,6 @@ const LOG_CONTEXT = 'PayOrder';
 export class PayOrderUseCase {
   constructor(
     @Inject(ORDER_REPOSITORY) private readonly orders: OrderRepositoryPort,
-    @Inject(CHECKOUT_SAGA_REPOSITORY) private readonly sagas: CheckoutSagaRepositoryPort,
     @Inject(PAYMENT_TCC) private readonly payment: PaymentTccPort,
     @Inject(CHECKOUT_SAGA_SETTINGS) private readonly settings: CheckoutSagaSettings,
     @Inject(METRICS) private readonly metrics: MetricsPort,
@@ -39,10 +37,10 @@ export class PayOrderUseCase {
     if (order.status !== OrderStatus.PENDING) {
       throw new ConflictException(`Order is not payable in status ${order.status}`);
     }
-    const saga = await this.sagas.findByOrderId(orderId);
-    if (!saga) throw new Error(`Pending order ${orderId} has no checkout saga`);
+    const deadlineAt = order.paymentDeadlineAt;
+    if (!deadlineAt) throw new Error(`Pending order ${orderId} has no payment deadline`);
     // A session opened past the cutoff could not stay open long enough for the buyer to finish.
-    if (Date.now() >= saga.deadlineAt.getTime() - this.settings.payCutoffMs) {
+    if (Date.now() >= deadlineAt.getTime() - this.settings.payCutoffMs) {
       throw new ConflictException('Payment window closed');
     }
 
@@ -52,7 +50,7 @@ export class PayOrderUseCase {
         orderId,
         amountMinor: order.totalAmountMinor,
         currency: order.currency,
-        expiresAt: saga.deadlineAt,
+        expiresAt: deadlineAt,
       });
     } catch (error) {
       this.metrics.recordSagaStep('open_session', 'failed');

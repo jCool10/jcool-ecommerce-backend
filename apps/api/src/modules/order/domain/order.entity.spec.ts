@@ -65,16 +65,19 @@ describe('Order entity', () => {
     expect(order.items[0].quantity).toBe(MAX_QUANTITY_PER_ORDER_LINE + 1);
   });
 
-  it('reserve() moves a draft to RESERVING and stamps placedAt, leaving the original untouched', () => {
+  it('reserve() moves a draft to RESERVING and stamps placedAt and the payment deadline, leaving the original untouched', () => {
     const draft = Order.create('u', 'VND', [line(100_000, 1)]);
+    const deadline = new Date(now.getTime() + 3_600_000);
 
-    const reserving = draft.reserve(now);
+    const reserving = draft.reserve(now, deadline);
 
     expect(reserving.status).toBe(OrderStatus.RESERVING);
     expect(reserving.placedAt).toBe(now);
+    expect(reserving.paymentDeadlineAt).toBe(deadline);
     expect(reserving.isTerminal()).toBe(false);
     expect(draft.status).toBe(OrderStatus.DRAFT);
     expect(draft.placedAt).toBeNull();
+    expect(draft.paymentDeadlineAt).toBeNull();
   });
 
   it('confirmPlaced() moves a reserving order to PENDING and keeps placedAt', () => {

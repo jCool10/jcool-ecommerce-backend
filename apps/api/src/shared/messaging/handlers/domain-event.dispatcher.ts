@@ -70,9 +70,9 @@ export class DomainEventDispatcher {
       ['order.failed', inTransaction((job) => orderEvents.record(job))],
       ['order.expired', inTransaction((job) => orderEvents.record(job))],
       ['order.cancelled', inTransaction((job) => orderEvents.record(job))],
-      // Unlike the above, this carries an effect this consumer genuinely owns: the producing
-      // transaction moved money and nothing else, leaving the saga still to move.
-      ['payment.authorized', (job) => paymentAuthorized.prepare(job)],
+      // The saga lives in Temporal, so the signal cannot roll back with the claim; it must land before
+      // the claim commits, and the saga ignores the repeat a redelivery brings.
+      ['payment.authorized', beforeClaim((job) => paymentAuthorized.apply(job))],
       ['catalog.product.changed', beforeClaim((job) => productChanged.apply(job))],
       ['catalog.category.renamed', beforeClaim((job) => categoryRenamed.apply(job))],
     ]);

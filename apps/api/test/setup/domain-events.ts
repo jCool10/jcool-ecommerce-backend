@@ -2,13 +2,13 @@ import type { INestApplication } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { count, isNull } from 'drizzle-orm';
 import type { ConsumeResult } from '@jcool/metrics-port';
-import { SagaKickExecutor } from '../../src/modules/order/application/saga/saga-kick.executor';
 import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { outbox } from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { waitForSagaClosed } from './checkout-sagas';
 
 const RELAY_BATCH = 100;
 const QUEUED_STATES = ['waiting', 'delayed', 'prioritized'] as const;
@@ -17,19 +17,26 @@ export interface DrainedEvent {
   eventType: string;
   outboxId: string;
   result: ConsumeResult;
+  /** Set for `payment.authorized`: the order whose saga the delivery signalled. */
+  orderId?: string;
+}
+
+export interface DrainOptions {
+  maxPasses?: number;
+  /** Off for a test that parks a saga mid-flight on purpose. */
+  awaitSagas?: boolean;
 }
 
 /**
  * What the relay and the worker do unattended, run in the foreground: relay, then deliver every
  * queued job, until a pass finds nothing. A job leaves the queue only once it is applied, and the
  * first failure stops the drain, so a broken consume can never pass for a converged one. Each pass
- * also waits out the saga kicks its deliveries submitted, so what they emit is relayed next pass.
+ * also waits for the sagas its authorizations signalled to close, so what they emit is relayed next pass.
  */
 export async function drainDomainEvents(
   app: INestApplication,
-  { maxPasses = 3 }: { maxPasses?: number } = {},
+  { maxPasses = 3, awaitSagas = true }: DrainOptions = {},
 ): Promise<DrainedEvent[]> {
-  const kicks = app.get(SagaKickExecutor);
   const db = app.get<DrizzleDB>(DRIZZLE);
   const drained: DrainedEvent[] = [];
 
@@ -45,12 +52,12 @@ export async function drainDomainEvents(
       return drained;
     }
     drained.push(...delivered);
-    await kicks.drain();
+    if (awaitSagas) await waitForSignalledSagas(app, delivered);
   }
   throw new Error(`domain events still queued after ${maxPasses} passes`);
 }
 
-/** One relay-and-deliver pass that leaves the saga kicks it submitted running, so a test can park one. */
+/** One relay-and-deliver pass; the sagas it signals keep running in the worker. */
 export async function deliverDomainEventsOnce(app: INestApplication): Promise<DrainedEvent[]> {
   const relayed = await app.get(OutboxRelay).runOnce(RELAY_BATCH);
   if (relayed.failed > 0) throw new Error(`relay refused ${relayed.failed} outbox rows`);
@@ -59,7 +66,7 @@ export async function deliverDomainEventsOnce(app: INestApplication): Promise<Dr
   const queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
   const delivered: DrainedEvent[] = [];
   for (const job of await queue.getJobs([...QUEUED_STATES])) {
-    const { eventType, outboxId } = job.data;
+    const { eventType, outboxId, payload } = job.data;
     const result = await processor.process(job.data).catch((error: unknown) => {
       throw new Error(`delivering ${eventType} ${outboxId} failed`, { cause: error });
     });
@@ -67,7 +74,13 @@ export async function deliverDomainEventsOnce(app: INestApplication): Promise<Dr
       throw new Error(`delivering ${eventType} ${outboxId} ended ${result}`);
     }
     await job.remove();
-    delivered.push({ eventType, outboxId, result });
+    const orderId = eventType === 'payment.authorized' ? String(payload.orderId) : undefined;
+    delivered.push({ eventType, outboxId, result, ...(orderId && { orderId }) });
   }
   return delivered;
+}
+
+async function waitForSignalledSagas(app: INestApplication, delivered: DrainedEvent[]): Promise<void> {
+  const orderIds = new Set(delivered.flatMap(({ orderId }) => (orderId ? [orderId] : [])));
+  await Promise.all([...orderIds].map((orderId) => waitForSagaClosed(app, orderId)));
 }

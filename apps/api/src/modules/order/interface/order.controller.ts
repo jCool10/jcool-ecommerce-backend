@@ -31,7 +31,6 @@ import { ORDER_THROTTLE, PAYMENT_SESSION_THROTTLE, UserThrottlerGuard } from '@j
 import { CurrentUser, type AuthenticatedUser } from '@jcool/platform/rbac';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { CancelOrderUseCase, CheckoutOrderUseCase, PayOrderUseCase } from '../application/use-cases';
-import { CheckoutUnavailableException } from '../application/checkout-unavailable.exception';
 import { OrderQueryService } from '../application/order-query.service';
 import { CreatePaymentSessionResponseDto } from './dto/create-payment-session.response.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -39,6 +38,7 @@ import { OrderResponseDto } from './dto/order-response.dto';
 import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
 import { RequireIdempotencyKeyGuard } from './require-idempotency-key.guard';
+import { withRetryAfter } from './with-retry-after';
 
 // The global JwtAuthGuard protects every route here — nothing is marked `@Public()`, and the user
 // id comes from the token, never from the request.
@@ -78,13 +78,7 @@ export class OrderController {
     @CurrentUser() user: AuthenticatedUser,
     @Res({ passthrough: true }) res: Response,
   ): Promise<OrderResponseDto> {
-    try {
-      return OrderResponseDto.fromView(await this.checkoutOrder.execute(user.userId));
-    } catch (error) {
-      // Set before rethrowing: the exception filter writes the body onto this same response.
-      if (error instanceof CheckoutUnavailableException) res.setHeader('Retry-After', String(error.retryAfterSec));
-      throw error;
-    }
+    return OrderResponseDto.fromView(await withRetryAfter(res, () => this.checkoutOrder.execute(user.userId)));
   }
 
   @Post(':id/pay')
@@ -130,8 +124,9 @@ export class OrderController {
   async cancel(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseSnowflakeIdPipe) id: string,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.cancelOrder.cancelOwn(id, user.userId));
+    return OrderResponseDto.fromView(await withRetryAfter(res, () => this.cancelOrder.cancelOwn(id, user.userId)));
   }
 
   @Get(':id')

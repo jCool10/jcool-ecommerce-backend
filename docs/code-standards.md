@@ -43,7 +43,7 @@ A constructor-injected field is named from its type, so `this.<field>` says what
 | Type | Field | Example |
 | --- | --- | --- |
 | `XRepositoryPort` | `xRepo`, singular | `orderRepo`, `refreshTokenRepo` — never `repo`, never the plural, which is also the Drizzle table's name |
-| `XUseCase` | the full verb phrase, no suffix | `checkoutOrder`, `advanceCheckoutSaga` — `.execute()` already marks it a use case; `initiateUploadUseCase` only where the class already has a method of that name |
+| `XUseCase` | the full verb phrase, no suffix | `checkoutOrder`, `onPaymentAuthorized` — `.execute()` already marks it a use case; `initiateUploadUseCase` only where the class already has a method of that name |
 | A module's own `XService` | `xService` | `cartService`, `sessionService` |
 | Any other port, adapter or component | the type's name without `Port`, camelCased | `inventoryTcc`, `idempotencyStore`, `outboxWriter`, `paymentGateway`, `idGenerator` |
 | `XHealthIndicator` | `xHealth` | `redisHealth`, `leaseHealth` |

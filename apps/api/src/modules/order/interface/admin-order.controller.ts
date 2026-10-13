@@ -1,4 +1,4 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -11,6 +11,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { ORDER_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
 import { Role, Roles } from '@jcool/platform/rbac';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
@@ -19,6 +20,7 @@ import { OrderQueryService } from '../application/order-query.service';
 import { ListAdminOrdersQueryDto } from './dto/list-orders-query.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
 import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto';
+import { withRetryAfter } from './with-retry-after';
 
 // Force-cancel is the same `CancelOrderUseCase` as the buyer's, differing only in the audit reason
 // it stamps, so an admin cannot reach an outcome a buyer's own cancel could not.
@@ -67,7 +69,10 @@ export class AdminOrderController {
   @ApiOkResponse({ type: OrderResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found' })
   @ApiConflictResponse({ description: 'Order has already settled and can no longer be cancelled' })
-  async cancel(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<OrderResponseDto> {
-    return OrderResponseDto.fromView(await this.cancelOrder.cancelAsAdmin(id));
+  async cancel(
+    @Param('id', ParseSnowflakeIdPipe) id: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<OrderResponseDto> {
+    return OrderResponseDto.fromView(await withRetryAfter(res, () => this.cancelOrder.cancelAsAdmin(id)));
   }
 }

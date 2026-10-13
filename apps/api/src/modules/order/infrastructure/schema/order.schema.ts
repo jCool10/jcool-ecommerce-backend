@@ -46,6 +46,8 @@ export const orders = pgTable(
     idempotencyKey: text('idempotency_key'),
     // Set when DRAFT → RESERVING; the payment deadline runs from it.
     placedAt: timestamp('placed_at', { withTimezone: true }),
+    // Null for orders placed before the checkout saga.
+    paymentDeadlineAt: timestamp('payment_deadline_at', { withTimezone: true }),
     // Stamped once, when the order reaches a terminal status. Idempotency reads `status`, not
     // these — they carry the when/why for reconciliation.
     finalizedAt: timestamp('finalized_at', { withTimezone: true }),
@@ -57,6 +59,8 @@ export const orders = pgTable(
     routableIdCheck('ck_orders_id_routable', t.id),
     routableIdCheck('ck_orders_user_id_routable', t.userId),
     index('idx_orders_user').on(t.userId),
+    // The reserving reaper's scan. No partial predicate: a migration batch cannot use an enum value it adds.
+    index('idx_orders_status_placed_at').on(t.status, t.placedAt),
     // Per-user idempotency, matching the store's (scope, key) scope: at most one order per
     // (user, key). NULL keys don't collide (Postgres treats them as distinct), so pre-idempotency
     // orders are unaffected. The final backstop behind the per-key entry gate.

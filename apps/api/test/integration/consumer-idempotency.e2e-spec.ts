@@ -2,7 +2,6 @@ import type { INestApplication } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { SagaKickExecutor } from '../../src/modules/order/application/saga/saga-kick.executor';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
@@ -16,8 +15,9 @@ import {
   placeAndOpenSession,
   postWebhook,
   readOrder,
-  readSaga,
+  sagaStepAttribute,
   seedSellableSku,
+  waitForSagaClosed,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
@@ -141,11 +141,13 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
 
     await expect(processor.process(authorized)).resolves.toBe('processed');
     await expect(processor.process(authorized)).resolves.toBe('duplicate');
-    await app.get(SagaKickExecutor).drain();
+    await waitForSagaClosed(app, order.orderId);
 
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
-    expect((await readSaga(app, order.orderId)).step).toBe('COMPLETED');
+    expect(await sagaStepAttribute(app, order.orderId)).toBe('COMPLETED');
     expect(gateway.captureCalls(intentId)).toBe(1);
+    const events = await db.select({ eventType: schema.outbox.eventType }).from(schema.outbox);
+    expect(events.filter(({ eventType }) => eventType === 'order.paid')).toHaveLength(1);
     await Promise.all(queued.map((queuedJob) => queuedJob.remove()));
   });
 

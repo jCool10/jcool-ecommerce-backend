@@ -10,12 +10,11 @@ import { authHeader } from '../setup/bearer.helper';
 import { drainDomainEvents } from '../setup/domain-events';
 import {
   authorizeAndRelay,
-  lapseSagaDeadline,
   placeAndOpenSession,
   postAuthorizationWebhook,
   readOrder,
-  runSagaUntilSettled,
   seedSellableSku,
+  waitForSagaClosed,
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
@@ -24,6 +23,17 @@ import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach
 const WEBHOOK_SECRET = 'whsec_e2e_saga_events_0123456789';
 const ON_HAND = 5;
 const QUANTITY = 2;
+// The shortest deadline the config rules allow: the saga's timers live on the Temporal server, so
+// expiry is waited for rather than forced.
+const SHORT_DEADLINES = {
+  CHECKOUT_PAYMENT_DEADLINE_SEC: '31',
+  CHECKOUT_PAY_CUTOFF_SEC: '30',
+  CHECKOUT_HOLD_SAFETY_SEC: '30',
+  SAGA_AUTH_GRACE_SEC: '1',
+  PAYMENT_SESSION_MIN_TTL_SEC: '0',
+  PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '0',
+};
+const EXPIRY_WAIT_MS = 50_000;
 
 // Each order status a saga settles on is announced by exactly one outbox row, written in the
 // transaction that moved the order there, whatever path got it there and however often it is retried.
@@ -35,7 +45,7 @@ describe('Order events emitted by the checkout saga (integration, real Postgres)
   let sku: SellableSku;
 
   beforeAll(async () => {
-    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SHORT_DEADLINES));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
@@ -85,7 +95,6 @@ describe('Order events emitted by the checkout saga (integration, real Postgres)
     gateway.failCapture(intentId, 'expired');
 
     await drainDomainEvents(app);
-    await runSagaUntilSettled(app, order.orderId);
 
     expect((await readOrder(app, order.orderId)).status).toBe('FAILED');
     expect((await orderEvents(order.orderId)).slice(1)).toEqual([
@@ -99,9 +108,7 @@ describe('Order events emitted by the checkout saga (integration, real Postgres)
   it('announces an order past its deadline once, as order.expired', async () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
 
-    await lapseSagaDeadline(app, order.orderId);
-    await runSagaUntilSettled(app, order.orderId);
-    await runSagaUntilSettled(app, order.orderId);
+    await waitForSagaClosed(app, order.orderId, { timeoutMs: EXPIRY_WAIT_MS });
 
     expect((await readOrder(app, order.orderId)).status).toBe('EXPIRED');
     expect((await orderEvents(order.orderId)).slice(1)).toEqual([
