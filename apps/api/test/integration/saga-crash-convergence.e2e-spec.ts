@@ -13,7 +13,7 @@ import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import {
   auditLedgerInvariants,
   lapseReservation,
@@ -90,7 +90,7 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   const deliverAll = async (): Promise<string[]> => {
     const results: string[] = [];
     for (const job of await queuedJobs()) {
-      results.push(await processor.process(job));
+      results.push(await processor.process(job, DOMAIN_EVENTS_CONSUMER));
     }
     return results;
   };
@@ -187,11 +187,14 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     await db.update(schema.outbox).set({ publishedAt: null });
     await expect(relay.runOnce(50)).resolves.toMatchObject({ published: published.length, failed: 0 });
 
-    // Re-adding under the row id keeps a republish from becoming a second job, before any effect runs.
-    expect(await queuedJobs()).toHaveLength(published.length);
-    expect(await deliverAll()).toEqual(Array(published.length).fill('processed'));
+    // Jobs carry no id, so the republish is a second job per row and only the inbox keeps one effect.
+    expect(await queuedJobs()).toHaveLength(published.length * 2);
+    expect((await deliverAll()).sort()).toEqual([
+      ...Array<string>(published.length).fill('duplicate'),
+      ...Array<string>(published.length).fill('processed'),
+    ]);
     // The durable half: the same envelope delivered again is claimed by nobody and does nothing.
-    expect(await deliverAll()).toEqual(Array(published.length).fill('duplicate'));
+    expect(await deliverAll()).toEqual(Array(published.length * 2).fill('duplicate'));
 
     expect(await readStock(app, sku.variantId)).toMatchObject({
       quantityOnHand: STOCK - QUANTITY,
@@ -213,8 +216,8 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     // The delivery commits, then the worker dies before the ack, so the queue hands the same job
     // back. This is the one order event carrying an effect outside the emitting transaction, which
     // makes it the only one a redelivery could actually apply twice.
-    await expect(processor.process(expiry)).resolves.toBe('processed');
-    await expect(processor.process(expiry)).resolves.toBe('duplicate');
+    await expect(processor.process(expiry, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+    await expect(processor.process(expiry, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
 
     expect(expireSession).toHaveBeenCalledExactlyOnceWith(order.sessionId);
     expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.EXPIRED);

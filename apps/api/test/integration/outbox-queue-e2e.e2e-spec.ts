@@ -14,7 +14,8 @@ import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { ConsumerRetryStore } from '../../src/shared/messaging/retry/consumer-retry.store';
 import { withSpan } from '@jcool/platform/observability';
 import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
@@ -140,6 +141,52 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
       expect(text).toContain('http_requests_total');
       // The last reading stands rather than dropping to a zero that would read as "nothing pending".
       expect(gauge(text, 'outbox_backlog_pending')).toBe(1);
+    });
+  });
+
+  describe('retry gauges', () => {
+    const PENDING = `messaging_retry_pending{consumer="${DOMAIN_EVENTS_CONSUMER}"}`;
+    const DEAD = `messaging_dead_letters{consumer="${DOMAIN_EVENTS_CONSUMER}"}`;
+
+    const fileRetries = (status: 'pending' | 'dead', count: number) =>
+      db.insert(schema.consumerRetries).values(
+        Array.from({ length: count }, () => {
+          const row = seedRow();
+          return {
+            consumer: DOMAIN_EVENTS_CONSUMER,
+            messageId: row.id,
+            eventType: row.eventType,
+            envelope: { ...row, outboxId: row.id, occurredAt: new Date().toISOString(), traceparent: null },
+            attemptsMade: 1,
+            nextAttemptAt: new Date(Date.now() + 60_000),
+            status,
+            deadReason: status === 'dead' ? ('permanent' as const) : null,
+            lastError: 'Error: handler refused',
+          };
+        }),
+      );
+
+    it('reports the retries waiting and the dead letters of each consumer', async () => {
+      await fileRetries('pending', 2);
+      await fileRetries('dead', 1);
+
+      const text = await scrape();
+
+      expect(gauge(text, PENDING)).toBe(2);
+      expect(gauge(text, DEAD)).toBe(1);
+    });
+
+    it('keeps serving every other metric when the retry query fails', async () => {
+      await fileRetries('pending', 1);
+      await scrape();
+      vi.spyOn(app.get(ConsumerRetryStore), 'countByStatus').mockRejectedValueOnce(
+        new Error('connection terminated unexpectedly'),
+      );
+
+      const text = await scrape();
+
+      expect(text).toContain('http_requests_total');
+      expect(gauge(text, PENDING)).toBe(1);
     });
   });
 
@@ -273,7 +320,7 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
 
       // Driven through the processor rather than a Worker so the assertion lands on a finished
       // span: a Worker would consume this on its own timeline. The envelope still came out of Redis.
-      await expect(processor.process(delivered)).resolves.toBe('processed');
+      await expect(processor.process(delivered, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
 
       const spans = exporter.getFinishedSpans();
       const names = spans.map((span) => span.name);

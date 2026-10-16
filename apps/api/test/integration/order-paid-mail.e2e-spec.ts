@@ -6,6 +6,7 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
@@ -68,9 +69,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   it('confirms a paid order once, however often the message is redelivered', async () => {
     const { user } = await createTestPrincipal(app);
 
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
+    await expect(processor.process(paidJob(user.id), DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
     const [delivered] = await mail.waitForMail(user.email);
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('duplicate');
+    await expect(processor.process(paidJob(user.id), DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
 
     expect(delivered.Subject).toBe('Your order is confirmed');
     expect(await mail.body(delivered.ID)).toContain(ORDER_ID);
@@ -80,9 +81,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   });
 
   it('refuses permanently when the event names a user that no longer exists', async () => {
-    await expect(processor.process(paidJob(mintTestUserId(), { occurredAt: LONG_AGO }))).rejects.toThrow(
-      /no longer exists/,
-    );
+    await expect(
+      processor.process(paidJob(mintTestUserId(), { occurredAt: LONG_AGO }), DOMAIN_EVENTS_CONSUMER),
+    ).rejects.toThrow(/no longer exists/);
 
     expect(await inboxRows()).toHaveLength(0);
   });
@@ -96,7 +97,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
       METRICS_TOKEN: E2E_METRICS_TOKEN,
     });
     try {
-      await expect(broken.get(DomainEventProcessor).process(paidJob(user.id))).resolves.toBe('processed');
+      await expect(broken.get(DomainEventProcessor).process(paidJob(user.id), DOMAIN_EVENTS_CONSUMER)).resolves.toBe(
+        'processed',
+      );
 
       expect(await inboxRows()).toHaveLength(1);
       expect(await mail.messages()).toHaveLength(0);

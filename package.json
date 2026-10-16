@@ -35,6 +35,8 @@
     "seed:users:bulk": "pnpm --filter @jcool/user-service seed:users:bulk",
     "queue:replay-dlq": "pnpm --filter @jcool/api queue:replay-dlq",
     "queue:replay-dlq:prod": "pnpm --filter @jcool/api queue:replay-dlq:prod",
+    "messaging:republish": "pnpm --filter @jcool/api messaging:republish",
+    "messaging:republish:prod": "pnpm --filter @jcool/api messaging:republish:prod",
     "search:reindex": "pnpm --filter @jcool/api search:reindex",
     "search:reindex:prod": "pnpm --filter @jcool/api search:reindex:prod",
     "storage:verify": "pnpm --filter @jcool/api storage:verify",

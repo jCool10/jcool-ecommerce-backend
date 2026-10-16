@@ -28,15 +28,7 @@ export type PostCommitEffect = () => Promise<void>;
  * Postgres cast error deep inside a transaction.
  */
 export function isWellFormedEnvelope(job: DomainEventJob | undefined): boolean {
-  return isRoutableId(job?.outboxId) && Boolean(job?.eventType);
-}
-
-/**
- * The BullMQ job id a message is queued under, in both the main queue and the dead-letter queue.
- * BullMQ refuses a custom id that reads back as an integer, and an outbox id is all digits.
- */
-export function jobIdFor(outboxId: string): string {
-  return `msg-${outboxId}`;
+  return isRoutableId(job?.outboxId) && typeof job?.eventType === 'string' && job.eventType !== '';
 }
 
 /** Field names only: the payload can carry customer data, and this string ends up in logs. */

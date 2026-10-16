@@ -4,14 +4,7 @@ import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { createQueueConnection } from './queue-connection';
-import {
-  buildJobOptions,
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-  QUEUE_CONNECTION,
-  QUEUE_DOMAIN_EVENTS,
-  QUEUE_DOMAIN_EVENTS_DLQ,
-} from './queue.constants';
+import { buildJobOptions, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION, QUEUE_DOMAIN_EVENTS } from './queue.constants';
 
 /**
  * Producer side only. A consumer gets its own connection: a worker's blocking read holds one open
@@ -48,14 +41,5 @@ export const QUEUE_PROVIDERS: Provider[] = [
           config.getOrThrow<number>('queue.consumerBackoffMs'),
         ),
       }),
-  },
-  {
-    provide: DOMAIN_EVENTS_DLQ_QUEUE,
-    inject: [QUEUE_CONNECTION, ConfigService],
-    useFactory: (connection: Redis, config: ConfigService): Queue =>
-      // No default job options on purpose: nothing consumes this queue, so retention rules would
-      // quietly delete the very record it exists to keep. A dead-letter job leaves only by being
-      // replayed or dropped by hand.
-      new Queue(QUEUE_DOMAIN_EVENTS_DLQ, { connection, prefix: config.getOrThrow<string>('queue.prefix') }),
   },
 ];

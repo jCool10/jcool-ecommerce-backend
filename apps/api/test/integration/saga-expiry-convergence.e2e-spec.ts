@@ -1,7 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
-import type { Job, Queue } from 'bullmq';
+import type { Queue } from 'bullmq';
+import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SweepExpiredReservationsUseCase } from '../../src/modules/order/application/use-cases';
@@ -10,10 +11,10 @@ import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/pay
 import { ReconcileStaleOrdersUseCase } from '../../src/modules/payment/application/use-cases/reconcile-stale-orders.use-case';
 import { PaymentStatus } from '../../src/modules/payment/domain/payment-status';
 import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import {
   lapseReservation,
@@ -58,7 +59,7 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
   let reconcile: ReconcileStaleOrdersUseCase;
   let relay: OutboxRelay;
   let queue: Queue;
-  let dlq: Queue;
+  let db: DrizzleDB;
   let metrics: MetricsPort;
   let sku: SellableSku;
 
@@ -77,6 +78,8 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
         RECONCILE_INTERVAL_MS: ONE_HOUR_MS,
         ORDER_TTL_SEC: String(ORDER_TTL_SEC),
         QUEUE_WORKER_ENABLED: 'true',
+        MESSAGING_RETRY_ENABLED: 'true',
+        MESSAGING_RETRY_POLL_MS: '100',
         QUEUE_CONSUMER_ATTEMPTS: ATTEMPTS,
         QUEUE_CONSUMER_BACKOFF_MS: '50',
         ORDER_PAID_CONSUMER_ATTEMPTS: ORDER_EXPIRED_ATTEMPTS,
@@ -88,7 +91,7 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
     reconcile = app.get(ReconcileStaleOrdersUseCase);
     relay = app.get(OutboxRelay);
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
+    db = app.get<DrizzleDB>(DRIZZLE);
     metrics = app.get<MetricsPort>(METRICS);
   });
 
@@ -99,7 +102,6 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
   beforeEach(async () => {
     await resetDatabase(pool);
     await queue.obliterate({ force: true });
-    await dlq.obliterate({ force: true });
     sku = await seedSellableSku(app, { onHand: STOCK });
   });
 
@@ -113,10 +115,11 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
     return order;
   }
 
-  const deadLetters = async (eventType: string): Promise<Job<DeadLetterJob>[]> => {
-    const jobs = (await dlq.getJobs(['waiting', 'prioritized'])) as Job<DeadLetterJob>[];
-    return jobs.filter((job) => job.data.eventType === eventType);
-  };
+  const deadLetters = (eventType: string) =>
+    db
+      .select()
+      .from(schema.consumerRetries)
+      .where(and(eq(schema.consumerRetries.status, 'dead'), eq(schema.consumerRetries.eventType, eventType)));
 
   // Stock is sellable again while the hosted page still takes money.
   async function expectStockBackWhileSessionStaysOpen(order: OpenOrder): Promise<void> {
@@ -169,7 +172,7 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
 
   // Fixed. order.expired (like order.cancelled) now retries on the same long ladder as order.paid,
   // whose horizon outlasts a Checkout Session's own lifetime (proven directly in
-  // queue.constants.spec.ts). A gateway outage this permanent still exhausts any finite budget and
+  // retry-policy.spec.ts). A gateway outage this permanent still exhausts any finite budget and
   // dead-letters eventually — no ladder rides out forever — but a REAL outage that outlasts this much
   // longer budget also outlasts the session itself, so the page it leaves behind is unpayable at the
   // gateway either way, not merely undetected by us.
@@ -182,15 +185,15 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
 
     const [dead] = await vi.waitFor(
       async () => {
-        const jobs = await deadLetters('order.expired');
-        expect(jobs).toHaveLength(1);
-        return jobs;
+        const rows = await deadLetters('order.expired');
+        expect(rows).toHaveLength(1);
+        return rows;
       },
       { timeout: 15_000, interval: 100 },
     );
-    // ORDER_EXPIRED_ATTEMPTS, not ATTEMPTS: had this fallen through to the queue's shared defaults
+    // ORDER_EXPIRED_ATTEMPTS, not ATTEMPTS: had this fallen through to the shared default ladder
     // (the pre-fix behaviour), it would have dead-lettered after ATTEMPTS deliveries instead.
-    expect(dead.data.attemptsMade).toBe(Number(ORDER_EXPIRED_ATTEMPTS));
+    expect(dead.attemptsMade).toBe(Number(ORDER_EXPIRED_ATTEMPTS));
 
     // The outbox row is marked published, so the dead letter is the only record the close is owed.
     await expect(relay.runOnce(50)).resolves.toMatchObject({ published: 0, failed: 0 });

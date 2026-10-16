@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sampleId } from '@shared/testing/id-generator.double';
-import { type DomainEventJob, isWellFormedEnvelope, jobIdFor } from './domain-event.job';
+import { type DomainEventJob, isWellFormedEnvelope } from './domain-event.job';
 
 const envelope = (outboxId: string): DomainEventJob => ({
   outboxId,
@@ -19,20 +19,11 @@ describe('isWellFormedEnvelope', () => {
       expect(isWellFormedEnvelope(envelope(outboxId))).toBe(false);
     }
   });
-});
 
-describe('jobIdFor', () => {
-  // BullMQ refuses a custom id that reads back as an integer or carries a colon, and an outbox id is
-  // all digits.
-  it('gives BullMQ an id it accepts, one per message', () => {
-    const ids = Array.from({ length: 64 }, (_, n) => sampleId(n));
-
-    const jobIds = ids.map(jobIdFor);
-
-    for (const jobId of jobIds) {
-      expect(jobId).not.toMatch(/^\d+$/);
-      expect(jobId).not.toContain(':');
+  // The type picks the retry ladder, so a truthy non-string would fail on its first retry instead of here.
+  it('refuses an event type that is not a non-empty string', () => {
+    for (const eventType of ['', 42, { name: 'order.placed' }]) {
+      expect(isWellFormedEnvelope({ ...envelope(sampleId()), eventType } as unknown as DomainEventJob)).toBe(false);
     }
-    expect(new Set(jobIds).size).toBe(ids.length);
   });
 });

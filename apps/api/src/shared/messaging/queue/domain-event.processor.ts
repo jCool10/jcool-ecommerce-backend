@@ -8,9 +8,11 @@ import { PermanentError } from '../errors';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
 import { withConsumeSpan } from './consume-span';
 import { envelopeFields, isWellFormedEnvelope, type DomainEventJob, type PostCommitEffect } from './domain-event.job';
-import { DOMAIN_EVENTS_CONSUMER } from './queue.constants';
 
 const LOG_CONTEXT = 'DomainEventProcessor';
+
+/** A failure rejects instead, so a caller only ever sees one of these. */
+export type AppliedResult = Exclude<ConsumeResult, 'failed'>;
 
 /**
  * The transport gives at-least-once, so duplicates are collapsed rather than prevented: the inbox
@@ -33,25 +35,25 @@ export class DomainEventProcessor {
     logger.setContext(LOG_CONTEXT);
   }
 
-  async process(job: DomainEventJob): Promise<ConsumeResult> {
-    let result: ConsumeResult;
+  async process(job: DomainEventJob, consumer: string): Promise<AppliedResult> {
+    let result: AppliedResult;
     try {
       // Inside the try so a rejected envelope is counted as a failed consume like any other:
       // otherwise the one failure that never reaches a handler is the one missing from the counter.
       assertEnvelope(job);
 
-      result = await withConsumeSpan(job.eventType, job.traceparent, async (): Promise<ConsumeResult> => {
+      result = await withConsumeSpan(job.eventType, job.traceparent, async (): Promise<AppliedResult> => {
         // Settled rather than awaited: a failure is only the delivery's once the claim says this is not
-        // a duplicate, or an already-applied message would ride the retry ladder into the DLQ.
+        // a duplicate, or an already-applied message would ride the retry ladder until it is dead.
         const prepared = await this.domainEventDispatcher.prepare(job).then(
           (step) => ({ step }),
           (error: unknown) => ({ error }),
         );
 
         let effect: PostCommitEffect | void = undefined;
-        const outcome = await this.db.transaction(async (tx): Promise<ConsumeResult> => {
+        const outcome = await this.db.transaction(async (tx): Promise<AppliedResult> => {
           const claimed = await this.inboxStore.claim(tx, {
-            consumer: DOMAIN_EVENTS_CONSUMER,
+            consumer,
             messageId: job.outboxId,
             eventType: job.eventType,
           });
@@ -110,7 +112,7 @@ export class DomainEventProcessor {
 }
 
 // Permanent by definition — the bytes will be identical on every redelivery — so a rejected envelope
-// goes straight to the dead-letter queue rather than through the whole retry budget.
+// is dead-lettered on its first delivery rather than after the whole retry budget.
 function assertEnvelope(job: DomainEventJob): void {
   if (!isWellFormedEnvelope(job)) {
     throw new PermanentError(`Malformed domain event envelope (fields: ${envelopeFields(job)})`);

@@ -18,6 +18,7 @@ Conventions used below:
 - [Reconcile the bucket against `media_assets`](#reconcile-the-bucket-against-media_assets)
 - [Outbox relay is not draining](#outbox-relay-is-not-draining)
 - [Replay the dead-letter queue](#replay-the-dead-letter-queue)
+- [Republish an outbox window](#republish-an-outbox-window)
 - [Retention sweeps](#retention-sweeps)
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
@@ -233,7 +234,7 @@ LIMIT 20;
 ```
 
 - **`attempts` climbing on one row while others publish** — that row is poison, and the backlog behind it is moving. The relay only charges an attempt when something else in the same tick got through, so a non-zero count is proof the queue itself is healthy. Fix the payload or the handler; the row keeps its place in line meanwhile.
-- **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not running (`QUEUE_ENABLED`, the worker process) or Redis is refusing every publish. Check `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked through, not an outage.
+- **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not running (`OUTBOX_RELAY_ENABLED`, the api process) or Redis is refusing every publish. Check `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked through, not an outage.
 
 A row here has **not** been dead-lettered — it was never delivered at all, so [replay](#replay-the-dead-letter-queue) does not apply to it and there is nothing to re-admit.
 
@@ -241,11 +242,13 @@ A row here has **not** been dead-lettered — it was never delivered at all, so 
 
 ## Replay the dead-letter queue
 
-A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service), and for `catalog.*` events, which wait out a search engine outage on the same ladder. A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
+Dead letters are rows in `consumer_retries` with `status = 'dead'`, one per consumer and message. A row gets there after `QUEUE_CONSUMER_ATTEMPTS` (default 8) attempts fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for `order.paid`, `order.expired`, `order.cancelled` and `catalog.*`, which [wait out a user-service outage](#orderpaid-waits-for-the-user-service), a payment gateway outage or a search engine outage on that longer ladder. A permanent failure — a malformed envelope, an event type nothing handles — gets there on its first attempt. The retry poller runs the ladder from Postgres, so parking a failed delivery needs nothing but Postgres. **Nothing re-runs a dead row on its own** — that is deliberate. A dead-letter store that drains itself hides the outage that filled it. `messaging_dead_letters{consumer}` shows how many are waiting.
+
+A replay sets the row back to `pending` with `attempts_made = 0` and `next_attempt_at = now()`. The retry poller of a running api picks it up on its next tick and runs it up its ladder from the first rung; the CLI itself publishes nothing.
 
 **Replay used to be unconditionally safe. It is not any more, and the tool now says so.** The old guarantee was that a message goes back under its outbox row id, the inbox dedups on that id, and a needless replay collapses into nothing. [Inbox retention](#retention-sweeps) ends it: once a claim has been swept, "no claim" no longer means "never applied", and replaying such a message applies its effect a second time.
 
-So the CLI asks the database as well as Redis, and decides per message:
+So the CLI asks the inbox of the row's own consumer, and decides per row:
 
 | Inbox claim for the message | Decision |
 | --------------------------- | -------- |
@@ -253,35 +256,75 @@ So the CLI asks the database as well as Redis, and decides per message:
 | Absent, `occurredAt` inside `RETENTION_INBOX_DAYS` | Replayed — the ordinary case |
 | Absent, `occurredAt` older than that | Refused unless `--force`: the claim may simply have been swept |
 
-The second and third rows turn on `occurredAt` — when the outbox row was written — and the choice of field is the whole argument. What those rows must establish is not that the message is old but that **if it had been applied, its claim would still be here to say so**. A claim is swept only once its `processed_at` falls outside the window, and nothing can be processed before it was produced, so a message born inside the window cannot have had a claim swept out from under it. Its absence is then proof it was never applied.
+The second and third rows turn on the envelope's `occurredAt` — when the outbox row was written — and the choice of field is the whole argument. What those rows must establish is not that the message is old but that **if it had been applied, its claim would still be here to say so**. A claim is swept only once its `processed_at` falls outside the window, and nothing can be processed before it was produced, so a message born inside the window cannot have had a claim swept out from under it. Its absence is then proof it was never applied.
 
-`failedAt` cannot carry that argument and does not decide anything. It is re-stamped on every dead-lettering, so it means "when it last failed" — a message applied a month ago and parked again this morning carries a brand-new `failedAt` and a guard keyed on it would wave through exactly the message most likely to have been swept. It is still printed in the refusal, because it is the diagnosis you need in order to judge a `--force`.
+`last_failed_at` cannot carry that argument and does not decide anything. It moves on every failed attempt, so it means "when it last failed" — a message applied a month ago and dead again this morning carries a brand-new `last_failed_at`, and a guard keyed on it would wave through exactly the message most likely to have been swept. It is still printed in the refusal, because it is the diagnosis you need in order to judge a `--force`.
 
 **Before using `--force`**, establish by some other means that the effect never happened — the order has no payment, the stock was never decremented, the email was never sent. `--force` is you asserting that, not the tool checking it.
 
 **Run it inside the deployed container**, via `queue:replay-dlq:prod`. The horizon comes from the `RETENTION_INBOX_DAYS` of whatever environment the CLI process itself starts in, so running it from a laptop whose `.env` omits the variable silently draws the window at the 30-day default while the server may be keeping claims for seven — re-admitting precisely the replays the third row exists to refuse. The window in force is echoed in the header the command prints; check it matches the deployment before `--apply`.
 
-What replay **cannot** fix in any case is the reason the message failed. Each line prints it as `[parked: <reason>]`; deploy the fix first, or the same messages come straight back.
+What replay **cannot** fix in any case is the reason the message failed. Each line prints the row's `last_error` as `[parked: <reason>]` — the root cause's name and message only, never the payload; deploy the fix first, or the same messages come straight back.
 
 ```bash
-# local — dry run is the default, because this puts real traffic back on a live queue
+# local — dry run is the default, because this puts real traffic back through a live consumer
 pnpm queue:replay-dlq
 pnpm queue:replay-dlq --apply
-pnpm queue:replay-dlq --apply --limit 20
+pnpm queue:replay-dlq --apply --limit 20 --consumer domain-events
 pnpm queue:replay-dlq --apply --force   # past the retention horizon; read above first
 ```
 
 ```bash
 # container — same tool, compiled. `tsx` is a devDependency and is not installed here.
 npm run queue:replay-dlq:prod
-npm run queue:replay-dlq:prod -- --apply
+npm run queue:replay-dlq:prod -- --apply --consumer domain-events
 ```
 
 The guard runs on a dry run too, so the listing is what `--apply` would actually do rather than a promise it would then refuse.
 
-**A `catalog.*` message is always safe to replay, `--force` included.** Its handler re-reads the product from Postgres and writes it as it is now, and the engine ignores any version it already holds, so a second application changes nothing. A `catalog.category.renamed` can also land here as permanent without any engine fault: a deploy that outlasts the worker's 10 s close window interrupts its fan-out, and a second such interruption exceeds BullMQ's stall limit. Replaying it restarts the fan-out from the first page. Dropping catalog messages instead of replaying them is fine too, provided a [rebuild](#rebuild-the-search-index) follows.
+**A `catalog.*` message is always safe to replay, `--force` included.** Its handler re-reads the product from Postgres and writes it as it is now, and the engine ignores any version it already holds, so a second application changes nothing. A `catalog.category.renamed` can also land here without any engine fault: a deploy that outlasts the worker's 10 s close window interrupts its fan-out, and enough such interruptions spend its attempts. Replaying it restarts the fan-out from the first page. Dropping catalog messages instead of replaying them is fine too, provided a [rebuild](#rebuild-the-search-index) follows.
 
-The CLI reads its Redis URL, queue prefix **and inbox window** through the app's own config factory rather than re-reading the environment, so it cannot report a reassuringly empty queue by looking under a different prefix than the app writes to, nor draw the horizon in a different place than the sweep does. It boots no Nest context at all — a replay is something you want to be able to run while the app itself is the thing that is broken. It now needs **Postgres as well as Redis**: the inbox check is not optional, so a replay cannot be performed while the database is down.
+The CLI reads its database URL **and inbox window** through the app's own config factory rather than re-reading the environment, so it cannot draw the horizon in a different place than the sweep does. It boots no Nest context at all — a replay is something you want to be able to run while the app itself is the thing that is broken. It needs **Postgres only**: the inbox check is not optional, so a replay cannot be performed while the database is down.
+
+### Dead rows whose message was applied anyway
+
+A dead row can outlive its message being applied: a [republish](#republish-an-outbox-window) delivered a message whose BullMQ ladder had already filed it dead, or, during a deploy overlap, a second poller buried a row on its last rung while the first one's attempt succeeded. The CLI refuses these as already applied, but they keep `messaging_dead_letters` above zero and take `--limit` slots ahead of real dead letters. Their effect has happened, so deleting them loses nothing:
+
+```sql
+DELETE FROM consumer_retries r
+USING inbox i
+WHERE r.status = 'dead' AND i.consumer = r.consumer AND i.message_id = r.message_id;
+```
+
+### BullMQ's ladder ran out while Postgres was down
+
+Only a retry row that cannot be written goes back to BullMQ, which then retries the delivery on the queue defaults (`QUEUE_CONSUMER_ATTEMPTS`, about two minutes at the defaults). When that runs out the worker logs `transport gave up on a delivery that could not be parked` at error, counts `messaging_dlq_total{reason="attempts_exhausted"}` so `DeadLetterQueued` pages, and tries to write the dead row. If Postgres is still down, **there is no row to replay**: the job sits in BullMQ's failed set and the log line is the only record. Once Postgres is back, take the event types and the time span from those log lines and [republish that window](#republish-an-outbox-window) with `--event-type` and a `--since` that covers the outage. The relay publishes without a job id, so BullMQ does not swallow the redelivery, and each consumer's inbox swallows whatever it had already applied.
+
+---
+
+## Republish an outbox window
+
+`messaging:republish` sets `published_at` back to NULL on published outbox rows created inside a window, and the relay publishes them again on its next ticks. Every consumer of those event types receives them again; each one's inbox swallows the copies it had already applied. Use it when messages were lost between the outbox and a consumer and there is no dead row to [replay](#replay-the-dead-letter-queue): BullMQ's ladder ran out while Postgres was down, a Redis was flushed or lost with jobs in it, or a rollback left retries behind.
+
+- **The window is on `created_at`**, not `published_at`. A republish rewrites `published_at`, so a window on it would pull rows republished earlier back in, while their inbox claims are swept by `processed_at`, which is never earlier than `created_at`.
+- **The window is bounded.** `--since` must be shorter than `RETENTION_INBOX_DAYS` — past it a claim may already be gone and the redelivery would apply its effect twice — and no longer than `RETENTION_OUTBOX_DAYS`, past which the rows themselves are gone. The CLI refuses either.
+- **`--event-type`** narrows the window to the types named; repeat it or give a comma-separated list. Without it every event type in the window goes out again, and every consumer of every one of them does the redelivery work.
+- **Read the dry run first.** It is the default, and prints the rows per event type and, per consumer, how many of those rows that consumer already applied: the copies its inbox will swallow. Rows minus claims is the real work about to happen.
+- **Run it inside the container**, for the same reason as the replay: the retention windows come from the CLI process's own environment.
+
+```bash
+# local — --since takes m, h or d
+pnpm messaging:republish --since 2h
+pnpm messaging:republish --since 90m --event-type order.paid,order.expired --apply
+```
+
+```bash
+# container — same tool, compiled
+npm run messaging:republish:prod -- --since 2h
+npm run messaging:republish:prod -- --since 2h --event-type order.paid --apply
+```
+
+A republished row that publishes as a new job also passes `prepare` before its inbox claim, so an `order.paid` copy still asks the user-service for the buyer once even though the mail is not sent twice. Once the window has drained, [delete the dead rows it applied](#dead-rows-whose-message-was-applied-anyway).
 
 ---
 
@@ -308,13 +351,13 @@ Every window is sized by **what still has to be able to retry against the row**,
 
 ### The two horizons that are not preferences
 
-**Inbox.** `RETENTION_INBOX_DAYS` must exceed how long the queue can still redeliver a message:
+**Inbox.** `RETENTION_INBOX_DAYS` must exceed how long a message can still be redelivered:
 
 ```
-RETENTION_INBOX_DAYS × 86400  >  REMOVE_ON_FAIL_AGE_SEC   (604800, i.e. 7 days)
+RETENTION_INBOX_DAYS × 86400  >  MAX_REDELIVERY_AGE_SEC   (604800, i.e. 7 days)
 ```
 
-A failed job is re-runnable for exactly that long. Sweep its claim first and the re-run is indistinguishable from a first delivery — the effect is applied twice, silently. **The app refuses to boot** on a value that violates this, with the arithmetic in the error. The dead-letter queue has no age limit at all and so no comparable bound, which is why the DLQ side is handled at replay time by querying the inbox rather than by a clock.
+BullMQ keeps a failed job, and so can still re-run it, for exactly that long. Sweep its claim first and the re-run is indistinguishable from a first delivery — the effect is applied twice, silently. **The app refuses to boot** on a value that violates this, with the arithmetic in the error. Dead letters in `consumer_retries` have no age limit at all and so no comparable bound, which is why a replay asks the inbox rather than a clock, and why `messaging:republish` refuses a window as long as the inbox retention.
 
 **Revoked refresh tokens.** Expiry is age; revocation is evidence. A revoked row is what reuse detection matches an incoming token against, so collecting it on the expiry clock turns a detected replay — the signal that a refresh token leaked — back into a successful refresh. Hence a separate grace, an order of magnitude longer, with a 30-day floor in env validation.
 

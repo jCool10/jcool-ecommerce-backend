@@ -280,10 +280,33 @@ tests:
               severity: page
             exp_annotations:
               summary: 'Message moved to the dead-letter queue'
-              description: 'Parked after exhausting retries or a permanent failure. Inspect with `npm run queue:replay-dlq`, deploy the fix, then replay.'
+              description: 'Dead after exhausting retries or a permanent failure. List the dead rows in consumer_retries with `npm run queue:replay-dlq`, deploy the fix, then replay. If the logs say the BullMQ ladder ran out while Postgres was down, there may be no row: use `npm run messaging:republish`.'
       # No `for` means no latch either: once the step leaves the 5m window the alert resolves on its
-      # own while the message is still parked. It announces an arrival, it does not track a
-      # condition — the queue depth is what says whether anything was replayed.
+      # own while the message is still dead. It announces an arrival, it does not track a
+      # condition — messaging_dead_letters is what says whether anything was replayed.
       - eval_time: 9m
         alertname: DeadLetterQueued
         exp_alerts: []
+
+  # A burst the poller drains inside ten minutes stays quiet; one that holds past it tickets.
+  - name: a retry backlog tickets only once it holds for ten minutes
+    interval: 1m
+    input_series:
+      - series: 'messaging_retry_pending{consumer="domain-events"}'
+        values: '0 80 80 10 0+0x6 60+0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RetryBacklogGrowing
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: RetryBacklogGrowing
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: RetryBacklogGrowing
+        exp_alerts:
+          - exp_labels:
+              consumer: domain-events
+              severity: ticket
+            exp_annotations:
+              summary: 'Consumer retry backlog above 50 rows'
+              description: 'Failed deliveries are piling up in consumer_retries — check the consumer logs for the shared error, and that the retry poller is scheduled.'

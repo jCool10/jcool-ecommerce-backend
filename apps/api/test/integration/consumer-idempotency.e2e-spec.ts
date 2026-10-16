@@ -51,7 +51,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('applies an event once and records the claim under its consumer group', async () => {
     const effect = spyOnEffect(dispatcher);
 
-    await expect(processor.process(job())).resolves.toBe('processed');
+    await expect(processor.process(job(), DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
 
     expect(effect).toHaveBeenCalledTimes(1);
     const rows = await inboxRows();
@@ -66,8 +66,8 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('collapses a redelivery of the same message into a single effect', async () => {
     const effect = spyOnEffect(dispatcher);
 
-    await expect(processor.process(job())).resolves.toBe('processed');
-    await expect(processor.process(job())).resolves.toBe('duplicate');
+    await expect(processor.process(job(), DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+    await expect(processor.process(job(), DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
 
     expect(effect).toHaveBeenCalledTimes(1);
     expect(await inboxRows()).toHaveLength(1);
@@ -77,9 +77,12 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('dedups on the outbox id, not on anything per delivery', async () => {
     const effect = spyOnEffect(dispatcher);
 
-    await processor.process(job());
+    await processor.process(job(), DOMAIN_EVENTS_CONSUMER);
     await expect(
-      processor.process(job({ traceparent: '00-' + '1'.repeat(32) + '-' + '2'.repeat(16) + '-01' })),
+      processor.process(
+        job({ traceparent: '00-' + '1'.repeat(32) + '-' + '2'.repeat(16) + '-01' }),
+        DOMAIN_EVENTS_CONSUMER,
+      ),
     ).resolves.toBe('duplicate');
 
     expect(effect).toHaveBeenCalledTimes(1);
@@ -88,12 +91,12 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('rolls the claim back when the effect fails, so the redelivery does the work', async () => {
     const effect = spyOnEffect(dispatcher).mockRejectedValueOnce(new Error('handler exploded'));
 
-    await expect(processor.process(job())).rejects.toThrow('handler exploded');
+    await expect(processor.process(job(), DOMAIN_EVENTS_CONSUMER)).rejects.toThrow('handler exploded');
 
     expect(await inboxRows()).toHaveLength(0);
 
     effect.mockRestore();
-    await expect(processor.process(job())).resolves.toBe('processed');
+    await expect(processor.process(job(), DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
     expect(await inboxRows()).toHaveLength(1);
   });
 
@@ -102,7 +105,9 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     const { user } = await createTestPrincipal(app);
     const payload = { orderId: ORDER_ID, userId: user.id, totalAmountMinor: 150_000 };
     for (const eventType of ['order.placed', 'order.paid', 'order.failed', 'order.expired']) {
-      await expect(processor.process(job({ outboxId: testId(), eventType, payload }))).resolves.toBe('processed');
+      await expect(
+        processor.process(job({ outboxId: testId(), eventType, payload }), DOMAIN_EVENTS_CONSUMER),
+      ).resolves.toBe('processed');
     }
 
     expect((await inboxRows()).map((row) => row.eventType).sort()).toEqual([
@@ -114,7 +119,9 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('fails an event with no handler and leaves it unclaimed', async () => {
-    await expect(processor.process(job({ eventType: 'payment.refunded' }))).rejects.toThrow(/No handler registered/);
+    await expect(processor.process(job({ eventType: 'payment.refunded' }), DOMAIN_EVENTS_CONSUMER)).rejects.toThrow(
+      /No handler registered/,
+    );
 
     expect(await inboxRows()).toHaveLength(0);
   });

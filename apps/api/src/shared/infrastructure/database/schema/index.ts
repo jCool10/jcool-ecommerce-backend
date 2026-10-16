@@ -8,6 +8,7 @@ export * from '../../../../modules/product/infrastructure/stock/schema/stock.sch
 export * from '../../../../modules/payment/infrastructure/schema/payment.schema';
 export * from '../../../../modules/media/infrastructure/schema/media.schema';
 // Not module tables: the outbox carries events from every context, the inbox records what a
-// consumer has applied of them.
+// consumer has applied of them, and consumer_retries what it has not applied yet.
 export * from '../../../messaging/outbox/schema/outbox.schema';
 export * from '../../../messaging/inbox/schema/inbox.schema';
+export * from '../../../messaging/retry/schema/consumer-retry.schema';

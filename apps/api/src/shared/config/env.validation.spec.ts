@@ -70,6 +70,27 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
   });
 
+  it('bounds the consumer retry poller', () => {
+    expect(() => validate({ ...BASE_ENV, MESSAGING_RETRY_POLL_MS: '99' })).toThrow(/MESSAGING_RETRY_POLL_MS/);
+    expect(() => validate({ ...BASE_ENV, MESSAGING_RETRY_BATCH_SIZE: '0' })).toThrow(/MESSAGING_RETRY_BATCH_SIZE/);
+    expect(() => validate({ ...BASE_ENV, MESSAGING_RETRY_BATCH_SIZE: '501' })).toThrow(/MESSAGING_RETRY_BATCH_SIZE/);
+    expect(() => validate({ ...BASE_ENV, MESSAGING_RETRY_ENABLED: '0' })).toThrow(/MESSAGING_RETRY_ENABLED/);
+    expect(() =>
+      validate({
+        ...BASE_ENV,
+        MESSAGING_RETRY_ENABLED: 'false',
+        MESSAGING_RETRY_POLL_MS: '100',
+        MESSAGING_RETRY_BATCH_SIZE: '500',
+      }),
+    ).not.toThrow();
+  });
+
+  // A lease that runs out mid-handler hands the same attempt to a second poller.
+  it('refuses a retry lease shorter than the longest a handler or a shutdown may take', () => {
+    expect(() => validate({ ...BASE_ENV, MESSAGING_RETRY_LEASE_MS: '29999' })).toThrow(/MESSAGING_RETRY_LEASE_MS/);
+    expect(() => validate({ ...BASE_ENV, MESSAGING_RETRY_LEASE_MS: '30000' })).not.toThrow();
+  });
+
   // The platform injects its own variables, and a retired key can linger in a deployment.
   it('boots with env keys the schema does not declare', () => {
     expect(() => validate({ ...BASE_ENV, RAILWAY_DEPLOYMENT_DRAINING_SECONDS: 'not-a-number' })).not.toThrow();

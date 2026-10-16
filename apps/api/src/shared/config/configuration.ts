@@ -36,10 +36,10 @@ export default () => ({
     consumerAttempts: parseIntOr(process.env.QUEUE_CONSUMER_ATTEMPTS, 8),
     // First retry delay; each further one doubles it. 1s through 64s at the defaults — long enough
     // to ride out a restart or a provider outage, short enough that a poison message reaches the
-    // dead-letter queue while the deploy that caused it is still the obvious suspect.
+    // dead letters while the deploy that caused it is still the obvious suspect.
     consumerBackoffMs: parseIntOr(process.env.QUEUE_CONSUMER_BACKOFF_MS, 1000),
     // order.paid starts on the same backoff, doubling up to this cap: at the defaults it rides out a
-    // user-service outage of 30 minutes before the dead-letter queue.
+    // user-service outage of 30 minutes before it is dead-lettered.
     orderPaidAttempts: parseIntOr(process.env.ORDER_PAID_CONSUMER_ATTEMPTS, 15),
     orderPaidBackoffCapMs: parseIntOr(process.env.ORDER_PAID_CONSUMER_BACKOFF_CAP_MS, 300_000),
   },
@@ -51,6 +51,16 @@ export default () => ({
     // Rows per tick. Also caps how long one transaction holds its row locks, since the publish runs
     // inside it.
     batchSize: parseIntOr(process.env.OUTBOX_BATCH_SIZE, 100),
+  },
+  messaging: {
+    retry: {
+      // Off for e2e suites, which drive the poller by hand, like the relay above.
+      enabled: process.env.MESSAGING_RETRY_ENABLED !== 'false',
+      pollMs: parseIntOr(process.env.MESSAGING_RETRY_POLL_MS, 1000),
+      batchSize: parseIntOr(process.env.MESSAGING_RETRY_BATCH_SIZE, 50),
+      // Per row: rows are leased one at a time, so this only has to outlast one handler run.
+      leaseMs: parseIntOr(process.env.MESSAGING_RETRY_LEASE_MS, 60_000),
+    },
   },
   auth: {
     jwksUrl: process.env.AUTH_JWKS_URL,
@@ -118,7 +128,7 @@ export default () => ({
     // How long a PUBLISHED outbox row is kept. Unpublished rows are never collected at any age.
     outboxDays: parseIntOr(process.env.RETENTION_OUTBOX_DAYS, 30),
     // How long an inbox claim is kept — the one retention number that is a correctness bound.
-    // Guarded at boot against the main queue's failed-job horizon (see sweep-inbox.ts).
+    // Guarded at boot against MAX_REDELIVERY_AGE_SEC (see sweep-inbox.ts).
     inboxDays: parseIntOr(process.env.RETENTION_INBOX_DAYS, 30),
     // Must outlast the GATEWAY's redelivery window, not the queue's — this table is the replay
     // defence at ingress. Stripe retries for ~72h; floored at 14 days in env.validation.

@@ -1,5 +1,5 @@
 import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
-import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
+import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/retry/retry-policy';
 import {
   AppEnv,
   DatabaseEnv,
@@ -57,7 +57,7 @@ export class EnvironmentVariables extends PlatformEnv {
   QUEUE_WORKER_CONCURRENCY?: number;
 
   // Capped at 10 rather than left open because the backoff doubles: ten tries already stretch the
-  // last wait past eight minutes, and a message nobody can apply belongs in the DLQ long before that.
+  // last wait past eight minutes, and a message nobody can apply belongs with the dead letters long before that.
   @IsOptional()
   @StrictInt()
   @IsInt()
@@ -94,6 +94,31 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(1)
   @Max(1000)
   OUTBOX_BATCH_SIZE?: number;
+
+  @IsOptional()
+  @IsStrictBoolean()
+  MESSAGING_RETRY_ENABLED?: string;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  MESSAGING_RETRY_POLL_MS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  MESSAGING_RETRY_BATCH_SIZE?: number;
+
+  // Above the worker's 10s close budget and MAIL_TIMEOUT_MS's 25s cap, the longest a handler step
+  // may wait: a lease that runs out mid-handler hands the same attempt to a second poller.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(30_000)
+  MESSAGING_RETRY_LEASE_MS?: number;
 
   @IsOptional()
   @IsStrictBoolean()
@@ -166,9 +191,9 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(1)
   RETENTION_OUTBOX_DAYS?: number;
 
-  // A correctness bound: while the queue can still redeliver a message, its claim is the only thing
-  // stopping the effect being applied twice. The floor is DERIVED from the queue's failed-job
-  // horizon so the pair cannot drift.
+  // A correctness bound: while a message can still be redelivered, its claim is the only thing
+  // stopping the effect being applied twice. The floor is DERIVED from MAX_REDELIVERY_AGE_SEC so the
+  // pair cannot drift.
   @IsOptional()
   @StrictInt()
   @IsInt()

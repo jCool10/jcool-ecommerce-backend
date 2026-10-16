@@ -165,4 +165,15 @@ groups:
           severity: page
         annotations:
           summary: 'Message moved to the dead-letter queue'
-          description: 'Parked after exhausting retries or a permanent failure. Inspect with `npm run queue:replay-dlq`, deploy the fix, then replay.'
+          description: 'Dead after exhausting retries or a permanent failure. List the dead rows in consumer_retries with `npm run queue:replay-dlq`, deploy the fix, then replay. If the logs say the BullMQ ladder ran out while Postgres was down, there may be no row: use `npm run messaging:republish`.'
+      # Rows waiting on the retry ladder. A burst drains on its own; a count that holds for ten minutes
+      # is a consumer failing on everything, or a poller that stopped (MESSAGING_RETRY_ENABLED,
+      # QUEUE_WORKER_ENABLED).
+      - alert: RetryBacklogGrowing
+        expr: messaging_retry_pending > 50
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Consumer retry backlog above 50 rows'
+          description: 'Failed deliveries are piling up in consumer_retries — check the consumer logs for the shared error, and that the retry poller is scheduled.'

@@ -3,7 +3,7 @@ import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { toError } from '@jcool/kernel';
-import { DOMAIN_EVENTS_DLQ_QUEUE, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from './queue.constants';
+import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from './queue.constants';
 
 const LOG_CONTEXT = 'QueueLifecycle';
 
@@ -15,7 +15,6 @@ const LOG_CONTEXT = 'QueueLifecycle';
 export class QueueLifecycle implements OnApplicationShutdown {
   constructor(
     @Inject(DOMAIN_EVENTS_QUEUE) private readonly domainEventsQueue: Queue,
-    @Inject(DOMAIN_EVENTS_DLQ_QUEUE) private readonly deadLetterQueue: Queue,
     @Inject(QUEUE_CONNECTION) private readonly queueConnection: Redis,
     private readonly logger: PinoLogger,
   ) {
@@ -25,14 +24,11 @@ export class QueueLifecycle implements OnApplicationShutdown {
   // Close at onApplicationShutdown (after the HTTP server has closed) rather than onModuleDestroy,
   // matching the pg pool and RedisService: a request still draining can publish until the very end.
   async onApplicationShutdown(): Promise<void> {
-    // Queues first — they can still have commands in flight on the connection underneath them. One
-    // failing to close must not leave the others open, so each is closed on its own.
-    for (const queue of [this.domainEventsQueue, this.deadLetterQueue]) {
-      try {
-        await queue.close();
-      } catch (error) {
-        this.logger.error({ queue: queue.name, err: toError(error) }, 'failed to close queue');
-      }
+    // Queue first — it can still have commands in flight on the connection underneath it.
+    try {
+      await this.domainEventsQueue.close();
+    } catch (error) {
+      this.logger.error({ queue: this.domainEventsQueue.name, err: toError(error) }, 'failed to close queue');
     }
 
     // quit() drains then closes; it rejects immediately when Redis is already gone, so fall back to

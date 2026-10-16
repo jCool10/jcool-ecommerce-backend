@@ -4,13 +4,15 @@ import {
   EXPIRY_CLOCK_MARGIN_SEC,
   SESSION_LIFETIME_SEC,
 } from '@modules/payment/infrastructure/gateway/stripe-gateway.adapter';
+import { dispatcherWith } from '../testing/domain-event-dispatcher.double';
 import {
-  CATALOG_EVENT_PRIORITY,
-  ORDER_PAID_BACKOFF,
+  MAX_REDELIVERY_AGE_SEC,
+  MIN_INBOX_RETENTION_DAYS,
   cappedBackoffMs,
-  jobOptionsFor,
   retryHorizonMs,
-} from './queue.constants';
+  retryPolicyFor,
+  type RetryLadderConfig,
+} from './retry-policy';
 
 const MINUTE_MS = 60_000;
 const LADDER_ENV = [
@@ -60,26 +62,49 @@ describe('retry ladders', () => {
   });
 });
 
-describe('jobOptionsFor', () => {
-  // BullMQ serves unprioritized jobs first, so only catalog work carries a priority.
-  it('puts catalog events on the long ladder behind order and payment work', () => {
-    expect(jobOptionsFor('catalog.product.changed', 15)).toEqual({
-      attempts: 15,
-      backoff: { type: ORDER_PAID_BACKOFF },
-      priority: CATALOG_EVENT_PRIORITY,
-    });
-    expect(CATALOG_EVENT_PRIORITY).toBeGreaterThan(0);
+describe('retryPolicyFor', () => {
+  const ladder: RetryLadderConfig = {
+    consumerAttempts: 8,
+    consumerBackoffMs: 1_000,
+    orderPaidAttempts: 15,
+    orderPaidBackoffCapMs: 300_000,
+  };
+  const SHORT = 'short';
+  const LONG = 'long';
+
+  // Every event the dispatcher registers, so a new handler cannot silently land on the wrong ladder.
+  const registered = [
+    ['order.placed', SHORT],
+    ['order.failed', SHORT],
+    ['payment.succeeded', SHORT],
+    ['payment.failed', SHORT],
+    ['order.paid', LONG],
+    ['order.expired', LONG],
+    ['order.cancelled', LONG],
+    ['catalog.product.changed', LONG],
+    ['catalog.category.renamed', LONG],
+  ] as const;
+
+  it.each(registered)('puts %s on the %s ladder', (eventType, rung) => {
+    const policy = retryPolicyFor(eventType, ladder);
+    const delays = [1, 2, 3, 10, 14].map((n) => policy.delayAfter(n));
+
+    expect(dispatcherWith().label(eventType)).toBe(eventType);
+    if (rung === LONG) {
+      expect(policy.attempts).toBe(ladder.orderPaidAttempts);
+      expect(delays).toEqual([1, 2, 3, 10, 14].map((n) => cappedBackoffMs(n, 1_000, 300_000)));
+    } else {
+      expect(policy.attempts).toBe(ladder.consumerAttempts);
+      expect(delays).toEqual([1_000, 2_000, 4_000, 512_000, 8_192_000]);
+    }
   });
 
-  it('keeps order.paid on the long ladder without a priority and every other event on the defaults', () => {
-    expect(jobOptionsFor('order.paid', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
-    expect(jobOptionsFor('order.placed', 15)).toEqual({});
+  it('retries an event nothing handles on the short ladder', () => {
+    expect(retryPolicyFor('payment.refunded', ladder).attempts).toBe(ladder.consumerAttempts);
   });
 
-  // The dead-letter fix: these two used to fall through to the short shared ladder (~2 minutes),
-  // dead-lettering long before a Stripe Checkout Session dies on its own.
-  it('gives order.expired and order.cancelled the same long ladder as order.paid', () => {
-    expect(jobOptionsFor('order.expired', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
-    expect(jobOptionsFor('order.cancelled', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
+  it('derives the inbox floor from the redelivery horizon in whole days', () => {
+    expect(MIN_INBOX_RETENTION_DAYS * 86_400).toBeGreaterThanOrEqual(MAX_REDELIVERY_AGE_SEC);
+    expect((MIN_INBOX_RETENTION_DAYS - 1) * 86_400).toBeLessThan(MAX_REDELIVERY_AGE_SEC);
   });
 });

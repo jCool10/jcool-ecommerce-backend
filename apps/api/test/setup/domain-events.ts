@@ -1,13 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { count, isNull } from 'drizzle-orm';
-import type { ConsumeResult } from '@jcool/metrics-port';
 import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import { outbox } from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DomainEventProcessor, type AppliedResult } from '../../src/shared/messaging/queue/domain-event.processor';
+import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 
 const RELAY_BATCH = 100;
 const QUEUED_STATES = ['waiting', 'delayed', 'prioritized'] as const;
@@ -15,7 +14,7 @@ const QUEUED_STATES = ['waiting', 'delayed', 'prioritized'] as const;
 export interface DrainedEvent {
   eventType: string;
   outboxId: string;
-  result: ConsumeResult;
+  result: AppliedResult;
 }
 
 /**
@@ -50,12 +49,9 @@ export async function drainDomainEvents(
 
     for (const job of jobs) {
       const { eventType, outboxId } = job.data;
-      const result = await processor.process(job.data).catch((error: unknown) => {
+      const result = await processor.process(job.data, DOMAIN_EVENTS_CONSUMER).catch((error: unknown) => {
         throw new Error(`delivering ${eventType} ${outboxId} failed`, { cause: error });
       });
-      if (result !== 'processed' && result !== 'duplicate') {
-        throw new Error(`delivering ${eventType} ${outboxId} ended ${result}`);
-      }
       await job.remove();
       drained.push({ eventType, outboxId, result });
     }

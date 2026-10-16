@@ -48,5 +48,7 @@ docs/test-dedup-backlog.md
 .claude/
 *.txt
 *.json
+# drizzle-kit diffs the next migration against the latest snapshot
+!**/migrations/meta/*.json
 
 bruno/

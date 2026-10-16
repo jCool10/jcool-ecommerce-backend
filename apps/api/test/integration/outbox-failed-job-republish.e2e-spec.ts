@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import { Job, type JobsOptions, type Queue } from 'bullmq';
+import type { Job, JobState, JobsOptions, Queue } from 'bullmq';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,21 +7,18 @@ import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructur
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
-import {
-  DOMAIN_EVENTS_CONSUMER,
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-} from '../../src/shared/messaging/queue/queue.constants';
+import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
+import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { ConsumerRetryStore } from '../../src/shared/messaging/retry/consumer-retry.store';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
 import { testId } from '../setup/id-service-stub';
 
-// One attempt, so a rejected dispatch reaches the failed set on the first delivery.
+// One attempt, so a delivery whose retry row cannot be written reaches the failed set at once.
 const ATTEMPTS = '1';
 const BACKOFF_MS = '50';
+const ALL_STATES: JobState[] = ['waiting', 'delayed', 'prioritized', 'active', 'completed', 'failed'];
 
 const seedRow = (orderId = testId()) => ({
   id: testId(),
@@ -31,13 +28,13 @@ const seedRow = (orderId = testId()) => ({
   payload: { orderId, totalAmountMinor: 150_000 },
 });
 
-// BullMQ dedups `add` on whether the job key exists, not on whether the event was applied.
+// The relay publishes without a job id, so an earlier job for the same row cannot swallow a new one.
 describe('Outbox relay against a job the queue already remembers (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let relay: OutboxRelay;
   let dispatcher: DomainEventDispatcher;
-  let queue: Queue;
-  let dlq: Queue;
+  let retries: ConsumerRetryStore;
+  let queue: Queue<DomainEventJob>;
   let db: DrizzleDB;
   let pool: Pool;
 
@@ -49,8 +46,8 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     });
     relay = app.get(OutboxRelay);
     dispatcher = app.get(DomainEventDispatcher);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
+    retries = app.get(ConsumerRetryStore);
+    queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
     db = app.get<DrizzleDB>(DRIZZLE);
     pool = app.get<Pool>(PG_POOL);
   });
@@ -62,7 +59,6 @@ describe('Outbox relay against a job the queue already remembers (integration, r
   beforeEach(async () => {
     await resetDatabase(pool);
     await queue.obliterate({ force: true });
-    await dlq.obliterate({ force: true });
   });
 
   afterEach(() => {
@@ -82,48 +78,46 @@ describe('Outbox relay against a job the queue already remembers (integration, r
       .select()
       .from(schema.inbox)
       .where(and(eq(schema.inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(schema.inbox.messageId, messageId)));
+  const retryRowsFor = (messageId: string) =>
+    db.select().from(schema.consumerRetries).where(eq(schema.consumerRetries.messageId, messageId));
 
-  const stateOf = async (id: string): Promise<string> => {
-    const job = await Job.fromId<DomainEventJob>(queue, jobIdFor(id));
-    return job ? job.getState() : 'missing';
-  };
+  const jobsFor = async (outboxId: string, states: JobState[] = ALL_STATES): Promise<Job<DomainEventJob>[]> =>
+    (await queue.getJobs(states)).filter((job) => job.data?.outboxId === outboxId);
 
-  const deadLettersFor = async (id: string): Promise<Job<DeadLetterJob>[]> => {
-    const jobs = (await dlq.getJobs(['waiting', 'prioritized'])) as Job<DeadLetterJob>[];
-    return jobs.filter((job) => job.id === jobIdFor(id));
-  };
+  const republish = (id: string) => db.update(schema.outbox).set({ publishedAt: null }).where(eq(schema.outbox.id, id));
 
-  const waitForState = (id: string, state: string) =>
-    vi.waitFor(async () => expect(await stateOf(id)).toBe(state), { timeout: 10_000, interval: 50 });
+  const waitForJobs = (id: string, state: JobState, count: number) =>
+    vi.waitFor(async () => expect(await jobsFor(id, [state])).toHaveLength(count), { timeout: 10_000, interval: 50 });
 
-  // Known defect. Intended: the relay marks a row published only when a consumer will still see it.
-  // Actual: OutboxRelay marks the row whatever queue.add did, and BullMQ ignores an add for a jobId
-  // it still keeps in the failed set (removeOnFail keeps it a week), so the republish is swallowed.
-  it('retires a row whose job sits in the failed set without applying the event', async () => {
-    spyOnEffect(dispatcher).mockRejectedValue(new Error('handler refused the event'));
+  it('delivers a republished row again while its earlier job sits in the failed set', async () => {
+    const effect = spyOnEffect(dispatcher);
+    effect.mockRejectedValueOnce(new Error('handler refused the event'));
+    // A retry row that cannot be written is the one failure still left to the transport.
+    vi.spyOn(retries, 'park').mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
     const [row] = await seed(1);
 
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
-    await waitForState(row.id, 'failed');
+    await waitForJobs(row.id, 'failed', 1);
     expect(await claimsFor(row.id)).toHaveLength(0);
 
-    // What a relay killed between the publish and its own commit leaves behind.
-    await db.update(schema.outbox).set({ publishedAt: null }).where(eq(schema.outbox.id, row.id));
-    vi.restoreAllMocks();
-
+    await republish(row.id);
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
+    await waitForJobs(row.id, 'completed', 1);
 
-    expect(await stateOf(row.id)).toBe('failed');
-    expect(await queue.getWaitingCount()).toBe(0);
-    expect(await queue.getDelayedCount()).toBe(0);
-    expect(await claimsFor(row.id)).toHaveLength(0);
+    const [applied] = await jobsFor(row.id, ['completed']);
+    expect(applied.returnvalue).toBe('processed');
+    expect(await jobsFor(row.id, ['failed'])).toHaveLength(1);
+    expect(await claimsFor(row.id)).toHaveLength(1);
 
-    expect((await byId(row.id)).publishedAt).not.toBeNull();
-    await expect(relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 0 });
-    expect(await claimsFor(row.id)).toHaveLength(0);
+    // Once more, now that the first copy applied: the inbox swallows it.
+    await republish(row.id);
+    await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
+    await waitForJobs(row.id, 'completed', 2);
 
-    // The dead letter is the only trace left.
-    expect(await deadLettersFor(row.id)).toHaveLength(1);
+    const results = (await jobsFor(row.id, ['completed'])).map((job) => job.returnvalue).sort();
+    expect(results).toEqual(['duplicate', 'processed']);
+    expect(effect).toHaveBeenCalledTimes(2);
+    expect(await claimsFor(row.id)).toHaveLength(1);
   });
 
   // Known defect. Intended: a row the queue permanently refuses reaches a terminal state. Actual:
@@ -134,7 +128,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     const [poison] = await seed(1);
     const add = queue.add.bind(queue);
     vi.spyOn(queue, 'add').mockImplementation((name: string, data: DomainEventJob, opts?: JobsOptions) =>
-      opts?.jobId === jobIdFor(poison.id)
+      data.outboxId === poison.id
         ? Promise.reject(new Error('payload exceeds the maximum job size'))
         : add(name, data, opts),
     );
@@ -151,9 +145,9 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     expect(stuck.id).toBe(poison.id);
     expect(stuck.attempts).toBe(TICKS_PAST_ANY_PLAUSIBLE_THRESHOLD);
 
-    expect(await deadLettersFor(poison.id)).toHaveLength(0);
+    expect(await retryRowsFor(poison.id)).toHaveLength(0);
     expect(await claimsFor(poison.id)).toHaveLength(0);
-    expect(await stateOf(poison.id)).toBe('missing');
+    expect(await jobsFor(poison.id)).toHaveLength(0);
 
     // Alone in the backlog the row looks like a Redis outage, so even `attempts` stops moving.
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 1 });

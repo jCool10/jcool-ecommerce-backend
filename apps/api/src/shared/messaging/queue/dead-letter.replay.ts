@@ -1,14 +1,17 @@
-import type { Job, JobsOptions, Queue } from 'bullmq';
-import type { DeadLetterJob } from './dead-letter';
-import { envelopeFields, isWellFormedEnvelope, jobIdFor, type DomainEventJob } from './domain-event.job';
+import { toError } from '@jcool/kernel';
+import type { ConsumerRetryRow, ConsumerRetryStore } from '../retry/consumer-retry.store';
+import { envelopeFields, isWellFormedEnvelope } from './domain-event.job';
+
+export type DeadLetterStore = Pick<ConsumerRetryStore, 'listDead' | 'revive'>;
 
 export interface ReplayOutcome {
+  consumer: string;
   messageId: string;
   eventType: string;
   status: 'replayed' | 'skipped';
   /** Why it was skipped, for the operator reading the summary. */
   detail?: string;
-  /** Why the message was parked, straight off the envelope — the diagnosis a replay cannot fix. */
+  /** The last error the row recorded — the diagnosis a replay cannot fix. */
   failedReason?: string;
 }
 
@@ -18,8 +21,8 @@ export interface ReplaySummary {
   outcomes: ReplayOutcome[];
 }
 
-/** When the domain-events consumer applied this message, or null if it never did. */
-export type InboxClaimLookup = (messageId: string) => Promise<Date | null>;
+/** When the consumer applied this message, or null if it never did. */
+export type InboxClaimLookup = (consumer: string, messageId: string) => Promise<Date | null>;
 
 export interface ReplayOptions {
   limit?: number;
@@ -29,8 +32,7 @@ export interface ReplayOptions {
   inboxRetentionMs: number;
   /** Overrides the age check ONLY. It can never override an existing claim. */
   force?: boolean;
-  /** The per-event options the relay publishes with, so a replay retries on the same ladder. */
-  jobOptionsFor: (eventType: string) => JobsOptions;
+  consumer?: string;
 }
 
 /**
@@ -43,34 +45,30 @@ export interface ReplayOptions {
  * | absent, born inside the retention window | replay |
  * | absent, born before the window | refuse unless `--force` — the claim may just have been swept |
  *
- * Branch 3 keys on `occurredAt`, not `failedAt`: it must establish that IF the message had been
- * applied, its claim would still be here to say so. A consumer transaction cannot begin before the
- * producer committed, so `processed_at >= occurredAt` holds unconditionally. `failedAt` proves
- * nothing of the sort — it is rewritten on every dead-lettering, so a message applied long ago and
- * re-parked today carries a brand-new stamp. It is reported in the refusal but decides nothing.
+ * Branch 3 keys on the envelope's `occurredAt`: a consumer transaction cannot begin before the
+ * producer committed, so `processed_at >= occurredAt` always holds. `last_failed_at` proves nothing
+ * of the sort and is only printed.
  *
- * `dryRun` is the default because this puts real traffic on a live queue; the guard runs in dry run
- * too, so the listing shows what would actually be refused.
+ * A replay revives the row and the poller delivers it; nothing is published here.
  */
 export async function replayDeadLetters(
-  main: Queue,
-  dlq: Queue,
-  { limit = 100, dryRun = true, inboxLookup, inboxRetentionMs, force = false, jobOptionsFor }: ReplayOptions,
+  store: DeadLetterStore,
+  { limit = 100, dryRun = true, inboxLookup, inboxRetentionMs, force = false, consumer }: ReplayOptions,
 ): Promise<ReplaySummary> {
-  // Nothing consumes the DLQ, so every job it holds is waiting.
-  const jobs = await dlq.getJobs(['waiting', 'prioritized'], 0, limit - 1, true);
+  const rows = await store.listDead({ limit, consumer });
   const outcomes: ReplayOutcome[] = [];
 
-  for (const job of jobs as Job<DeadLetterJob>[]) {
-    // Per job, never per batch: one unreadable entry must not cost the record of which others went back.
+  for (const row of rows) {
+    // Per row, never per batch: one failure must not cost the record of which others went back.
     try {
-      outcomes.push(await replayOne(main, dlq, job, { dryRun, inboxLookup, inboxRetentionMs, force, jobOptionsFor }));
+      outcomes.push(await replayOne(store, row, { dryRun, inboxLookup, inboxRetentionMs, force }));
     } catch (error) {
       outcomes.push({
-        messageId: job.data?.outboxId ?? job.id ?? 'unknown',
-        eventType: job.data?.eventType ?? 'unknown',
+        consumer: row.consumer,
+        messageId: row.messageId,
+        eventType: row.eventType || 'unknown',
         status: 'skipped',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toError(error).message,
       });
     }
   }
@@ -83,44 +81,37 @@ export async function replayDeadLetters(
 }
 
 async function replayOne(
-  main: Queue,
-  dlq: Queue,
-  job: Job<DeadLetterJob>,
-  { dryRun, inboxLookup, inboxRetentionMs, force, jobOptionsFor }: Required<Omit<ReplayOptions, 'limit'>>,
+  store: DeadLetterStore,
+  row: ConsumerRetryRow,
+  { dryRun, inboxLookup, inboxRetentionMs, force }: Required<Omit<ReplayOptions, 'limit' | 'consumer'>>,
 ): Promise<ReplayOutcome> {
-  // The DLQ is where malformed envelopes are parked, so its contents must not be trusted to match
-  // their type. Both fields below are used as keys further down.
-  if (!isWellFormedEnvelope(job.data)) {
-    return {
-      messageId: job.id ?? 'unknown',
-      eventType: 'unknown',
-      status: 'skipped',
-      detail: `malformed envelope, not replayable (fields: ${envelopeFields(job.data)}) — inspect and delete it by hand`,
-    };
-  }
-
-  const messageId = job.data.outboxId;
+  const { consumer, messageId, envelope } = row;
   const outcome: ReplayOutcome = {
+    consumer,
     messageId,
-    eventType: job.data.eventType,
+    eventType: 'unknown',
     status: 'skipped',
-    failedReason: job.data.failedReason,
+    failedReason: row.lastError,
   };
+  // Dead rows are where malformed envelopes end up, so the stored envelope is not trusted to match its type.
+  if (!isWellFormedEnvelope(envelope)) {
+    outcome.detail = `malformed envelope, not replayable (fields: ${envelopeFields(envelope)}) — inspect and delete it by hand`;
+    return outcome;
+  }
+  outcome.eventType = envelope.eventType;
 
-  // Branch 1. Not overridable: a claim means the effect already happened.
-  const appliedAt = await inboxLookup(messageId);
+  const appliedAt = await inboxLookup(consumer, messageId);
   if (appliedAt) {
     outcome.detail = `already applied at ${appliedAt.toISOString()} — a replay would be a silent no-op (--force cannot override this)`;
     return outcome;
   }
 
-  // An unparseable stamp counts as born before the window: `isWellFormedEnvelope` does not vet this
-  // field, and an unprovable replay is refused rather than attempted.
-  const occurredAtMs = Date.parse(job.data.occurredAt);
+  // An unparseable stamp counts as born before the window: an unprovable replay is refused.
+  const occurredAtMs = Date.parse(envelope.occurredAt);
   const olderThanRetention = !Number.isFinite(occurredAtMs) || Date.now() - occurredAtMs > inboxRetentionMs;
   if (olderThanRetention && !force) {
     outcome.detail =
-      `occurred ${job.data.occurredAt} (last failed ${job.data.failedAt}), older than the ` +
+      `occurred ${envelope.occurredAt} (last failed ${row.lastFailedAt.toISOString()}), older than the ` +
       `${Math.round(inboxRetentionMs / 86_400_000)}-day inbox retention — a claim from back then would ` +
       `already have been swept, so "no claim" cannot be told apart from "applied and forgotten" and ` +
       `replaying may apply the effect twice. Re-run with --force if you have confirmed it was never applied`;
@@ -132,32 +123,10 @@ async function replayOne(
     return outcome;
   }
 
-  // The failed job still holds this id in the main queue (kept for a week), and `add` with an
-  // existing jobId is ignored rather than rejected — without this the replay is a silent no-op.
-  const jobId = jobIdFor(messageId);
-  const stale = await main.getJob(jobId);
-  if (stale) {
-    try {
-      await stale.remove();
-    } catch (error) {
-      // A locked job is one a worker is running right now; removing it underneath must not happen.
-      outcome.detail = `main-queue job still held: ${error instanceof Error ? error.message : String(error)}`;
-      return outcome;
-    }
+  if (!(await store.revive({ consumer, messageId }))) {
+    outcome.detail = 'no longer dead — revived or removed since it was listed';
+    return outcome;
   }
-
-  const { failedReason: _reason, attemptsMade: _attempts, failedAt: _at, ...envelope } = job.data;
-  await main.add(envelope.eventType, envelope satisfies DomainEventJob, {
-    jobId,
-    ...jobOptionsFor(envelope.eventType),
-  });
-
-  // Only after the re-publish landed — the reverse order would lose the message outright. Re-read
-  // rather than reuse the handle: if it poisoned again meanwhile, the router has replaced this entry
-  // with a fresher diagnosis and deleting that would hide the failure.
-  const current = (await dlq.getJob(jobId)) as Job<DeadLetterJob> | undefined;
-  if (current && current.data?.failedAt === job.data.failedAt) await current.remove();
-
   outcome.status = 'replayed';
   return outcome;
 }

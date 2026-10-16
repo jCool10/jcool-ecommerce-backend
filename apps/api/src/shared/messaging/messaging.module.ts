@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { OrderModule } from '@modules/order/order.module';
 import { PaymentModule } from '@modules/payment/payment.module';
 import { ProductModule } from '@modules/product/product.module';
+import { ConsumerDelivery } from './consume/consumer-delivery';
 import { DomainEventDispatcher } from './handlers/domain-event.dispatcher';
 import { OrderEventsHandler } from './handlers/order-events.handler';
 import { InboxStore } from './inbox/inbox.store';
@@ -12,11 +13,14 @@ import { SweepPublishedOutbox } from './outbox/sweep-published-outbox';
 import { OutboxRelay } from './outbox/outbox-relay';
 import { OutboxRelayScheduler } from './outbox/outbox-relay.scheduler';
 import { OUTBOX_WRITER } from './outbox/outbox-writer.port';
-import { DeadLetterRouter } from './queue/dead-letter';
 import { DomainEventProcessor } from './queue/domain-event.processor';
 import { DomainEventsWorker } from './queue/domain-events.worker';
 import { QueueLifecycle } from './queue/queue.lifecycle';
 import { QUEUE_PROVIDERS } from './queue/queue.providers';
+import { ConsumerRetryStore } from './retry/consumer-retry.store';
+import { RETRY_BACKLOG_PROVIDERS } from './retry/retry-backlog.collector';
+import { RetryPoller } from './retry/retry-poller';
+import { RetryPollerScheduler } from './retry/retry-poller.scheduler';
 
 // Global because any context may need to emit an event and the writer holds no per-module state.
 @Global()
@@ -31,6 +35,7 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
   providers: [
     { provide: OUTBOX_WRITER, useClass: DrizzleOutboxWriter },
     ...OUTBOX_BACKLOG_PROVIDERS,
+    ...RETRY_BACKLOG_PROVIDERS,
     ...QUEUE_PROVIDERS,
     QueueLifecycle,
     OutboxRelay,
@@ -41,7 +46,10 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
     OrderEventsHandler,
     DomainEventDispatcher,
     DomainEventProcessor,
-    DeadLetterRouter,
+    ConsumerRetryStore,
+    ConsumerDelivery,
+    RetryPoller,
+    RetryPollerScheduler,
     DomainEventsWorker,
   ],
   exports: [OUTBOX_WRITER],

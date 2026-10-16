@@ -23,7 +23,20 @@ function isolateEnv(keys: readonly string[]): void {
 }
 
 describe('configuration', () => {
-  isolateEnv(['INVENTORY_OPTIMISTIC_MAX_RETRIES', 'STRIPE_SUCCESS_URL', 'ID_SERVICE_URL', 'ID_SERVICE_TIMEOUT_MS']);
+  isolateEnv([
+    'INVENTORY_OPTIMISTIC_MAX_RETRIES',
+    'STRIPE_SUCCESS_URL',
+    'ID_SERVICE_URL',
+    'ID_SERVICE_TIMEOUT_MS',
+    'MESSAGING_RETRY_ENABLED',
+    'MESSAGING_RETRY_POLL_MS',
+    'MESSAGING_RETRY_BATCH_SIZE',
+    'MESSAGING_RETRY_LEASE_MS',
+  ]);
+
+  it('runs the consumer retry poller every second, 50 rows a tick, each leased for a minute', () => {
+    expect(configuration().messaging.retry).toEqual({ enabled: true, pollMs: 1_000, batchSize: 50, leaseMs: 60_000 });
+  });
 
   it('reads the id-service address and gives the call the gateway retries 2s by default', () => {
     process.env.ID_SERVICE_URL = 'http://gateway:4000';

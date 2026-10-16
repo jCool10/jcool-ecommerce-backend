@@ -9,6 +9,7 @@ import { OrderStatus } from '../../src/modules/order/domain/order-status';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import {
   addToCart,
@@ -216,7 +217,7 @@ describe('Reservation TTL sweep (integration, real Postgres)', () => {
       await lapseReservation(app, orderId);
       await sweep.execute(SWEEP_ALL);
 
-      expect(await processor.process(await expiryJob(orderId))).toBe('processed');
+      expect(await processor.process(await expiryJob(orderId), DOMAIN_EVENTS_CONSUMER)).toBe('processed');
 
       expect(expire).not.toHaveBeenCalled();
       expect(await readPayment(app, orderId)).toBeUndefined();

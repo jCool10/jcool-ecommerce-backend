@@ -7,10 +7,10 @@ import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@jcool/metrics-port';
-import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { sampleId } from '@shared/testing/id-generator.double';
-import { type DomainEventJob, jobIdFor } from '../queue/domain-event.job';
+import type { DomainEventJob } from '../queue/domain-event.job';
+import { CATALOG_EVENT_PRIORITY } from '../queue/queue.constants';
 import { dispatcherWith } from '../testing/domain-event-dispatcher.double';
 import { OutboxRelay } from './outbox-relay';
 import type { outbox } from './schema/outbox.schema';
@@ -56,7 +56,6 @@ function build(rows: OutboxRow[]) {
     { status: 'ready' } as unknown as Redis,
     { recordEventPublished: vi.fn() } as unknown as MetricsPort,
     dispatcherWith(),
-    fakeConfigService({ 'queue.orderPaidAttempts': 15 }),
     fakePinoLogger(),
   );
 
@@ -85,18 +84,30 @@ describe('OutboxRelay', () => {
     propagation.disable();
   });
 
-  // The job id is what makes a republish of the same row a no-op instead of a second delivery.
-  it('publishes each row under a job id derived from the row id', async () => {
+  // A job id would let BullMQ swallow a republish while it still remembers the row's earlier job.
+  it('publishes every row as a fresh job and leaves dedup to the inbox', async () => {
     const rows = [row(), row()];
     const t = build(rows);
 
     await t.relay.runOnce(10);
 
-    const published = t.add.mock.calls.map(([, job, opts]) => [
-      (job as DomainEventJob).outboxId,
-      (opts as JobsOptions).jobId,
+    expect(t.add.mock.calls.map(([, job]) => (job as DomainEventJob).outboxId)).toEqual(rows.map((r) => r.id));
+    expect(t.add.mock.calls.map(([, , opts]) => (opts as JobsOptions | undefined)?.jobId)).toEqual([
+      undefined,
+      undefined,
     ]);
-    expect(published).toEqual(rows.map((r) => [r.id, jobIdFor(r.id)]));
+  });
+
+  // Attempts and backoff come from the queue defaults: they only matter when Postgres is down.
+  it('queues only catalog events behind order and payment work', async () => {
+    const t = build([row({ eventType: 'catalog.product.changed' }), row({ eventType: 'order.paid' })]);
+
+    await t.relay.runOnce(10);
+
+    expect(t.add.mock.calls.map(([, , opts]) => opts as JobsOptions | undefined)).toEqual([
+      { priority: CATALOG_EVENT_PRIORITY },
+      undefined,
+    ]);
   });
 
   // Each refusal can cost a full command timeout while the batch's row locks stay held.

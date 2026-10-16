@@ -12,13 +12,14 @@ Navigation only — "where to look for X". For what each context owns, the layer
 | `user-service` | [`apps/user-service/src/main.ts`](../apps/user-service/src/main.ts) |
 | `gateway` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) (not a Node process) |
 
-CLIs (the api's migrate, DLQ replay, search reindex and storage verify also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`README.md#scripts`](../README.md#scripts) for the `pnpm` names):
+CLIs (the api's migrate, DLQ replay, outbox republish, search reindex and storage verify also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`README.md#scripts`](../README.md#scripts) for the `pnpm` names):
 
 | CLI | File |
 | --- | --- |
 | api migrate | [`apps/api/src/shared/infrastructure/database/migrate-cli.ts`](../apps/api/src/shared/infrastructure/database/migrate-cli.ts) |
 | api seed | [`apps/api/src/shared/infrastructure/database/seed.ts`](../apps/api/src/shared/infrastructure/database/seed.ts) |
 | DLQ replay | [`apps/api/src/shared/messaging/queue/replay-dlq.cli.ts`](../apps/api/src/shared/messaging/queue/replay-dlq.cli.ts) |
+| outbox republish | [`apps/api/src/shared/messaging/outbox/republish-outbox.cli.ts`](../apps/api/src/shared/messaging/outbox/republish-outbox.cli.ts) |
 | search reindex | [`apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts`](../apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts) |
 | storage verify | [`apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts`](../apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts) |
 | id-service floor lift (pre-deploy form: `--if-uninitialized`) | [`apps/id-service/src/lease/lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts) |
@@ -30,7 +31,7 @@ Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modul
 
 ## Shared / messaging
 
-Cross-context wiring and the outbox/inbox backbone live in [`apps/api/src/shared/messaging`](../apps/api/src/shared/messaging) (outbox, relay, BullMQ queue, inbox, dead-letter replay). It is one of the two composition roots allowed to import across contexts ([`README.md#layering`](../README.md#layering)).
+Cross-context wiring and the outbox/inbox backbone live in [`apps/api/src/shared/messaging`](../apps/api/src/shared/messaging) (outbox, relay, BullMQ queue, inbox, retry ladder and dead letters in Postgres, replay and republish). It is one of the two composition roots allowed to import across contexts ([`README.md#layering`](../README.md#layering)).
 
 ## Schema and migrations
 

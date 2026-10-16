@@ -11,6 +11,7 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { authHeader } from '../setup/bearer.helper';
 import {
@@ -166,7 +167,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       const { orderId, sessionId } = await cancelledOrderWithSession();
       expect(expire).not.toHaveBeenCalled(); // the cancel itself never asks
 
-      expect(await processor.process(await cancelledJob(orderId))).toBe('processed');
+      expect(await processor.process(await cancelledJob(orderId), DOMAIN_EVENTS_CONSUMER)).toBe('processed');
 
       expect(expire).toHaveBeenCalledWith(sessionId);
       expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
@@ -179,7 +180,9 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       vi.spyOn(gateway, 'expireSession').mockRejectedValue(new Error('gateway unreachable'));
       const { orderId } = await cancelledOrderWithSession();
 
-      await expect(processor.process(await cancelledJob(orderId))).rejects.toThrow('gateway unreachable');
+      await expect(processor.process(await cancelledJob(orderId), DOMAIN_EVENTS_CONSUMER)).rejects.toThrow(
+        'gateway unreachable',
+      );
 
       expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.PENDING);
       // The inbox claim rolled back with it, or the redelivery would find it consumed.
@@ -192,8 +195,8 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       const { orderId } = await cancelledOrderWithSession();
       const job = await cancelledJob(orderId);
 
-      expect(await processor.process(job)).toBe('processed');
-      expect(await processor.process(job)).toBe('duplicate');
+      expect(await processor.process(job, DOMAIN_EVENTS_CONSUMER)).toBe('processed');
+      expect(await processor.process(job, DOMAIN_EVENTS_CONSUMER)).toBe('duplicate');
 
       expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
       expect(refundOwed).not.toHaveBeenCalled();
@@ -206,7 +209,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       // rolled-back attempt leaves behind.
       expect(await gateway.expireSession(sessionId)).toBe('expired');
 
-      expect(await processor.process(job)).toBe('processed');
+      expect(await processor.process(job, DOMAIN_EVENTS_CONSUMER)).toBe('processed');
 
       expect((await readPayment(app, orderId)).status).toBe(PaymentStatus.EXPIRED);
       expect(refundOwed).not.toHaveBeenCalled();
@@ -223,7 +226,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
       gateway.setPaymentStatus(order.sessionId, 'PAID');
 
       // Acknowledged, not retried: no redelivery un-pays a session, so this never reaches the DLQ.
-      expect(await processor.process(await cancelledJob(order.orderId))).toBe('processed');
+      expect(await processor.process(await cancelledJob(order.orderId), DOMAIN_EVENTS_CONSUMER)).toBe('processed');
 
       expect(refundOwed).toHaveBeenCalledExactlyOnceWith('expire_session');
       // Nothing written: recording EXPIRED here would log a settlement that never happened.
@@ -265,15 +268,18 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
         .orderBy(desc(schema.outbox.createdAt), desc(schema.outbox.id));
 
       expect(
-        await processor.process({
-          outboxId: settlement.id,
-          aggregateType: settlement.aggregateType,
-          aggregateId: settlement.aggregateId,
-          eventType: settlement.eventType,
-          payload: settlement.payload,
-          occurredAt: settlement.createdAt.toISOString(),
-          traceparent: null,
-        }),
+        await processor.process(
+          {
+            outboxId: settlement.id,
+            aggregateType: settlement.aggregateType,
+            aggregateId: settlement.aggregateId,
+            eventType: settlement.eventType,
+            payload: settlement.payload,
+            occurredAt: settlement.createdAt.toISOString(),
+            traceparent: null,
+          },
+          DOMAIN_EVENTS_CONSUMER,
+        ),
       ).toBe('processed');
 
       expect(refundOwed).toHaveBeenCalledWith('settlement_event');

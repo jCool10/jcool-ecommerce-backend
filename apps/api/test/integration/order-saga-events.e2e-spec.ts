@@ -11,7 +11,7 @@ import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import {
   auditLedgerInvariants,
   placeAndOpenSession,
@@ -84,7 +84,7 @@ describe('Payment settlement events driving the order saga (integration, real Po
   const deliverAll = async (): Promise<string[]> => {
     const results: string[] = [];
     for (const job of await publishedJobs()) {
-      results.push(await processor.process(job));
+      results.push(await processor.process(job, DOMAIN_EVENTS_CONSUMER));
     }
     return results;
   };
@@ -166,8 +166,8 @@ describe('Payment settlement events driving the order saga (integration, real Po
     await relay.runOnce(10);
     const [settlement] = (await publishedJobs()).filter((job) => job.eventType === 'payment.succeeded');
 
-    await expect(processor.process(settlement)).resolves.toBe('processed');
-    await expect(processor.process(settlement)).resolves.toBe('duplicate');
+    await expect(processor.process(settlement, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+    await expect(processor.process(settlement, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
 
     expect((await inboxRows()).filter((row) => row.eventType === 'payment.succeeded')).toHaveLength(1);
   });
@@ -190,7 +190,7 @@ describe('Payment settlement events driving the order saga (integration, real Po
       traceparent: null,
     };
 
-    await expect(processor.process(late)).resolves.toBe('processed');
+    await expect(processor.process(late, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
 
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
     expect((await readReservation(app, order.orderId)).status).toBe('COMMITTED');
@@ -211,7 +211,7 @@ describe('Payment settlement events driving the order saga (integration, real Po
       traceparent: null,
     };
 
-    await expect(processor.process(orphan)).resolves.toBe('processed');
+    await expect(processor.process(orphan, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
     expect(refundOwed).toHaveBeenCalledWith('settlement_event');
   });
 
@@ -226,7 +226,9 @@ describe('Payment settlement events driving the order saga (integration, real Po
       traceparent: null,
     };
 
-    await expect(processor.process(malformed)).rejects.toThrow(/Unusable payment settlement event/);
+    await expect(processor.process(malformed, DOMAIN_EVENTS_CONSUMER)).rejects.toThrow(
+      /Unusable payment settlement event/,
+    );
     expect(await inboxRows()).toHaveLength(0);
   });
 
@@ -249,13 +251,13 @@ describe('Payment settlement events driving the order saga (integration, real Po
       };
     });
 
-    await expect(processor.process(settlement)).rejects.toThrow('worker died after the effect');
+    await expect(processor.process(settlement, DOMAIN_EVENTS_CONSUMER)).rejects.toThrow('worker died after the effect');
 
     applyThenDie.mockRestore();
     expect((await readOrder(app, order.orderId)).status).toBe('PENDING');
     expect(await inboxRows()).toHaveLength(0);
 
-    await expect(processor.process(settlement)).resolves.toBe('processed');
+    await expect(processor.process(settlement, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
     expect((await readOrder(app, order.orderId)).status).toBe('PAID');
   });
 });

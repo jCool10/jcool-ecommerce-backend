@@ -41,7 +41,7 @@ const beforeClaim =
     return () => Promise.resolve();
   };
 
-const UNREGISTERED_EVENT_LABEL = 'unregistered';
+export const UNREGISTERED_EVENT_LABEL = 'unregistered';
 
 @Injectable()
 export class DomainEventDispatcher {
@@ -108,8 +108,8 @@ export class DomainEventDispatcher {
 
   async prepare(job: DomainEventJob): Promise<TransactionalStep> {
     const handler = this.handlers.get(job.eventType);
-    // Never ack an event we do not understand: failing keeps it in the queue's failure path, where
-    // it stays visible and replayable, rather than dropping it with only a log line to show for it.
+    // Never ack an event we do not understand: failing dead-letters it in consumer_retries, where it
+    // stays visible and replayable, rather than dropping it with only a log line to show for it.
     if (!handler) throw new UnhandledEventError(job.eventType);
 
     return handler(job);

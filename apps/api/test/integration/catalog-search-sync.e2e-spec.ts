@@ -15,7 +15,11 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { CATALOG_EVENT_PRIORITY, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import {
+  CATALOG_EVENT_PRIORITY,
+  DOMAIN_EVENTS_CONSUMER,
+  DOMAIN_EVENTS_QUEUE,
+} from '../../src/shared/messaging/queue/queue.constants';
 import { authHeader } from '../setup/bearer.helper';
 import { drainDomainEvents } from '../setup/domain-events';
 import { createTestCategory, type TestCategory } from '../setup/fixtures/catalog.fixture';
@@ -216,10 +220,10 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     const job = await relayJobFor(productId);
     vi.spyOn(searchPort(), 'write').mockRejectedValueOnce(new Error('search engine unavailable'));
 
-    await expect(processor.process(job.data)).rejects.toThrow('search engine unavailable');
+    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).rejects.toThrow('search engine unavailable');
     expect(await inboxRowsFor(job.data.outboxId)).toEqual([]);
 
-    await expect(processor.process(job.data)).resolves.toBe('processed');
+    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
     expect(await inboxRowsFor(job.data.outboxId)).toHaveLength(1);
     await refreshSearchIndex(engine);
     expect(await found('Compass')).toEqual([productId]);
@@ -228,12 +232,12 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
   it('skips a redelivered message it already applied and leaves the document as it was', async () => {
     const productId = await createProduct('Echo Sextant');
     const job = await relayJobFor(productId);
-    await expect(processor.process(job.data)).resolves.toBe('processed');
+    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
     await refreshSearchIndex(engine);
     const applied = await stored(productId);
     expect(applied).toEqual({ version: 0, name: 'Echo Sextant', status: 'ACTIVE' });
 
-    await expect(processor.process(job.data)).resolves.toBe('duplicate');
+    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
     await refreshSearchIndex(engine);
 
     expect(await stored(productId)).toEqual(applied);
@@ -260,13 +264,13 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       return write(changes);
     });
 
-    const late = processor.process(first.data);
+    const late = processor.process(first.data, DOMAIN_EVENTS_CONSUMER);
     await stalled;
 
     await send('patch', `/admin/products/${productId}`, { name: 'Drifting Buoy Bravo' }).expect(200);
     await first.remove();
     const second = await relayJobFor(productId);
-    await expect(processor.process(second.data)).resolves.toBe('processed');
+    await expect(processor.process(second.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
 
     release();
     await expect(late).resolves.toBe('processed');
@@ -369,10 +373,10 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       const job = await relayJobFor(seeded.id);
       vi.spyOn(searchPort(), 'write').mockRejectedValueOnce(new Error('search engine unavailable'));
 
-      await expect(processor.process(job.data)).rejects.toThrow('search engine unavailable');
+      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).rejects.toThrow('search engine unavailable');
       expect(await inboxRowsFor(job.data.outboxId)).toEqual([]);
 
-      await expect(processor.process(job.data)).resolves.toBe('processed');
+      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
       expect(await inboxRowsFor(job.data.outboxId)).toHaveLength(1);
       await refreshSearchIndex(engine);
       expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
@@ -383,11 +387,11 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       const seeded = await seedCategory();
       await renameCategory(seeded.id, { name: 'Walnut Orchard' });
       const job = await relayJobFor(seeded.id);
-      await expect(processor.process(job.data)).resolves.toBe('processed');
+      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
       await refreshSearchIndex(engine);
       expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
 
-      await expect(processor.process(job.data)).resolves.toBe('duplicate');
+      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
       await refreshSearchIndex(engine);
 
       expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
@@ -407,11 +411,11 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       vi.spyOn(port, 'write').mockImplementationOnce(async (changes) => {
         await send('patch', `/admin/products/${edited}`, { name: 'Copper Kettle' }).expect(200);
         const edit = await relayJobFor(edited);
-        await expect(processor.process(edit.data)).resolves.toBe('processed');
+        await expect(processor.process(edit.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
         return write(changes);
       });
 
-      await expect(processor.process(rename.data)).resolves.toBe('processed');
+      await expect(processor.process(rename.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
       await refreshSearchIndex(engine);
 
       const hits = await search('Walnut Orchard', seeded.slug);

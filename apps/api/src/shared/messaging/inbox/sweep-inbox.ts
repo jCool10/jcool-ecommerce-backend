@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { inArray, lt } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database';
 import { RetentionSweepRegistry, type RetentionSweep } from '@jcool/platform/retention';
-import { MIN_INBOX_RETENTION_DAYS, REMOVE_ON_FAIL_AGE_SEC } from '../queue/queue.constants';
+import { MAX_REDELIVERY_AGE_SEC, MIN_INBOX_RETENTION_DAYS } from '../retry/retry-policy';
 import { inbox } from './schema/inbox.schema';
 
 const DAY_MS = 86_400_000;
@@ -45,16 +45,15 @@ export class SweepInbox implements RetentionSweep, OnModuleInit {
 }
 
 /**
- * The horizon to clear is the main queue's failed-job retention, not the DLQ's — the DLQ has no age
- * limit at all, so there is no bound to compare against. Its unbounded horizon is handled instead by
- * `dead-letter.replay.ts`, which asks the inbox directly rather than trusting a clock.
+ * Dead letters have no age limit, so they are not the bound here: `dead-letter.replay.ts` asks the
+ * inbox directly before reviving one rather than trusting a clock.
  */
 function assertClearsRedeliveryHorizon(days: number): void {
   const retentionSec = days * SEC_PER_DAY;
-  if (retentionSec < REMOVE_ON_FAIL_AGE_SEC) {
+  if (retentionSec < MAX_REDELIVERY_AGE_SEC) {
     throw new Error(
-      `RETENTION_INBOX_DAYS=${days} (${retentionSec}s) is shorter than the queue's failed-job retention ` +
-        `(${REMOVE_ON_FAIL_AGE_SEC}s). A failed job re-run after its inbox claim was swept would apply its ` +
+      `RETENTION_INBOX_DAYS=${days} (${retentionSec}s) is shorter than MAX_REDELIVERY_AGE_SEC ` +
+        `(${MAX_REDELIVERY_AGE_SEC}s). A message redelivered after its inbox claim was swept would apply its ` +
         `effect a second time — the exactly-once guarantee would be lost silently. Raise it to at least ` +
         `${MIN_INBOX_RETENTION_DAYS} days.`,
     );

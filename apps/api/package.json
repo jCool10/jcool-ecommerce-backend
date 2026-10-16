@@ -33,6 +33,8 @@
     "db:seed:perf": "tsx scripts/perf-seed.ts",
     "queue:replay-dlq": "tsx src/shared/messaging/queue/replay-dlq.cli.ts",
     "queue:replay-dlq:prod": "node dist/shared/messaging/queue/replay-dlq.cli.js",
+    "messaging:republish": "tsx src/shared/messaging/outbox/republish-outbox.cli.ts",
+    "messaging:republish:prod": "node dist/shared/messaging/outbox/republish-outbox.cli.js",
     "search:reindex": "tsx src/modules/product/infrastructure/catalog/search/reindex.ts",
     "search:reindex:prod": "node dist/modules/product/infrastructure/catalog/search/reindex.js",
     "storage:verify": "tsx src/shared/infrastructure/storage/verify-storage-orphans.cli.ts",

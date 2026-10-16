@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { context } from '@opentelemetry/api';
-import type { Queue } from 'bullmq';
+import type { JobsOptions, Queue } from 'bullmq';
 import { asc, eq, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
@@ -10,8 +9,8 @@ import { toError } from '@jcool/kernel';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { extractTraceContext, injectTraceContext, withSpan } from '@jcool/platform/observability';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
-import { type DomainEventJob, jobIdFor } from '../queue/domain-event.job';
-import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION, jobOptionsFor } from '../queue/queue.constants';
+import type { DomainEventJob } from '../queue/domain-event.job';
+import { CATALOG_EVENT_PRIORITY, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../queue/queue.constants';
 import { outbox } from './schema/outbox.schema';
 
 const LOG_CONTEXT = 'OutboxRelay';
@@ -31,8 +30,6 @@ export interface RelayTickSummary {
  */
 @Injectable()
 export class OutboxRelay {
-  private readonly orderPaidAttempts: number;
-
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     @Inject(DOMAIN_EVENTS_QUEUE) private readonly domainEventsQueue: Queue,
@@ -40,12 +37,10 @@ export class OutboxRelay {
     @Inject(METRICS) private readonly metrics: MetricsPort,
     // Not to dispatch anything — for `label()`, which folds the free-text `outbox.event_type` into
     // the bounded set of names. The fold is also the signal: `event_type="unregistered"` climbing
-    // here means events are heading straight for the DLQ, a full retry budget before it says so.
+    // here means events are heading straight for the dead letters.
     private readonly domainEventDispatcher: DomainEventDispatcher,
-    config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
-    this.orderPaidAttempts = config.getOrThrow<number>('queue.orderPaidAttempts');
     logger.setContext(LOG_CONTEXT);
   }
 
@@ -137,13 +132,13 @@ export class OutboxRelay {
           traceparent: traceparent ?? row.traceparent,
         };
 
-        // Republishing a row BullMQ still remembers is a no-op instead of a second job — best effort
-        // only, since a completed job eventually ages out of retention and frees the id again.
-        await this.domainEventsQueue.add(row.eventType, job, {
-          jobId: jobIdFor(row.id),
-          ...jobOptionsFor(row.eventType, this.orderPaidAttempts),
-        });
+        // No job id: a republish must be a real redelivery, and the inbox swallows the copies.
+        await this.domainEventsQueue.add(row.eventType, job, catalogPriority(row.eventType));
       }),
     );
   }
+}
+
+function catalogPriority(eventType: string): JobsOptions | undefined {
+  return eventType.startsWith('catalog.') ? { priority: CATALOG_EVENT_PRIORITY } : undefined;
 }

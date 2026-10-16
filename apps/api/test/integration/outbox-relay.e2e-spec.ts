@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Queue } from 'bullmq';
+import type { Job, Queue } from 'bullmq';
 import { eq, inArray, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { Pool } from 'pg';
@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
+import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../../src/shared/messaging/queue/queue.constants';
 import {
   closeAppAfterAll,
@@ -67,8 +67,8 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
 
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 3, failed: 0 });
 
-    const jobs = await queue.getJobs(['waiting']);
-    expect(jobs.map((job) => job.id).sort()).toEqual(rows.map((row) => jobIdFor(row.id)).sort());
+    const jobs = (await queue.getJobs(['waiting'])) as Job<DomainEventJob>[];
+    expect(jobs.map((job) => job.data.outboxId).sort()).toEqual(rows.map((row) => row.id).sort());
     expect(await unpublished()).toHaveLength(0);
 
     // A published row is off the work queue for good: the partial index no longer sees it.
@@ -82,7 +82,8 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     await relay.runOnce(10);
 
     const [job] = await queue.getJobs(['waiting']);
-    expect(job.id).toBe(jobIdFor(row.id));
+    // The key is the envelope's outboxId, deduped by the inbox; a job id would let BullMQ swallow a republish.
+    expect(job.id).toMatch(/^\d+$/);
     expect(job.name).toBe('order.placed');
     expect(job.data as DomainEventJob).toEqual({
       outboxId: row.id,

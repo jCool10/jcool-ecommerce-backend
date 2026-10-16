@@ -1,19 +1,15 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Job, Queue } from 'bullmq';
+import type { Queue } from 'bullmq';
+import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
-import {
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-  cappedBackoffMs,
-  retryHorizonMs,
-} from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import type { ConsumerRetryRow } from '../../src/shared/messaging/retry/consumer-retry.store';
+import { cappedBackoffMs, retryHorizonMs } from '../../src/shared/messaging/retry/retry-policy';
 import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, type StartedMailServer } from '../setup/mail-server';
@@ -49,12 +45,16 @@ describe('Order confirmation mail against the user directory (integration, real 
   let app: INestApplication;
   let relay: OutboxRelay;
   let queue: Queue;
-  let dlq: Queue;
   let db: DrizzleDB;
   let pool: Pool;
 
   const inboxRows = () => db.select().from(schema.inbox);
-  const deadLetters = () => dlq.getJobs(['waiting', 'prioritized']) as Promise<Job<DeadLetterJob>[]>;
+  const deadLetters = () => db.select().from(schema.consumerRetries).where(eq(schema.consumerRetries.status, 'dead'));
+  const retryRowFor = async (messageId: string): Promise<ConsumerRetryRow | undefined> =>
+    (await db.select().from(schema.consumerRetries).where(eq(schema.consumerRetries.messageId, messageId)))[0];
+  // An attempt is charged when it is leased, so one still holding the lease has not failed yet.
+  const failedAttempts = (row: ConsumerRetryRow | undefined) =>
+    row ? row.attemptsMade - (row.leaseToken === null ? 0 : 1) : 0;
 
   const publishPaid = async (userId: string): Promise<string> => {
     const [row] = await db
@@ -68,11 +68,11 @@ describe('Order confirmation mail against the user directory (integration, real 
       })
       .returning();
     await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
-    return jobIdFor(row.id);
+    return row.id;
   };
 
-  const waitForFailedAttempts = (jobId: string, count: number) =>
-    vi.waitFor(async () => expect((await queue.getJob(jobId))?.attemptsMade ?? 0).toBeGreaterThanOrEqual(count), {
+  const waitForFailedAttempts = (messageId: string, count: number) =>
+    vi.waitFor(async () => expect(failedAttempts(await retryRowFor(messageId))).toBeGreaterThanOrEqual(count), {
       timeout: 15_000,
       interval: 25,
     });
@@ -86,6 +86,8 @@ describe('Order confirmation mail against the user directory (integration, real 
       MAIL_TIMEOUT_MS,
       METRICS_TOKEN: E2E_METRICS_TOKEN,
       QUEUE_WORKER_ENABLED: 'true',
+      MESSAGING_RETRY_ENABLED: 'true',
+      MESSAGING_RETRY_POLL_MS: '100',
       QUEUE_CONSUMER_ATTEMPTS: String(ATTEMPTS),
       QUEUE_CONSUMER_BACKOFF_MS: String(BACKOFF_MS),
       ORDER_PAID_CONSUMER_ATTEMPTS: String(ORDER_PAID_ATTEMPTS),
@@ -95,7 +97,6 @@ describe('Order confirmation mail against the user directory (integration, real 
     }));
     relay = app.get(OutboxRelay);
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
   }, 180_000);
 
   afterAll(async () => {
@@ -108,7 +109,6 @@ describe('Order confirmation mail against the user directory (integration, real 
     stub.reset();
     await resetDatabase(pool);
     await queue.obliterate({ force: true });
-    await dlq.obliterate({ force: true });
     await mail.clear();
   });
 
@@ -126,8 +126,8 @@ describe('Order confirmation mail against the user directory (integration, real 
     const { user } = await createTestPrincipal(app);
     stub.fail('summary', 503);
 
-    const jobId = await publishPaid(user.id);
-    await waitForFailedAttempts(jobId, ATTEMPTS);
+    const messageId = await publishPaid(user.id);
+    await waitForFailedAttempts(messageId, ATTEMPTS);
     expect(await deadLetters()).toHaveLength(0);
 
     stub.reset();
@@ -141,8 +141,8 @@ describe('Order confirmation mail against the user directory (integration, real 
     const { user } = await createTestPrincipal(app);
     stub.fail('summary', 'hang');
 
-    const jobId = await publishPaid(user.id);
-    await waitForFailedAttempts(jobId, 1);
+    const messageId = await publishPaid(user.id);
+    await waitForFailedAttempts(messageId, 1);
 
     stub.reset();
 
@@ -153,8 +153,8 @@ describe('Order confirmation mail against the user directory (integration, real 
     const email = `late-${Date.now()}@test.local`;
     const user = { id: mintTestUserId(), email, role: 'CUSTOMER' as const };
 
-    const jobId = await publishPaid(user.id);
-    await waitForFailedAttempts(jobId, 2);
+    const messageId = await publishPaid(user.id);
+    await waitForFailedAttempts(messageId, 2);
     expect(await deadLetters()).toHaveLength(0);
 
     stub.register(user);
@@ -169,7 +169,7 @@ describe('Order confirmation mail against the user directory (integration, real 
 
     await publishPaid(user.id);
 
-    let dead: Job<DeadLetterJob> | undefined;
+    let dead: ConsumerRetryRow | undefined;
     await vi.waitFor(
       async () => {
         [dead] = await deadLetters();
@@ -177,8 +177,9 @@ describe('Order confirmation mail against the user directory (integration, real 
       },
       { timeout: 20_000, interval: 50 },
     );
-    expect(dead?.data.attemptsMade).toBe(ORDER_PAID_ATTEMPTS);
-    const elapsedMs = Date.parse(dead?.data.failedAt ?? '') - publishedAt;
+    expect(dead?.attemptsMade).toBe(ORDER_PAID_ATTEMPTS);
+    expect(dead?.deadReason).toBe('attempts_exhausted');
+    const elapsedMs = (dead?.lastFailedAt.getTime() ?? 0) - publishedAt;
     expect(elapsedMs).toBeGreaterThanOrEqual(ORDER_PAID_HORIZON_MS);
     expect(elapsedMs).toBeLessThan(UNCAPPED_HORIZON_MS);
     expect(await inboxRows()).toHaveLength(0);

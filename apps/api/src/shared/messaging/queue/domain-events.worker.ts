@@ -6,28 +6,26 @@ import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import { runInJobContext } from '@jcool/platform/observability';
 import { toError } from '@jcool/kernel';
-import type { ConsumeResult } from '@jcool/metrics-port';
-import { DeadLetterRouter } from './dead-letter';
+import { ConsumerDelivery, type DeliveryOutcome } from '../consume/consumer-delivery';
+import { cappedBackoffMs } from '../retry/retry-policy';
 import type { DomainEventJob } from './domain-event.job';
-import { DomainEventProcessor } from './domain-event.processor';
 import { createQueueConnection } from './queue-connection';
-import { QUEUE_DOMAIN_EVENTS, cappedBackoffMs } from './queue.constants';
+import { DOMAIN_EVENTS_CONSUMER, QUEUE_DOMAIN_EVENTS } from './queue.constants';
 
 const LOG_CONTEXT = 'DomainEventsWorker';
 // Long enough for a job that is merely slow, short enough that SIGTERM never waits on a dead Redis.
 const CLOSE_TIMEOUT_MS = 10_000;
 
 /**
- * Holds no logic of its own on purpose: everything worth asserting lives in the processor, which a
- * test can drive one delivery at a time without a running queue.
+ * Holds no logic of its own on purpose: everything worth asserting lives in the delivery, which a
+ * test can drive one message at a time without a running queue.
  */
 @Injectable()
 export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdown {
-  private worker: Worker<DomainEventJob, ConsumeResult> | null = null;
+  private worker: Worker<DomainEventJob, DeliveryOutcome> | null = null;
   private queueConnection: Redis | null = null;
-  // BullMQ's 'failed' listener is synchronous, so routing to the dead-letter queue outlives the
-  // event that triggered it. Tracked because shutdown has to wait for it: worker.close() knows
-  // nothing about these, and the queue underneath them is closed moments later.
+  // BullMQ's 'failed' listener is synchronous, so filing the dead letter outlives the event that
+  // triggered it. Tracked because shutdown has to wait for it before the pg pool closes.
   private readonly pendingRoutes = new Set<Promise<void>>();
 
   private readonly enabled: boolean;
@@ -38,8 +36,7 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
   private readonly orderPaidBackoffCapMs: number;
 
   constructor(
-    private readonly domainEventProcessor: DomainEventProcessor,
-    private readonly deadLetterRouter: DeadLetterRouter,
+    private readonly delivery: ConsumerDelivery,
     config: ConfigService,
     private readonly cls: ClsService,
     private readonly logger: PinoLogger,
@@ -64,18 +61,17 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     this.queueConnection = createQueueConnection(this.redisUrl, this.logger);
     // One correlation context per delivery, not per worker: at concurrency > 1 several jobs are in
     // flight and without a scope each their lines interleave.
-    this.worker = new Worker<DomainEventJob, ConsumeResult>(
+    this.worker = new Worker<DomainEventJob, DeliveryOutcome>(
       QUEUE_DOMAIN_EVENTS,
       (job) =>
         runInJobContext(this.cls, `${QUEUE_DOMAIN_EVENTS}:${job.name}`, () =>
-          this.domainEventProcessor.process(job.data),
+          this.delivery.deliver(DOMAIN_EVENTS_CONSUMER, job.data),
         ),
       {
         connection: this.queueConnection,
         prefix: this.prefix,
         concurrency: this.concurrency,
-        // BullMQ consults this only for a type it has no built-in for: the long ladder order.paid and
-        // catalog events share.
+        // Only jobs published before retries moved to Postgres still carry this custom backoff type.
         settings: {
           backoffStrategy: (attemptsMade: number) =>
             cappedBackoffMs(attemptsMade, this.backoffMs, this.orderPaidBackoffCapMs),
@@ -88,18 +84,19 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
       this.logger.error({ err: error }, 'domain events worker error');
     });
 
-    // The listener signature is synchronous, so the route is started rather than awaited; the
-    // .catch() keeps a bug inside it from surfacing as an unhandled rejection that kills the process.
+    // A job only fails here when its retry row could not be written. `finishedOn` is set once BullMQ
+    // schedules nothing more, so earlier failures are left to its own ladder.
     this.worker.on('failed', (job, error: Error) => {
       if (!job) {
-        // No job means BullMQ could not load it — nothing to route, and nothing to identify it by.
         this.logger.error({ err: error }, 'domain event consume failed');
         return;
       }
-      const route = this.deadLetterRouter
-        .route(job, error)
+      if (job.finishedOn === undefined) return;
+
+      const route = this.delivery
+        .recordTransportExhausted(DOMAIN_EVENTS_CONSUMER, job.data, job.attemptsMade, error)
         .catch((caught: unknown) => {
-          this.logger.error({ err: toError(caught) }, 'dead-letter routing threw');
+          this.logger.error({ err: toError(caught) }, 'filing a dead letter threw');
         })
         .finally(() => this.pendingRoutes.delete(route));
       this.pendingRoutes.add(route);
@@ -121,8 +118,7 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
       this.logger.error({ err: toError(error) }, 'failed to close domain events worker');
     }
 
-    // After the close, because the last job to fail raises 'failed' during it. Returning early here
-    // would close the dead-letter queue out from under a move still in flight.
+    // After the close, because the last job to fail raises 'failed' during it.
     await Promise.race([Promise.allSettled(this.pendingRoutes), timeout(CLOSE_TIMEOUT_MS)]);
 
     if (!this.queueConnection) return;
