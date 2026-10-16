@@ -1,0 +1,40 @@
+<svg class="ak-diagram-svg" viewBox="36 28 744 244" width="744" height="244" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Layering inside a bounded context"><title>Layering inside a bounded context</title><desc>Dependencies point inward. Infrastructure plugs in by implementing ports the application layer declares; domain imports no framework, driver or telemetry package, and application imports neither infrastructure nor interface. pnpm arch:check fails the build otherwise.</desc><defs><style>
+      svg {
+        --ak-bg: #ffffff; --ak-surface: #f8fafc; --ak-surface-border: #e2e8f0;
+        --ak-text-primary: #0f172a; --ak-text-secondary: #475569; --ak-text-muted: #94a3b8;
+        --ak-accent: #2563eb; --ak-node-bg: #ffffff; --ak-node-border: #cbd5e1;
+        --ak-edge-stroke: #64748b; --ak-edge-active: #2563eb;
+        --ak-font-sans: system-ui, -apple-system, sans-serif;
+        font-family: var(--ak-font-sans);
+      }
+      svg { --ak-bg: #090d16; --ak-text-primary: #f8fafc; --ak-text-secondary: #94a3b8; --ak-node-bg: #0f172a; --ak-node-border: #334155; --ak-edge-stroke: #475569; --ak-edge-active: #38bdf8; }
+      svg { --ak-accent: #06b6d4; --ak-edge-stroke: #0ea5e9; --ak-edge-active: #38bdf8; }
+      
+      
+    svg { --ak-surface: #111827; --ak-surface-border: #334155; }</style><marker id="ak-arrowhead-e4461002" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="var(--ak-edge-stroke)" />
+    </marker>
+  </defs><rect x="36" y="28" width="744" height="244" rx="12" fill="var(--ak-bg)" /><g class="ak-boundary" data-boundary-id="core">
+        <rect x="304" y="52" width="452" height="108" rx="12" fill="none" stroke="var(--ak-surface-border)" stroke-width="1.5" stroke-dasharray="6 4" />
+        <text x="316" y="70" font-size="11" font-weight="600" fill="var(--ak-text-muted)" font-family="var(--ak-font-sans)">core · no telemetry import</text>
+      </g><g class="ak-edge" data-from="a-interface" data-to="application" data-edge-id="edge-a-interface-application-0">
+        <path d="M 220 112 C 270 112, 270 112, 320 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-e4461002)" /><text x="270" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">calls use cases</text></g><g class="ak-edge" data-from="b-infrastructure" data-to="application" data-edge-id="edge-b-infrastructure-application-1">
+        <path d="M 220 216 C 270 216, 270 112, 320 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-e4461002)" /><text x="270" y="158" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">implements ports</text></g><g class="ak-edge" data-from="b-infrastructure" data-to="domain" data-edge-id="edge-b-infrastructure-domain-2">
+        <path d="M 220 216 C 400 216, 400 112, 580 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-e4461002)" /><text x="400" y="158" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">maps entities</text></g><g class="ak-edge" data-from="application" data-to="domain" data-edge-id="edge-application-domain-3">
+        <path d="M 480 112 C 530 112, 530 112, 580 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-e4461002)" /><text x="530" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">uses</text></g><g class="ak-node" data-node-id="a-interface" data-label="interface" data-role="gateway" data-desc="Controllers, DTOs, guards, queue handlers, schedulers." tabindex="0">
+        <rect x="60" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="140" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">interface</text>
+        <text x="140" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">gateway</text>
+      </g><g class="ak-node" data-node-id="b-infrastructure" data-label="infrastructure" data-role="database" data-desc="Drizzle repositories, Redis, S3, Stripe, SMTP, Elasticsearch adapters." tabindex="0">
+        <rect x="60" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="140" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">infrastructure</text>
+        <text x="140" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">database</text>
+      </g><g class="ak-node" data-node-id="application" data-label="application" data-role="backend" data-desc="Use cases, the ports they depend on, and the public ports other contexts call. No infrastructure, interface or telemetry import." tabindex="0">
+        <rect x="320" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="400" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">application</text>
+        <text x="400" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="domain" data-label="domain" data-role="backend" data-desc="Entities, value objects, state machines. Framework-free: no Nest, Drizzle, pg or telemetry import." tabindex="0">
+        <rect x="580" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">domain</text>
+        <text x="660" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g></svg>

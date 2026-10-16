@@ -47,5 +47,6 @@ docs/test-dedup-backlog.md
 .agentkit/
 .claude/
 *.txt
+*.json
 
 bruno/

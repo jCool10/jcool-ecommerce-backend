@@ -13,6 +13,7 @@ The gateway sends `/auth` and `/.well-known/jwks.json` here; the api serves ever
 | `GET /.well-known/jwks.json` | Public half of every key in `JWT_ES256_PRIVATE_KEYS`, `alg: ES256`, `use: sig`. `Cache-Control: public, max-age=300`. |
 | `GET /internal/v1/users/:id/summary` | `{ id, email, role }`, `404` for an unknown id. |
 | `GET /internal/v1/sessions/:userId/epoch` | `{ epoch }` from Postgres, after raising `auth:epoch:{userId}` to it. `404` for an unknown user. |
+| `GET /internal/v1/cutover/digest` | `{ csrfSecret, accessTtl, issuer, audience }` as this process loaded them, the secret as a fingerprint only — so a cut-over precheck can compare what is running instead of trusting a dashboard. |
 | `GET /health/live`, `GET /health/ready` | As in the api. |
 | `GET /auth/verify-email?token=` | The link in the verification mail. Verifies through the same use case as the JSON `POST`, then answers an HTML page; `400` page for an invalid or expired token. |
 | `GET /auth/reset-password?token=` | The link in the reset mail. Changes nothing: renders a no-JavaScript form carrying the token. |
@@ -88,6 +89,7 @@ Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`.
 ```bash
 cp apps/user-service/.env.example apps/user-service/.env      # then fill a key pair
 docker compose --profile user-service up -d --build user-service   # user-postgres, a one-shot migrate, the service
+pnpm turbo watch dev --filter=@jcool/user-service              # or on the host, rebuilt and restarted on change (stop the container first)
 curl -s http://127.0.0.1:3002/.well-known/jwks.json
 pnpm --filter @jcool/user-service test                        # unit
 pnpm --filter @jcool/user-service test:e2e                    # Postgres, Redis and Mailpit via Testcontainers

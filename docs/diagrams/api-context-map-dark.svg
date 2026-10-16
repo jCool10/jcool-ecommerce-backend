@@ -1,0 +1,57 @@
+<svg class="ak-diagram-svg" viewBox="36 56 1248 320" width="1248" height="320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="api context map"><title>api context map</title><desc>Each arrow between contexts is a call into a port the target publishes, through an adapter the calling context owns; the others are a context&apos;s calls out of the process. No context reads another&apos;s tables.</desc><defs><style>
+      svg {
+        --ak-bg: #ffffff; --ak-surface: #f8fafc; --ak-surface-border: #e2e8f0;
+        --ak-text-primary: #0f172a; --ak-text-secondary: #475569; --ak-text-muted: #94a3b8;
+        --ak-accent: #2563eb; --ak-node-bg: #ffffff; --ak-node-border: #cbd5e1;
+        --ak-edge-stroke: #64748b; --ak-edge-active: #2563eb;
+        --ak-font-sans: system-ui, -apple-system, sans-serif;
+        font-family: var(--ak-font-sans);
+      }
+      svg { --ak-bg: #090d16; --ak-text-primary: #f8fafc; --ak-text-secondary: #94a3b8; --ak-node-bg: #0f172a; --ak-node-border: #334155; --ak-edge-stroke: #475569; --ak-edge-active: #38bdf8; }
+      svg { --ak-accent: #06b6d4; --ak-edge-stroke: #0ea5e9; --ak-edge-active: #38bdf8; }
+      
+      
+    svg { --ak-surface: #111827; --ak-surface-border: #334155; }</style><marker id="ak-arrowhead-ab207e87" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="var(--ak-edge-stroke)" />
+    </marker>
+  </defs><rect x="36" y="56" width="1248" height="320" rx="12" fill="var(--ak-bg)" /><g class="ak-edge" data-from="payment" data-to="a-stripe" data-edge-id="edge-payment-a-stripe-0">
+        <path d="M 220 112 C 270 112, 270 112, 320 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="270" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">sessions</text></g><g class="ak-edge" data-from="payment" data-to="b-order" data-edge-id="edge-payment-b-order-1">
+        <path d="M 220 112 C 270 112, 270 216, 320 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="270" y="158" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">settle · read order</text></g><g class="ak-edge" data-from="b-order" data-to="a-cart" data-edge-id="edge-b-order-a-cart-2">
+        <path d="M 480 216 C 530 216, 530 112, 580 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="530" y="158" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">snapshot</text></g><g class="ak-edge" data-from="b-order" data-to="product" data-edge-id="edge-b-order-product-3">
+        <path d="M 480 216 C 660 216, 660 112, 840 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="660" y="158" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">price · stock hold</text></g><g class="ak-edge" data-from="b-order" data-to="b-smtp" data-edge-id="edge-b-order-b-smtp-4">
+        <path d="M 480 216 C 530 216, 530 216, 580 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="530" y="210" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">mail</text></g><g class="ak-edge" data-from="b-order" data-to="c-user-service" data-edge-id="edge-b-order-c-user-service-5">
+        <path d="M 480 216 C 530 216, 530 320, 580 320" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="530" y="262" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">address</text></g><g class="ak-edge" data-from="a-cart" data-to="product" data-edge-id="edge-a-cart-product-6">
+        <path d="M 740 112 C 790 112, 790 112, 840 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="790" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">live price</text></g><g class="ak-edge" data-from="product" data-to="media" data-edge-id="edge-product-media-7">
+        <path d="M 1000 112 C 1050 112, 1050 112, 1100 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-ab207e87)" /><text x="1050" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">images</text></g><g class="ak-node" data-node-id="payment" data-label="Payment" data-role="backend" data-desc="Gateway sessions, webhook sink, reconciliation. Settles Order through Order&apos;s own use case." tabindex="0">
+        <rect x="60" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="140" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Payment</text>
+        <text x="140" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="a-stripe" data-label="Stripe" data-role="external" data-desc="Hosted checkout sessions; HMAC-signed webhooks come back to Payment." tabindex="0">
+        <rect x="320" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="400" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Stripe</text>
+        <text x="400" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">external</text>
+      </g><g class="ak-node" data-node-id="b-order" data-label="Order" data-role="backend" data-desc="Order aggregate, state machine, checkout and settlement. Publishes ORDER_PAYMENT_VIEW and the order-finalization port." tabindex="0">
+        <rect x="320" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="400" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Order</text>
+        <text x="400" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="a-cart" data-label="Cart" data-role="backend" data-desc="Per-user lines, quantities only. Publishes CART_SNAPSHOT." tabindex="0">
+        <rect x="580" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Cart</text>
+        <text x="660" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="b-smtp" data-label="SMTP relay" data-role="external" data-desc="Order confirmation mail, attempted at most once when order.paid is consumed." tabindex="0">
+        <rect x="580" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">SMTP relay</text>
+        <text x="660" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">external</text>
+      </g><g class="ak-node" data-node-id="c-user-service" data-label="user-service" data-role="auth" data-desc="Internal HTTP: the buyer&apos;s address for the order.paid mail." tabindex="0">
+        <rect x="580" y="288" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="312" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">user-service</text>
+        <text x="660" y="330" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">auth</text>
+      </g><g class="ak-node" data-node-id="product" data-label="Product" data-role="backend" data-desc="Catalog and stock, two aggregate groups meeting only by variantId. Publishes PRODUCT_SKU_QUERY and PRODUCT_STOCK_RESERVATION." tabindex="0">
+        <rect x="840" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="920" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Product</text>
+        <text x="920" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="media" data-label="Media" data-role="storage" data-desc="Upload lifecycle, presigned URLs to the S3-compatible bucket, reclaim sweep. Publishes MEDIA_FACADE." tabindex="0">
+        <rect x="1100" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="1180" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Media</text>
+        <text x="1180" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">storage</text>
+      </g></svg>

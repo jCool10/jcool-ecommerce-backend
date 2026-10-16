@@ -24,10 +24,9 @@ export interface StockRepositoryPort {
   reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void>;
 
   /**
-   * Version-CAS with a bounded retry budget; throws `InsufficientStockError` on a real shortfall.
-   * Its idempotency check is NOT lock-guarded: two concurrent reserves for one `orderId` can each
-   * raise reserved once, and the surplus hold has no reservation row to release — callers must
-   * dedupe order submission upstream.
+   * Version-CAS with a bounded retry budget; throws `InsufficientStockError` on a real shortfall and
+   * `ReservationConflictError` once the budget is spent. Idempotent per (order, SKU) like the
+   * pessimistic path, concurrent duplicates of one order included.
    */
   reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[]): Promise<void>;
 

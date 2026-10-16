@@ -1,0 +1,72 @@
+<svg class="ak-diagram-svg" viewBox="34 28 1006 660" width="1006" height="660" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Production topology on Railway"><title>Production topology on Railway</title><desc>The gateway is the public entry: /auth and the JWKS go to the user-service, everything else but /internal to the api. Both apps mint every row id through the id-service fleet behind the gateway&apos;s private :4000 listener; the id-service keeps its node leases in etcd.</desc><defs><style>
+      svg {
+        --ak-bg: #ffffff; --ak-surface: #f8fafc; --ak-surface-border: #e2e8f0;
+        --ak-text-primary: #0f172a; --ak-text-secondary: #475569; --ak-text-muted: #94a3b8;
+        --ak-accent: #2563eb; --ak-node-bg: #ffffff; --ak-node-border: #cbd5e1;
+        --ak-edge-stroke: #64748b; --ak-edge-active: #2563eb;
+        --ak-font-sans: system-ui, -apple-system, sans-serif;
+        font-family: var(--ak-font-sans);
+      }
+      
+      svg { --ak-accent: #06b6d4; --ak-edge-stroke: #0ea5e9; --ak-edge-active: #38bdf8; }
+      
+      
+    </style><marker id="ak-arrowhead-5d5eba17" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="var(--ak-edge-stroke)" />
+    </marker>
+  </defs><rect x="34" y="28" width="1006" height="660" rx="12" fill="var(--ak-bg)" /><g class="ak-boundary" data-boundary-id="id-plane">
+        <rect x="564" y="52" width="452" height="108" rx="12" fill="none" stroke="var(--ak-surface-border)" stroke-width="1.5" stroke-dasharray="6 4" />
+        <text x="576" y="70" font-size="11" font-weight="600" fill="var(--ak-text-muted)" font-family="var(--ak-font-sans)">private :4000 → id plane</text>
+      </g><g class="ak-edge" data-from="gateway" data-to="a-api" data-edge-id="edge-gateway-a-api-0">
+        <path d="M 220 112 C 270 112, 270 112, 320 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /><text x="270" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">/*</text></g><g class="ak-edge" data-from="gateway" data-to="b-user-service" data-edge-id="edge-gateway-b-user-service-1">
+        <path d="M 220 112 C 270 112, 270 216, 320 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /><text x="270" y="158" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">/auth · JWKS</text></g><g class="ak-edge" data-from="a-api" data-to="a-id-service" data-edge-id="edge-a-api-a-id-service-2">
+        <path d="M 480 112 C 530 112, 530 112, 580 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /><text x="530" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">ids</text></g><g class="ak-edge" data-from="a-api" data-to="b-api-postgres" data-edge-id="edge-a-api-b-api-postgres-3">
+        <path d="M 480 112 C 530 112, 530 216, 580 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="a-api" data-to="c-elasticsearch" data-edge-id="edge-a-api-c-elasticsearch-4">
+        <path d="M 480 112 C 530 112, 530 320, 580 320" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="a-api" data-to="d-redis" data-edge-id="edge-a-api-d-redis-5">
+        <path d="M 480 112 C 530 112, 530 424, 580 424" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="a-api" data-to="f-external" data-edge-id="edge-a-api-f-external-6">
+        <path d="M 480 112 C 530 112, 530 632, 580 632" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="b-user-service" data-to="a-id-service" data-edge-id="edge-b-user-service-a-id-service-7">
+        <path d="M 480 216 C 530 216, 530 112, 580 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="b-user-service" data-to="d-redis" data-edge-id="edge-b-user-service-d-redis-8">
+        <path d="M 480 216 C 530 216, 530 424, 580 424" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="b-user-service" data-to="e-user-postgres" data-edge-id="edge-b-user-service-e-user-postgres-9">
+        <path d="M 480 216 C 530 216, 530 528, 580 528" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="b-user-service" data-to="f-external" data-edge-id="edge-b-user-service-f-external-10">
+        <path d="M 480 216 C 530 216, 530 632, 580 632" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /></g><g class="ak-edge" data-from="a-id-service" data-to="id-etcd" data-edge-id="edge-a-id-service-id-etcd-11">
+        <path d="M 740 112 C 790 112, 790 112, 840 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-5d5eba17)" /><text x="790" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">node lease</text></g><g class="ak-node" data-node-id="gateway" data-label="gateway · public :8080" data-role="gateway" data-desc="Caddy. /auth/* and /.well-known/jwks.json to the user-service, /internal/* answered 404, everything else to the api. Its private :4000 listener load-balances the id-service replicas." tabindex="0">
+        <rect x="60" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="140" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">gateway · public :8080</text>
+        <text x="140" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">gateway</text>
+      </g><g class="ak-node" data-node-id="a-api" data-label="api" data-role="backend" data-desc="NestJS modular monolith: Product, Cart, Order, Payment, Media. Verifies ES256 tokens against the user-service JWKS and reads epochs and addresses from its internal routes; holds no user rows." tabindex="0">
+        <rect x="320" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="400" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">api</text>
+        <text x="400" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="b-user-service" data-label="user-service" data-role="auth" data-desc="/auth, sessions, ES256 signing, JWKS, internal user and epoch routes. Only writer of the auth:* keys in Redis." tabindex="0">
+        <rect x="320" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="400" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">user-service</text>
+        <text x="400" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">auth</text>
+      </g><g class="ak-node" data-node-id="a-id-service" data-label="id-service ×3" data-role="backend" data-desc="POST /v1/ids: 63-bit snowflake ids under a node id leased from etcd. Reached only through the gateway&apos;s private :4000 load balancer, which retries a 503 on another replica." tabindex="0">
+        <rect x="580" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">id-service ×3</text>
+        <text x="660" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="b-api-postgres" data-label="PostgreSQL · api" data-role="database" data-desc="Every api context&apos;s tables plus outbox, inbox and idempotency keys. No foreign key crosses a context." tabindex="0">
+        <rect x="580" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">PostgreSQL · api</text>
+        <text x="660" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">database</text>
+      </g><g class="ak-node" data-node-id="c-elasticsearch" data-label="Elasticsearch" data-role="database" data-desc="Derived product index, written through the outbox with external versions. Private, reached as a user limited to products*." tabindex="0">
+        <rect x="580" y="288" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="312" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Elasticsearch</text>
+        <text x="660" y="330" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">database</text>
+      </g><g class="ak-node" data-node-id="d-redis" data-label="Redis · shared" data-role="cache" data-desc="Catalog cache, throttler, BullMQ, and the auth:epoch / auth:denylist keys the user-service writes and the api reads. AOF on, noeviction." tabindex="0">
+        <rect x="580" y="392" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="416" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Redis · shared</text>
+        <text x="660" y="434" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">cache</text>
+      </g><g class="ak-node" data-node-id="e-user-postgres" data-label="PostgreSQL · users" data-role="database" data-desc="The user-service&apos;s own database: users, refresh-token families, auth tokens, the id-layout pin." tabindex="0">
+        <rect x="580" y="496" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="520" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">PostgreSQL · users</text>
+        <text x="660" y="538" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">database</text>
+      </g><g class="ak-node" data-node-id="f-external" data-label="Stripe · S3 · SMTP" data-role="external" data-desc="Outside Railway: Stripe checkout and webhooks, the S3-compatible image bucket, the SMTP relay." tabindex="0">
+        <rect x="580" y="600" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="624" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Stripe · S3 · SMTP</text>
+        <text x="660" y="642" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">external</text>
+      </g><g class="ak-node" data-node-id="id-etcd" data-label="id-etcd" data-role="database" data-desc="Single-member etcd on the private network: per-node owner and floor keys plus the initialized marker." tabindex="0">
+        <rect x="840" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="920" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">id-etcd</text>
+        <text x="920" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">database</text>
+      </g></svg>

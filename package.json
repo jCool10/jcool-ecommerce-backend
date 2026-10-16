@@ -15,6 +15,7 @@
     "test": "turbo run test",
     "test:cov": "turbo run test:cov",
     "test:e2e": "turbo run test:e2e",
+    "dev": "turbo watch dev",
     "dev:link-env": "ln -sf ../../.env apps/api/.env",
     "format": "pnpm --filter @jcool/api format",
     "start": "pnpm --filter @jcool/api start",

@@ -1,0 +1,52 @@
+<svg class="ak-diagram-svg" viewBox="36 56 728 320" width="728" height="320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Observability on Railway"><title>Observability on Railway</title><desc>Every Node service pushes its pino lines to Loki as well as stdout; Prometheus scrapes the api&apos;s token-guarded /metrics; Grafana, the only public piece, queries both behind a login. No trace backend is deployed: a traceId joins log lines across services.</desc><defs><style>
+      svg {
+        --ak-bg: #ffffff; --ak-surface: #f8fafc; --ak-surface-border: #e2e8f0;
+        --ak-text-primary: #0f172a; --ak-text-secondary: #475569; --ak-text-muted: #94a3b8;
+        --ak-accent: #2563eb; --ak-node-bg: #ffffff; --ak-node-border: #cbd5e1;
+        --ak-edge-stroke: #64748b; --ak-edge-active: #2563eb;
+        --ak-font-sans: system-ui, -apple-system, sans-serif;
+        font-family: var(--ak-font-sans);
+      }
+      svg { --ak-bg: #090d16; --ak-text-primary: #f8fafc; --ak-text-secondary: #94a3b8; --ak-node-bg: #0f172a; --ak-node-border: #334155; --ak-edge-stroke: #475569; --ak-edge-active: #38bdf8; }
+      svg { --ak-accent: #06b6d4; --ak-edge-stroke: #0ea5e9; --ak-edge-active: #38bdf8; }
+      
+      
+    svg { --ak-surface: #111827; --ak-surface-border: #334155; }</style><marker id="ak-arrowhead-9d5101f2" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="var(--ak-edge-stroke)" />
+    </marker>
+  </defs><rect x="36" y="56" width="728" height="320" rx="12" fill="var(--ak-bg)" /><g class="ak-edge" data-from="a-api" data-to="a-prometheus" data-edge-id="edge-a-api-a-prometheus-0">
+        <path d="M 220 112 C 270 112, 270 112, 320 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-9d5101f2)" /><text x="270" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">/metrics</text></g><g class="ak-edge" data-from="a-api" data-to="b-loki" data-edge-id="edge-a-api-b-loki-1">
+        <path d="M 220 112 C 270 112, 270 216, 320 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-9d5101f2)" /></g><g class="ak-edge" data-from="b-user-service" data-to="b-loki" data-edge-id="edge-b-user-service-b-loki-2">
+        <path d="M 220 216 C 270 216, 270 216, 320 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-9d5101f2)" /><text x="270" y="210" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">logs</text></g><g class="ak-edge" data-from="c-id-service" data-to="b-loki" data-edge-id="edge-c-id-service-b-loki-3">
+        <path d="M 220 320 C 270 320, 270 216, 320 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-9d5101f2)" /></g><g class="ak-edge" data-from="a-prometheus" data-to="a-grafana" data-edge-id="edge-a-prometheus-a-grafana-4">
+        <path d="M 480 112 C 530 112, 530 112, 580 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-9d5101f2)" /><text x="530" y="106" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">queries</text></g><g class="ak-edge" data-from="b-loki" data-to="a-grafana" data-edge-id="edge-b-loki-a-grafana-5">
+        <path d="M 480 216 C 530 216, 530 112, 580 112" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-9d5101f2)" /></g><g class="ak-edge" data-from="b-loki" data-to="b-loki-chunks" data-edge-id="edge-b-loki-b-loki-chunks-6">
+        <path d="M 480 216 C 530 216, 530 216, 580 216" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-9d5101f2)" /><text x="530" y="210" font-size="10" font-weight="500" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)" style="stroke:none;stroke-width:0;">chunks</text></g><g class="ak-node" data-node-id="a-api" data-label="api" data-role="backend" data-desc="" tabindex="0">
+        <rect x="60" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="140" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">api</text>
+        <text x="140" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="b-user-service" data-label="user-service" data-role="auth" data-desc="" tabindex="0">
+        <rect x="60" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="140" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">user-service</text>
+        <text x="140" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">auth</text>
+      </g><g class="ak-node" data-node-id="c-id-service" data-label="id-service ×3" data-role="backend" data-desc="" tabindex="0">
+        <rect x="60" y="288" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="140" y="312" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">id-service ×3</text>
+        <text x="140" y="330" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
+      </g><g class="ak-node" data-node-id="a-prometheus" data-label="Prometheus" data-role="database" data-desc="Scrapes the api&apos;s /metrics with METRICS_TOKEN, and Loki&apos;s own metrics. Alert rules ship with promtool tests." tabindex="0">
+        <rect x="320" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="400" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Prometheus</text>
+        <text x="400" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">database</text>
+      </g><g class="ak-node" data-node-id="b-loki" data-label="Loki" data-role="database" data-desc="Push target for every Node service; WAL on a volume." tabindex="0">
+        <rect x="320" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="400" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Loki</text>
+        <text x="400" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">database</text>
+      </g><g class="ak-node" data-node-id="a-grafana" data-label="Grafana · login" data-role="frontend" data-desc="The only public part of the stack. Links a traceId to its log lines across services." tabindex="0">
+        <rect x="580" y="80" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="104" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Grafana · login</text>
+        <text x="660" y="122" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">frontend</text>
+      </g><g class="ak-node" data-node-id="b-loki-chunks" data-label="loki-chunks bucket" data-role="storage" data-desc="Chunks and index, 30-day retention." tabindex="0">
+        <rect x="580" y="184" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="660" y="208" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">loki-chunks bucket</text>
+        <text x="660" y="226" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">storage</text>
+      </g></svg>

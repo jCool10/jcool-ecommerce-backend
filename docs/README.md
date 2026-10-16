@@ -8,14 +8,15 @@ Code owns **what** and **how**. These documents own only **why** and **where** �
 | --- | --- | --- |
 | [`README.md`](../README.md) | Public entry: product intent and non-goals, the four invariants, the architecture map and layering contract, the route summary, testing tiers, measured performance, observability, and the known-limits ledger | The system at a glance, or the file to open for an engineering highlight |
 | [`project-overview-pdr.md`](./project-overview-pdr.md) | Domain glossary and the business rules the code enforces | The exact meaning of a domain term, or which constant owns a business rule |
-| [`system-architecture.md`](./system-architecture.md) | Service boundaries, data ownership, the auth trust flow, and the decision ledger — each durable choice with its rejected alternatives and revisit trigger | To change a boundary, or to judge whether a past decision still fits |
+| [`system-architecture.md`](./system-architecture.md) | Service boundaries, data ownership, the auth trust flow, the checkout and settlement sequence, and the decision ledger — each durable choice with its rejected alternatives and revisit trigger | To change a boundary, or to judge whether a past decision still fits |
 | [`code-standards.md`](./code-standards.md) | Contribution constraints: gates, how fences are treated, where a test belongs, migrations, logging, API conventions, commits | To change the code and have the change accepted |
 | [`codebase-summary.md`](./codebase-summary.md) | Navigation: entry points, CLIs, schemas, config, test tiers, infra and deploy config, package roles | To find where something lives |
 | [`deployment-guide.md`](./deployment-guide.md) | Environments, what owns each deploy target's config, and where the pipeline's reasoning is recorded | To change how or where the system deploys |
 | [`project-roadmap.md`](./project-roadmap.md) | Intended direction that has not shipped | To know what is planned, as distinct from what is live |
+| [`diagrams/`](./diagrams) | The diagrams the README and `system-architecture.md` embed: one typed JSON IR per diagram (the source), compiled by the `ak-diagram` skill's compiler into `<name>.svg` and `<name>-dark.svg`. Edit the JSON, never the SVG, then run `node scripts/build-doc-diagrams.mjs` (`AK_DIAGRAM_COMPILER` points it at a compiler outside `~/.claude/skills`). The same compiler's `--format html` turns one IR into an interactive reader | To change or add a diagram |
 | [`RUNBOOK.md`](../RUNBOOK.md) | Manual operator procedures with consequences | To perform an operation against a live system |
 | [`apps/id-service/README.md`](../apps/id-service/README.md), [`apps/user-service/README.md`](../apps/user-service/README.md) | Each service's API, configuration and published contracts | To call or configure that service |
-| [`.env.example`](../.env.example), [`apps/user-service/.env.example`](../apps/user-service/.env.example) | The complete, commented reference for every api and user-service environment variable | To configure an environment |
+| [`.env.example`](../.env.example), [`apps/user-service/.env.example`](../apps/user-service/.env.example) | The commented reference for the api's and the user-service's environment variables; the validators in each app's config are the final word | To configure an environment |
 | `/docs` (Swagger UI) | The always-current HTTP contract, generated from the code | The exact request and response shape of a route |
 
 ## Route

@@ -18,9 +18,9 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — five 
 
 | | |
 | --- | --- |
-| **Scale** | api: 5 bounded contexts · 437 TypeScript files · 17 tables · 28 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
-| **Tests** | The claims above are pinned on real Postgres, Redis, etcd, MinIO, Elasticsearch and SMTP (Testcontainers), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
-| **Gates** | `lint` → `typecheck` → `arch:check` (8 boundary rules) → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
+| **Scale** | api: 5 bounded contexts · 449 TypeScript files · 17 tables · 29 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
+| **Tests** | The claims above are pinned on real Postgres, Redis, MinIO, Elasticsearch and SMTP (Testcontainers; the id-service suites add etcd), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
+| **Gates** | `lint:check` → `typecheck` → `arch:check` (8 boundary rules) → `railway:check-flip-vars` → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
 ---
 
@@ -54,75 +54,14 @@ Four invariants drive nearly every design decision in the repository:
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    subgraph edge["interface — HTTP"]
-        CAT["/products, /admin"]:::ctx
-        CART["/cart"]:::ctx
-        ORD["/orders, /admin/orders"]:::ctx
-        PAY["/orders/:id/pay<br/>/webhooks/payment"]:::ctx
-        INV["/admin/inventory"]:::ctx
-        MED["/admin/media"]:::ctx
-    end
+Three Node services and a Caddy gateway on Railway. The api is the modular monolith; the user-service and the id-service were extracted from it. Shown is the routing once the public domain moves onto the gateway ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)); until that flip the domain still points straight at the api.
 
-    subgraph core["bounded contexts — application + domain"]
-        PR["Product<br/>catalog · stock"]:::box --- K[Cart]:::box
-        O[Order]:::box --- P[Payment]:::box --- M[Media]:::box
-    end
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/diagrams/system-topology-dark.svg">
+  <img alt="Production topology: the public gateway routes /auth and the JWKS to the user-service and everything else to the api; both mint ids through three id-service replicas behind the gateway's private :4000 listener, which lease node ids from etcd; the api owns its Postgres and Elasticsearch, shares Redis with the user-service, and calls Stripe, S3 and SMTP" src="./docs/diagrams/system-topology.svg">
+</picture>
 
-    subgraph async["asynchronous backbone"]
-        OB[(outbox)]:::db --> RLY[relay<br/>FOR UPDATE SKIP LOCKED]:::box
-        RLY --> Q[[BullMQ<br/>domain-events]]:::box
-        Q --> W[worker]:::box --> IB[(inbox claim)]:::db
-        Q -.retries exhausted.-> DLQ[[domain-events-dlq]]:::box
-    end
-
-    subgraph infra["infrastructure"]
-        PG[(PostgreSQL 16)]:::db
-        RD[(Redis 7)]:::db
-        S3[(S3 / MinIO)]:::db
-        ES[(Elasticsearch)]:::db
-        SMTP[(SMTP)]:::db
-        STRIPE([Stripe]):::ext
-    end
-
-    CAT --> PR
-    CART --> K
-    ORD --> O
-    PAY --> P
-    INV --> PR
-    MED --> M
-
-    O -->|one transaction| PG
-    O --> OB
-    P --> OB
-    P --> STRIPE
-    PR --> RD
-    PR --> OB
-    PR -->|search| ES
-    M --> S3
-    W --> PG
-    W -->|versioned writes| ES
-
-    classDef ctx fill:#1f2937,stroke:#4b5563,color:#e5e7eb
-    classDef box fill:#111827,stroke:#374151,color:#e5e7eb
-    classDef db fill:#0f766e,stroke:#115e59,color:#ecfeff
-    classDef ext fill:#7c2d12,stroke:#9a3412,color:#ffedd5
-```
-
-Deployed on Railway, once the public domain moves onto the gateway ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)):
-
-```
-client ─TLS─▶ Railway edge ─▶ gateway :8080 ─▶ user-service   /auth/*
-                              gateway :8080 ─▶ api            every other route but /internal/*
-                              gateway :4000 ─▶ id-service ×3 ─▶ id-etcd       private network only
-                user-service ─▶ gateway :4000
-                         api ─▶ elasticsearch :9200   private network only, as a user limited to products*
-      api, user-service, id-service ─▶ loki ◀── grafana (public, login only) ──▶ prometheus ─▶ api /metrics
-```
-
-The api verifies the user-service's ES256 tokens against its JWKS and reads session epochs from the
-shared Redis; it holds no user rows, no signing key and no `/auth` route.
+The api verifies the user-service's ES256 tokens against its JWKS and reads session epochs from the shared Redis, asking the user-service's internal routes only on a miss; it holds no user rows, no signing key and no `/auth` route. The gateway answers any `/internal/*` path with `404`, so those routes are reachable only on the private network. Elasticsearch is private too, and the api reaches it as a user limited to `products*`.
 
 ### Bounded contexts
 
@@ -130,23 +69,27 @@ shared Redis; it holds no user rows, no signing key and no `/auth` route.
 | --- | --- | --- |
 | **Product** | Two aggregate groups that meet only by `variantId`: catalog (categories, products, SKUs, prices, product images, search index) and stock (stock levels, reservations) | `PRODUCT_SKU_QUERY` (live price/name), `PRODUCT_STOCK_RESERVATION` (reserve / commit / release) |
 | **Cart** | Per-user cart lines — quantities only, no prices | `CART_SNAPSHOT` (`{skuId, quantity}`) |
-| **Order** | The order aggregate, its state machine, checkout and settlement | `ORDER_PAYMENT_VIEW`, `FinalizeOrderUseCase` |
+| **Order** | The order aggregate, its state machine, checkout and settlement | `ORDER_PAYMENT_VIEW`, `FinalizeOrderUseCase` (through `order-finalization.port`) |
 | **Payment** | Gateway sessions, webhook sink, reconciliation | — (settles Order through Order's own use case) |
-| **Media** | Upload lifecycle, presigned URLs, reclaim sweep | `MEDIA_QUERY`, `MEDIA_FACADE` |
+| **Media** | Upload lifecycle, presigned URLs to the object bucket, reclaim sweep | `MEDIA_FACADE` (Product reads it through its own `MEDIA_QUERY` adapter) |
 
 No context reads another's tables. Cross-context calls go through an anti-corruption adapter the *calling* context owns, bound to the target's published port — there are no cross-context foreign keys anywhere in the schema, which is what keeps an extraction from becoming a schema migration.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/diagrams/api-context-map-dark.svg">
+  <img alt="Context map: Payment calls Stripe and settles Order; Order reads the Cart snapshot, prices and holds stock in Product, sends mail over SMTP and asks the user-service for the buyer's address; Cart prices lines live from Product; Product resolves images through Media" src="./docs/diagrams/api-context-map.svg">
+</picture>
 
 ### Layering
 
 Dependencies point inward; infrastructure is plugged in through ports declared by the inner layers.
 
-```
-interface  ──▶  application  ──▶  domain          (framework-free, no DB, no telemetry)
-                     ▲                 ▲
-                     └──── implements ─┴──── infrastructure   (Drizzle, Redis, S3, Stripe, SMTP)
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/diagrams/layering-dark.svg">
+  <img alt="Layering: interface calls application use cases; infrastructure implements application ports and maps domain entities; application uses domain; application and domain form a core that imports no telemetry" src="./docs/diagrams/layering.svg">
+</picture>
 
-`pnpm arch:check` (dependency-cruiser, 8 error-severity rules) fails the build when `domain` imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one context reaches into another for anything but its `application/public` surface — internal use cases included, which is the crossing a boundary rule usually forgets — when Product's catalog and stock subdomains import each other in any layer, or when `domain`/`application` import **any** telemetry package. That last rule is mechanical because the leak is easy: the observability barrel transitively pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity. ESLint adds two file-scoped fences of its own — no `async`/`await` in the id generator, and no `uuid`/`randomUUID` in user infrastructure.
+`pnpm arch:check` (dependency-cruiser, 8 error-severity rules) fails the build when `domain` imports a framework or a driver, when `application` imports `infrastructure` or `interface`, when one context reaches into another for anything but its `application/public` surface — internal use cases included, which is the crossing a boundary rule usually forgets — when Product's catalog and stock subdomains import each other in any layer, when `shared/` imports a context, when one package reaches into another by relative path instead of its published name, or when `domain`/`application` import **any** telemetry package or reach messaging other than through its pure port. That telemetry rule is mechanical because the leak is easy: the observability barrel transitively pulls `@opentelemetry/api`, so one stray import would put a tracing dependency in a domain entity. ESLint adds file-scoped fences of its own: no `await` on the id generator's mint path (the node lease, which talks to etcd, is exempt outside `generate`/`fenced`), and no `uuid`/`randomUUID` where rows are inserted outside the id port — the user-service's infrastructure and id-generator service, and both apps' `scripts/`.
 
 Two composition roots are exempt from the "shared may not import a context" rule, because wiring contexts together is precisely their job: `shared/messaging` (registers context event handlers) and the schema barrel (collects every context's tables for the migrator).
 
@@ -169,12 +112,16 @@ apps/api/
 │       ├── messaging/       # outbox, relay, BullMQ queue, inbox, DLQ + replay CLI
 │       ├── infrastructure/  # Drizzle schema + migrations, the api's DrizzleDB alias, object storage
 │       ├── cache/           # stale-while-revalidate cache + single-flight rebuild lock
+│       ├── identity/        # ID_GENERATOR port + module: every row id comes from the id-service
 │       ├── idempotency/     # request fingerprint + CLS carrier
-│       └── interface/       # debug controller
+│       ├── interface/       # debug controller
+│       └── testing/         # unit-test doubles (id generator, Redis)
 ├── test/
 │   ├── integration/         # e2e suites on real infrastructure (Testcontainers)
-│   └── setup/               # global setup, app factory, fixtures, per-suite side containers
-└── scripts/                 # seeds, DB metrics
+│   ├── setup/               # global setup, app factory, fixtures, per-suite side containers, service stubs
+│   ├── mocks/               # deterministic uuid double for the unit tier
+│   └── vitest-e2e.config.mts
+└── scripts/                 # perf-seed (catalog + cart for the load tests), trace harness
 apps/id-service/             # POST /v1/ids; node lease (etcd), N replicas; unit / e2e / system tests
 apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e tests
 apps/gateway/                # Caddyfile: public site routing /auth to the user-service, private LB over the id-service replicas
@@ -184,16 +131,19 @@ packages/
 ├── id-generator/            # @jcool/id-generator — monotonic snowflake generator, node lease, node ids
 ├── auth-verifier/           # @jcool/auth-verifier — the access-token check every service runs: ES256, then denylist and session epoch
 ├── metrics-port/            # @jcool/metrics-port — the metrics seam domain and application code depend on
-├── platform/                # @jcool/platform — Nest infrastructure: env fragments, pg + Drizzle, Redis, observability,
-│                            #   health, throttler, rbac, mail, resilience, retention; one subpath export each
+├── platform/                # @jcool/platform — Nest infrastructure: env fragments, pg + Drizzle, Redis, observability, metrics,
+│                            #   error tracking, health, throttler, rbac, mail, resilience, retention, identity, interface;
+│                            #   one subpath export each
 └── testing/                 # @jcool/testing — test doubles, source-only, dev dependency only
 test/load/  k6/              # k6 mixes
-infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana, Elasticsearch
+infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana, Elasticsearch, etcd
+scripts/                     # repo tooling: CI's Railway flip-variable check, rollout wait, perf capture, doc diagram build
+docs/                        # standards, architecture decisions, deployment; docs/diagrams/ holds the diagram sources
 .railway/railway.ts          # Railway deploy config (infrastructure as code)
-turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflows/
+turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflows/  RUNBOOK.md
 ```
 
-Packages compile to CommonJS `dist/` with `tsc` and are consumed the way production consumes them, tests included. Every Turborepo task depends on `^build`, so the packages are built first, in dependency order: `kernel` and `metrics-port`, then `id-codec`, then `id-generator`, then `platform`, then `auth-verifier`, then the apps. `@jcool/testing` is never built. Scripts forwarded straight to the api (`start:dev`, `test:watch`, `db:*`, the CLIs) skip Turborepo and read the last build, so run `pnpm build` after changing a package. Nest, nestjs-pino, prom-client, ioredis and drizzle-orm are peer dependencies of `platform`. The lockfile resolves each to a single install shared by the app and the package, and `apps/api/src/platform-peer-dependencies.spec.ts` fails once the two manifests drift apart.
+Packages compile to CommonJS `dist/` with `tsc` and are consumed the way production consumes them, tests included. Every Turborepo task depends on `^build`, so the packages are built first, in dependency order: `kernel` and `metrics-port`, then `id-codec`, then `id-generator`, then `platform`, then `auth-verifier`, then the apps. `@jcool/testing` is never built. `pnpm dev` rebuilds a package when it changes and restarts the apps that use it (see [Quick start](#quick-start)). Scripts forwarded straight to the api (`start:dev`, `test:watch`, `db:*`, the CLIs) skip Turborepo and read the last build, so run `pnpm build` after changing a package before using them. Nest, nestjs-pino, prom-client, ioredis and drizzle-orm are among the peer dependencies of `platform`. The lockfile resolves each to a single install shared by the app and the package, and `apps/api/src/platform-peer-dependencies.spec.ts` fails once the two manifests drift apart.
 
 ---
 
@@ -205,30 +155,35 @@ The parts worth reading the code for. Each row names the file to open.
 
 | Problem | Approach | Where |
 | --- | --- | --- |
-| **Oversell under contention** | Two interchangeable strategies behind one port, picked by `INVENTORY_LOCK_STRATEGY`: pessimistic `SELECT … FOR UPDATE`, or a version CAS with bounded retry. Both run **inside the caller's transaction**, so the hold commits with the order. Three `CHECK` constraints (`ck_stock_on_hand_nonneg`, `ck_stock_reserved_nonneg`, `ck_stock_no_oversell`) make the database the final authority | `modules/product/infrastructure/stock/stock.repository.ts` |
-| **Checkout atomicity** | One transaction inserts the placed order and its price-snapshot lines, takes the stock hold, appends the `order.placed` outbox row, and flips the idempotency key to `COMPLETED`. A stock shortfall rolls back all four — no order, no event, no key blocking the retry | `modules/order/application/use-cases/checkout-order.use-case.ts` |
+| **Oversell under contention** | Two interchangeable strategies behind one port, picked by `INVENTORY_LOCK_STRATEGY`: pessimistic `SELECT … FOR UPDATE`, or a version CAS with bounded retry (`INVENTORY_OPTIMISTIC_MAX_RETRIES`, default 3). Both run **inside the caller's transaction**, so the hold commits with the order. Three `CHECK` constraints (`ck_stock_on_hand_nonneg`, `ck_stock_reserved_nonneg`, `ck_stock_no_oversell`) make the database the final authority | `modules/product/application/stock/reserve-stock.use-case.ts`, `modules/product/infrastructure/stock/stock.repository.ts` |
+| **Checkout atomicity** | One transaction, under a per-buyer advisory lock, inserts the placed order and its price-snapshot lines, takes the stock hold, appends the `order.placed` outbox row, and flips the idempotency key to `COMPLETED`. A stock shortfall rolls back all four — no order, no event, no key blocking the retry | `modules/order/application/use-cases/checkout-order.use-case.ts`, `modules/order/infrastructure/drizzle-order.repository.ts` |
 | **Exactly-once settlement** | Every path that settles an order (webhook, queue consumer, reconcile sweep, buyer cancel, admin cancel) funnels through one `FinalizeOrderUseCase`: `SELECT … FOR UPDATE` on the order row plus a terminal-status guard. No distributed lock. It can **join** a caller's transaction so a consumer's inbox claim and the settlement commit together | `modules/order/application/use-cases/finalize-order.use-case.ts` |
-| **Duplicate checkout requests** | Two layers: a per-`(scope, key)` idempotency entry gate that replays the first response body and status, and a `UNIQUE (user_id, idempotency_key)` index on `orders` as the backstop. A key reused with a different request body is `422`, not a silent replay. A key left `IN_PROGRESS` by a crashed request is reclaimable after a 30 s lease; a reclaim racing a request that is still alive is safe, because checkout also takes a per-user advisory lock and the unique index still decides | `modules/order/application/ports/idempotency-store.port.ts` |
+| **Duplicate checkout requests** | Two layers: a per-`(scope, key)` idempotency entry gate that replays the first response body and status, and a `UNIQUE (user_id, idempotency_key)` index on `orders` as the backstop. A key reused with a different request body is `422`, not a silent replay. A key left `IN_PROGRESS` by a crashed request is reclaimable after a 30 s lease; a reclaim racing a request that is still alive is safe, because checkout also takes a per-user advisory lock and the unique index still decides | `modules/order/interface/idempotency.interceptor.ts`, `modules/order/application/ports/idempotency-store.port.ts` |
 | **Refresh-token theft** | Rotation runs in one `FOR UPDATE` transaction. Presenting a token that was already replaced or revoked revokes the **entire family**, not just that token — and revocation is checked before expiry, so a retired token still reads as reuse rather than as an expiry. Only a replay that finds live tokens counts as theft and bumps the session epoch, so an old token replayed again cannot keep logging the owner out. Rotation holds a shared per-user advisory lock and logout-all / session revoke take it exclusively, so a revoke never misses a successor inserted by a rotation already in flight | `apps/user-service/src/modules/user/infrastructure/drizzle-refresh-token.repository.ts` |
 
 ### Distributed systems
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/diagrams/async-backbone-dark.svg">
+  <img alt="Outbox to inbox: a write transaction commits the change and its outbox row; the relay publishes unpublished rows with SKIP LOCKED to the domain-events queue; a worker claims the message in the inbox and applies the effect in the same transaction; exhausted jobs land in domain-events-dlq, inspected by queue:replay-dlq" src="./docs/diagrams/async-backbone.svg">
+</picture>
 
 | Problem | Approach | Where |
 | --- | --- | --- |
 | **The dual-write problem** | Events are rows written by the same transaction as the change they describe. A relay polls `published_at IS NULL` with `FOR UPDATE SKIP LOCKED`, publishes to BullMQ and marks the row published in one transaction — at-least-once, safe on every replica, no leader election | `shared/messaging/outbox/outbox-relay.ts` |
 | **At-least-once → exactly-once** | The consumer claims `message_id = outbox.id` in an `inbox` table (`UNIQUE (consumer, message_id)`) and applies the handler's effect **in that same transaction** (anything slow, such as a call to another service, is prepared before it opens). A redelivery loses the claim and does nothing; a handler that throws takes its claim down with it, so the redelivery does the work | `shared/messaging/queue/domain-event.processor.ts` |
 | **Sweeping the inbox safely** | Inbox claims are swept on a schedule (`RETENTION_INBOX_DAYS`, default 30d), and the app **refuses to boot** if that retention is shorter than the queue's failed-job horizon — deleting a claim while its message can still be redelivered would apply the effect twice | `shared/messaging/inbox/sweep-inbox.ts` |
-| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery; `order.paid`, which waits on the user-service, gets 15 with a capped backoff, as do `order.expired` and `order.cancelled`, which close the Stripe session and so must outlive its 32-minute lifetime), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing, so replaying a job whose effect already landed is a no-op. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts` |
+| **Poison messages** | BullMQ retries with backoff to a bounded attempt budget (`QUEUE_CONSUMER_ATTEMPTS`, default 8 including the first delivery; `order.paid`, which waits on the user-service, gets 15 with a capped backoff, as do `order.expired` and `order.cancelled`, which close the Stripe session and so must outlive its 32-minute lifetime, and `catalog.*`, which waits on the search engine at a lower priority than order and payment work), then routes to `domain-events-dlq`. `pnpm queue:replay-dlq` interrogates the inbox before re-publishing: a job whose effect already landed is reported `skipped`, and `--force` cannot override that — it only admits a job old enough that its claim may have been swept. Dry run is the default | `shared/messaging/queue/dead-letter.replay.ts`, `shared/messaging/queue/queue.constants.ts` |
 | **Search index consistency** | No transaction reaches the engine, so the index follows Postgres through the outbox. Every catalog write bumps `products.search_version` and appends its event in the same transaction; the worker re-reads the product and writes it with `version_type: external`, so the engine refuses a stale, repeated or reordered delivery. An archived product stays as a versioned tombstone, so a late write cannot bring it back. A rebuild fills a fresh index behind a second alias and swaps atomically ([decision record](./docs/system-architecture.md#search-index-consistency)) | `modules/product/application/catalog/services/product-search-sync.service.ts`, `modules/product/infrastructure/catalog/search/elasticsearch-catalog-search.adapter.ts` |
-| **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts` |
-| **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `packages/platform/src/observability/tracing/propagation.ts` |
+| **Payment saga convergence** | Three paths settle an order, in descending priority: the HMAC-verified webhook, a durable `payment.succeeded`/`payment.failed` event, and a polling reconciliation sweep that probes the gateway for orders stuck `PENDING` and doubles as TTL expiry. Behind them, Order's own expired-hold sweep expires any order whose stock hold lapsed unsettled without asking the gateway anything, so it converges even through a gateway outage. Whichever arrives first wins; the rest are no-ops under the terminal guard | `modules/payment/application/use-cases/reconcile-stale-orders.use-case.ts`, `modules/order/application/use-cases/sweep-expired-reservations.use-case.ts` |
+| **Trace continuity across the async hop** | The outbox writer captures the W3C `traceparent` at insert, the relay carries it onto the job, and the consumer resumes it, so one trace runs from HTTP request through outbox insert, relay publish and consumer handler | `shared/messaging/outbox/drizzle-outbox.writer.ts`, `shared/messaging/queue/domain-event.processor.ts`, `packages/platform/src/observability/tracing/propagation.ts` |
 
 ### Performance and caching
 
 | Problem | Approach | Where |
 | --- | --- | --- |
 | **Thundering herd on cache expiry** | Reads go through stale-while-revalidate behind a Redis **single-flight rebuild lock** with a lease and jitter: one request rebuilds, everyone else is served the stale value. `cache_rebuild_duration_seconds` measures the rebuild | `shared/cache/swr-cache.service.ts`, `shared/cache/single-flight.lock.ts` |
-| **Catalog-wide invalidation** | A generation counter, not key enumeration: bumping one Redis integer retires every catalog key at once, in O(1). Staleness after a *missed* invalidation is bounded by `CATALOG_CACHE_TTL_SEC` **plus** the shared stale window and jitter (≈100s at defaults) | `modules/product/infrastructure/catalog/caching-product.repository.ts` |
+| **Catalog-wide invalidation** | A generation counter, not key enumeration: bumping one Redis integer retires every catalog key at once, in O(1). Staleness after a *missed* invalidation is bounded by `CATALOG_CACHE_TTL_SEC` **plus** the shared stale window and jitter (≈100s at defaults) | `modules/product/infrastructure/catalog/catalog-cache.keys.ts`, `modules/product/infrastructure/catalog/caching-catalog-admin.repository.ts` |
 | **Cache poisoning across deploys** | The cache codec re-validates every field on read, so a shape change between deploys degrades to a cache refill instead of a 500 | `modules/product/infrastructure/catalog/product-cache.codec.ts` |
 | **Presigned URLs vs cached documents** | Catalog stores **asset ids, never URLs**. A presigned URL outlives its cache entry by minutes and the entry by hours, so URLs are resolved *after* the cache read — one batched call per response page. An id whose asset has since gone is dropped rather than rendered as a broken image | `modules/product/application/catalog/use-cases/get-product-detail.use-case.ts` |
 | **Unbounded cache keys** | Every query parameter is part of the cache-key fingerprint, so each is bounded at the DTO edge: `page ≤ 10000`, `pageSize ≤ 100`, `categorySlug` must match the slug pattern. An unbounded field would be an unbounded number of cache keys as well as an unbounded query | `modules/product/interface/catalog/dto/list-products-query.dto.ts` |
@@ -240,7 +195,7 @@ The parts worth reading the code for. Each row names the file to open.
 | --- | --- | --- |
 | **Immediate JWT revocation** | Stateless ES256 access tokens, signed by the user-service and checked against its JWKS, carry `{sub, role, jti, epoch}` and are re-checked per request against a Redis `jti` denylist (one token) and a per-user epoch (every token issued before a logout-all or password change). The user-service is the only writer of those keys; the api only reads them | `packages/auth-verifier/src/access-token.verifier.ts` |
 | **Token delivery and CSRF** | The access token goes in the JSON body (Bearer is CSRF-immune). The refresh token goes **only** in an `httpOnly; SameSite=Strict; Path=/auth` cookie, paired with a signed double-submit CSRF cookie enforced on the two routes that consume it. Both live in the user-service; the api takes Bearer only | `apps/user-service/src/modules/user/interface/security/csrf.guard.ts` |
-| **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor), `account` by IP + SHA-256(email) on auth routes (5/15min, 15min block), `user` by authenticated id on write routes (10/60s) — the tier an attacker cannot outrun by rotating IPs | `packages/platform/src/throttler/throttler.constants.ts` |
+| **Brute force** | Three Redis-backed tiers with different keys: `default` by IP (100/60s app-wide floor; tightened to 20/60s with a 5-min block on the routes that take an email — login, register, resend-verification, forgot-password — and to 30/60s on the other token-consuming auth routes), `account` by IP + SHA-256(email) on those email routes (5/15min, 15min block), `user` by authenticated id on checkout, payment-session creation and cancel (10/60s) — the tier an attacker cannot outrun by rotating IPs | `packages/platform/src/throttler/throttler.constants.ts` |
 | **User enumeration** | `forgot-password` and `resend-verification` always answer `202`. Login runs a real argon2 verify against a cached dummy hash on the unknown-email branch, so the timing of "no such user" matches "wrong password" | `apps/user-service/src/modules/user/application/use-cases/login-user.use-case.ts` |
 | **Webhook authenticity** | HMAC-SHA256 over the **raw request bytes** (`rawBody: true` — the JSON parser would re-serialize and break the signature), constant-time compare, plus a `±PAYMENT_WEBHOOK_TOLERANCE_SEC` replay window. Exempt from both throttle tiers so a burst of legitimate gateway retries is never rate-limited away | `modules/payment/infrastructure/gateway/hmac-signature.ts` |
 | **Metrics endpoint disclosure** | A wrong or missing `METRICS_TOKEN` returns a plain `404`, never `401` — a `401` confirms the endpoint exists to anyone probing. (With no token configured at all, `/metrics` is open in development and `404` in production.) | `packages/platform/src/observability/metrics/metrics.guard.ts` |
@@ -267,25 +222,34 @@ The parts worth reading the code for. Each row names the file to open.
 # 1. install
 pnpm install
 
-# 2. configure — the template boots as-is against the Compose stack below. The app runs from
-#    apps/api, so link the root .env there.
+# 2. configure — both templates boot as-is against the Compose stack below, once the
+#    user-service's .env has a signing key (JWT_ES256_PRIVATE_KEYS; the openssl one-liner is in
+#    its template). The api runs from apps/api, so link the root .env there.
 cp .env.example .env
+cp apps/user-service/.env.example apps/user-service/.env
 pnpm dev:link-env
 
-# 3. infrastructure (the ports below are the host-mapped ones)
+# 3. infrastructure (the ports below are the host-mapped ones). The id-service fleet stays in
+#    Compose: both apps mint ids through the gateway's load balancer on 127.0.0.1:4000.
 docker compose up -d postgres redis elasticsearch mailpit minio minio-init
+docker compose --profile user-service up -d user-postgres
+docker compose up -d --build id-service gateway
 
-# 4. schema + sample data
+# 4. build, schema + sample data (the user-service migrates from its build)
+pnpm build
 pnpm db:migrate
+pnpm --filter @jcool/user-service db:migrate
 pnpm db:seed
 
-# 5. run
-pnpm start:dev
+# 5. run the api and the user-service on the host
+pnpm dev
 ```
 
-- API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs>
+- API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs> · user-service → <http://localhost:3002>
 - Mail inbox (Mailpit) → <http://localhost:8025> · MinIO console → <http://localhost:9001>
-- Postgres → `localhost:5433` · Redis → `localhost:6380` · Elasticsearch → `localhost:9200`
+- Postgres → `localhost:5433` (user-service: `localhost:5434`) · Redis → `localhost:6380` · Elasticsearch → `localhost:9200` · id-service load balancer → `localhost:4000`
+
+`pnpm dev` is `turbo watch dev`. It builds the packages, then runs `dev` in the api (`nest start --watch`) and the user-service. A change under `packages/` rebuilds that package and every package that depends on it, then restarts the apps that use them. A change in the api's `src/` is left to Nest's own incremental reload, because [`apps/api/turbo.json`](./apps/api/turbo.json) limits the inputs of the api's `dev` task to its config files (`futureFlags.watchUsingTaskInputs` in the root `turbo.json`). The user-service has no watcher of its own, so turbo rebuilds it with `tsc` and restarts it. To run one app with the packages it uses: `pnpm turbo watch dev --filter=@jcool/api`. With a filter, turbo 2.11.6 still starts `dev` in the other apps that depend on a package you change; without `watchUsingTaskInputs` it honours the filter, but every save in the api then restarts it twice. Keep `SHUTDOWN_GRACE_PERIOD_MS` at `0` locally, since each restart and Ctrl+C waits it out. Turbo runs tasks in strict env mode, so a variable set on the command line (`PORT=3005 pnpm dev`) never reaches the app; put overrides in the `.env` files. Don't run the user-service container alongside `pnpm dev`: both bind port 3002.
 
 `minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Elasticsearch is only needed with `SEARCH_ENABLED=true`, and on a Linux host it wants `sudo sysctl -w vm.max_map_count=262144` first (Docker Desktop already sets it). Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
@@ -295,7 +259,7 @@ Full stack in-network, behind the gateway as on Railway: `docker compose up -d -
 
 ## Configuration
 
-Environment is validated **once at startup** and the process refuses to boot on anything invalid — a missing secret is a crash, not a runtime surprise. Validation is as strict as the loaders that read the values afterwards: integers must be plain decimal (`6e4` is refused rather than loaded as `6`), and booleans must be exactly `true` or `false` (`1` is refused rather than loaded as off). `.env.example` is the complete, commented reference for all ~105 variables; these are the ones without a default:
+Environment is validated **once at startup** and the process refuses to boot on anything invalid — a missing secret is a crash, not a runtime surprise. Validation is as strict as the loaders that read the values afterwards: integers must be plain decimal (`6e4` is refused rather than loaded as `6`), and booleans must be exactly `true` or `false` (`1` is refused rather than loaded as off). `.env.example` is the commented reference for the api's ~100 variables (`APP_PUBLIC_URL`, `COOKIE_SECURE` and `DB_QUERY_TIMEOUT_MS` are read but not listed there yet), plus a few Compose-only ones; these are the ones without a default:
 
 | Variable | Notes |
 | --- | --- |
@@ -306,9 +270,10 @@ Environment is validated **once at startup** and the process refuses to boot on 
 | `JWT_ISSUER`, `JWT_AUDIENCE` | Must match what the user-service signs |
 | `USER_SERVICE_INTERNAL_URL`, `INTERNAL_API_TOKEN` | Its internal API: session epochs on a Redis miss, and the buyer's address for `order.paid`. Token min 32 chars |
 | `ID_SERVICE_URL` | The gateway's internal id-service listener, never a replica. Every row id is minted there, so a write answers 503 without it (`ID_SERVICE_TIMEOUT_MS`, default 2000, covers the gateway's retries) |
+| `PAYMENT_WEBHOOK_SECRET` | Min 16 chars. Validation lets it be absent, but the Stripe adapter — the default `PAYMENT_PROVIDER` — refuses to construct without it, so the app does not boot either |
 | `STRIPE_SUCCESS_URL` | Required once `STRIPE_SECRET_KEY` is set, and deliberately has no fallback: a default would satisfy the adapter's boot check and only surface on a real buyer's post-charge redirect |
 
-Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO), `SMTP_URL`, `STRIPE_SECRET_KEY` + `PAYMENT_WEBHOOK_SECRET`, `METRICS_TOKEN`, `LOKI_URL`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`. The auth-side variables (`CSRF_SECRET`, `JWT_ES256_*`, `ARGON2_*`, the token TTLs) belong to the user-service — see its [README](./apps/user-service/README.md).
+Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_STRATEGY` (`pessimistic` \| `optimistic`), `CATALOG_CACHE_TTL_SEC` and `CACHE_*`, `QUEUE_*`, `RETENTION_*`, `SEARCH_*`, `STORAGE_*` (S3/R2/MinIO; endpoint, bucket and the key pair are all-or-nothing), `SMTP_URL`, `STRIPE_SECRET_KEY`, `METRICS_TOKEN`, `LOKI_URL`, `OTEL_*`, `SENTRY_DSN`, `TRUST_PROXY`, `SHUTDOWN_GRACE_PERIOD_MS`. The auth-side variables (`CSRF_SECRET`, `JWT_ES256_*`, `ARGON2_*`, the token TTLs) belong to the user-service — see its [README](./apps/user-service/README.md).
 
 `MIGRATIONS_DIR` is read raw, outside Nest, by the migration CLI — the production image sets it because it ships `migrations/` without a `src/` tree.
 
@@ -318,21 +283,19 @@ Groups worth knowing about, all optional with working defaults: `INVENTORY_LOCK_
 
 ## API
 
-No global prefix; routes are served at the root. The always-current contract is **`/docs`** (Swagger UI) when `SWAGGER_ENABLED` is on.
+No global prefix; routes are served at the root. The always-current contract is **`/docs`** (Swagger UI), on by default outside production; `SWAGGER_ENABLED` overrides that either way.
 
-**Applies to every route unless noted:** `401` without a valid access token, `403` on an `ADMIN` route without the role, `429` when throttled, `400` when a request body carries an unknown property — the global `ValidationPipe` runs with `whitelist` and `forbidNonWhitelisted` — and `422` when a value passes DTO validation but breaks a domain rule (`Email`, `Slug`, `Money`, the state machines). Every error answers with one envelope:
+**Applies to every route unless noted:** `401` without a valid access token, `403` on an `ADMIN` route without the role, `429` when throttled, `400` when a request body carries an unknown property — the global `ValidationPipe` runs with `whitelist` and `forbidNonWhitelisted` — and `422` when a value passes DTO validation but breaks a domain rule (`Email`, `Slug`, `Money`). A refused state transition is a `409`, translated by the use case. Every error answers with one envelope:
 
 ```json
 { "statusCode": 409, "path": "/orders", "timestamp": "…", "requestId": "…", "traceId": "…", "message": "…" }
 ```
 
-`5xx` bodies are masked to a generic message and the real error is logged; `requestId` is echoed as the `x-request-id` response header on every response, error or not.
+`path` is the request URL including its query string; `traceId` appears only while tracing is on. `5xx` bodies are masked to a generic message and the real error is logged; `requestId` is echoed as the `x-request-id` response header on every response, error or not. The `/health/*` probes are the exception: a `503` there carries Terminus's own body, not the envelope. Throttling skips `/health/*`, `/metrics`, `/debug/boom` and `POST /webhooks/payment`.
 
 ### Auth — `/auth`
 
-Served by the **user-service**, behind the same public origin. Its routes and cookie rules are in the
-[user-service README](./apps/user-service/README.md); the api verifies the tokens it issues and serves
-none of those paths itself.
+Served by the **user-service**, behind the same public origin. Its routes and cookie rules are in the [user-service README](./apps/user-service/README.md); the api verifies the tokens it issues and serves none of those paths itself.
 
 ### Catalog — `/products`, `/admin`
 
@@ -341,11 +304,14 @@ none of those paths itself.
 | `GET` | `/products` | Public | List (paginated; optional `categorySlug`, `q`) |
 | `GET` | `/products/search` | Public | Relevance search over the Elasticsearch index; eventual, about 1–2 s behind a write |
 | `GET` | `/products/:idOrSlug` | Public | Detail by id or slug (`404` if unknown or not `ACTIVE`) |
-| `POST` `PATCH` `DELETE` | `/admin/categories`, `/admin/products`, `/admin/skus` | `ADMIN` | Create, update, **archive** |
+| `POST` · `PATCH` `DELETE` | `/admin/categories` · `/admin/categories/:id` | `ADMIN` | Create · update, **archive** |
+| `POST` · `PATCH` `DELETE` | `/admin/products` · `/admin/products/:id` | `ADMIN` | Create · update, **archive** |
+| `POST` · `PATCH` `DELETE` | `/admin/products/:productId/skus` · `/admin/skus/:id` | `ADMIN` | Create a SKU under a product · update, **archive** |
 | `PUT` | `/admin/skus/:skuId/price` | `ADMIN` | Set SKU price (idempotent upsert) |
-| `GET` `POST` `DELETE` `PATCH` | `/admin/products/:productId/images` | `ADMIN` | List, attach a `READY` asset, detach, reorder |
+| `GET` `POST` `PATCH` | `/admin/products/:productId/images` | `ADMIN` | List, attach a `READY` asset, reorder |
+| `DELETE` | `/admin/products/:productId/images/:imageId` | `ADMIN` | Detach (`204`) |
 
-`DELETE` on categories, products and SKUs is a **soft delete**: `200` with the archived entity, the row stays and disappears from the public `ACTIVE` projection. Archiving a category that still holds active products is `409`. There is no admin read endpoint — reads go through the public paths.
+`DELETE` on categories, products and SKUs is a **soft delete**: `200` with the archived entity, the row stays and disappears from the public `ACTIVE` projection. Archiving a category that still holds active products is `409`. Admin reads exist only for a product's images; catalog entities are read through the public paths.
 
 `/products/search` is always mounted and **degrades to an empty page**: with `SEARCH_ENABLED` off, or the engine unreachable, it answers `200` with zero hits rather than a `5xx`. A client cannot distinguish "search is off" from "nothing matched". Reordering images requires the body to list every image on the product exactly once (`409` otherwise), so none is left at a stale position.
 
@@ -364,13 +330,20 @@ The cart is scratch space, not a transaction: prices are never snapshotted, and 
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| `POST` | `/orders` | Bearer + `Idempotency-Key` | Checkout the cart. `400` empty cart or missing key, `409` key in progress, insufficient stock (the available count is never disclosed) or 3 orders already `PENDING`, `422` key reused with a different body or a line above 10 units |
+| `POST` | `/orders` | Bearer + `Idempotency-Key` | Checkout the cart. `400` empty cart or missing key, `409` key in progress, insufficient stock (the available count is never disclosed) or 3 orders already `PENDING`, `422` key reused with a different body (a line above 10 units is also `422`, but the cart's clamp means only a defensive path reaches it) |
 | `GET` | `/orders` · `/orders/:id` | Bearer | List (paginated, `pageSize ≤ 100`) · detail (`404` if another user's) |
-| `POST` | `/orders/:id/pay` | Bearer | Open a gateway checkout session. Paying again while a session is still open hands back that same session; one the gateway confirms dead is replaced. `409` if the order is not `PENDING`, the gateway already recorded the payment, or it cannot confirm the old session is dead |
+| `POST` | `/orders/:id/pay` | Bearer | Open a gateway checkout session. Paying again while a session is still open hands back that same session; one the gateway confirms dead is replaced. `409` if the order is not `PENDING`, the gateway already recorded the payment, or it cannot confirm the old session is dead; `502` when the gateway itself fails |
 | `POST` | `/orders/:id/cancel` | Bearer | Cancel a `PENDING` order and release its stock. Re-cancelling answers `200` — no idempotency key needed |
 | `GET` `POST` | `/admin/orders`, `/admin/orders/:id`, `/admin/orders/:id/cancel` | `ADMIN` | Any buyer's orders, plus force-cancel through the identical use case |
 
 There is no separate "place" call: `POST /orders` goes **DRAFT → PENDING inside one transaction**, which is what lets the order, its stock hold, its `order.placed` event and its idempotency result commit or roll back together. Every edge is wired: `DRAFT → PENDING | CANCELLED` and `PENDING → PAID | FAILED | EXPIRED | CANCELLED`; the four settled states are terminal, which is the guard that turns an at-least-once webhook into an exactly-once effect. Legal edges live in one table; a use case translates a refused transition into `409` at its boundary.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/diagrams/order-lifecycle-dark.svg">
+  <img alt="Order lifecycle: DRAFT is placed to PENDING inside the checkout transaction or discarded to CANCELLED; PENDING, with stock held, settles to PAID, FAILED, EXPIRED when the hold lapses, or CANCELLED; all four are terminal" src="./docs/diagrams/order-lifecycle.svg">
+</picture>
+
+The whole checkout and settlement path, webhook and reconcile sweep included, is drawn in [system-architecture.md](./docs/system-architecture.md#checkout-and-settlement).
 
 An admin cannot reach an outcome a buyer's own cancel could not — only the audit reason differs (`admin:cancel` vs `user:cancel`).
 
@@ -402,9 +375,9 @@ A rejected `complete` leaves the asset `PENDING` on purpose — the sweep alread
 Two tiers, kept separate on purpose.
 
 ```bash
-pnpm test           # 756 unit tests, 186 files across every workspace; hermetic, no Docker
+pnpm test           # ~760 unit tests, 186 files across every workspace; hermetic, no Docker
 pnpm test:cov       # same, with the coverage floors CI enforces
-pnpm test:e2e       # 100 integration suites (api 64, user-service 26, id-service 10); requires Docker
+pnpm test:e2e       # 98 integration suites (api 65, user-service 23, id-service 10); requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
@@ -414,7 +387,7 @@ pnpm test:e2e       # 100 integration suites (api 64, user-service 26, id-servic
 
 Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
-The apps' coverage floors are **glob-scoped**, not global: the api's is `statements 82 / branches 80 / functions 79 / lines 82` on `src/**/{domain,application}/**` only, and the user-service uses the same glob. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested, and the usual fix for that is either to lower the floor until it means nothing or to keep unit tests that repeat an e2e test only to hold the number. The numbers are the measured values minus two points, not a round 80. Packages keep global floors.
+The api's and the user-service's coverage floors are **glob-scoped**, not global: `src/**/{domain,application}/**` only, at `statements 82 / branches 80 / functions 79 / lines 82` for the api and `92 / 83 / 88 / 93` for the user-service. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested, and the usual fix for that is either to lower the floor until it means nothing or to keep unit tests that repeat an e2e test only to hold the number. The numbers are the measured values minus two points, not a round 80. The id-service (`98 / 90 / 98 / 98`) and the packages keep global floors.
 
 A unit test that repeats what an integration suite already proves on real infrastructure is deleted rather than kept for coverage. What stays at the unit tier is what the integration tier cannot reach: exhaustive state-machine matrices, clock and lease edge cases, the throttler composition, breaker timing, and races staged with deferred promises.
 
@@ -481,6 +454,11 @@ Alerting ships as code: four Prometheus rule files (multi-window burn-rate SLOs,
 
 **On Railway**, `.railway/railway.ts` deploys Prometheus, Loki and Grafana next to the services. Prometheus scrapes the api's `/metrics` and Loki's own push metrics; the api, user-service and id-service push their logs to Loki, whose chunks live in a Railway bucket with a 30-day retention. Grafana is the only public part of the stack and requires a login. No trace backend runs there, so Grafana links a `traceId` to that trace's log lines across services instead ([RUNBOOK → Logs in Loki](./RUNBOOK.md#logs-in-loki)).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/diagrams/observability-dark.svg">
+  <img alt="Observability on Railway: Prometheus scrapes the api's /metrics; the api, user-service and id-service push logs to Loki, which stores chunks in the loki-chunks bucket; Grafana, behind a login, queries Prometheus and Loki" src="./docs/diagrams/observability.svg">
+</picture>
+
 The local stack is profile-gated and binds to loopback only:
 
 ```bash
@@ -497,7 +475,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 **Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only: the builder runs `pnpm deploy --prod` for `@jcool/api`, and the runtime stage takes its `node_modules` plus the app's `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
 
-**CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first: `lint:check` → `typecheck` → `arch:check` → `pnpm audit --prod --audit-level high` → `build` → promtool rule parse + rule tests; then coverage-gated unit tests + Testcontainers e2e. The audit is runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
+**CI** (`ci.yml`) — two jobs, least-privilege, ref-scoped concurrency. Ordered fastest-failing first: `lint:check` → `typecheck` → `arch:check` → `railway:check-flip-vars` (the switches an operator flips by hand mid-cutover must stay declared and `preserve()`d in `.railway/railway.ts`, or the next apply reverts them) → `pnpm audit --prod --audit-level high` → `build` → `alerts:check` → `alerts:test`; then coverage-gated unit tests + Testcontainers e2e. The audit is runtime-only and set to `high` on purpose: a devDependency CVE cannot be reached by the deployed process, and a floor that fires constantly is a floor nobody reads. CodeQL runs separately.
 
 **CD** (`cd.yml`) — chained off `workflow_run: [CI]` so a direct push to `main` cannot bypass it, and pinned to the CI-verified SHA. It first plans `.railway/railway.ts` (every service's build and deploy settings; hand-set variables are listed by name with `preserve()`, so their values stay in Railway) into the run summary. A plan that deletes anything waits for a required reviewer on the `production-destructive` environment ([Review a destructive change](./RUNBOOK.md#review-a-destructive-change)). CD then applies only the change set that was shown, by hash, then re-plans and fails if anything is still pending. It then deploys id-service, the api and the gateway in that order, each live before the next starts, and the dark user-service after the public smoke test. For each, Railway builds the image, applies migrations as a `preDeployCommand`, and gates the traffic switch on `/health/ready` from inside the network. Last, CD smokes the **public** URL — which covers what the internal gate cannot see: domain, TLS, edge routing.
 
@@ -526,16 +504,20 @@ Stated plainly, because a reviewer will find them anyway.
 
 ## Scripts
 
-Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lint:check`, `arch:check`, `test`, `test:cov` and `test:e2e` go through Turborepo; the other app scripts (`test:watch` / `test:debug` included) forward to `@jcool/api`, and `alerts:*` / `load:*` run at the root. Turborepo scripts run in every workspace project, so arguments go to one project at a time (`pnpm turbo run test --filter=@jcool/api -- src/modules/cart`, paths relative to that project); the others take them directly (`pnpm queue:replay-dlq --apply`), since pnpm forwards a literal `--` to the command.
+Run from the repo root with `pnpm <script>`. `build`, `typecheck`, `lint` / `lint:check`, `arch:check`, `test`, `test:cov` and `test:e2e` go through Turborepo, and `dev` through `turbo watch`; the other app scripts (`test:watch` / `test:debug` included) forward to `@jcool/api`, and `alerts:*` / `load:*` run at the root. Turborepo scripts run in every workspace project, so arguments go to one project at a time (`pnpm turbo run test --filter=@jcool/api -- src/modules/cart`, paths relative to that project); the others take them directly (`pnpm queue:replay-dlq --apply`), since pnpm forwards a literal `--` to the command.
 
 | Script | Purpose |
 | --- | --- |
+| `dev` | The api and the user-service on the host; a changed package is rebuilt and the apps that use it restart |
 | `dev:link-env` | Symlink the root `.env` into `apps/api` |
-| `start:dev` · `start:prod` · `build` | Watch mode · compiled run (`node --import ./dist/instrumentation.js dist/main`) · Nest SWC build |
+| `start` · `start:dev` · `start:debug` | The api alone, on the last package build: once · in watch mode · in watch mode with the inspector |
+| `start:prod` · `build` | Compiled run (`node --env-file-if-exists=.env --import ./dist/instrumentation.js dist/main`) · Nest SWC build |
 | `typecheck` · `lint` / `lint:check` · `format` | `tsc --noEmit` · ESLint with / without `--fix` · Prettier |
 | `arch:check` | dependency-cruiser boundary rules |
+| `railway:check-flip-vars` | Fail if a hand-flipped Railway switch (`TRUST_PROXY`, the gateway's `AUTH_*` and `TRUSTED_PROXY_CIDRS`) is no longer declared and preserved in `.railway/railway.ts` |
 | `alerts:check` · `alerts:test` | Prometheus rules parse · and fire (and clear) on the timelines they claim to |
 | `test` · `test:cov` · `test:e2e` | Unit · unit with the coverage floor · integration (needs Docker) |
+| `test:watch` · `test:debug` | The api's unit tests in Vitest watch mode · under the inspector, one file at a time |
 | `db:generate` · `db:migrate` · `db:migrate:prod` · `db:studio` · `db:seed` | Drizzle migration workflow (`:prod` runs the compiled CLI — the image's release command) |
 | `search:reindex` | Rebuild the search index from Postgres into a fresh index, then swap the `products` alias onto it, so search never goes empty |
 | `queue:replay-dlq` | Inspect the dead-letter queue; `--apply` to replay (dry run is the default) |

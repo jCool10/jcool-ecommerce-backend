@@ -9,7 +9,3 @@ The api, user-service and id-service already run split and the Caddy gateway is 
 ## Shard the user database
 
 The user-service's single Postgres instance is the deliberate starting point, not the end state. Ids carry no routing field, so a split needs a lookup or directory from a user to its shard, not a bit read from the id. That trade is recorded in [`system-architecture.md`](./system-architecture.md#63-bit-snowflake-layout-45-ts_ms--8-node--10-seq).
-
-## Cut the id-service over to etcd
-
-The id-service's node lease now lives in etcd and its Postgres is removed in the working tree; the cut-over onto the deployed stack is manual, costs about ten minutes of write downtime, and is pending. Procedure and rollback: [`RUNBOOK.md#cut-over-from-postgres`](../RUNBOOK.md#cut-over-from-postgres), [`RUNBOOK.md#roll-back-the-cut-over`](../RUNBOOK.md#roll-back-the-cut-over).

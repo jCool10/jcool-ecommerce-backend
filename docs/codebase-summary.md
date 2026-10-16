@@ -12,7 +12,7 @@ Navigation only — "where to look for X". For what each context owns, the layer
 | `user-service` | [`apps/user-service/src/main.ts`](../apps/user-service/src/main.ts) |
 | `gateway` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) (not a Node process) |
 
-CLIs (each also has a `:prod` twin that runs the compiled `dist/` file — see [`README.md#scripts`](../README.md#scripts) for the `pnpm` names):
+CLIs (the api's migrate, DLQ replay, search reindex and storage verify also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`README.md#scripts`](../README.md#scripts) for the `pnpm` names):
 
 | CLI | File |
 | --- | --- |
@@ -51,7 +51,7 @@ Migrations are Drizzle-generated (`pnpm db:generate`); the current set is whatev
 | id-service | [`apps/id-service/src/config/env.validation.ts`](../apps/id-service/src/config/env.validation.ts), [`configuration.ts`](../apps/id-service/src/config/configuration.ts) |
 | user-service | [`apps/user-service/src/config/env.validation.ts`](../apps/user-service/src/config/env.validation.ts), [`configuration.ts`](../apps/user-service/src/config/configuration.ts) |
 
-Every service composes its env schema from shared fragments in [`packages/platform/src/config`](../packages/platform/src/config) (parsers and strict decorators every app's validator builds on). The complete, commented variable references are [`.env.example`](../.env.example) for the api and [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service; see [`README.md#configuration`](../README.md#configuration) for which ones have no default.
+Every service composes its env schema from shared fragments in [`packages/platform/src/config`](../packages/platform/src/config) (parsers and strict decorators every app's validator builds on). The commented variable references are [`.env.example`](../.env.example) for the api and [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service; see [`README.md#configuration`](../README.md#configuration) for which ones have no default.
 
 ## Test tiers
 
@@ -72,7 +72,19 @@ Discover the current suite rather than trusting a count: `find apps -name '*.e2e
 | Grafana dashboards/datasources | [`infra/grafana/provisioning`](../infra/grafana/provisioning) |
 | Loki | [`infra/loki/config.yaml`](../infra/loki/config.yaml) |
 | OTel Collector | [`infra/otel-collector/config.yaml`](../infra/otel-collector/config.yaml) |
-| Elasticsearch (Railway image) | [`infra/elasticsearch/Dockerfile`](../infra/elasticsearch/Dockerfile) |
+| Railway images that bake the config above (Prometheus, Grafana, Loki) and run Elasticsearch and the id-service's etcd | `infra/*/Dockerfile`, e.g. [`infra/etcd/Dockerfile`](../infra/etcd/Dockerfile), [`infra/elasticsearch/Dockerfile`](../infra/elasticsearch/Dockerfile) |
+
+## Scripts
+
+| Where | What lives there |
+| --- | --- |
+| [`scripts/`](../scripts) | Repo tooling: the CI check on hand-flipped Railway variables, CD's rollout wait, perf-run capture, and the doc diagram build |
+| [`apps/api/scripts/`](../apps/api/scripts) | The perf seed behind the load tests (`db:seed:perf`) and a trace-propagation harness |
+| [`apps/user-service/scripts/`](../apps/user-service/scripts) | Perf-user and bulk user seeds, the epoch prewarm, DB metrics capture; they mint on the node reserved for scripts, under one lock |
+
+## Docs diagrams
+
+Each diagram's source is a JSON IR in [`docs/diagrams/`](./diagrams), compiled with its light and dark SVG by [`scripts/build-doc-diagrams.mjs`](../scripts/build-doc-diagrams.mjs); how to change one is in [`docs/README.md`](./README.md).
 
 ## CI/CD and deploy config
 
@@ -91,7 +103,7 @@ CI/CD workflows: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`.g
 | `@jcool/id-generator` | Monotonic id generator, node lease | [`packages/id-generator/package.json`](../packages/id-generator/package.json) |
 | `@jcool/auth-verifier` | Access-token verification (every service) | [`packages/auth-verifier/package.json`](../packages/auth-verifier/package.json) |
 | `@jcool/metrics-port` | Metrics seam for domain/application code | [`packages/metrics-port/package.json`](../packages/metrics-port/package.json) |
-| `@jcool/platform` | Nest infrastructure glue (db, redis, observability, health, throttler, rbac, mail, resilience, retention) | [`packages/platform/package.json`](../packages/platform/package.json) |
+| `@jcool/platform` | Nest infrastructure glue, one subpath export per concern (config, db, redis, observability, metrics, error tracking, health, throttler, rbac, mail, resilience, retention, identity, interface) | [`packages/platform/package.json`](../packages/platform/package.json) |
 | `@jcool/testing` | Test doubles, dev-only | [`packages/testing/package.json`](../packages/testing/package.json) |
 | `apps/id-service` | 63-bit id minting service, under a leased node id | [`apps/id-service/README.md`](../apps/id-service/README.md) |
 | `apps/user-service` | Auth/user service | [`apps/user-service/README.md`](../apps/user-service/README.md) |

@@ -803,9 +803,10 @@ The api is unaffected either way.
 
 ### Cut over from Postgres
 
+Production made this cut-over on 2026-10-13. The steps stay as the record of what it took and as the base for [rolling it back](#roll-back-the-cut-over).
+
 The merge that brings etcd deletes `id-postgres`. The two stores do not see each other's leases, so no Postgres-era replica may mint once an etcd-era one does, and the etcd floors must start above every id a Postgres-era holder stamped. So the id-service is down from step 2 to step 5, about ten minutes: reads keep working and the api answers 503 on writes. Do it off-peak, from an up-to-date `main`:
 
-0. **Optionally [freeze checkout](#checkout-freeze)**, so buyers get `Retry-After` rather than a bare 503.
 1. **Merge**, then wait until the CD run waits at "Confirm destructive Railway changes": the plan deletes `id-postgres` and its volume. Leave it waiting. Approving it now, or an apply of yours that lands before CD plans, deploys the id-service ahead of etcd and with Postgres-era replicas still minting.
 2. **Stop the Postgres-era replicas**: `railway down --service id-service --yes`. Each drains, releases its node and exits. Then wait `ID_LEASE_TTL_MS` (5 minutes unless set): no id was stamped past its holder's lease end, so after that the clock is above every Postgres-era id.
 3. **Apply.**
@@ -820,7 +821,7 @@ The merge that brings etcd deletes `id-postgres`. The two stores do not see each
 
 4. **Deploy etcd**: `railway up --ci --service id-etcd`, then wait until the deployment is live (its healthcheck is etcd's `/health`).
 5. **Deploy the rest**: approve the waiting CD run. The plan is now empty, so it skips the apply. The id-service's pre-deploy step finds a keyspace with no floors and lifts all 254 to its clock (`floors under /jcool/id-service/ lifted to …` in the deploy logs). The replicas then claim their nodes, and the api, the gateway and the user-service follow as usual.
-6. **Verify.** Each of the three replicas logs `node lease acquired` with its own `nodeId`, and a write through the api (add a cart item) answers 2xx. Lift the freeze if step 0 set it.
+6. **Verify.** Each of the three replicas logs `node lease acquired` with its own `nodeId`, and a write through the api (add a cart item) answers 2xx.
 
 ### Roll back the cut-over
 

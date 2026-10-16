@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, lt, notExists, sql } from 'drizzle-orm';
 import { durationToMs } from '@jcool/kernel';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
@@ -47,12 +47,7 @@ export class StockRepository implements StockRepositoryPort {
 
       // Idempotent per (order, SKU): a repeat hold must not raise reserved twice. Checked
       // under the row lock, so a concurrent duplicate serializes here and sees this hold.
-      const [existing] = await tx
-        .select({ id: reservations.id })
-        .from(reservations)
-        .where(and(eq(reservations.orderId, orderId), eq(reservations.variantId, variantId)))
-        .limit(1);
-      if (existing) {
+      if (await this.isHeld(tx, orderId, variantId)) {
         continue;
       }
 
@@ -79,22 +74,22 @@ export class StockRepository implements StockRepositoryPort {
     // deterministic order as the pessimistic path to rule out a cross-order deadlock.
     const ordered = [...lines].sort((a, b) => a.variantId.localeCompare(b.variantId));
     for (const [index, { variantId, quantity }] of ordered.entries()) {
-      // Idempotent for a sequential repeat of the same (order, SKU). This read isn't
-      // lock-guarded (optimistic holds no row lock here), so a concurrent same-order
-      // submit isn't deduped — see the port doc; callers single-flight order submission.
-      const [existing] = await tx
-        .select({ id: reservations.id })
-        .from(reservations)
-        .where(and(eq(reservations.orderId, orderId), eq(reservations.variantId, variantId)))
-        .limit(1);
-      if (existing) {
-        continue;
+      if (await this.casReserve(tx, orderId, variantId, quantity)) {
+        await this.insertHold(tx, ids[index], orderId, variantId, quantity);
       }
-
-      await this.casReserve(tx, variantId, quantity);
-
-      await this.insertHold(tx, ids[index], orderId, variantId, quantity);
     }
+  }
+
+  private holdOf(tx: DrizzleTx, orderId: string, variantId: string) {
+    return tx
+      .select({ id: reservations.id })
+      .from(reservations)
+      .where(and(eq(reservations.orderId, orderId), eq(reservations.variantId, variantId)));
+  }
+
+  private async isHeld(tx: DrizzleTx, orderId: string, variantId: string): Promise<boolean> {
+    const [existing] = await this.holdOf(tx, orderId, variantId).limit(1);
+    return existing !== undefined;
   }
 
   private async insertHold(
@@ -111,13 +106,19 @@ export class StockRepository implements StockRepositoryPort {
   }
 
   // Hold one SKU via compare-and-swap: read the current version unlocked, then UPDATE only
-  // if that version and the available quantity still hold. Zero rows means either a real
-  // shortfall (throw, no retry) or a concurrent version bump (retry at once).
+  // if that version and the available quantity still hold and this (order, SKU) is still
+  // unheld. Returns false, raising nothing, when a hold for it already exists.
   // The retry never backs off: under READ COMMITTED a lost CAS is only visible once the
   // conflicting writer has committed and dropped its row lock, so sleeping relieves no
   // contention while extending the write locks this transaction already holds on earlier lines.
-  private async casReserve(tx: DrizzleTx, variantId: string, quantity: number): Promise<void> {
+  private async casReserve(tx: DrizzleTx, orderId: string, variantId: string, quantity: number): Promise<boolean> {
     for (let attempt = 0; ; attempt++) {
+      // Before the shortfall and budget checks: the writer this CAS lost to may be a duplicate of
+      // this order, and the stock it took is this order's own hold, not a shortfall.
+      if (await this.isHeld(tx, orderId, variantId)) {
+        return false;
+      }
+
       const [row] = await tx
         .select({
           id: stockLevels.id,
@@ -129,6 +130,14 @@ export class StockRepository implements StockRepositoryPort {
         .where(eq(stockLevels.variantId, variantId));
       if (!row) {
         throw new InsufficientStockError(variantId, quantity, 0);
+      }
+      // Real shortfalls never consume a retry, so this precedes the budget check.
+      const available = row.onHand - row.reserved;
+      if (available < quantity) {
+        throw new InsufficientStockError(variantId, quantity, available);
+      }
+      if (attempt > this.maxRetries) {
+        throw new ReservationConflictError(variantId);
       }
 
       const won = await tx
@@ -142,26 +151,13 @@ export class StockRepository implements StockRepositoryPort {
             eq(stockLevels.id, row.id),
             eq(stockLevels.version, row.version),
             sql`${stockLevels.quantityOnHand} - ${stockLevels.quantityReserved} >= ${quantity}`,
+            // A duplicate that committed its hold after the isHeld read above, before this statement.
+            notExists(this.holdOf(tx, orderId, variantId)),
           ),
         )
         .returning({ id: stockLevels.id });
       if (won.length === 1) {
-        return;
-      }
-
-      const [fresh] = await tx
-        .select({ onHand: stockLevels.quantityOnHand, reserved: stockLevels.quantityReserved })
-        .from(stockLevels)
-        .where(eq(stockLevels.id, row.id));
-      if (!fresh) {
-        throw new InsufficientStockError(variantId, quantity, 0);
-      }
-      const available = fresh.onHand - fresh.reserved;
-      if (available < quantity) {
-        throw new InsufficientStockError(variantId, quantity, available);
-      }
-      if (attempt >= this.maxRetries) {
-        throw new ReservationConflictError(variantId);
+        return true;
       }
     }
   }

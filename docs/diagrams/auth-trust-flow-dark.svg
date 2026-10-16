@@ -1,0 +1,56 @@
+<svg class="ak-diagram-svg" viewBox="36 26 988 628" width="988" height="628" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Auth trust flow"><title>Auth trust flow</title><desc>The user-service signs ES256 access tokens and is the only writer of the auth:* keys in Redis. The api checks the signature against the user-service&apos;s JWKS (cached, served stale if a refetch fails), then the jti denylist, then the session epoch; it reads the epoch from the user-service only on a Redis miss.</desc><defs><style>
+      svg {
+        --ak-bg: #ffffff; --ak-surface: #f8fafc; --ak-surface-border: #e2e8f0;
+        --ak-text-primary: #0f172a; --ak-text-secondary: #475569; --ak-text-muted: #94a3b8;
+        --ak-accent: #2563eb; --ak-node-bg: #ffffff; --ak-node-border: #cbd5e1;
+        --ak-edge-stroke: #64748b; --ak-edge-active: #2563eb;
+        --ak-font-sans: system-ui, -apple-system, sans-serif;
+        font-family: var(--ak-font-sans);
+      }
+      svg { --ak-bg: #090d16; --ak-text-primary: #f8fafc; --ak-text-secondary: #94a3b8; --ak-node-bg: #0f172a; --ak-node-border: #334155; --ak-edge-stroke: #475569; --ak-edge-active: #38bdf8; }
+      svg { --ak-accent: #06b6d4; --ak-edge-stroke: #0ea5e9; --ak-edge-active: #38bdf8; }
+      
+      
+    svg { --ak-surface: #111827; --ak-surface-border: #334155; }</style><marker id="ak-arrowhead-32a822ae" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="var(--ak-edge-stroke)" />
+    </marker>
+  </defs><rect x="36" y="26" width="988" height="628" rx="12" fill="var(--ak-bg)" /><line x1="125" y1="98" x2="125" y2="630" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="395" y1="98" x2="395" y2="630" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="665" y1="98" x2="665" y2="630" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="935" y1="98" x2="935" y2="630" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><g class="ak-edge" data-from="client" data-to="user-service" data-edge-id="msg-0">
+        <line x1="125" y1="140" x2="395" y2="140" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="260" y="134" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">POST /auth/login</text>
+      </g><g class="ak-edge" data-from="user-service" data-to="client" data-edge-id="msg-1">
+        <line x1="395" y1="190" x2="125" y2="190" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="260" y="184" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">ES256 token in body · refresh cookie</text>
+      </g><g class="ak-edge" data-from="client" data-to="api" data-edge-id="msg-2">
+        <line x1="125" y1="240" x2="665" y2="240" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="395" y="234" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">request · Authorization: Bearer</text>
+      </g><g class="ak-edge" data-from="api" data-to="user-service" data-edge-id="msg-3">
+        <line x1="665" y1="290" x2="395" y2="290" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="530" y="284" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">JWKS (cached)</text>
+      </g><g class="ak-edge" data-from="api" data-to="redis" data-edge-id="msg-4">
+        <line x1="665" y1="340" x2="935" y2="340" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="800" y="334" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">auth:denylist:{jti} · auth:epoch:{sub}</text>
+      </g><g class="ak-edge" data-from="api" data-to="user-service" data-edge-id="msg-5">
+        <line x1="665" y1="390" x2="395" y2="390" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="530" y="384" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">epoch on a Redis miss</text>
+      </g><g class="ak-edge" data-from="api" data-to="client" data-edge-id="msg-6">
+        <line x1="665" y1="440" x2="125" y2="440" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="395" y="434" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">200, or 401 when revoked</text>
+      </g><g class="ak-edge" data-from="client" data-to="user-service" data-edge-id="msg-7">
+        <line x1="125" y1="490" x2="395" y2="490" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="260" y="484" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">POST /auth/logout-all</text>
+      </g><g class="ak-edge" data-from="user-service" data-to="redis" data-edge-id="msg-8">
+        <line x1="395" y1="540" x2="935" y2="540" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-32a822ae)" />
+        <text x="665" y="534" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">raise auth:epoch:{userId}</text>
+      </g><g class="ak-node" data-node-id="client" data-label="Client" data-role="client" data-desc="client" tabindex="0">
+        <rect x="60" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="125" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Client</text>
+      </g><g class="ak-node" data-node-id="user-service" data-label="user-service" data-role="service" data-desc="service" tabindex="0">
+        <rect x="330" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="395" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">user-service</text>
+      </g><g class="ak-node" data-node-id="api" data-label="api" data-role="service" data-desc="service" tabindex="0">
+        <rect x="600" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="665" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">api</text>
+      </g><g class="ak-node" data-node-id="redis" data-label="Redis" data-role="database" data-desc="database" tabindex="0">
+        <rect x="870" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="935" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Redis</text>
+      </g></svg>
