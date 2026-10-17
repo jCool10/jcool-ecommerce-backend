@@ -53,6 +53,7 @@ describe('BusinessMetrics', () => {
     metrics.recordBreakerCall('payment_gateway', 'rejected');
     metrics.recordRateLimitRejection('account', '/auth/login');
     metrics.recordSessionEpochLookup('miss');
+    metrics.recordTccBranch('inventory', 'release', 'fenced');
 
     const exposition = await registry.metrics();
     const expected = [
@@ -81,6 +82,7 @@ describe('BusinessMetrics', () => {
       'circuit_breaker_calls_total{breaker="payment_gateway",result="rejected"} 1',
       'rate_limit_rejections_total{tier="account",route="/auth/login"} 1',
       'session_epoch_lookups_total{result="miss"} 1',
+      'tcc_branch_total{participant="inventory",op="release",outcome="fenced"} 1',
     ];
 
     expect(warn).not.toHaveBeenCalled();

@@ -18,7 +18,7 @@ Single-store e-commerce backend built as a **NestJS modular monolith** — five 
 
 | | |
 | --- | --- |
-| **Scale** | api: 5 bounded contexts · 449 TypeScript files · 17 tables · 29 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
+| **Scale** | api: 5 bounded contexts · 465 TypeScript files · 18 tables · 30 committed migrations · 40 HTTP routes — plus user-service, id-service and a Caddy gateway |
 | **Tests** | The claims above are pinned on real Postgres, Redis, MinIO, Elasticsearch and SMTP (Testcontainers; the id-service suites add etcd), under concurrency and failure: [the last unit sells once](./apps/api/test/integration/checkout-oversell.e2e-spec.ts), [one of two racing settlements wins](./apps/api/test/integration/payment-webhook-contract.e2e-spec.ts), [a saga cut mid-flight converges](./apps/api/test/integration/saga-crash-convergence.e2e-spec.ts). Unit tests cover domain rules, state machines and the failure paths no e2e can stage ([Testing](#testing)) |
 | **Gates** | `lint:check` → `typecheck` → `arch:check` (8 boundary rules) → `railway:check-flip-vars` → `pnpm audit` → `build` → Prometheus rule tests → coverage-floored unit + e2e |
 
@@ -67,7 +67,7 @@ The api verifies the user-service's ES256 tokens against its JWKS and reads sess
 
 | Context | Owns | Publishes to other contexts |
 | --- | --- | --- |
-| **Product** | Two aggregate groups that meet only by `variantId`: catalog (categories, products, SKUs, prices, product images, search index) and stock (stock levels, reservations) | `PRODUCT_SKU_QUERY` (live price/name), `PRODUCT_STOCK_RESERVATION` (reserve / commit / release) |
+| **Product** | Two aggregate groups that meet only by `variantId`: catalog (categories, products, SKUs, prices, product images, search index) and stock (stock levels, reservations) | `PRODUCT_SKU_QUERY` (live price/name), `PRODUCT_STOCK_RESERVATION` (reserve / commit / release), `INVENTORY_PARTICIPANT` (TCC try / commit / release / restock) |
 | **Cart** | Per-user cart lines — quantities only, no prices | `CART_SNAPSHOT` (`{skuId, quantity}`) |
 | **Order** | The order aggregate, its state machine, checkout and settlement | `ORDER_PAYMENT_VIEW`, `FinalizeOrderUseCase` (through `order-finalization.port`) |
 | **Payment** | Gateway sessions, webhook sink, reconciliation | — (settles Order through Order's own use case) |

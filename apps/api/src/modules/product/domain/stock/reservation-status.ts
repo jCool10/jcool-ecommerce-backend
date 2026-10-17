@@ -9,6 +9,8 @@ export const ReservationStatus = {
   RELEASED: 'RELEASED',
   /** Hold committed (payment succeeded) → stock leaves for real. */
   COMMITTED: 'COMMITTED',
+  /** A committed line put back on hand by a compensation. */
+  RESTOCKED: 'RESTOCKED',
 } as const;
 
 export type ReservationStatus = (typeof ReservationStatus)[keyof typeof ReservationStatus];

@@ -333,6 +333,32 @@ export class EnvironmentVariables extends PlatformEnv {
   @Max(10)
   INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
 
+  // Capped: a Try holds a pool connection for up to this long.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  @Max(30_000)
+  INVENTORY_TRY_LOCK_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsStrictBoolean()
+  INVENTORY_HOLD_SWEEP_ENABLED?: string;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1000)
+  INVENTORY_HOLD_SWEEP_INTERVAL_MS?: number;
+
+  // Each order in the batch costs its own transaction.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  INVENTORY_HOLD_SWEEP_BATCH_SIZE?: number;
+
   @IsOptional()
   @IsEnum(PaymentProvider)
   PAYMENT_PROVIDER?: PaymentProvider;

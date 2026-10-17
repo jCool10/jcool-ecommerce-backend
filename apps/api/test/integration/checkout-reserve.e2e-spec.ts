@@ -35,6 +35,19 @@ describe('Checkout holds stock (integration, real Postgres)', () => {
     return row;
   }
 
+  it('holds stock without writing a participant fence row', async () => {
+    const token = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 5);
+    await addToCart(app, token, variantId, 2);
+
+    const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
+
+    expect(res.status).toBe(201);
+    expect(await stockOf(variantId)).toEqual({ onHand: 5, reserved: 2 });
+    expect(await db.select().from(schema.reservationOrders)).toHaveLength(0);
+  });
+
   it('rolls the whole checkout back with 409 when one line is short', async () => {
     const token = await newPrincipalToken(app);
     const a = await createTestProduct(app, { priceMinor: 100_000 });

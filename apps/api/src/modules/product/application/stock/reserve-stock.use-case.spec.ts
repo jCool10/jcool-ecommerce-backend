@@ -1,27 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { InsufficientStockError } from '../../domain/stock/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../../domain/stock/errors/reservation-conflict.error';
+import { FAKE_TX as TX, fakeStockRepository } from '../../testing/stock-port.doubles';
 import { StockReservationError } from '../public/product-stock-reservation.port';
 import { ReserveStockUseCase } from './reserve-stock.use-case';
 
-const TX = {} as DrizzleTx;
 const LINES = [{ variantId: 'sku-a', quantity: 1 }];
-const RESOLVED = { applied: true, alreadyResolved: false, count: 1 };
 
 function build(strategy: string | undefined, reserveError?: Error) {
   const reserve = () => (reserveError ? Promise.reject(reserveError) : Promise.resolve());
   const reservePessimistic = vi.fn(reserve);
   const reserveOptimistic = vi.fn(reserve);
   const useCase = new ReserveStockUseCase(
-    {
-      reservePessimistic,
-      reserveOptimistic,
-      commitReservations: () => Promise.resolve(RESOLVED),
-      releaseReservations: () => Promise.resolve(RESOLVED),
-      findExpiredHolds: () => Promise.resolve([]),
-    },
+    fakeStockRepository({ reservePessimistic, reserveOptimistic }),
     fakeConfigService({ 'inventory.lockStrategy': strategy }),
   );
   return { useCase, reservePessimistic, reserveOptimistic };

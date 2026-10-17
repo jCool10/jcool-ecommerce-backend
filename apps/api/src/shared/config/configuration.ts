@@ -195,5 +195,13 @@ export default () => ({
     // Real shortfalls never consume a retry. A NaN budget would leave the CAS loop unbounded, so
     // this must never fall through to a bare parseInt.
     optimisticMaxRetries: parseIntOr(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES, 3),
+    // Budget of a whole participant Try, from entry: minting and pool wait spend it, locks are cut at the rest.
+    // Also caps each commit/release/restock transaction and each order the hold sweep releases.
+    tryLockTimeoutMs: parseIntOr(process.env.INVENTORY_TRY_LOCK_TIMEOUT_MS, 2_000),
+    holdSweep: {
+      enabled: process.env.INVENTORY_HOLD_SWEEP_ENABLED !== 'false',
+      intervalMs: parseIntOr(process.env.INVENTORY_HOLD_SWEEP_INTERVAL_MS, 60_000),
+      batchSize: parseIntOr(process.env.INVENTORY_HOLD_SWEEP_BATCH_SIZE, 50),
+    },
   },
 });

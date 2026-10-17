@@ -49,6 +49,13 @@ export type MailKind = 'email_verification' | 'password_reset' | 'order_paid';
 /** `miss` is a read-through to the user-service, paid for on the request path. */
 export type SessionEpochLookupResult = 'hit' | 'miss';
 
+export type TccParticipant = 'inventory' | 'payment';
+
+export type TccOp = 'try' | 'commit' | 'release' | 'restock' | 'open_session' | 'capture' | 'cancel' | 'sweep';
+
+/** `rejected` is a final business no (out of stock, contended); `error` threw and its outcome is unknown. */
+export type TccBranchOutcome = 'ok' | 'idempotent' | 'conflict' | 'fenced' | 'rejected' | 'error';
+
 /**
  * Every `string` parameter below is a Prometheus LABEL: callers pass only bounded values, never an
  * id/email/sku/concrete path (those belong on logs and spans).
@@ -90,4 +97,6 @@ export interface MetricsPort {
   recordRetentionSweepFailure(sweep: string): void;
   recordMediaBytesReclaimed(bytes: number): void;
   recordSessionEpochLookup(result: SessionEpochLookupResult): void;
+  /** One per participant call, as seen by the participant. */
+  recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void;
 }

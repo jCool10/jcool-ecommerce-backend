@@ -23,7 +23,23 @@ function isolateEnv(keys: readonly string[]): void {
 }
 
 describe('configuration', () => {
-  isolateEnv(['INVENTORY_OPTIMISTIC_MAX_RETRIES', 'STRIPE_SUCCESS_URL', 'ID_SERVICE_URL', 'ID_SERVICE_TIMEOUT_MS']);
+  isolateEnv([
+    'INVENTORY_OPTIMISTIC_MAX_RETRIES',
+    'INVENTORY_HOLD_SWEEP_ENABLED',
+    'INVENTORY_HOLD_SWEEP_INTERVAL_MS',
+    'INVENTORY_HOLD_SWEEP_BATCH_SIZE',
+    'INVENTORY_TRY_LOCK_TIMEOUT_MS',
+    'STRIPE_SUCCESS_URL',
+    'ID_SERVICE_URL',
+    'ID_SERVICE_TIMEOUT_MS',
+  ]);
+
+  it('sweeps lapsed participant holds every minute and gives a Try 2s by default', () => {
+    const { holdSweep, tryLockTimeoutMs } = configuration().inventory;
+
+    expect(holdSweep).toEqual({ enabled: true, intervalMs: 60_000, batchSize: 50 });
+    expect(tryLockTimeoutMs).toBe(2_000);
+  });
 
   it('reads the id-service address and gives the call the gateway retries 2s by default', () => {
     process.env.ID_SERVICE_URL = 'http://gateway:4000';

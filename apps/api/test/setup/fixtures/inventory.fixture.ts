@@ -95,6 +95,21 @@ export async function releaseOnceBlocked(
   }
 }
 
+export async function readReservationOrder(app: INestApplication, orderId: string) {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  const [row] = await db.select().from(schema.reservationOrders).where(eq(schema.reservationOrders.orderId, orderId));
+  return row;
+}
+
+/** Ages a participant hold past its `hold_until`, the one thing a test cannot wait for. */
+export async function lapseHoldHeader(app: INestApplication, orderId: string, minutesAgo = 30): Promise<void> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  await db
+    .update(schema.reservationOrders)
+    .set({ holdUntil: new Date(Date.now() - minutesAgo * 60_000) })
+    .where(eq(schema.reservationOrders.orderId, orderId));
+}
+
 /** Must equal the number of winning holds after a race. */
 export async function countHeldReservations(app: INestApplication, variantId: string): Promise<number> {
   const db = app.get<DrizzleDB>(DRIZZLE);

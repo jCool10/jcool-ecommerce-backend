@@ -54,7 +54,7 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 - **Why:** Order's checkout deals with one Product participant, which reads price and name and holds stock. Catalog edits and stock holds never need one transaction, though, so the module merges and the aggregates stay apart.
 - **Rejected alternatives:** subdomain first (`product/{catalog,stock}/<layer>`), where every layering rule keyed on `modules/<context>/<layer>/` would stop matching without failing; a façade module re-exporting the old two, which merges on paper only; renaming the tables to `product_*`, which buys a migration and nothing else.
 - **Consequences:** `no-cross-context-internals` no longer separates the two groups, so `product-aggregate-isolation` forbids either subdomain from importing the other in any layer. They meet only through `product.module.ts`, `application/public/` and the `variantId`, and a stock write must never bump the catalog cache generation. Table names, `catalog.*` event names, `catalog:*` cache keys, admin URLs and the `INVENTORY_LOCK_STRATEGY` / `CATALOG_CACHE_*` variables did not change.
-- **Revisit when:** stock needs its own database or a reservation has to call an external warehouse system — the hold then leaves checkout's local transaction and becomes a saga step, so `PRODUCT_STOCK_RESERVATION` loses the caller's `tx` and turns into a command/reply contract.
+- **Revisit when:** stock needs its own database or a reservation has to call an external warehouse system — the hold then leaves checkout's local transaction and becomes a saga step, so `PRODUCT_STOCK_RESERVATION` loses the caller's `tx` and turns into a command/reply contract. Taken up by [the checkout saga](#checkout-saga-orchestration-tcc-on-stock-and-payment-stripe-manual-capture): `INVENTORY_PARTICIPANT` is that contract.
 
 ### Transactional outbox and inbox instead of dual-write
 
@@ -70,7 +70,7 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 - **Why:** settlement has to commit atomically with a caller's own transaction, a consumer's inbox claim in particular; an external lock (Redis, ZooKeeper) can be released without that commit ever happening, which a row lock inside the same transaction cannot.
 - **Rejected alternatives:** a distributed lock service; per-path settlement logic, which would duplicate the terminal guard once per caller and risk one that forgets it.
 - **Consequences:** `execute` can run standalone or `join` a caller's transaction; no network I/O is allowed inside it, so a gateway call must be resolved before entry ([`finalize-order.use-case.ts`](../apps/api/src/modules/order/application/use-cases/finalize-order.use-case.ts)).
-- **Revisit when:** settlement needs to span more than one Postgres instance — that would need a saga step, the same shape the api/user-service split already uses for `order.paid`.
+- **Revisit when:** settlement needs to span more than one Postgres instance — that would need a saga step, the same shape the api/user-service split already uses for `order.paid`. Taken up by [the checkout saga](#checkout-saga-orchestration-tcc-on-stock-and-payment-stripe-manual-capture), which replaces this path once checkout moves onto it.
 
 ### Two inventory lock strategies behind one port
 
@@ -79,6 +79,16 @@ Error-severity rules in [`apps/api/.dependency-cruiser.cjs`](../apps/api/.depend
 - **Rejected alternatives:** committing to a single strategy repo-wide (forecloses the measurement); a distributed lock across replicas (unnecessary — both strategies already run inside the caller's own transaction).
 - **Consequences:** the optimistic path's idempotency check is not lock-guarded, so callers must dedupe order submission upstream, not rely on the reservation call itself ([`stock-repository.port.ts`](../apps/api/src/modules/product/application/stock/ports/stock-repository.port.ts)).
 - **Revisit when:** `load:sku-contention` shows one strategy dominating every measured shape, making the switch dead weight.
+
+### Checkout saga: orchestration, TCC on stock and payment, Stripe manual capture
+
+Status: implementation in progress. Only the stock participant (`INVENTORY_PARTICIPANT`) exists so far, and checkout still holds stock inside its own transaction through `PRODUCT_STOCK_RESERVATION`.
+
+- **Decision:** checkout becomes a saga that Order orchestrates, with its state in a Temporal workflow. Stock and payment are TCC participants. Stock holds on Try and commits, releases or restocks on command. Payment authorizes through Stripe manual capture and captures only after stock has committed, so capture is the pivot. Every participant call runs its own transaction behind a per-order fence row (`reservation_orders` for stock): repeats get the same answer, a release that arrives before its Try records `FENCED`, and that Try is refused when it lands late.
+- **Why:** order, inventory and payment are leaving the api as separate services, and after that no single transaction covers the order, the hold and the money. TCC keeps each step a local transaction while stock is never oversold and money is never taken for stock that was not committed.
+- **Rejected alternatives:** choreography over events (no single place knows where an order stands, and compensation order stays implicit); 2PC/XA across services (Stripe and BullMQ are not XA resources, and it holds locks across the network); capturing before the stock commit (a stock failure would then need a refund).
+- **Consequences:** a participant answers with an outcome or throws. A throw means the outcome is unknown, so the orchestrator retries or compensates and never reads it as a refusal. One `INVENTORY_TRY_LOCK_TIMEOUT_MS` budget covers a whole stock Try: id minting and the pool wait spend it, and every lock wait and statement is cut at what is left, so a Try the orchestrator has given up on cannot keep a pooled connection. Participant holds carry the orchestrator's `hold_until`, and a stock-side sweep releases them once it passes; holds made by today's checkout stay with the existing reservation sweep.
+- **Revisit when:** a participant cannot hold or authorize without settling at once. That step then has to move behind the pivot or gain a refund compensation.
 
 ### Ids minted by a separate id-service, not in process
 
