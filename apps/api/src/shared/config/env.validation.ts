@@ -1,4 +1,5 @@
-import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Matches, Max, Min, MinLength } from 'class-validator';
+import { KAFKA_PREFIX_PATTERN } from '@shared/messaging/kafka/kafka-topology';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/retry/retry-policy';
 import {
   AppEnv,
@@ -119,6 +120,28 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsInt()
   @Min(30_000)
   MESSAGING_RETRY_LEASE_MS?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  KAFKA_BROKERS?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  KAFKA_CLIENT_ID?: string;
+
+  @IsOptional()
+  @Matches(KAFKA_PREFIX_PATTERN)
+  KAFKA_PREFIX?: string;
+
+  // The relay publishes while it holds the outbox row locks, so this bounds how long they are held.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1_000)
+  @Max(30_000)
+  KAFKA_DELIVERY_TIMEOUT_MS?: number;
 
   @IsOptional()
   @IsStrictBoolean()

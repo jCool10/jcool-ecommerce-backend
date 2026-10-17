@@ -91,6 +91,28 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, MESSAGING_RETRY_LEASE_MS: '30000' })).not.toThrow();
   });
 
+  it('boots without a Kafka broker while nothing publishes or consumes through it', () => {
+    expect(() => validate(BASE_ENV)).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, KAFKA_BROKERS: 'kafka:9092,127.0.0.1:9094' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, KAFKA_BROKERS: '' })).toThrow(/KAFKA_BROKERS/);
+  });
+
+  // The prefix lands in topic and group names, which Kafka limits to these characters.
+  it('refuses a Kafka prefix Kafka would not accept in a topic name', () => {
+    for (const prefix of ['', 'has space', 'a/b', 'jcool:prod', 'x'.repeat(101)]) {
+      expect(() => validate({ ...BASE_ENV, KAFKA_PREFIX: prefix }), prefix).toThrow(/KAFKA_PREFIX/);
+    }
+    expect(() => validate({ ...BASE_ENV, KAFKA_PREFIX: 'e2e.kafka-client_behaviour' })).not.toThrow();
+  });
+
+  // The relay publishes while it holds the outbox row locks, so this also bounds how long they are held.
+  it('bounds the Kafka delivery timeout', () => {
+    expect(() => validate({ ...BASE_ENV, KAFKA_DELIVERY_TIMEOUT_MS: '999' })).toThrow(/KAFKA_DELIVERY_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, KAFKA_DELIVERY_TIMEOUT_MS: '30001' })).toThrow(/KAFKA_DELIVERY_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, KAFKA_DELIVERY_TIMEOUT_MS: '1000' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, KAFKA_DELIVERY_TIMEOUT_MS: '30000' })).not.toThrow();
+  });
+
   // The platform injects its own variables, and a retired key can linger in a deployment.
   it('boots with env keys the schema does not declare', () => {
     expect(() => validate({ ...BASE_ENV, RAILWAY_DEPLOYMENT_DRAINING_SECONDS: 'not-a-number' })).not.toThrow();

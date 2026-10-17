@@ -26,6 +26,7 @@ Conventions used below:
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
+- [Kafka broker](#kafka-broker)
 - [The id-service's etcd](#the-id-services-etcd)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
@@ -835,6 +836,81 @@ printf '%s\n%s\n' "$ELASTIC_PASSWORD" "$ELASTIC_PASSWORD" |
 ```
 
 The api is unaffected either way.
+
+---
+
+## Kafka broker
+
+`kafka` is a Railway service declared in `.railway/railway.ts` and built from `infra/kafka/`: Apache Kafka 4.3.1 as one KRaft node that is both broker and controller, with its log directory on the `kafka-data` volume. Nothing publishes or consumes through it yet; the api only carries `KAFKA_BROKERS`. Like Elasticsearch it is outside `cd.yml`, so a deploy or a config change is `railway up --ci --service kafka`. A service with a volume never runs two deployments at once, so every redeploy is a short outage.
+
+What it depends on ([decision record](./docs/system-architecture.md#one-kafka-broker-and-a-client-pinned-by-its-measured-behaviour)):
+
+- **No public surface, ever.** The listener has no auth, so only the private network may reach it. `railway domain list --service kafka` prints nothing, and the service's Settings → Networking shows no TCP proxy.
+- **The controller binds loopback only** (`CONTROLLER://localhost:9093`, voters `1@localhost:9093`). A single node has no peer that needs it, so nothing on the private network can talk to the quorum.
+- **No healthcheck.** Railway's healthcheck is an HTTP path and Kafka speaks no HTTP, so a deploy would never turn healthy. Check a deploy by hand instead (below).
+- **It starts as root only to hand the root-owned volume to `appuser` (uid 1000)**, then drops to it with coreutils' `chroot --userspec` (`railway-entrypoint.sh`). The image's `setpriv` and `su` are BusyBox and cannot do it.
+- **`CLUSTER_ID` never changes.** The first start formats the volume with it, and a broker whose `CLUSTER_ID` differs from the volume's refuses to start. It is not a secret, so it is a literal in `.railway/railway.ts`.
+- **Heap 512 MB** (`KAFKA_HEAP_OPTS`).
+
+### First release
+
+The change only adds things, so it follows [Change Railway service config](#change-railway-service-config) without a destructive review:
+
+1. From the branch rebased on `main`, `railway config plan` adds only `kafka-data`, `kafka` and the api's `KAFKA_BROKERS`, and destroys nothing. Then `railway config apply --yes`.
+2. `railway up --ci --service kafka`, then check the deploy:
+
+   ```sh
+   # container (kafka)
+   ls /var/lib/kafka/data/logs/meta.properties
+   grep ^Uid: /proc/1/status    # the broker is PID 1; 1000 is appuser
+   ```
+
+   The log (`railway logs --service kafka`) has `Kafka Server started`, and `railway domain list --service kafka` prints nothing.
+3. `railway config plan --detailed-exit-code` exits 0. Merge; CD deploys the api with `KAFKA_BROKERS` set and unused.
+4. [Provision the topics](#provision-the-topics) twice from the api's container. The second run creating nothing proves the private network between the api and the broker.
+
+Rollback is not needed while nothing depends on the broker: leave a broken one in place and fix it forward with `railway up --ci --service kafka`. Never delete the service or the volume.
+
+### Provision the topics
+
+Topics come only from `messaging:provision-topics`. Auto-create is off, so a publish to a missing topic fails rather than creating one with the wrong layout. Run it by hand whenever a topic is added or changed, and after the volume is lost. It never runs in `preDeploy`: there, a broken broker would block every api deploy, rollbacks and hotfixes included.
+
+```bash
+# container (api)
+npm run messaging:provision-topics:prod
+```
+
+```bash
+# local — against KAFKA_BROKERS, compose's broker in .env.example
+pnpm messaging:provision-topics
+```
+
+It creates whichever of `jcool.order.events`, `jcool.payment.events` and `jcool.catalog.events` is missing, with 3 partitions and the configs of `TOPIC_SPEC` (`apps/api/src/shared/messaging/kafka/kafka-topology.ts`), and checks the partition count of those that exist. It exits non-zero when an existing topic has another partition count. When the broker does not answer, it exits 1 within 10 s rather than hanging.
+
+A drifted partition count cannot be fixed in place: Kafka adds partitions but never removes them, and either direction moves keys between partitions, which breaks per-key ordering. Delete the topic, provision again, then [republish](#republish-an-outbox-window) the window its records covered.
+
+### Check topic configs
+
+The Node client cannot read a topic's configs back, so provisioning applies them on create and never sees a later change. After provisioning, and whenever a topic may have been altered by hand, read them in the broker's shell:
+
+```sh
+# container (kafka)
+for t in order payment catalog; do
+  /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic "jcool.$t.events" | head -1
+done
+```
+
+Each line must show `PartitionCount: 3` and, in any order, `cleanup.policy=delete`, `min.insync.replicas=1`, `flush.messages=1`, `segment.ms=3600000` and `retention.ms=601200000`. A record lives up to `retention.ms + segment.ms`, which is the redelivery horizon the inbox claims are sized against. A longer retention lets a replay reach records whose claims may be gone; a shorter one drops records a stalled consumer has not read yet. Put a drifted value back with:
+
+```sh
+# container (kafka)
+/opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --entity-type topics \
+  --entity-name jcool.order.events --add-config retention.ms=601200000
+```
+
+### The volume is lost
+
+The broker formats the fresh volume with the same `CLUSTER_ID` and starts with no topics. [Provision them](#provision-the-topics) again, then [republish](#republish-an-outbox-window) the outbox window the lost records covered.
 
 ---
 

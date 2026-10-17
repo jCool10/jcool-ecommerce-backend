@@ -80,6 +80,46 @@ services:
     networks:
       - jcool-net
 
+  # Topics come from `pnpm messaging:provision-topics`, never from a client: auto-create is off.
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: jcool-kafka
+    restart: unless-stopped
+    # Loopback only: the broker has no auth, so anyone who reaches it can write to a topic.
+    ports:
+      - "127.0.0.1:${KAFKA_HOST_PORT:-9094}:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # The controller binds loopback: a single node has no peer that needs to reach it.
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:9094,CONTROLLER://localhost:9093
+      # 127.0.0.1 rather than localhost: the published port is IPv4 only, and librdkafka would try ::1 first.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://127.0.0.1:${KAFKA_HOST_PORT:-9094}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # The image defaults to a directory under /tmp.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data/logs
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx256m
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    networks:
+      - jcool-net
+
   # Accepts every message and delivers none. The log sink the app falls back to records only the
   # envelope, so this web inbox is how a developer reads a verification or reset link. Nothing is
   # persisted — a restart empties it.
@@ -175,6 +215,7 @@ services:
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
+      KAFKA_BROKERS: kafka:9092
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -182,6 +223,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
       # The bucket must exist before the first upload is confirmed, and this container is the only
       # thing that creates it.
@@ -469,6 +512,7 @@ volumes:
   userpgdata:
   redisdata:
   esdata:
+  kafkadata:
   miniodata:
   promdata:
   grafanadata:

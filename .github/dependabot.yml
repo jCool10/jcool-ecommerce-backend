@@ -24,6 +24,10 @@ updates:
       # all move together), not something to accept from a bot PR.
       - dependency-name: '@types/node'
         update-types: [version-update:semver-major]
+      # Every bump is its own change: the native client's behaviour is pinned by
+      # kafka-client-behaviour.e2e-spec.ts, which has to be rerun against the new version.
+      - dependency-name: '@confluentinc/kafka-javascript'
+        update-types: [version-update:semver-minor, version-update:semver-patch]
 
   # The workflows themselves. An action pinned to a tag that silently moves is the supply-chain risk
   # CI is otherwise there to catch, so it gets the same weekly review.

@@ -32,7 +32,26 @@ describe('configuration', () => {
     'MESSAGING_RETRY_POLL_MS',
     'MESSAGING_RETRY_BATCH_SIZE',
     'MESSAGING_RETRY_LEASE_MS',
+    'KAFKA_BROKERS',
+    'KAFKA_CLIENT_ID',
+    'KAFKA_PREFIX',
+    'KAFKA_DELIVERY_TIMEOUT_MS',
   ]);
+
+  it('knows no Kafka broker by default and names topics and groups under jcool', () => {
+    expect(configuration().kafka).toEqual({
+      brokers: [],
+      clientId: 'jcool-api',
+      prefix: 'jcool',
+      deliveryTimeoutMs: 5_000,
+    });
+  });
+
+  it('splits the broker list on commas and drops the blanks', () => {
+    process.env.KAFKA_BROKERS = ' kafka:9092 , ,127.0.0.1:9094,';
+
+    expect(configuration().kafka.brokers).toEqual(['kafka:9092', '127.0.0.1:9094']);
+  });
 
   it('runs the consumer retry poller every second, 50 rows a tick, each leased for a minute', () => {
     expect(configuration().messaging.retry).toEqual({ enabled: true, pollMs: 1_000, batchSize: 50, leaseMs: 60_000 });

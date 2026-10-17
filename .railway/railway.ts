@@ -12,6 +12,7 @@ const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
 const LOKI_PORT = '3100';
 const ELASTICSEARCH_PORT = '9200';
+const KAFKA_PORT = '9092';
 
 // Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
 const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
@@ -109,6 +110,8 @@ export default defineRailway(() => {
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,
       SEARCH_USERNAME: 'jcool_api',
       SEARCH_PASSWORD: '${{elasticsearch.API_SEARCH_PASSWORD}}',
+      // Nothing publishes or consumes through it yet; topics are provisioned by hand (RUNBOOK).
+      KAFKA_BROKERS: `\${{kafka.RAILWAY_PRIVATE_DOMAIN}}:${KAFKA_PORT}`,
     },
   });
 
@@ -226,6 +229,39 @@ export default defineRailway(() => {
     },
   });
 
+  // Losing it costs the records not yet consumed: recreate the topics, then republish the window (RUNBOOK).
+  const kafkaData = volume('kafka-data', { sizeMB: 5_000, region: 'iad' });
+
+  // No domain and no TCP proxy, ever: the listener has no auth. No healthcheck either: Railway's is an HTTP
+  // path and Kafka speaks none. Deployed by hand with `railway up`, and every redeploy is a short outage.
+  const kafka = service('kafka', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/kafka/Dockerfile' },
+    deploy: { numReplicas: 1, restartPolicyMaxRetries: 5 },
+    volumeMounts: { '/var/lib/kafka/data': kafkaData },
+    env: {
+      KAFKA_NODE_ID: '1',
+      KAFKA_PROCESS_ROLES: 'broker,controller',
+      // The controller binds loopback: a single node has no peer that needs to reach it.
+      KAFKA_LISTENERS: `PLAINTEXT://:${KAFKA_PORT},CONTROLLER://localhost:9093`,
+      KAFKA_ADVERTISED_LISTENERS: `PLAINTEXT://\${{RAILWAY_PRIVATE_DOMAIN}}:${KAFKA_PORT}`,
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@localhost:9093',
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER',
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT',
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1',
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1',
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1',
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: '1',
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: '1',
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: '0',
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false',
+      // Not the volume root, which holds lost+found.
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data/logs',
+      KAFKA_HEAP_OPTS: '-Xms512m -Xmx512m',
+      // Formats the volume on first start and must never change after. Not a secret.
+      CLUSTER_ID: 'gOm7CASESJSMnC69YBZCpw',
+    },
+  });
+
   // The tsdb outlives a deploy; the retention window is set in railway-entrypoint.sh.
   const prometheusData = volume('prometheus-data', { sizeMB: 5_000, region: 'iad' });
 
@@ -306,6 +342,8 @@ export default defineRailway(() => {
       userService,
       elasticsearchData,
       elasticsearch,
+      kafkaData,
+      kafka,
       prometheusData,
       prometheus,
       lokiChunks,

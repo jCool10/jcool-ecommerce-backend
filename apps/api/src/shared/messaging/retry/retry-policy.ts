@@ -1,8 +1,10 @@
 import type { ConfigService } from '@nestjs/config';
 
 /**
- * The longest a delivered message can still come back: BullMQ keeps a failed job this long. One half
- * of a correctness pair — an inbox claim must outlive it, and `sweep-inbox.ts` asserts that at boot.
+ * The longest a delivered message can still come back: BullMQ keeps a failed job this long, and a
+ * Kafka topic keeps a record as long, plus up to the broker's 5-minute retention check
+ * (kafka-topology.ts). One half of a correctness pair — an inbox claim must outlive it, and
+ * `sweep-inbox.ts` asserts that at boot.
  */
 export const MAX_REDELIVERY_AGE_SEC = 604_800;
 

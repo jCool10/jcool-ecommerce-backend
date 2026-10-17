@@ -6,9 +6,11 @@ overrides:
   multer: ^2.4.0
   proxy-addr: ^2.0.8
 
-# argon2 compiles from source when no prebuild matches the platform. The rest only verify or
-# optimize binaries that already arrive as platform packages.
+# argon2 compiles from source when no prebuild matches the platform. The Kafka client's install
+# script is what downloads its prebuilt librdkafka binary. The rest only verify or optimize binaries
+# that already arrive as platform packages.
 allowBuilds:
+  '@confluentinc/kafka-javascript': true
   '@scarf/scarf': false
   '@swc/core': false
   argon2: true

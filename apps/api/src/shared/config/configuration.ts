@@ -62,6 +62,16 @@ export default () => ({
       leaseMs: parseIntOr(process.env.MESSAGING_RETRY_LEASE_MS, 60_000),
     },
   },
+  kafka: {
+    brokers: (process.env.KAFKA_BROKERS ?? '')
+      .split(',')
+      .map((broker) => broker.trim())
+      .filter(Boolean),
+    clientId: process.env.KAFKA_CLIENT_ID ?? 'jcool-api',
+    // Prefixes topic names and group ids, never the consumer name written to inbox rows.
+    prefix: process.env.KAFKA_PREFIX ?? 'jcool',
+    deliveryTimeoutMs: parseIntOr(process.env.KAFKA_DELIVERY_TIMEOUT_MS, 5_000),
+  },
   auth: {
     jwksUrl: process.env.AUTH_JWKS_URL,
     issuer: process.env.JWT_ISSUER,

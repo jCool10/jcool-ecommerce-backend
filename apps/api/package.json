@@ -35,6 +35,8 @@
     "queue:replay-dlq:prod": "node dist/shared/messaging/queue/replay-dlq.cli.js",
     "messaging:republish": "tsx src/shared/messaging/outbox/republish-outbox.cli.ts",
     "messaging:republish:prod": "node dist/shared/messaging/outbox/republish-outbox.cli.js",
+    "messaging:provision-topics": "tsx src/shared/messaging/kafka/provision-topics.cli.ts",
+    "messaging:provision-topics:prod": "node dist/shared/messaging/kafka/provision-topics.cli.js",
     "search:reindex": "tsx src/modules/product/infrastructure/catalog/search/reindex.ts",
     "search:reindex:prod": "node dist/modules/product/infrastructure/catalog/search/reindex.js",
     "storage:verify": "tsx src/shared/infrastructure/storage/verify-storage-orphans.cli.ts",
@@ -43,6 +45,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1145.0",
     "@aws-sdk/s3-request-presigner": "^3.1145.0",
+    "@confluentinc/kafka-javascript": "1.11.0",
     "@elastic/elasticsearch": "^9.5.1",
     "@jcool/auth-verifier": "workspace:*",
     "@jcool/id-codec": "workspace:*",

@@ -65,7 +65,9 @@ export async function createTestApp(
   // a file that leaves jobs waiting hands them to the next file that boots a worker, which then
   // applies events its own test never published. Same value for every app in a file, because a
   // suite may drive one app's relay and read the queue through another's.
-  process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
+  process.env.QUEUE_PREFIX = `bull${specSuffix(':')}`;
+  // Same reason for Kafka: topics and groups live on one broker for the whole run.
+  process.env.KAFKA_PREFIX = `e2e${specSuffix('.')}`;
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
   // live path, billable and non-deterministic.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {
@@ -145,8 +147,8 @@ export async function createTestApp(
   }
 }
 
-// Spec filenames are unique, so the prefix is stable within a file and distinct across files.
-function queuePrefixForCurrentSpec(): string {
+// Spec filenames are unique, so a prefix is stable within a file and distinct across files.
+function specSuffix(separator: string): string {
   const testPath = expect.getState().testPath;
-  return testPath ? `bull:${basename(testPath, '.e2e-spec.ts')}` : 'bull';
+  return testPath ? `${separator}${basename(testPath, '.e2e-spec.ts')}` : '';
 }

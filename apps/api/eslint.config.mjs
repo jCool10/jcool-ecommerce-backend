@@ -50,6 +50,13 @@ const randomUuidBan = [
   { selector: "MemberExpression[property.name='randomUUID']", message: rowIdMessage },
 ];
 
+// Producers, consumers and admins are built only under src/shared/messaging/kafka/, so connection
+// settings and shutdown order live in one module. The package has no exports map, hence the subpaths.
+const kafkaClientBan = {
+  group: ['@confluentinc/kafka-javascript', '@confluentinc/kafka-javascript/*'],
+  message: 'Only src/shared/messaging/kafka/ talks to the Kafka client; go through its exports.',
+};
+
 const domainImportBan = {
   group: ['@nestjs/*', 'drizzle-orm', 'drizzle-orm/*', 'pg', 'ioredis'],
   message: 'domain/ must not import framework/DB. Keep domain pure; put adapters in infrastructure/.',
@@ -105,7 +112,19 @@ export default tseslint.config(
     files: ['src/**/*.ts'],
     ignores: ['src/main.ts'],
     rules: {
+      'no-restricted-imports': ['error', { paths: [nestLoggerBan], patterns: [kafkaClientBan] }],
+    },
+  },
+  {
+    files: ['src/shared/messaging/kafka/**/*.ts'],
+    rules: {
       'no-restricted-imports': ['error', { paths: [nestLoggerBan] }],
+    },
+  },
+  {
+    files: ['src/main.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [kafkaClientBan] }],
     },
   },
   {
@@ -122,14 +141,14 @@ export default tseslint.config(
   {
     files: ['src/**/domain/**/*.ts'],
     rules: {
-      'no-restricted-imports': ['error', { paths: [nestLoggerBan], patterns: [domainImportBan] }],
+      'no-restricted-imports': ['error', { paths: [nestLoggerBan], patterns: [domainImportBan, kafkaClientBan] }],
     },
   },
   {
     files: ['scripts/**/*.ts'],
     ignores: ['**/*.spec.ts'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [uuidImportBan] }],
+      'no-restricted-imports': ['error', { patterns: [uuidImportBan, kafkaClientBan] }],
       'no-restricted-syntax': ['error', ...randomUuidBan],
     },
   },
@@ -141,6 +160,7 @@ export default tseslint.config(
       'src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
       'src/shared/messaging/queue/replay-dlq.cli.ts',
       'src/shared/messaging/outbox/republish-outbox.cli.ts',
+      'src/shared/messaging/kafka/provision-topics.cli.ts',
       'src/modules/product/infrastructure/catalog/search/reindex.ts',
       'src/**/*.spec.ts',
     ],

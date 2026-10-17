@@ -136,7 +136,7 @@ packages/
 │                            #   one subpath export each
 └── testing/                 # @jcool/testing — test doubles, source-only, dev dependency only
 test/load/  k6/              # k6 mixes
-infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana, Elasticsearch, etcd
+infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana, Elasticsearch, Kafka, etcd
 scripts/                     # repo tooling: CI's Railway flip-variable check, rollout wait, perf capture, doc diagram build
 docs/                        # standards, architecture decisions, deployment; docs/diagrams/ holds the diagram sources
 .railway/railway.ts          # Railway deploy config (infrastructure as code)
@@ -216,7 +216,7 @@ The parts worth reading the code for. Each row names the file to open.
 
 ## Quick start
 
-**Prerequisites:** Node ≥ 22.9, pnpm (any recent install switches itself to the version pinned in `packageManager`), Docker (for infrastructure and the integration tests).
+**Prerequisites:** Node 24 (`.nvmrc`), pnpm (any recent install switches itself to the version pinned in `packageManager`), Docker (for infrastructure and the integration tests). Node ≥ 22.9 runs the apps, but the Kafka client ships prebuilt binaries only up to Node 24: on a newer one, `pnpm install` compiles librdkafka from source, which needs Python and a C++20 compiler and takes minutes.
 
 ```bash
 # 1. install
@@ -231,7 +231,7 @@ pnpm dev:link-env
 
 # 3. infrastructure (the ports below are the host-mapped ones). The id-service fleet stays in
 #    Compose: both apps mint ids through the gateway's load balancer on 127.0.0.1:4000.
-docker compose up -d postgres redis elasticsearch mailpit minio minio-init
+docker compose up -d postgres redis elasticsearch kafka mailpit minio minio-init
 docker compose --profile user-service up -d user-postgres
 docker compose up -d --build id-service gateway
 
@@ -247,11 +247,11 @@ pnpm dev
 
 - API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs> · user-service → <http://localhost:3002>
 - Mail inbox (Mailpit) → <http://localhost:8025> · MinIO console → <http://localhost:9001>
-- Postgres → `localhost:5433` (user-service: `localhost:5434`) · Redis → `localhost:6380` · Elasticsearch → `localhost:9200` · id-service load balancer → `localhost:4000`
+- Postgres → `localhost:5433` (user-service: `localhost:5434`) · Redis → `localhost:6380` · Elasticsearch → `localhost:9200` · Kafka → `127.0.0.1:9094` · id-service load balancer → `localhost:4000`
 
 `pnpm dev` is `turbo watch dev`. It builds the packages, then runs `dev` in the api (`nest start --watch`) and the user-service. A change under `packages/` rebuilds that package and every package that depends on it, then restarts the apps that use them. A change in the api's `src/` is left to Nest's own incremental reload, because [`apps/api/turbo.json`](./apps/api/turbo.json) limits the inputs of the api's `dev` task to its config files (`futureFlags.watchUsingTaskInputs` in the root `turbo.json`). The user-service has no watcher of its own, so turbo rebuilds it with `tsc` and restarts it. To run one app with the packages it uses: `pnpm turbo watch dev --filter=@jcool/api`. With a filter, turbo 2.11.6 still starts `dev` in the other apps that depend on a package you change; without `watchUsingTaskInputs` it honours the filter, but every save in the api then restarts it twice. Keep `SHUTDOWN_GRACE_PERIOD_MS` at `0` locally, since each restart and Ctrl+C waits it out. Turbo runs tasks in strict env mode, so a variable set on the command line (`PORT=3005 pnpm dev`) never reaches the app; put overrides in the `.env` files. Don't run the user-service container alongside `pnpm dev`: both bind port 3002.
 
-`minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Elasticsearch is only needed with `SEARCH_ENABLED=true`, and on a Linux host it wants `sudo sysctl -w vm.max_map_count=262144` first (Docker Desktop already sets it). Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
+`minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Elasticsearch is only needed with `SEARCH_ENABLED=true`, and on a Linux host it wants `sudo sysctl -w vm.max_map_count=262144` first (Docker Desktop already sets it). Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink. Nothing publishes or consumes through Kafka yet. Its auto-create is off, so `pnpm messaging:provision-topics` is what creates the topics ([RUNBOOK](./RUNBOOK.md#provision-the-topics)), and it publishes on loopback only because the broker has no auth.
 
 Full stack in-network, behind the gateway as on Railway: `docker compose up -d --build`, then <http://localhost:8080>. The app container publishes no port there. Tear down including volumes: `docker compose --profile '*' down -v` (without a profile, `down` leaves the profile-gated services, the user-service's Postgres and its volume included). The user-service is opt-in, since it needs `apps/user-service/.env`: `docker compose --profile user-service up -d --build user-service` serves it on <http://127.0.0.1:3002>, with its Postgres on 127.0.0.1:5434. Redis runs with AOF on, which the api and the user-service both require.
 
@@ -377,15 +377,15 @@ Two tiers, kept separate on purpose.
 ```bash
 pnpm test           # ~760 unit tests, 186 files across every workspace; hermetic, no Docker
 pnpm test:cov       # same, with the coverage floors CI enforces
-pnpm test:e2e       # 98 integration suites (api 65, user-service 23, id-service 10); requires Docker
+pnpm test:e2e       # 102 integration suites (api 69, user-service 23, id-service 10); requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
 
 - **Unit** (`src/**/*.spec.ts`) — fast and hermetic, with a deterministic `uuid` double so generated ids are stable within a run.
-- **Integration** (`apps/*/test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Elasticsearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
+- **Integration** (`apps/*/test/integration/*.e2e-spec.ts`) — the app wired to real infrastructure, no DB mocking. A single `globalSetup` boots **Postgres + Redis + Kafka** once per run, applies the committed migrations to a template database and clones one database per worker from it; the media, search and mail suites additionally boot **MinIO, Elasticsearch and Mailpit** per spec file, kept out of `globalSetup` so unrelated files never wait on containers they don't use. So the suite exercises real S3, a real search engine and a real SMTP server.
 
-Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
+Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace and Kafka topic prefix; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
 The api's and the user-service's coverage floors are **glob-scoped**, not global: `src/**/{domain,application}/**` only, at `statements 82 / branches 80 / functions 79 / lines 82` for the api and `92 / 83 / 88 / 93` for the user-service. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested, and the usual fix for that is either to lower the floor until it means nothing or to keep unit tests that repeat an e2e test only to hold the number. The numbers are the measured values minus two points, not a round 80. The id-service (`98 / 90 / 98 / 98`) and the packages keep global floors.
 
@@ -471,7 +471,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 ## Operations
 
-[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: the permanent id layout and how to change it, backup/restore per database (including restoring a dump into one pinned to a different id layout), rotating the JWKS and `INTERNAL_API_TOKEN`, deploying Elasticsearch and rebuilding the search index, replaying dead letters and republishing an outbox window, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
+[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: the permanent id layout and how to change it, backup/restore per database (including restoring a dump into one pinned to a different id layout), rotating the JWKS and `INTERNAL_API_TOKEN`, deploying Elasticsearch and rebuilding the search index, running the Kafka broker and provisioning its topics, replaying dead letters and republishing an outbox window, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
 
 **Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only: the builder runs `pnpm deploy --prod` for `@jcool/api`, and the runtime stage takes its `node_modules` plus the app's `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
 

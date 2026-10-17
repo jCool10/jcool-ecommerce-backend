@@ -62,7 +62,7 @@ jobs:
       # declared in vitest.config.mts. Running both would just run the suite twice.
       - run: pnpm turbo run test:cov # unit (Vitest) — fast, hermetic, no Docker; fails under the coverage floor
       # Turbo's strict env mode drops unlisted vars: a new one here also goes in turbo.json `passThroughEnv`.
-      - run: pnpm turbo run test:e2e # integration — Testcontainers spins real Postgres/Redis + programmatic migrate
+      - run: pnpm turbo run test:e2e # integration — Testcontainers spins real Postgres/Redis/Kafka + programmatic migrate
         env:
           # Job is ephemeral (fresh runner, torn down after), so skip Ryuk's reaper
           # container. Trades auto-cleanup (unneeded here) for reliability on runners

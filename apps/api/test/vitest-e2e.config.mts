@@ -43,12 +43,12 @@ export default defineConfig({
     },
     // Same reason as the unit config: one instance of every workspace package, the native one.
     server: { deps: { external: [/\/packages\/[^/]+\/dist\//] } },
-    // Boot Postgres + Redis containers once per run and migrate; connection URLs
+    // Boot Postgres, Redis and Kafka containers once per run and migrate; connection URLs
     // reach tests via provide()/inject() (globalSetup runs in its own process).
     globalSetup: ['./test/setup/global-setup.ts'],
     // Resolves this worker's database + Redis index before any spec module loads, and fails the
     // worker loudly if the pool grew past the databases globalSetup pre-created.
-    setupFiles: ['./test/setup/worker-resources.ts'],
+    setupFiles: ['./test/setup/worker-resources.ts', './test/setup/kafka-brokers.ts'],
     // Testcontainers spins real Postgres/Redis: give containers room and avoid
     // cross-file races on shared ports.
     testTimeout: 60_000,

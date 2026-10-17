@@ -2,6 +2,7 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer } from '@testcontainers/redis';
 import { Client } from 'pg';
 import { runMigrations } from '../../src/shared/infrastructure/database/migrate';
+import { startKafka } from './kafka-container';
 import {
   MAX_REDIS_DB_INDEX,
   TEMPLATE_DATABASE,
@@ -26,6 +27,10 @@ declare module 'vitest' {
     PG_BASE_URL: string;
     /** No logical-db index: each worker appends its own. */
     REDIS_BASE_URL: string;
+    /** Shared by every worker; specs keep apart through KAFKA_PREFIX. */
+    KAFKA_BROKERS: string;
+    /** For the broker's own CLI tools, which can read what the Node client cannot. */
+    KAFKA_CONTAINER_ID: string;
   }
 }
 
@@ -34,7 +39,7 @@ declare module 'vitest' {
 export default async function setup({
   provide,
 }: {
-  provide: (key: 'PG_BASE_URL' | 'REDIS_BASE_URL', value: string) => void;
+  provide: (key: 'PG_BASE_URL' | 'REDIS_BASE_URL' | 'KAFKA_BROKERS' | 'KAFKA_CONTAINER_ID', value: string) => void;
 }): Promise<() => Promise<void>> {
   // Before any `docker run`: the Redis cap is knowable here, and `assertWorkerBudget` can only
   // report it per worker, i.e. after both containers are up, the template is migrated and N
@@ -50,39 +55,46 @@ export default async function setup({
 
   // allSettled, not Promise.all: a one-sided failure must still expose the container that did
   // start, or it is orphaned.
-  const [pgResult, redisResult] = await Promise.allSettled([
+  const [pgResult, redisResult, kafkaResult] = await Promise.allSettled([
     new PostgreSqlContainer(POSTGRES_IMAGE)
       .withCommand(['postgres', '-c', `max_connections=${MAX_CONNECTIONS}`])
       .start(),
     // The api refuses to boot on a Redis that could lose revocation state.
     new RedisContainer(REDIS_IMAGE).withCommand(['redis-server', '--appendonly', 'yes']).start(),
+    startKafka(),
   ]);
 
-  if (pgResult.status === 'rejected' || redisResult.status === 'rejected') {
+  if (pgResult.status === 'rejected' || redisResult.status === 'rejected' || kafkaResult.status === 'rejected') {
     await Promise.allSettled([
       pgResult.status === 'fulfilled' ? pgResult.value.stop() : undefined,
       redisResult.status === 'fulfilled' ? redisResult.value.stop() : undefined,
+      kafkaResult.status === 'fulfilled' ? kafkaResult.value.container.stop() : undefined,
     ]);
     if (pgResult.status === 'rejected') throw pgResult.reason;
     if (redisResult.status === 'rejected') throw redisResult.reason;
+    if (kafkaResult.status === 'rejected') throw kafkaResult.reason;
   }
 
   const postgres = pgResult.value;
   const redis = redisResult.value;
+  const kafka = kafkaResult.value;
+  const stopAll = () => Promise.allSettled([postgres.stop(), redis.stop(), kafka.container.stop()]);
 
   try {
     const baseUrl = postgres.getConnectionUri();
     await createWorkerDatabases(baseUrl);
     provide('PG_BASE_URL', baseUrl);
     provide('REDIS_BASE_URL', redis.getConnectionUrl());
+    provide('KAFKA_BROKERS', kafka.brokers);
+    provide('KAFKA_CONTAINER_ID', kafka.container.getId());
   } catch (error) {
-    await Promise.allSettled([postgres.stop(), redis.stop()]);
+    await stopAll();
     throw error;
   }
 
   return async () => {
     // Dropping the container drops every worker database with it.
-    await Promise.allSettled([postgres.stop(), redis.stop()]);
+    await stopAll();
   };
 }
 
