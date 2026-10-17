@@ -22,6 +22,8 @@ const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 const API_VARIABLES = [
   'LOG_LEVEL',
   'MAIL_FROM',
+  // HMAC key for Kafka messages. Must exist before a deploy: the worker refuses to boot without it.
+  'MESSAGING_SIGNING_KEY',
   // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.
   'METRICS_TOKEN',
   'NODE_ENV',
@@ -30,6 +32,8 @@ const API_VARIABLES = [
   'POSTGRES_HOST_PORT',
   'POSTGRES_PASSWORD',
   'POSTGRES_USER',
+  // Flipped by hand to take an instance's consumers out (RUNBOOK); unset means on.
+  'QUEUE_WORKER_ENABLED',
   'REDIS_HOST_PORT',
   'SEARCH_ENABLED',
   'SMTP_URL',
@@ -86,7 +90,9 @@ export default defineRailway(() => {
       healthcheckTimeout: 120,
       restartPolicyMaxRetries: 5,
       overlapSeconds: 20,
-      drainingSeconds: 15,
+      // Shutdown takes up to 28s: relay 5, grace 5, consumers, worker and retry poller together 10,
+      // producer flush 5, telemetry flush 3.
+      drainingSeconds: 30,
     },
     env: {
       ...preserved(API_VARIABLES),
@@ -110,7 +116,7 @@ export default defineRailway(() => {
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,
       SEARCH_USERNAME: 'jcool_api',
       SEARCH_PASSWORD: '${{elasticsearch.API_SEARCH_PASSWORD}}',
-      // Nothing publishes or consumes through it yet; topics are provisioned by hand (RUNBOOK).
+      // The worker consumes from it whichever transport publishes; topics are provisioned by hand (RUNBOOK).
       KAFKA_BROKERS: `\${{kafka.RAILWAY_PRIVATE_DOMAIN}}:${KAFKA_PORT}`,
     },
   });

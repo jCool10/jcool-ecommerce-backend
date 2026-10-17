@@ -53,6 +53,11 @@ export default () => ({
     batchSize: parseIntOr(process.env.OUTBOX_BATCH_SIZE, 100),
   },
   messaging: {
+    // Picks the publisher only: the worker runs the BullMQ and the Kafka consumers either way, so a
+    // switch in either direction leaves nothing undrained.
+    transport: process.env.MESSAGING_TRANSPORT ?? 'bullmq',
+    // HMAC key for Kafka message values. Undefined only where nothing touches Kafka (env.validation).
+    signingKey: process.env.MESSAGING_SIGNING_KEY,
     retry: {
       // Off for e2e suites, which drive the poller by hand, like the relay above.
       enabled: process.env.MESSAGING_RETRY_ENABLED !== 'false',

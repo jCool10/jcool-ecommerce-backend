@@ -1,10 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Job, Queue } from 'bullmq';
 import { eq, isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
+import { ConsumerDelivery, type DeliveryOutcome } from '../../src/shared/messaging/consume/consumer-delivery';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import {
@@ -12,15 +12,9 @@ import {
   republishOutbox,
   type RepublishWindow,
 } from '../../src/shared/messaging/outbox/republish-outbox';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
-import {
-  closeAppAfterAll,
-  createTestAppWithPool,
-  obliterateQueueBeforeEach,
-  resetDatabaseBeforeEach,
-} from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 
 const MINUTE_MS = 60_000;
@@ -28,27 +22,26 @@ const HOUR_MS = 60 * MINUTE_MS;
 const RETENTION = { inboxDays: 30, outboxDays: 30 };
 const WAIT = { timeout: 10_000, interval: 50 };
 
-// A real worker rather than `drainDomainEvents`, which removes each job: the point here is that a
-// completed job BullMQ still keeps does not swallow the redelivery.
+// A real consumer rather than `drainDomainEvents`: the point here is that a group already past the
+// first copy still delivers the republished one.
 describe('Outbox republish window (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let db: DrizzleDB;
   let pool: Pool;
   let relay: OutboxRelay;
   let dispatcher: DomainEventDispatcher;
-  let queue: Queue<DomainEventJob>;
+  let delivery: ConsumerDelivery;
   let windows: DrizzleOutboxWindowStore;
 
   beforeAll(async () => {
     ({ app, pool, db } = await createTestAppWithPool({ QUEUE_WORKER_ENABLED: 'true' }));
     relay = app.get(OutboxRelay);
     dispatcher = app.get(DomainEventDispatcher);
-    queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
+    delivery = app.get(ConsumerDelivery);
     windows = new DrizzleOutboxWindowStore(db);
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-  obliterateQueueBeforeEach(() => [queue]);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -85,22 +78,30 @@ describe('Outbox republish window (integration, real Postgres + Redis)', () => {
       (row) => row.id,
     );
 
-  const completedFor = async (outboxId: string): Promise<Job<DomainEventJob>[]> =>
-    (await queue.getJobs(['completed'])).filter((job) => job.data.outboxId === outboxId);
+  const recordOutcomes = () => {
+    const outcomes: { outboxId: string; result: DeliveryOutcome }[] = [];
+    const deliver = delivery.deliver.bind(delivery) as ConsumerDelivery['deliver'];
+    vi.spyOn(delivery, 'deliver').mockImplementation(async (consumer, job) => {
+      const result = await deliver(consumer, job);
+      outcomes.push({ outboxId: job.outboxId, result });
+      return result;
+    });
+    return (outboxId: string) => outcomes.filter((o) => o.outboxId === outboxId).map((o) => o.result);
+  };
 
   it('redelivers a republished row as a new job and the inbox swallows the copy', async () => {
     const effect = spyOnEffect(dispatcher).mockResolvedValue(undefined);
+    const outcomesFor = recordOutcomes();
     const [row] = await seed([{ published: false }]);
 
     await expect(relay.runOnce(10)).resolves.toMatchObject({ published: 1 });
-    await vi.waitFor(async () => expect(await completedFor(row.id)).toHaveLength(1), WAIT);
+    await vi.waitFor(() => expect(outcomesFor(row.id)).toHaveLength(1), WAIT);
 
     await expect(republish({ sinceMs: HOUR_MS, eventTypes: [] })).resolves.toMatchObject({ reset: 1 });
     await expect(relay.runOnce(10)).resolves.toMatchObject({ published: 1 });
-    await vi.waitFor(async () => expect(await completedFor(row.id)).toHaveLength(2), WAIT);
+    await vi.waitFor(() => expect(outcomesFor(row.id)).toHaveLength(2), WAIT);
 
-    const results = (await completedFor(row.id)).map((job) => job.returnvalue).sort();
-    expect(results).toEqual(['duplicate', 'processed']);
+    expect(outcomesFor(row.id)).toEqual(['processed', 'duplicate']);
     expect(effect).toHaveBeenCalledTimes(1);
     expect(await db.select().from(schema.inbox).where(eq(schema.inbox.messageId, row.id))).toHaveLength(1);
   });

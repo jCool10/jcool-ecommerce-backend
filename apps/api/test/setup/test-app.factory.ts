@@ -5,12 +5,18 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { expect } from 'vitest';
+import { expect, inject } from 'vitest';
 import { AppModule } from '../../src/app.module';
+import {
+  DOMAIN_EVENT_PUBLISHER,
+  type DomainEventPublisher,
+} from '../../src/shared/messaging/transport/domain-event-publisher.port';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
 import { idServiceStub } from './id-service-stub';
 import { waitForRedisReady } from './redis-ready';
+import { sleep } from './sleep';
+import { provisionSpecTopics } from './spec-topics';
 import { userServiceStub } from './user-service-stub';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
 
@@ -68,6 +74,10 @@ export async function createTestApp(
   process.env.QUEUE_PREFIX = `bull${specSuffix(':')}`;
   // Same reason for Kafka: topics and groups live on one broker for the whole run.
   process.env.KAFKA_PREFIX = `e2e${specSuffix('.')}`;
+  // Assigned, not `??=`, for the .env reason above. The suites that assert BullMQ's own behaviour
+  // pass MESSAGING_TRANSPORT: 'bullmq'.
+  process.env.MESSAGING_TRANSPORT = 'kafka';
+  process.env.MESSAGING_SIGNING_KEY = inject('MESSAGING_SIGNING_KEY');
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
   // live path, billable and non-deterministic.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {
@@ -97,6 +107,9 @@ export async function createTestApp(
   }
 
   try {
+    const usesKafka = process.env.MESSAGING_TRANSPORT === 'kafka' || process.env.QUEUE_WORKER_ENABLED !== 'false';
+    if (usesKafka) await provisionSpecTopics(process.env.KAFKA_BROKERS!, process.env.KAFKA_PREFIX);
+
     let builder = Test.createTestingModule({ imports: [AppModule] });
     for (const override of providerOverrides) {
       builder = builder.overrideProvider(override.provide).useValue(override.useValue);
@@ -129,6 +142,10 @@ export async function createTestApp(
       // surfaces as `read ECONNRESET`, moving the race off the DB/cache/lock under test.
       await app.listen(0);
       await waitForRedisReady(app.get(RedisService).getClient());
+      // The producer connects in the background, and the relay skips every tick until it has.
+      if (configService.get<string>('messaging.transport') === 'kafka') {
+        await waitForPublisherReady(app.get<DomainEventPublisher>(DOMAIN_EVENT_PUBLISHER));
+      }
       return app;
     } catch (error) {
       // Providers are constructed by the time init can fail, so the pool and Redis socket are open
@@ -144,6 +161,16 @@ export async function createTestApp(
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+}
+
+const PUBLISHER_READY_TIMEOUT_MS = 15_000;
+
+async function waitForPublisherReady(publisher: DomainEventPublisher): Promise<void> {
+  const deadline = Date.now() + PUBLISHER_READY_TIMEOUT_MS;
+  while (!publisher.ready()) {
+    if (Date.now() > deadline) throw new Error(`Kafka publisher not ready after ${PUBLISHER_READY_TIMEOUT_MS}ms`);
+    await sleep(25);
   }
 }
 

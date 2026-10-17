@@ -34,6 +34,8 @@ const API_ENV = {
   STORAGE_BUCKET: 'system-test',
   STORAGE_ACCESS_KEY_ID: 'system-test',
   STORAGE_SECRET_ACCESS_KEY: randomBytes(16).toString('hex'),
+  // No case consumes, and the worker would otherwise want a Kafka broker and a signing key.
+  QUEUE_WORKER_ENABLED: 'false',
   LOG_LEVEL: 'warn',
 };
 

@@ -17,6 +17,7 @@ import {
   TOPICS,
   TOPIC_SPEC,
   UnroutableEventError,
+  consumerFor,
   groupIdFor,
   qualifiedTopic,
   topicFor,
@@ -74,6 +75,12 @@ describe('kafka topology', () => {
     const subscribed = Object.values(CONSUMER_GROUPS).flat();
 
     expect([...subscribed].sort()).toEqual(TOPICS.map((t) => t.topic).sort());
+  });
+
+  it('names the group that reads a topic', () => {
+    expect(consumerFor('order.events')).toBe('domain-events');
+    expect(consumerFor('payment.events')).toBe('domain-events');
+    expect(consumerFor('catalog.events')).toBe('catalog-search');
   });
 
   it('prefixes topics and group ids, never the consumer name', () => {

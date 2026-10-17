@@ -1,5 +1,4 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Queue } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,7 +10,8 @@ import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
+import { deliverApplied, publishedEnvelopes, snapshotTransportBeforeEach } from '../setup/domain-event-transport';
 import {
   auditLedgerInvariants,
   placeAndOpenSession,
@@ -24,9 +24,8 @@ import {
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
-import { resetDatabase } from '../setup/reset-database';
 
 const WEBHOOK_SECRET = 'whsec_e2e_saga_events_0123456789';
 const ON_HAND = 5;
@@ -44,7 +43,6 @@ describe('Payment settlement events driving the order saga (integration, real Po
   let relay: OutboxRelay;
   let processor: DomainEventProcessor;
   let dispatcher: DomainEventDispatcher;
-  let queue: Queue;
   let finalize: FinalizeOrderUseCase;
   let sku: SellableSku;
 
@@ -53,16 +51,14 @@ describe('Payment settlement events driving the order saga (integration, real Po
     relay = app.get(OutboxRelay);
     processor = app.get(DomainEventProcessor);
     dispatcher = app.get(DomainEventDispatcher);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     finalize = app.get(FinalizeOrderUseCase);
   });
   closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
+  // Or a message left over from the previous test lands on rows that no longer exist.
+  snapshotTransportBeforeEach(() => app);
 
-  // Explicit rather than `resetDatabaseBeforeEach`: the queue has to be emptied in the same hook and
-  // after the truncate, or a job left over from the previous test lands on rows that no longer exist.
   beforeEach(async () => {
-    await resetDatabase(pool);
-    await queue.obliterate({ force: true });
     sku = await seedSellableSku(app, { onHand: ON_HAND });
   });
 
@@ -75,19 +71,13 @@ describe('Payment settlement events driving the order saga (integration, real Po
 
   const inboxRows = () => db.select().from(schema.inbox);
 
-  /** The envelope the worker would receive, taken off the real queue rather than hand-built. */
-  const publishedJobs = async (): Promise<DomainEventJob[]> => {
-    const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized']);
-    return jobs.map((job) => job.data as DomainEventJob);
+  /** The envelope a consumer would receive, read off the real broker rather than hand-built. */
+  const publishedSettlement = async (): Promise<DomainEventJob> => {
+    const published = await publishedEnvelopes(app);
+    return published.find(({ envelope }) => envelope?.eventType === 'payment.succeeded')!.envelope!;
   };
 
-  const deliverAll = async (): Promise<string[]> => {
-    const results: string[] = [];
-    for (const job of await publishedJobs()) {
-      results.push(await processor.process(job, DOMAIN_EVENTS_CONSUMER));
-    }
-    return results;
-  };
+  const deliverAll = async (): Promise<string[]> => (await deliverApplied(app)).map(({ result }) => result);
 
   const settle = (order: OpenOrder, outcome: 'PAID' | 'FAILED', eventId: string) =>
     postWebhook(app, signOutcome(WEBHOOK_SECRET, order.sessionId, order.charge, outcome, eventId));
@@ -164,7 +154,7 @@ describe('Payment settlement events driving the order saga (integration, real Po
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     await settle(order, 'PAID', 'evt_redeliver').expect(200);
     await relay.runOnce(10);
-    const [settlement] = (await publishedJobs()).filter((job) => job.eventType === 'payment.succeeded');
+    const settlement = await publishedSettlement();
 
     await expect(processor.process(settlement, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
     await expect(processor.process(settlement, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
@@ -239,7 +229,7 @@ describe('Payment settlement events driving the order saga (integration, real Po
     await settle(order, 'PAID', 'evt_atomic').expect(200);
     lost.mockRestore();
     await relay.runOnce(10);
-    const [settlement] = (await publishedJobs()).filter((job) => job.eventType === 'payment.succeeded');
+    const settlement = await publishedSettlement();
 
     // Asserted because `strictBindCallApply` is off, so `bind` alone would hand back `any`.
     const prepare = dispatcher.prepare.bind(dispatcher) as DomainEventDispatcher['prepare'];

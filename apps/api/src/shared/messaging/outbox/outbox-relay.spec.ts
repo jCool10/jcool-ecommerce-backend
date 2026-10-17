@@ -9,9 +9,11 @@ import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@jcool/metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { sampleId } from '@shared/testing/id-generator.double';
+import { BullmqDomainEventPublisher } from '../queue/bullmq-domain-event.publisher';
 import type { DomainEventJob } from '../queue/domain-event.job';
 import { CATALOG_EVENT_PRIORITY } from '../queue/queue.constants';
 import { dispatcherWith } from '../testing/domain-event-dispatcher.double';
+import type { DomainEventPublisher, OutboundEvent, PublishOutcome } from '../transport/domain-event-publisher.port';
 import { OutboxRelay } from './outbox-relay';
 import type { outbox } from './schema/outbox.schema';
 
@@ -37,7 +39,13 @@ function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
   };
 }
 
-function build(rows: OutboxRow[]) {
+type Answer = (events: OutboundEvent[]) => PublishOutcome[];
+
+const acceptAll: Answer = (events) => events.map(({ rowId }) => ({ rowId, ok: true }));
+
+/** Drives the relay through the BullMQ adapter over a fake queue unless a test hands it a port of its own. */
+function build(rows: OutboxRow[], port?: DomainEventPublisher) {
+  const updates: Array<Record<string, unknown>> = [];
   const tx = {
     select: () => ({
       from: () => ({
@@ -46,26 +54,42 @@ function build(rows: OutboxRow[]) {
         }),
       }),
     }),
-    update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => {
+        updates.push(values);
+        return { where: () => Promise.resolve() };
+      },
+    }),
   };
+  const transaction = vi.fn((run: (t: unknown) => unknown) => run(tx));
   const add = vi.fn().mockResolvedValue(undefined);
+  const publisher =
+    port ?? new BullmqDomainEventPublisher({ add } as unknown as Queue, { status: 'ready' } as unknown as Redis);
+  const publish = vi.spyOn(publisher, 'publish');
+  const recordEventPublished = vi.fn<MetricsPort['recordEventPublished']>();
 
   const relay = new OutboxRelay(
-    { transaction: (run: (t: unknown) => unknown) => run(tx) } as unknown as DrizzleDB,
-    { add } as unknown as Queue,
-    { status: 'ready' } as unknown as Redis,
-    { recordEventPublished: vi.fn() } as unknown as MetricsPort,
+    { transaction } as unknown as DrizzleDB,
+    publisher,
+    { recordEventPublished } as unknown as MetricsPort,
     dispatcherWith(),
     fakePinoLogger(),
   );
 
-  const traceparents = () => add.mock.calls.map(([, job]) => (job as DomainEventJob).traceparent);
-  return { relay, add, traceparents };
+  const envelopes = (): DomainEventJob[] => publish.mock.calls.flatMap(([events]) => events.map((e) => e.envelope));
+  const traceparents = () => envelopes().map((envelope) => envelope.traceparent);
+  const marked = () => updates.filter((values) => 'publishedAt' in values).length;
+  const charged = () => updates.filter((values) => 'attempts' in values).map((values) => values.attempts);
+  return { relay, add, publish, transaction, envelopes, traceparents, marked, charged, recordEventPublished };
+}
+
+function stubPublisher(answer: Answer = acceptAll): DomainEventPublisher {
+  return { ready: () => true, publish: (events) => Promise.resolve(answer(events)) };
 }
 
 describe('OutboxRelay', () => {
-  // Without the globals the SDK installs at boot, `withSpan` yields a non-recording span and the
-  // trace assertions below pass vacuously.
+  // Without the globals the SDK installs at boot, the publish spans are non-recording and the trace
+  // assertions below pass vacuously.
   const contextManager = new AsyncLocalStorageContextManager();
   let provider: BasicTracerProvider;
 
@@ -110,14 +134,92 @@ describe('OutboxRelay', () => {
     ]);
   });
 
-  // Each refusal can cost a full command timeout while the batch's row locks stay held.
-  it('gives up on the batch after three refusals', async () => {
-    const t = build(Array.from({ length: 20 }, () => row()));
-    t.add.mockRejectedValue(new Error('Command timed out'));
+  it('skips the tick without opening a transaction while the publisher is not ready', async () => {
+    const t = build([row()], { ...stubPublisher(), ready: () => false });
 
-    await t.relay.runOnce(20);
+    await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 0 });
 
-    expect(t.add).toHaveBeenCalledTimes(3);
+    expect(t.transaction).not.toHaveBeenCalled();
+  });
+
+  it('hands the whole batch to the publisher in one call, each row as its own envelope', async () => {
+    const rows = [row({ traceparent: null }), row({ aggregateId: sampleId(99), eventType: 'payment.succeeded' })];
+    const t = build(rows, stubPublisher());
+
+    await t.relay.runOnce(10);
+
+    expect(t.publish).toHaveBeenCalledTimes(1);
+    expect(t.publish.mock.calls[0][0]).toEqual(
+      rows.map((r) => ({
+        rowId: r.id,
+        eventType: r.eventType,
+        aggregateId: r.aggregateId,
+        envelope: {
+          outboxId: r.id,
+          aggregateType: r.aggregateType,
+          aggregateId: r.aggregateId,
+          eventType: r.eventType,
+          payload: r.payload,
+          occurredAt: r.createdAt.toISOString(),
+          traceparent: expect.any(String) as unknown,
+        },
+      })),
+    );
+  });
+
+  it('marks only the rows the publisher acknowledged as published', async () => {
+    const rows = [row(), row(), row()];
+    const t = build(
+      rows,
+      stubPublisher((events) => events.map(({ rowId }, i) => ({ rowId, ok: i !== 1, error: new Error('no') }))),
+    );
+
+    await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 2, failed: 1 });
+
+    expect(t.marked()).toBe(2);
+  });
+
+  // An acknowledged neighbour is the proof the broker works and this row is what it rejected.
+  it('charges an attempt to a refused row only when another row in the batch got through', async () => {
+    const refusedAlongsideAck = build(
+      [row({ attempts: 2 }), row()],
+      stubPublisher((events) => events.map(({ rowId }, i) => ({ rowId, ok: i === 1 }))),
+    );
+    await refusedAlongsideAck.relay.runOnce(10);
+    expect(refusedAlongsideAck.charged()).toEqual([3]);
+
+    const allRefused = build(
+      [row(), row()],
+      stubPublisher((events) => events.map(({ rowId }) => ({ rowId, ok: false, error: new Error('down') }))),
+    );
+    await expect(allRefused.relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 2 });
+    expect(allRefused.charged()).toEqual([]);
+    expect(allRefused.marked()).toBe(0);
+  });
+
+  // Behind the third refusal nothing is sent, so those rows must look as if the tick never saw them.
+  it('leaves the rows the BullMQ adapter never sent exactly as they were', async () => {
+    const t = build([row(), row(), row(), row(), row(), row()]);
+    t.add.mockResolvedValueOnce(undefined).mockRejectedValue(new Error('Command timed out'));
+
+    await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 3 });
+
+    expect(t.add).toHaveBeenCalledTimes(4);
+    expect(t.charged()).toEqual([1, 1, 1]);
+    expect(t.recordEventPublished.mock.calls.map(([, result]) => result)).toEqual([
+      'published',
+      'refused',
+      'refused',
+      'refused',
+    ]);
+  });
+
+  it('does not call the publisher for an empty backlog', async () => {
+    const t = build([], stubPublisher());
+
+    await expect(t.relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 0 });
+
+    expect(t.publish).not.toHaveBeenCalled();
   });
 
   it('continues the producer trace under a fresh span, keeping its sampling flag', async () => {

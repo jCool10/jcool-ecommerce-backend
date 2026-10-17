@@ -6,6 +6,8 @@ import { ConsumerDelivery } from './consume/consumer-delivery';
 import { DomainEventDispatcher } from './handlers/domain-event.dispatcher';
 import { OrderEventsHandler } from './handlers/order-events.handler';
 import { InboxStore } from './inbox/inbox.store';
+import { KafkaConsumerGroups } from './kafka/kafka-consumer-groups';
+import { KAFKA_LAG_PROVIDERS } from './kafka/kafka-lag.collector';
 import { SweepInbox } from './inbox/sweep-inbox';
 import { DrizzleOutboxWriter } from './outbox/drizzle-outbox.writer';
 import { OUTBOX_BACKLOG_PROVIDERS } from './outbox/outbox-backlog.collector';
@@ -21,6 +23,7 @@ import { ConsumerRetryStore } from './retry/consumer-retry.store';
 import { RETRY_BACKLOG_PROVIDERS } from './retry/retry-backlog.collector';
 import { RetryPoller } from './retry/retry-poller';
 import { RetryPollerScheduler } from './retry/retry-poller.scheduler';
+import { DOMAIN_EVENT_PUBLISHER_PROVIDER } from './transport/domain-event-publisher.provider';
 
 // Global because any context may need to emit an event and the writer holds no per-module state.
 @Global()
@@ -37,6 +40,7 @@ import { RetryPollerScheduler } from './retry/retry-poller.scheduler';
     ...OUTBOX_BACKLOG_PROVIDERS,
     ...RETRY_BACKLOG_PROVIDERS,
     ...QUEUE_PROVIDERS,
+    DOMAIN_EVENT_PUBLISHER_PROVIDER,
     QueueLifecycle,
     OutboxRelay,
     OutboxRelayScheduler,
@@ -51,6 +55,8 @@ import { RetryPollerScheduler } from './retry/retry-poller.scheduler';
     RetryPoller,
     RetryPollerScheduler,
     DomainEventsWorker,
+    KafkaConsumerGroups,
+    ...KAFKA_LAG_PROVIDERS,
   ],
   exports: [OUTBOX_WRITER],
 })

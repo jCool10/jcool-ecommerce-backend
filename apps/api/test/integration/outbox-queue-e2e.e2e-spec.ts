@@ -3,7 +3,6 @@ import { context, propagation, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import type { Queue } from 'bullmq';
 import { eq, isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
@@ -12,19 +11,18 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { ConsumerRetryStore } from '../../src/shared/messaging/retry/consumer-retry.store';
+import {
+  DOMAIN_EVENT_PUBLISHER,
+  type DomainEventPublisher,
+} from '../../src/shared/messaging/transport/domain-event-publisher.port';
 import { withSpan } from '@jcool/platform/observability';
 import { authHeader } from '../setup/bearer.helper';
+import { publishedEnvelopes, snapshotTransportBeforeEach } from '../setup/domain-event-transport';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
-import {
-  closeAppAfterAll,
-  createTestAppWithPool,
-  obliterateQueueBeforeEach,
-  resetDatabaseBeforeEach,
-} from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
@@ -42,14 +40,14 @@ const seedRow = (overrides: Record<string, unknown> = {}, orderId = testId()) =>
 /**
  * The hops themselves have their own suites (outbox-append, outbox-relay, consumer-idempotency,
  * dead-letter). This one is about the telemetry that has to be true at each hop, and one trace id
- * from the producer through Redis to the effect.
+ * from the producer through the broker to the effect.
  */
 describe('Outbox to queue to consumer, end to end (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let relay: OutboxRelay;
   let processor: DomainEventProcessor;
   let writer: OutboxWriterPort;
-  let queue: Queue;
+  let publisher: DomainEventPublisher;
   let db: DrizzleDB;
   let pool: Pool;
 
@@ -73,7 +71,6 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
   };
 
   const unpublished = () => db.select().from(schema.outbox).where(isNull(schema.outbox.publishedAt));
-  const inboxRows = () => db.select().from(schema.inbox);
 
   const seed = (count: number, overrides: Record<string, unknown> = {}) =>
     db
@@ -86,11 +83,11 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
     relay = app.get(OutboxRelay);
     processor = app.get(DomainEventProcessor);
     writer = app.get<OutboxWriterPort>(OUTBOX_WRITER);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
+    publisher = app.get<DomainEventPublisher>(DOMAIN_EVENT_PUBLISHER);
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-  obliterateQueueBeforeEach(() => [queue]);
+  snapshotTransportBeforeEach(() => app);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -209,8 +206,12 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
       const text = await scrape();
       const [beforeRefused, beforePublished] = [counter(text, REFUSED), counter(text, PUBLISHED)];
       // A healthy sibling in the batch, so the relay reads this as the row being rejected rather
-      // than the queue being down, the same split the retry budget is charged on.
-      vi.spyOn(queue, 'add').mockRejectedValueOnce(new Error('queue rejected the payload'));
+      // than the broker being down, the same split the retry budget is charged on.
+      const publish = publisher.publish.bind(publisher);
+      vi.spyOn(publisher, 'publish').mockImplementationOnce(async ([refused, ...rest]) => [
+        { rowId: refused.rowId, ok: false, error: new Error('broker rejected the message') },
+        ...(await publish(rest)),
+      ]);
 
       await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 1 });
 
@@ -250,12 +251,18 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
       expect(gauge(await scrape(), 'outbox_backlog_pending')).toBe(1);
 
       await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
-      await vi.waitFor(async () => expect(await inboxRows()).toHaveLength(1), { timeout: 15_000, interval: 50 });
-
-      const [claimed] = await inboxRows();
       const [event] = await db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, orderId));
+      // A new group reads its topics from the start, so what earlier tests published is claimed too.
+      const claimed = await vi.waitFor(
+        async () => {
+          const [row] = await db.select().from(schema.inbox).where(eq(schema.inbox.messageId, event.id));
+          expect(row).toBeDefined();
+          return row;
+        },
+        { timeout: 15_000, interval: 50 },
+      );
+
       // One id from the write to the claim: the outbox row is the message the inbox dedups on.
-      expect(claimed.messageId).toBe(event.id);
       expect(claimed.eventType).toBe('order.placed');
       expect(event.publishedAt).not.toBeNull();
       expect(await unpublished()).toHaveLength(0);
@@ -294,7 +301,7 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
     it('runs one trace from the producing transaction through Redis to the effect', async () => {
       let producerTraceId = '';
       // Stands in for the HTTP request span, which auto-instrumentation adds in production. Under
-      // test is the hop it cannot make: an async one through Redis.
+      // test is the hop it cannot make: an async one through the broker.
       await withSpan('order.place', async (span) => {
         producerTraceId = span.spanContext().traceId;
         const orderId = testId();
@@ -314,12 +321,12 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
       expect(stored.traceparent).toContain(producerTraceId);
 
       await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 0 });
-      const [job] = await queue.getJobs(['waiting']);
-      const delivered = job.data as DomainEventJob;
+      const [published] = await publishedEnvelopes(app);
+      const delivered = published.envelope!;
       expect(delivered.traceparent).toContain(producerTraceId);
 
-      // Driven through the processor rather than a Worker so the assertion lands on a finished
-      // span: a Worker would consume this on its own timeline. The envelope still came out of Redis.
+      // Driven through the processor rather than a consumer so the assertion lands on a finished
+      // span: a consumer would take this on its own timeline. The envelope still came off the broker.
       await expect(processor.process(delivered, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
 
       const spans = exporter.getFinishedSpans();

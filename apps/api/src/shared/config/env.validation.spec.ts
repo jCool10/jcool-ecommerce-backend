@@ -14,7 +14,12 @@ const BASE_ENV = {
   USER_SERVICE_INTERNAL_URL: 'http://user-service.railway.internal:3000',
   INTERNAL_API_TOKEN: 'internal-api-token-not-a-real-secret-0000',
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
+  // The worker is on by default and consumes Kafka too.
+  KAFKA_BROKERS: 'kafka.railway.internal:9092',
+  MESSAGING_SIGNING_KEY: 'messaging-signing-key-not-a-real-secret-0000',
 };
+
+const WITHOUT_KAFKA = (({ KAFKA_BROKERS: _b, MESSAGING_SIGNING_KEY: _k, ...rest }) => rest)(BASE_ENV);
 
 describe('env validation', () => {
   it('refuses to boot in production until TRUST_PROXY is set to anything', () => {
@@ -92,9 +97,45 @@ describe('env validation', () => {
   });
 
   it('boots without a Kafka broker while nothing publishes or consumes through it', () => {
-    expect(() => validate(BASE_ENV)).not.toThrow();
-    expect(() => validate({ ...BASE_ENV, KAFKA_BROKERS: 'kafka:9092,127.0.0.1:9094' })).not.toThrow();
-    expect(() => validate({ ...BASE_ENV, KAFKA_BROKERS: '' })).toThrow(/KAFKA_BROKERS/);
+    const idle = { ...WITHOUT_KAFKA, QUEUE_WORKER_ENABLED: 'false', MESSAGING_TRANSPORT: 'bullmq' };
+
+    expect(() => validate(idle)).not.toThrow();
+    expect(() => validate({ ...idle, KAFKA_BROKERS: 'kafka:9092,127.0.0.1:9094' })).not.toThrow();
+    expect(() => validate({ ...idle, KAFKA_BROKERS: '' })).toThrow(/KAFKA_BROKERS/);
+  });
+
+  it('refuses a transport other than bullmq or kafka', () => {
+    expect(() => validate({ ...BASE_ENV, MESSAGING_TRANSPORT: 'rabbitmq' })).toThrow(/MESSAGING_TRANSPORT/);
+    for (const transport of ['bullmq', 'kafka']) {
+      expect(() => validate({ ...BASE_ENV, MESSAGING_TRANSPORT: transport }), transport).not.toThrow();
+    }
+  });
+
+  // The worker runs the Kafka consumers whichever transport publishes.
+  it('requires the broker and the signing key whenever the worker consumes or the relay publishes to Kafka', () => {
+    const inUse = [
+      { MESSAGING_TRANSPORT: 'kafka', QUEUE_WORKER_ENABLED: 'false' },
+      { MESSAGING_TRANSPORT: 'bullmq', QUEUE_WORKER_ENABLED: 'true' },
+      { MESSAGING_TRANSPORT: 'bullmq' },
+      {},
+    ];
+    for (const flags of inUse) {
+      const label = JSON.stringify(flags);
+      const { KAFKA_BROKERS: _, ...noBroker } = BASE_ENV;
+      const { MESSAGING_SIGNING_KEY: __, ...noKey } = BASE_ENV;
+
+      expect(() => validate({ ...noBroker, ...flags }), label).toThrow(/KAFKA_BROKERS/);
+      expect(() => validate({ ...noKey, ...flags }), label).toThrow(/MESSAGING_SIGNING_KEY/);
+      expect(() => validate({ ...BASE_ENV, ...flags }), label).not.toThrow();
+    }
+  });
+
+  it('refuses a signing key shorter than 32 characters and never echoes it', () => {
+    const short = 'short-signing-key-0123456789abc';
+
+    expect(() => validate({ ...BASE_ENV, MESSAGING_SIGNING_KEY: short })).toThrow(/MESSAGING_SIGNING_KEY/);
+    expect(() => validate({ ...BASE_ENV, MESSAGING_SIGNING_KEY: short })).not.toThrow(new RegExp(short));
+    expect(() => validate({ ...BASE_ENV, MESSAGING_SIGNING_KEY: 'k'.repeat(32) })).not.toThrow();
   });
 
   // The prefix lands in topic and group names, which Kafka limits to these characters.

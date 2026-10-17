@@ -22,6 +22,7 @@ import configuration from '@shared/config/configuration';
 import * as schema from '@shared/infrastructure/database/schema';
 import { inboxClaimLookup } from '../inbox/inbox-claim.lookup';
 import { ConsumerRetryStore } from '../retry/consumer-retry.store';
+import { stripControlCharacters } from '../strip-control-characters';
 import { replayDeadLetters } from './dead-letter.replay';
 
 const DAY_MS = 86_400_000;
@@ -69,11 +70,12 @@ async function main(): Promise<void> {
     }
     for (const outcome of summary.outcomes) {
       // Labelled because on a `replayed` line an unlabelled reason reads as a failure that just happened.
-      const reason = outcome.failedReason ? ` [parked: ${outcome.failedReason}]` : '';
-      const detail = outcome.detail ? ` — ${outcome.detail}` : '';
+      const reason = outcome.failedReason ? ` [parked: ${stripControlCharacters(outcome.failedReason)}]` : '';
+      const detail = outcome.detail ? ` — ${stripControlCharacters(outcome.detail)}` : '';
       console.log(
-        `${outcome.status.padEnd(8)} ${outcome.consumer.padEnd(14)} ${outcome.eventType.padEnd(16)} ` +
-          `${outcome.messageId}${reason}${detail}`,
+        `${outcome.status.padEnd(8)} ${stripControlCharacters(outcome.consumer).padEnd(14)} ` +
+          `${stripControlCharacters(outcome.eventType).padEnd(16)} ${stripControlCharacters(outcome.messageId)}` +
+          `${reason}${detail}`,
       );
     }
     console.log(`\nreplayed: ${summary.replayed}   skipped: ${summary.skipped}`);

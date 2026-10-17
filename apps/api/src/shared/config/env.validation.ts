@@ -22,6 +22,11 @@ export enum InventoryLockStrategy {
   Optimistic = 'optimistic',
 }
 
+export enum MessagingTransport {
+  Bullmq = 'bullmq',
+  Kafka = 'kafka',
+}
+
 // One member today: the enum earns its place by rejecting any other value at startup instead of
 // letting a typo pick a gateway that does not exist.
 export enum PaymentProvider {
@@ -142,6 +147,17 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(1_000)
   @Max(30_000)
   KAFKA_DELIVERY_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsEnum(MessagingTransport)
+  MESSAGING_TRANSPORT?: MessagingTransport;
+
+  // Anyone on the private network can produce to the broker; this key is what tells our messages
+  // apart. Required in validate() whenever Kafka is in use.
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  MESSAGING_SIGNING_KEY?: string;
 
   @IsOptional()
   @IsStrictBoolean()
@@ -478,6 +494,14 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
   if (env.NODE_ENV === NodeEnv.Production && env.TRUST_PROXY === undefined) {
     throw new Error(
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
+    );
+  }
+  // The worker runs the Kafka consumers whichever transport publishes. Names only, never values.
+  const kafkaInUse = env.MESSAGING_TRANSPORT === MessagingTransport.Kafka || env.QUEUE_WORKER_ENABLED !== 'false';
+  const missing = (['KAFKA_BROKERS', 'MESSAGING_SIGNING_KEY'] as const).filter((key) => env[key] === undefined);
+  if (kafkaInUse && missing.length > 0) {
+    throw new Error(
+      `Environment validation failed -> ${missing.join(', ')}: required while the worker consumes or MESSAGING_TRANSPORT is kafka`,
     );
   }
   return env;

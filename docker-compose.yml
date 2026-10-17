@@ -216,6 +216,7 @@ services:
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
       KAFKA_BROKERS: kafka:9092
+      MESSAGING_SIGNING_KEY: local-messaging-signing-key-not-a-secret-0000
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.

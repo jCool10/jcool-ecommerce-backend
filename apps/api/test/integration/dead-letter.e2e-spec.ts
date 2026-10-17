@@ -1,5 +1,4 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Queue } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
@@ -12,14 +11,13 @@ import { inboxClaimLookup } from '../../src/shared/messaging/inbox/inbox-claim.l
 import { replayDeadLetters, type ReplayOptions } from '../../src/shared/messaging/queue/dead-letter.replay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { ConsumerRetryStore, type ConsumerRetryRow } from '../../src/shared/messaging/retry/consumer-retry.store';
 import {
-  closeAppAfterAll,
-  createTestAppWithPool,
-  obliterateQueueBeforeEach,
-  resetDatabaseBeforeEach,
-} from '../setup/harness';
+  DOMAIN_EVENT_PUBLISHER,
+  type DomainEventPublisher,
+} from '../../src/shared/messaging/transport/domain-event-publisher.port';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { testId } from '../setup/id-service-stub';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -33,13 +31,13 @@ const MESSAGE_IDS = [testId(), testId(), testId()];
 const messageId = (n: number) => MESSAGE_IDS[n];
 const ORDER_ID = testId();
 
-// A real BullMQ worker and a real retry poller; assertions read where the message ended up.
+// A real consumer and a real retry poller; assertions read where the message ended up.
 describe('Retry, backoff and dead-letter queue (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let processor: DomainEventProcessor;
   let dispatcher: DomainEventDispatcher;
   let retries: ConsumerRetryStore;
-  let queue: Queue;
+  let publisher: DomainEventPublisher;
   let db: DrizzleDB;
   let pool: Pool;
 
@@ -61,7 +59,12 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
 
   let replayGuards: Pick<ReplayOptions, 'inboxLookup' | 'inboxRetentionMs'>;
 
-  const publish = (data: DomainEventJob) => queue.add(data.eventType, data);
+  const publish = async (data: DomainEventJob) => {
+    const [sent] = await publisher.publish([
+      { rowId: data.outboxId, eventType: data.eventType, aggregateId: data.aggregateId, envelope: data },
+    ]);
+    expect(sent.ok).toBe(true);
+  };
 
   const waitForDeadLetter = async (count = 1): Promise<ConsumerRetryRow[]> => {
     let rows: ConsumerRetryRow[] = [];
@@ -84,12 +87,11 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     processor = app.get(DomainEventProcessor);
     dispatcher = app.get(DomainEventDispatcher);
     retries = app.get(ConsumerRetryStore);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
+    publisher = app.get<DomainEventPublisher>(DOMAIN_EVENT_PUBLISHER);
     replayGuards = { inboxLookup: inboxClaimLookup(db), inboxRetentionMs: 30 * 86_400_000 };
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-  obliterateQueueBeforeEach(() => [queue]);
 
   afterEach(() => {
     vi.restoreAllMocks();

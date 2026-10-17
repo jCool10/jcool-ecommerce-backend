@@ -36,7 +36,17 @@ describe('configuration', () => {
     'KAFKA_CLIENT_ID',
     'KAFKA_PREFIX',
     'KAFKA_DELIVERY_TIMEOUT_MS',
+    'MESSAGING_TRANSPORT',
+    'MESSAGING_SIGNING_KEY',
   ]);
+
+  it('publishes to BullMQ until the transport is switched, with no signing key of its own', () => {
+    expect(configuration().messaging).toMatchObject({ transport: 'bullmq', signingKey: undefined });
+
+    process.env.MESSAGING_TRANSPORT = 'kafka';
+    process.env.MESSAGING_SIGNING_KEY = 'k'.repeat(32);
+    expect(configuration().messaging).toMatchObject({ transport: 'kafka', signingKey: 'k'.repeat(32) });
+  });
 
   it('knows no Kafka broker by default and names topics and groups under jcool', () => {
     expect(configuration().kafka).toEqual({

@@ -10,7 +10,7 @@ const SOURCE_PATH = new URL('../.railway/railway.ts', import.meta.url);
 const source = readFileSync(SOURCE_PATH, 'utf8');
 
 const REQUIRED = {
-  'service(API_SERVICE': ['TRUST_PROXY'],
+  'service(API_SERVICE': ['TRUST_PROXY', 'QUEUE_WORKER_ENABLED'],
   "service('gateway'": ['AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED', 'AUTH_WRITE_FREEZE', 'TRUSTED_PROXY_CIDRS'],
 };
 

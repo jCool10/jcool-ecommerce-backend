@@ -27,6 +27,8 @@ Conventions used below:
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
 - [Kafka broker](#kafka-broker)
+- [A message crashes the process](#a-message-crashes-the-process)
+- [Consumer lag high](#consumer-lag-high)
 - [The id-service's etcd](#the-id-services-etcd)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
@@ -235,7 +237,7 @@ LIMIT 20;
 ```
 
 - **`attempts` climbing on one row while others publish** — that row is poison, and the backlog behind it is moving. The relay only charges an attempt when something else in the same tick got through, so a non-zero count is proof the queue itself is healthy. Fix the payload or the handler; the row keeps its place in line meanwhile.
-- **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not running (`OUTBOX_RELAY_ENABLED`, the api process) or Redis is refusing every publish. Check `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked through, not an outage.
+- **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not running (`OUTBOX_RELAY_ENABLED`, the api process) or the transport is refusing every publish: Redis, or the Kafka broker under `MESSAGING_TRANSPORT=kafka`. After a batch where every send failed, the Kafka publisher reports itself not ready for `BREAKER_RESET_TIMEOUT_MS` (default 10 s), the relay skips its ticks meanwhile, and the next tick tries again on its own. Check `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked through, not an outage.
 
 A row here has **not** been dead-lettered — it was never delivered at all, so [replay](#replay-the-dead-letter-queue) does not apply to it and there is nothing to re-admit.
 
@@ -282,6 +284,8 @@ npm run queue:replay-dlq:prod -- --apply --consumer domain-events
 ```
 
 The guard runs on a dry run too, so the listing is what `--apply` would actually do rather than a promise it would then refuse.
+
+**`DeadLetterQueued` with `event_type="unverified"` has no row to replay.** It counts a Kafka message the consumer dropped before parsing it: no signature, a signature made with another key (a burst of them right after a deploy means [the key changed](#the-signing-key)), or an event type that does not belong on the topic it arrived on. Nothing was parked and the offset moved on. The warn line `dropped an unverified Kafka message` carries its topic, partition, offset and reason, never the value; start from there to find whatever on the private network produced it.
 
 **A `catalog.*` message is always safe to replay, `--force` included.** Its handler re-reads the product from Postgres and writes it as it is now, and the engine ignores any version it already holds, so a second application changes nothing. A `catalog.category.renamed` can also land here without any engine fault: a deploy that outlasts the worker's 10 s close window interrupts its fan-out, and enough such interruptions spend its attempts. Replaying it restarts the fan-out from the first page. Dropping catalog messages instead of replaying them is fine too, provided a [rebuild](#rebuild-the-search-index) follows.
 
@@ -841,7 +845,7 @@ The api is unaffected either way.
 
 ## Kafka broker
 
-`kafka` is a Railway service declared in `.railway/railway.ts` and built from `infra/kafka/`: Apache Kafka 4.3.1 as one KRaft node that is both broker and controller, with its log directory on the `kafka-data` volume. Nothing publishes or consumes through it yet; the api only carries `KAFKA_BROKERS`. Like Elasticsearch it is outside `cd.yml`, so a deploy or a config change is `railway up --ci --service kafka`. A service with a volume never runs two deployments at once, so every redeploy is a short outage.
+`kafka` is a Railway service declared in `.railway/railway.ts` and built from `infra/kafka/`: Apache Kafka 4.3.1 as one KRaft node that is both broker and controller, with its log directory on the `kafka-data` volume. The api's `domain-events` and `catalog-search` consumer groups read it whenever the worker runs; the relay publishes to it only with `MESSAGING_TRANSPORT=kafka`, and production still publishes through BullMQ. Like Elasticsearch it is outside `cd.yml`, so a deploy or a config change is `railway up --ci --service kafka`. A service with a volume never runs two deployments at once, so every redeploy is a short outage.
 
 What it depends on ([decision record](./docs/system-architecture.md#one-kafka-broker-and-a-client-pinned-by-its-measured-behaviour)):
 
@@ -911,6 +915,60 @@ Each line must show `PartitionCount: 3` and, in any order, `cleanup.policy=delet
 ### The volume is lost
 
 The broker formats the fresh volume with the same `CLUSTER_ID` and starts with no topics. [Provision them](#provision-the-topics) again, then [republish](#republish-an-outbox-window) the outbox window the lost records covered.
+
+### The signing key
+
+Every Kafka message carries an HMAC of its value under `MESSAGING_SIGNING_KEY`, and an api whose worker runs refuses to boot without one. Set it before the first deploy that needs it, piped so the value never reaches a terminal or a shell history:
+
+```sh
+openssl rand -hex 32 | tr -d '\n' | railway variable set MESSAGING_SIGNING_KEY --stdin --service jcool-ecommerce-backend --skip-deploys
+```
+
+**Never change it while Kafka carries traffic.** Each process signs and verifies with the one key it booted with, so after a change every message signed with the other key is dropped as `unverified` and its offset committed: both ways while the old and new deployments overlap, and the backlog the old key signed after that. The drops stop once only the new key runs and that backlog is read. Then [republish](#republish-an-outbox-window) with a `--since` reaching back past the change; the dropped messages are gone from the groups, not from the outbox. While production publishes through BullMQ the topics are empty and a change costs nothing.
+
+---
+
+## A message crashes the process
+
+A message that kills the api before its delivery returns is never committed, so every restart reads it again and dies at the same place. Skip it by hand, then deliver it again once the fix is out. `<consumer>` is `domain-events` (topics `order.events`, `payment.events`) or `catalog-search` (`catalog.events`).
+
+1. Find the stuck partition. The one whose `CURRENT-OFFSET` stays put across restarts is it, and that offset, N, is the message:
+
+   ```sh
+   # container (kafka)
+   /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group jcool.<consumer>
+   ```
+
+2. Note the message's `message_id` and `event_type` headers, and its timestamp: step 6's `--since` must reach back past it. Do not print the value: it can hold customer data.
+
+   ```sh
+   # container (kafka)
+   /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic jcool.<topic> --partition <p> \
+     --offset <N> --max-messages 1 --property print.headers=true --property print.timestamp=true \
+     --property print.value=false
+   ```
+
+3. Take the worker out with `railway variable set QUEUE_WORKER_ENABLED=false --service jcool-ecommerce-backend`, then wait for the new deployment to turn healthy and for the `--describe` of step 1 to show no members. `API_VARIABLES` preserves the variable, so a CD apply does not turn the worker back on. The retry poller stops with the worker, so `pending` rows wait.
+4. Move the group past the message. Kafka resets the offsets of a group only while it has no members:
+
+   ```sh
+   # container (kafka)
+   /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group jcool.<consumer> \
+     --topic jcool.<topic>:<p> --reset-offsets --to-offset <N+1> --execute
+   ```
+
+5. Put the worker back with `railway variable set QUEUE_WORKER_ENABLED=true --service jcool-ecommerce-backend`.
+6. Once the fix is deployed, [republish](#republish-an-outbox-window) with the `--event-type` noted in step 2, from the api's container (`npm run messaging:republish:prod`). The inbox swallows whatever had already been applied.
+
+---
+
+## Consumer lag high
+
+`messaging_consumer_lag{group,topic,partition}` is how far a group's committed offset trails the end of a partition. Only an api whose worker runs exports it, and only for a group that process has joined, so with `QUEUE_WORKER_ENABLED=false` the series is missing rather than zero.
+
+- **Lag stands still on a partition and `consumer_retries` does not grow** — Postgres is down. A failed delivery cannot be parked either, so the consumer keeps the message and hands it back after a backoff that doubles from 500 ms to 30 s, logging `failed to park a failed delivery, handing it back to the transport`. It catches up on its own once Postgres is back; there is nothing to replay.
+- **Lag keeps moving but `messaging_retry_pending` climbs** — the id-service is down. The inbox claim mints its id over HTTP and fails, while parking needs only Postgres, so each message becomes a `pending` row and its offset is committed. The retry poller applies the rows once the id-service answers again.
+- **Lag stands still and the api keeps restarting** — see [A message crashes the process](#a-message-crashes-the-process).
 
 ---
 

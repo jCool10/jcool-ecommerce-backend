@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Job, JobState, JobsOptions, Queue } from 'bullmq';
-import { and, eq, isNull } from 'drizzle-orm';
+import type { Job, JobState, Queue } from 'bullmq';
+import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
@@ -40,6 +40,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
 
   beforeAll(async () => {
     app = await createTestApp({
+      MESSAGING_TRANSPORT: 'bullmq',
       QUEUE_WORKER_ENABLED: 'true',
       QUEUE_CONSUMER_ATTEMPTS: ATTEMPTS,
       QUEUE_CONSUMER_BACKOFF_MS: BACKOFF_MS,
@@ -71,16 +72,11 @@ describe('Outbox relay against a job the queue already remembers (integration, r
       .values(Array.from({ length: count }, () => seedRow()))
       .returning();
 
-  const unpublished = () => db.select().from(schema.outbox).where(isNull(schema.outbox.publishedAt));
-  const byId = async (id: string) => (await db.select().from(schema.outbox).where(eq(schema.outbox.id, id)))[0];
   const claimsFor = (messageId: string) =>
     db
       .select()
       .from(schema.inbox)
       .where(and(eq(schema.inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(schema.inbox.messageId, messageId)));
-  const retryRowsFor = (messageId: string) =>
-    db.select().from(schema.consumerRetries).where(eq(schema.consumerRetries.messageId, messageId));
-
   const jobsFor = async (outboxId: string, states: JobState[] = ALL_STATES): Promise<Job<DomainEventJob>[]> =>
     (await queue.getJobs(states)).filter((job) => job.data?.outboxId === outboxId);
 
@@ -118,39 +114,5 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     expect(results).toEqual(['duplicate', 'processed']);
     expect(effect).toHaveBeenCalledTimes(2);
     expect(await claimsFor(row.id)).toHaveLength(1);
-  });
-
-  // Known defect. Intended: a row the queue permanently refuses reaches a terminal state. Actual:
-  // OutboxRelay increments `attempts` and nothing reads it; only the backlog alerts in
-  // slo-burn-rate.yml would notice the row.
-  it('retries a permanently refused row forever without ever escalating it', async () => {
-    spyOnEffect(dispatcher).mockResolvedValue(undefined);
-    const [poison] = await seed(1);
-    const add = queue.add.bind(queue);
-    vi.spyOn(queue, 'add').mockImplementation((name: string, data: DomainEventJob, opts?: JobsOptions) =>
-      data.outboxId === poison.id
-        ? Promise.reject(new Error('payload exceeds the maximum job size'))
-        : add(name, data, opts),
-    );
-
-    // The relay charges an attempt only when a sibling in the batch got through. The tick count sits
-    // past any plausible escalation threshold, so adding one turns this test red.
-    const TICKS_PAST_ANY_PLAUSIBLE_THRESHOLD = 12;
-    for (let tick = 0; tick < TICKS_PAST_ANY_PLAUSIBLE_THRESHOLD; tick += 1) {
-      await db.insert(schema.outbox).values(seedRow());
-      await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 1 });
-    }
-
-    const [stuck] = await unpublished();
-    expect(stuck.id).toBe(poison.id);
-    expect(stuck.attempts).toBe(TICKS_PAST_ANY_PLAUSIBLE_THRESHOLD);
-
-    expect(await retryRowsFor(poison.id)).toHaveLength(0);
-    expect(await claimsFor(poison.id)).toHaveLength(0);
-    expect(await jobsFor(poison.id)).toHaveLength(0);
-
-    // Alone in the backlog the row looks like a Redis outage, so even `attempts` stops moving.
-    await expect(relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 1 });
-    expect((await byId(poison.id)).attempts).toBe(TICKS_PAST_ANY_PLAUSIBLE_THRESHOLD);
   });
 });

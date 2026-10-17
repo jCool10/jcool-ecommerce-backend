@@ -1,5 +1,4 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Queue } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
@@ -7,7 +6,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import type { ConsumerRetryRow } from '../../src/shared/messaging/retry/consumer-retry.store';
 import { cappedBackoffMs, retryHorizonMs } from '../../src/shared/messaging/retry/retry-policy';
 import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
@@ -44,7 +42,6 @@ describe('Order confirmation mail against the user directory (integration, real 
   let stub: UserServiceStub;
   let app: INestApplication;
   let relay: OutboxRelay;
-  let queue: Queue;
   let db: DrizzleDB;
   let pool: Pool;
 
@@ -96,7 +93,6 @@ describe('Order confirmation mail against the user directory (integration, real 
       BREAKER_RESET_TIMEOUT_MS: '100',
     }));
     relay = app.get(OutboxRelay);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
   }, 180_000);
 
   afterAll(async () => {
@@ -108,7 +104,6 @@ describe('Order confirmation mail against the user directory (integration, real 
   beforeEach(async () => {
     stub.reset();
     await resetDatabase(pool);
-    await queue.obliterate({ force: true });
     await mail.clear();
   });
 

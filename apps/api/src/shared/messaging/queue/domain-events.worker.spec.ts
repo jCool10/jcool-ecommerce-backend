@@ -10,6 +10,7 @@ import { DOMAIN_EVENTS_CONSUMER } from './queue.constants';
 interface FakeWorker {
   processor: (job: { name: string; data: DomainEventJob }) => Promise<unknown>;
   emit(event: string, ...args: unknown[]): boolean;
+  close(): Promise<void>;
 }
 
 const created = vi.hoisted(() => ({ workers: [] as FakeWorker[] }));
@@ -70,6 +71,7 @@ function start(delivery: Partial<ConsumerDelivery>) {
 describe('DomainEventsWorker', () => {
   afterEach(() => {
     created.workers.length = 0;
+    vi.useRealTimers();
   });
 
   it('hands every delivery to the consumer delivery as the domain-events consumer', async () => {
@@ -116,6 +118,22 @@ describe('DomainEventsWorker', () => {
 
     filed();
     await shutdown;
+    expect(closed).toBe(true);
+  });
+
+  // The Kafka consumers and the retry poller close beside the worker, so its 10s is the whole step.
+  it('gives the close and the dead letters it triggers one 10s budget between them', async () => {
+    vi.useFakeTimers();
+    const { worker, bull } = start({ recordTransportExhausted: () => new Promise<void>(() => {}) });
+    vi.spyOn(bull, 'close').mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 8_000));
+      bull.emit('failed', { data: ENVELOPE, attemptsMade: 8, finishedOn: Date.now() }, new Error('pg down'));
+    });
+
+    let closed = false;
+    void worker.beforeApplicationShutdown().then(() => (closed = true));
+    await vi.advanceTimersByTimeAsync(10_000);
+
     expect(closed).toBe(true);
   });
 });

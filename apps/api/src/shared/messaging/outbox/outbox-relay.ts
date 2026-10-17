@@ -1,20 +1,22 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { context } from '@opentelemetry/api';
-import type { JobsOptions, Queue } from 'bullmq';
+import { context, type Span, SpanStatusCode, trace } from '@opentelemetry/api';
 import { asc, eq, isNull } from 'drizzle-orm';
-import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { DRIZZLE, type DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
-import { toError } from '@jcool/kernel';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
-import { extractTraceContext, injectTraceContext, withSpan } from '@jcool/platform/observability';
+import { extractTraceContext, injectTraceContext } from '@jcool/platform/observability';
 import { DomainEventDispatcher } from '../handlers/domain-event.dispatcher';
-import type { DomainEventJob } from '../queue/domain-event.job';
-import { CATALOG_EVENT_PRIORITY, DOMAIN_EVENTS_QUEUE, QUEUE_CONNECTION } from '../queue/queue.constants';
+import {
+  DOMAIN_EVENT_PUBLISHER,
+  type DomainEventPublisher,
+  type OutboundEvent,
+  type PublishOutcome,
+} from '../transport/domain-event-publisher.port';
 import { outbox } from './schema/outbox.schema';
 
 const LOG_CONTEXT = 'OutboxRelay';
-const MAX_REFUSALS_PER_TICK = 3;
+// Same tracer name as `withSpan`, which cannot hold a span open across one batched call per row.
+const TRACER_NAME = 'jcool';
 
 type OutboxRow = typeof outbox.$inferSelect;
 
@@ -32,8 +34,7 @@ export interface RelayTickSummary {
 export class OutboxRelay {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
-    @Inject(DOMAIN_EVENTS_QUEUE) private readonly domainEventsQueue: Queue,
-    @Inject(QUEUE_CONNECTION) private readonly queueConnection: Redis,
+    @Inject(DOMAIN_EVENT_PUBLISHER) private readonly publisher: DomainEventPublisher,
     @Inject(METRICS) private readonly metrics: MetricsPort,
     // Not to dispatch anything — for `label()`, which folds the free-text `outbox.event_type` into
     // the bounded set of names. The fold is also the signal: `event_type="unregistered"` climbing
@@ -45,10 +46,10 @@ export class OutboxRelay {
   }
 
   async runOnce(batchSize: number): Promise<RelayTickSummary> {
-    // Cheap short-circuit only: with no offline buffer every publish throws while Redis is away, so
-    // there is no point opening a transaction to fail inside. What actually keeps an outage off the
-    // rows' attempt budget is the batch check below.
-    if (!this.isConnected()) return { published: 0, failed: 0 };
+    // Cheap short-circuit only: a broker that is away refuses every publish, so there is no point
+    // opening a transaction to fail inside. What keeps an outage off the rows' attempt budget is the
+    // charging rule below.
+    if (!this.publisher.ready()) return { published: 0, failed: 0 };
 
     return this.db.transaction(async (tx) => {
       const rows = await tx
@@ -61,27 +62,27 @@ export class OutboxRelay {
         // Rows another instance holds are skipped, not waited on: multi-instance safety and
         // throughput without leader election, paid for in global ordering.
         .for('update', { skipLocked: true });
+      if (rows.length === 0) return { published: 0, failed: 0 };
+
+      const outcomes = await this.publish(rows);
 
       const refused: OutboxRow[] = [];
       let lastError: Error | undefined;
       let published = 0;
 
-      for (const row of rows) {
+      for (const [index, row] of rows.entries()) {
+        const outcome = outcomes[index];
+        if (outcome.skipped) continue;
         const eventType = this.domainEventDispatcher.label(row.eventType);
-        try {
-          await this.publish(row);
-        } catch (error) {
+        if (!outcome.ok) {
           this.metrics.recordEventPublished(eventType, 'refused');
           refused.push(row);
-          lastError = toError(error);
-          // Several refusals in one tick is the queue failing, not that many bad rows. Stop rather
-          // than pay its timeout again for every row left in the batch.
-          if (refused.length >= MAX_REFUSALS_PER_TICK) break;
+          lastError = outcome.error ?? lastError;
           continue;
         }
-        // Counted at the publish, not after the commit: the job is on the queue from here on, and a
-        // crash before the mark commits does not take it back. Counting after the commit would
-        // under-report exactly the window the outbox exists to survive.
+        // Counted at the publish, not after the commit: the message is out from here on, and a crash
+        // before the mark commits does not take it back. Counting after the commit would under-report
+        // exactly the window the outbox exists to survive.
         this.metrics.recordEventPublished(eventType, 'published');
         await tx.update(outbox).set({ publishedAt: new Date() }).where(eq(outbox.id, row.id));
         published += 1;
@@ -89,7 +90,7 @@ export class OutboxRelay {
 
       if (refused.length > 0) {
         // Only charge an attempt once something else in this batch got through: that is the proof
-        // the queue works and the row itself is what it rejected. Otherwise the queue is refusing
+        // the broker works and the row itself is what it rejected. Otherwise the broker is refusing
         // everything, and charging for that would let one outage dead-letter a healthy backlog.
         if (published > 0) {
           for (const row of refused) {
@@ -110,19 +111,22 @@ export class OutboxRelay {
     });
   }
 
-  private isConnected(): boolean {
-    return this.queueConnection.status === 'ready';
-  }
-
-  private async publish(row: OutboxRow): Promise<void> {
-    const parent = row.traceparent ? extractTraceContext({ traceparent: row.traceparent }) : context.active();
-
-    await context.with(parent, () =>
-      withSpan('outbox.publish', async () => {
-        // Re-injected rather than forwarded so the consumer's spans hang off this publish; falls
-        // back to the stored header when no SDK is registered.
-        const { traceparent } = injectTraceContext();
-        const job: DomainEventJob = {
+  // One `outbox.publish` span per row, held open across the batch so each covers its own send.
+  private async publish(rows: OutboxRow[]): Promise<PublishOutcome[]> {
+    const tracer = trace.getTracer(TRACER_NAME);
+    const spans: Span[] = [];
+    const events = rows.map((row): OutboundEvent => {
+      const parent = row.traceparent ? extractTraceContext({ traceparent: row.traceparent }) : context.active();
+      const span = tracer.startSpan('outbox.publish', undefined, parent);
+      spans.push(span);
+      // Re-injected rather than forwarded so the consumer's spans hang off this publish; falls back
+      // to the stored header when no SDK is registered.
+      const { traceparent } = context.with(trace.setSpan(parent, span), () => injectTraceContext());
+      return {
+        rowId: row.id,
+        eventType: row.eventType,
+        aggregateId: row.aggregateId,
+        envelope: {
           outboxId: row.id,
           aggregateType: row.aggregateType,
           aggregateId: row.aggregateId,
@@ -130,15 +134,23 @@ export class OutboxRelay {
           payload: row.payload,
           occurredAt: row.createdAt.toISOString(),
           traceparent: traceparent ?? row.traceparent,
-        };
+        },
+      };
+    });
 
-        // No job id: a republish must be a real redelivery, and the inbox swallows the copies.
-        await this.domainEventsQueue.add(row.eventType, job, catalogPriority(row.eventType));
-      }),
-    );
+    let outcomes: PublishOutcome[] | undefined;
+    try {
+      outcomes = await this.publisher.publish(events);
+      return outcomes;
+    } finally {
+      for (const [index, span] of spans.entries()) {
+        const outcome = outcomes?.[index];
+        if (!outcome?.ok) {
+          if (outcome?.error) span.recordException(outcome.error);
+          span.setStatus({ code: SpanStatusCode.ERROR });
+        }
+        span.end();
+      }
+    }
   }
-}
-
-function catalogPriority(eventType: string): JobsOptions | undefined {
-  return eventType.startsWith('catalog.') ? { priority: CATALOG_EVENT_PRIORITY } : undefined;
 }

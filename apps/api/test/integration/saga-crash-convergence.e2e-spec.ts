@@ -1,5 +1,4 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Queue } from 'bullmq';
 import { isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,9 +10,13 @@ import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_CONSUMER, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import {
+  deliverApplied,
+  publishedEnvelopes,
+  snapshotTransportBeforeEach,
+  type PublishedEvent,
+} from '../setup/domain-event-transport';
 import {
   auditLedgerInvariants,
   lapseReservation,
@@ -28,8 +31,7 @@ import {
   type OpenOrder,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway } from '../setup/harness';
-import { resetDatabase } from '../setup/reset-database';
+import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 
 const WEBHOOK_SECRET = 'whsec_e2e_crash_convergence_0123456789';
 const STOCK = 10;
@@ -49,7 +51,6 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
   let gateway: FakeSignerGatewayAdapter;
   let relay: OutboxRelay;
   let processor: DomainEventProcessor;
-  let queue: Queue;
   let sweep: SweepExpiredReservationsUseCase;
   let writer: OutboxWriterPort;
   let sku: SellableSku;
@@ -58,18 +59,16 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
     relay = app.get(OutboxRelay);
     processor = app.get(DomainEventProcessor);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     sweep = app.get(SweepExpiredReservationsUseCase);
     writer = app.get<OutboxWriterPort>(OUTBOX_WRITER);
   });
 
   closeAppAfterAll(() => app);
+  resetDatabaseBeforeEach(() => pool);
+  // Or a message left over from the previous test lands on rows that no longer exist.
+  snapshotTransportBeforeEach(() => app);
 
-  // Explicit rather than `resetDatabaseBeforeEach`: the queue has to be emptied in the same hook and
-  // after the truncate, or a job left over from the previous test lands on rows that no longer exist.
   beforeEach(async () => {
-    await resetDatabase(pool);
-    await queue.obliterate({ force: true });
     sku = await seedSellableSku(app, { onHand: STOCK });
   });
 
@@ -82,16 +81,11 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
 
   const unpublished = () => db.select().from(schema.outbox).where(isNull(schema.outbox.publishedAt));
 
-  const queuedJobs = async (): Promise<DomainEventJob[]> => {
-    const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized']);
-    return jobs.map((job) => job.data as DomainEventJob);
-  };
+  const deliverAll = async (): Promise<string[]> => (await deliverApplied(app)).map(({ result }) => result);
 
-  const deliverAll = async (): Promise<string[]> => {
+  const redeliver = async (events: PublishedEvent[]): Promise<string[]> => {
     const results: string[] = [];
-    for (const job of await queuedJobs()) {
-      results.push(await processor.process(job, DOMAIN_EVENTS_CONSUMER));
-    }
+    for (const { envelope, consumer } of events) results.push(await processor.process(envelope!, consumer));
     return results;
   };
 
@@ -179,22 +173,27 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     const order = await placeAndOpenSession(app, sku, QUANTITY);
     await settle(order, 'PAID', 'evt_kill_after_publish').expect(200);
     await relay.runOnce(50);
-    const published = await queuedJobs();
-    expect(published.map((job) => job.eventType)).toEqual(expect.arrayContaining(['payment.succeeded', 'order.paid']));
+    const published = await publishedEnvelopes(app);
+    expect(published.map(({ envelope }) => envelope?.eventType)).toEqual(
+      expect.arrayContaining(['payment.succeeded', 'order.paid']),
+    );
 
-    // The exact state a relay killed between the publish and its own commit leaves behind: the jobs
-    // are on the queue, the rows still read as unsent, so the next tick sends every one of them again.
+    // The exact state a relay killed between the publish and its own commit leaves behind: the
+    // messages are on the broker, the rows still read as unsent, so the next tick sends every one again.
     await db.update(schema.outbox).set({ publishedAt: null });
     await expect(relay.runOnce(50)).resolves.toMatchObject({ published: published.length, failed: 0 });
 
-    // Jobs carry no id, so the republish is a second job per row and only the inbox keeps one effect.
-    expect(await queuedJobs()).toHaveLength(published.length * 2);
-    expect((await deliverAll()).sort()).toEqual([
+    // Nothing dedups a send, so the republish is a second message per row and only the inbox keeps one effect.
+    const republished = await publishedEnvelopes(app);
+    const outboxIds = (events: PublishedEvent[]) => events.map(({ envelope }) => envelope?.outboxId).sort();
+    expect(outboxIds(republished)).toEqual(outboxIds(published));
+    const copies = [...published, ...republished];
+    expect((await redeliver(copies)).sort()).toEqual([
       ...Array<string>(published.length).fill('duplicate'),
       ...Array<string>(published.length).fill('processed'),
     ]);
     // The durable half: the same envelope delivered again is claimed by nobody and does nothing.
-    expect(await deliverAll()).toEqual(Array(published.length * 2).fill('duplicate'));
+    expect(await redeliver(copies)).toEqual(Array(published.length * 2).fill('duplicate'));
 
     expect(await readStock(app, sku.variantId)).toMatchObject({
       quantityOnHand: STOCK - QUANTITY,
@@ -210,14 +209,14 @@ describe('Saga crash convergence (integration, real Postgres + Redis)', () => {
     await lapseReservation(app, order.orderId);
     await sweep.execute(SWEEP_ALL);
     await relay.runOnce(50);
-    const [expiry] = (await queuedJobs()).filter((job) => job.eventType === 'order.expired');
+    const expiry = (await publishedEnvelopes(app)).find(({ envelope }) => envelope?.eventType === 'order.expired');
     expect(expiry).toBeDefined();
 
-    // The delivery commits, then the worker dies before the ack, so the queue hands the same job
-    // back. This is the one order event carrying an effect outside the emitting transaction, which
-    // makes it the only one a redelivery could actually apply twice.
-    await expect(processor.process(expiry, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
-    await expect(processor.process(expiry, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
+    // The delivery commits, then the consumer dies before the commit, so the broker hands the same
+    // message back. This is the one order event carrying an effect outside the emitting transaction,
+    // which makes it the only one a redelivery could actually apply twice.
+    await expect(redeliver([expiry!])).resolves.toEqual(['processed']);
+    await expect(redeliver([expiry!])).resolves.toEqual(['duplicate']);
 
     expect(expireSession).toHaveBeenCalledExactlyOnceWith(order.sessionId);
     expect((await readPayment(app, order.orderId)).status).toBe(PaymentStatus.EXPIRED);

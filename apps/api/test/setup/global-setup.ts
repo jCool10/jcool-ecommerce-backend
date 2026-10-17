@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer } from '@testcontainers/redis';
 import { Client } from 'pg';
@@ -31,15 +32,19 @@ declare module 'vitest' {
     KAFKA_BROKERS: string;
     /** For the broker's own CLI tools, which can read what the Node client cannot. */
     KAFKA_CONTAINER_ID: string;
+    /** Fresh per run, so nothing signed by an earlier run or a developer's .env verifies. */
+    MESSAGING_SIGNING_KEY: string;
   }
 }
+
+type ProvidedKey = 'PG_BASE_URL' | 'REDIS_BASE_URL' | 'KAFKA_BROKERS' | 'KAFKA_CONTAINER_ID' | 'MESSAGING_SIGNING_KEY';
 
 // Runs once per test:e2e in its own process; URLs reach workers via provide()/inject(), which is
 // run-global; the per-worker scoping is applied worker-side in worker-resources.ts.
 export default async function setup({
   provide,
 }: {
-  provide: (key: 'PG_BASE_URL' | 'REDIS_BASE_URL' | 'KAFKA_BROKERS' | 'KAFKA_CONTAINER_ID', value: string) => void;
+  provide: (key: ProvidedKey, value: string) => void;
 }): Promise<() => Promise<void>> {
   // Before any `docker run`: the Redis cap is knowable here, and `assertWorkerBudget` can only
   // report it per worker, i.e. after both containers are up, the template is migrated and N
@@ -87,6 +92,7 @@ export default async function setup({
     provide('REDIS_BASE_URL', redis.getConnectionUrl());
     provide('KAFKA_BROKERS', kafka.brokers);
     provide('KAFKA_CONTAINER_ID', kafka.container.getId());
+    provide('MESSAGING_SIGNING_KEY', randomBytes(32).toString('hex'));
   } catch (error) {
     await stopAll();
     throw error;

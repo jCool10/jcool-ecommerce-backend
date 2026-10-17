@@ -22,6 +22,7 @@ import {
 } from '../setup/harness';
 import { idServiceStub, testId } from '../setup/id-service-stub';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
+import { createTestApp } from '../setup/test-app.factory';
 
 const CONSUMER = DOMAIN_EVENTS_CONSUMER;
 const ATTEMPTS = 3;
@@ -29,6 +30,13 @@ const BACKOFF_MS = 100;
 const ORDER_PAID_ATTEMPTS = 4;
 const ORDER_PAID_CAP_MS = 400;
 const WAIT = { timeout: 15_000, interval: 25 };
+const LADDER_ENV = {
+  METRICS_TOKEN: E2E_METRICS_TOKEN,
+  QUEUE_CONSUMER_ATTEMPTS: String(ATTEMPTS),
+  QUEUE_CONSUMER_BACKOFF_MS: String(BACKOFF_MS),
+  ORDER_PAID_CONSUMER_ATTEMPTS: String(ORDER_PAID_ATTEMPTS),
+  ORDER_PAID_CONSUMER_BACKOFF_CAP_MS: String(ORDER_PAID_CAP_MS),
+};
 
 const envelope = (overrides: Partial<DomainEventJob> = {}): DomainEventJob => {
   const orderId = testId();
@@ -59,26 +67,16 @@ describe('Consumer retry ladder on Postgres (integration, real Postgres + Redis)
   let poller: RetryPoller;
   let store: ConsumerRetryStore;
   let dispatcher: DomainEventDispatcher;
-  let queue: Queue;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({
-      METRICS_TOKEN: E2E_METRICS_TOKEN,
-      QUEUE_WORKER_ENABLED: 'true',
-      QUEUE_CONSUMER_ATTEMPTS: String(ATTEMPTS),
-      QUEUE_CONSUMER_BACKOFF_MS: String(BACKOFF_MS),
-      ORDER_PAID_CONSUMER_ATTEMPTS: String(ORDER_PAID_ATTEMPTS),
-      ORDER_PAID_CONSUMER_BACKOFF_CAP_MS: String(ORDER_PAID_CAP_MS),
-    }));
+    ({ app, pool, db } = await createTestAppWithPool(LADDER_ENV));
     delivery = app.get(ConsumerDelivery);
     poller = app.get(RetryPoller);
     store = app.get(ConsumerRetryStore);
     dispatcher = app.get(DomainEventDispatcher);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-  obliterateQueueBeforeEach(() => [queue]);
 
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -109,8 +107,8 @@ describe('Consumer retry ladder on Postgres (integration, real Postgres + Redis)
     return poller.runOnce(batch);
   };
 
-  const counter = async (series: string): Promise<number> => {
-    const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
+  const counter = async (series: string, from = app): Promise<number> => {
+    const { text } = await request(from.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
     const line = text.split('\n').find((candidate) => candidate.startsWith(`${series} `));
     return line ? Number(line.slice(series.length + 1)) : 0;
   };
@@ -296,32 +294,45 @@ describe('Consumer retry ladder on Postgres (integration, real Postgres + Redis)
     expect(row?.lastError).not.toContain('Failed query');
   });
 
-  // Only a retry row that cannot be written goes back to BullMQ, which then runs its own ladder.
-  it('falls back to the transport ladder while the retry row cannot be written', async () => {
-    const effect = spyOnEffect(dispatcher).mockRejectedValue(new Error('handler refused'));
-    vi.spyOn(store, 'park').mockRejectedValue(new Error('Connection terminated unexpectedly'));
-    const series = 'messaging_dlq_total{event_type="order.placed",reason="attempts_exhausted"}';
-    const before = await counter(series);
-    const filed = envelope();
+  describe('over BullMQ', () => {
+    let bullmq: INestApplication;
+    let queue: Queue;
 
-    await queue.add(filed.eventType, filed);
-
-    await vi.waitFor(async () => expect(await rowFor(filed.outboxId)).toBeDefined(), WAIT);
-    expect(await rowFor(filed.outboxId)).toMatchObject({
-      status: 'dead',
-      deadReason: 'attempts_exhausted',
-      attemptsMade: ATTEMPTS,
-      lastError: 'Error: Connection terminated unexpectedly',
+    beforeAll(async () => {
+      bullmq = await createTestApp({ ...LADDER_ENV, QUEUE_WORKER_ENABLED: 'true', MESSAGING_TRANSPORT: 'bullmq' });
+      queue = bullmq.get<Queue>(DOMAIN_EVENTS_QUEUE);
     });
-    expect(effect).toHaveBeenCalledTimes(ATTEMPTS);
-    expect(await counter(series)).toBe(before + 1);
+    closeAppAfterAll(() => bullmq);
+    obliterateQueueBeforeEach(() => [queue]);
 
-    // With Postgres still refusing, the log line and the metric are all that is left.
-    vi.spyOn(store, 'insertDead').mockRejectedValue(new Error('Connection terminated unexpectedly'));
-    const lost = envelope();
-    await queue.add(lost.eventType, lost);
+    // Only a retry row that cannot be written goes back to BullMQ, which then runs its own ladder.
+    it('falls back to the transport ladder while the retry row cannot be written', async () => {
+      const effect = spyOnEffect(bullmq.get(DomainEventDispatcher)).mockRejectedValue(new Error('handler refused'));
+      const bullmqStore = bullmq.get(ConsumerRetryStore);
+      vi.spyOn(bullmqStore, 'park').mockRejectedValue(new Error('Connection terminated unexpectedly'));
+      const series = 'messaging_dlq_total{event_type="order.placed",reason="attempts_exhausted"}';
+      const before = await counter(series, bullmq);
+      const filed = envelope();
 
-    await vi.waitFor(async () => expect(await counter(series)).toBe(before + 2), WAIT);
-    expect(await rowFor(lost.outboxId)).toBeUndefined();
+      await queue.add(filed.eventType, filed);
+
+      await vi.waitFor(async () => expect(await rowFor(filed.outboxId)).toBeDefined(), WAIT);
+      expect(await rowFor(filed.outboxId)).toMatchObject({
+        status: 'dead',
+        deadReason: 'attempts_exhausted',
+        attemptsMade: ATTEMPTS,
+        lastError: 'Error: Connection terminated unexpectedly',
+      });
+      expect(effect).toHaveBeenCalledTimes(ATTEMPTS);
+      expect(await counter(series, bullmq)).toBe(before + 1);
+
+      // With Postgres still refusing, the log line and the metric are all that is left.
+      vi.spyOn(bullmqStore, 'insertDead').mockRejectedValue(new Error('Connection terminated unexpectedly'));
+      const lost = envelope();
+      await queue.add(lost.eventType, lost);
+
+      await vi.waitFor(async () => expect(await counter(series, bullmq)).toBe(before + 2), WAIT);
+      expect(await rowFor(lost.outboxId)).toBeUndefined();
+    });
   });
 });

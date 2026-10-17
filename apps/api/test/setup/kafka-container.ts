@@ -17,8 +17,11 @@ export function freePort(): Promise<number> {
 
 // The advertised listener has to name the port clients dial, which a random mapping only reveals after
 // the broker has started. So the broker listens on a port picked up front and Docker maps it 1:1.
-export async function startKafka(): Promise<{ container: StartedTestContainer; brokers: string }> {
-  const port = await freePort();
+// Passing the previous broker's port brings a fresh one up at the same address.
+export async function startKafka(
+  options: { port?: number } = {},
+): Promise<{ container: StartedTestContainer; brokers: string; port: number }> {
+  const port = options.port ?? (await freePort());
   const container = await new GenericContainer(KAFKA_IMAGE)
     .withEnvironment({
       KAFKA_NODE_ID: '1',
@@ -48,7 +51,7 @@ export async function startKafka(): Promise<{ container: StartedTestContainer; b
     await container.stop();
     throw error;
   }
-  return { container, brokers };
+  return { container, brokers, port };
 }
 
 // The Node client's admin wedges for good when its first fetchOffsets lands while __consumer_offsets is

@@ -1,12 +1,14 @@
 import { KafkaJS } from '@confluentinc/kafka-javascript';
-import type { Logger } from 'pino';
 
 export interface KafkaConnection {
   brokers: string[];
   clientId: string;
 }
 
-export function createKafka({ brokers, clientId }: KafkaConnection, log: Logger): KafkaJS.Kafka {
+/** What pino and nestjs-pino's PinoLogger both offer. */
+export type KafkaLogSink = Record<'error' | 'warn' | 'info' | 'debug', (fields: object, message: string) => void>;
+
+export function createKafka({ brokers, clientId }: KafkaConnection, log: KafkaLogSink): KafkaJS.Kafka {
   if (brokers.length === 0) throw new Error('KAFKA_BROKERS is not set');
   return new KafkaJS.Kafka({ kafkaJS: { brokers, clientId, logger: kafkaLogger(log) } });
 }
@@ -15,7 +17,7 @@ export function createKafka({ brokers, clientId }: KafkaConnection, log: Logger)
  * The client hands a custom logger every line, librdkafka's and its own, and only reports the configured
  * level through setLogLevel, so the filtering happens here.
  */
-export function kafkaLogger(log: Logger): KafkaJS.Logger {
+export function kafkaLogger(log: KafkaLogSink): KafkaJS.Logger {
   let level = KafkaJS.logLevel.INFO;
 
   const at =

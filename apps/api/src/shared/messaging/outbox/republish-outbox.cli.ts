@@ -13,6 +13,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import configuration from '@shared/config/configuration';
 import * as schema from '@shared/infrastructure/database/schema';
+import { stripControlCharacters } from '../strip-control-characters';
 import { DrizzleOutboxWindowStore, parseRepublishArgs, republishOutbox } from './republish-outbox';
 
 async function main(): Promise<void> {
@@ -34,9 +35,13 @@ async function main(): Promise<void> {
         `event types ${types}, inbox window ${retention.inboxDays}d) ---`,
     );
     if (report.byEventType.length === 0) console.log('no published rows in the window');
-    for (const { eventType, rows } of report.byEventType) console.log(`rows     ${eventType.padEnd(28)} ${rows}`);
+    for (const { eventType, rows } of report.byEventType) {
+      console.log(`rows     ${stripControlCharacters(eventType).padEnd(28)} ${rows}`);
+    }
     for (const { consumer, rows } of report.claimsByConsumer) {
-      console.log(`claimed  ${consumer.padEnd(28)} ${rows}   (already applied; its inbox swallows these)`);
+      console.log(
+        `claimed  ${stripControlCharacters(consumer).padEnd(28)} ${rows}   (already applied; its inbox swallows these)`,
+      );
     }
 
     if (apply) console.log(`\nreset: ${report.reset} rows, the relay publishes them on its next ticks`);

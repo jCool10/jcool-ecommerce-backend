@@ -15,12 +15,9 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
 import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import {
-  CATALOG_EVENT_PRIORITY,
-  DOMAIN_EVENTS_CONSUMER,
-  DOMAIN_EVENTS_QUEUE,
-} from '../../src/shared/messaging/queue/queue.constants';
+import { CATALOG_EVENT_PRIORITY, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { authHeader } from '../setup/bearer.helper';
+import { publishedEnvelopes, snapshotTransportBeforeEach, type PublishedEvent } from '../setup/domain-event-transport';
 import { drainDomainEvents } from '../setup/domain-events';
 import { createTestCategory, type TestCategory } from '../setup/fixtures/catalog.fixture';
 import { createTestAdminPrincipal, type TestPrincipal } from '../setup/fixtures/principal.fixture';
@@ -52,7 +49,6 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
-  let queue: Queue<DomainEventJob>;
   let relay: OutboxRelay;
   let processor: DomainEventProcessor;
   let admin: TestPrincipal;
@@ -61,7 +57,6 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
   beforeAll(async () => {
     engine = await startSearchEngine();
     ({ app, pool, db } = await createTestAppWithPool(searchEnv(engine)));
-    queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
     relay = app.get(OutboxRelay);
     processor = app.get(DomainEventProcessor);
   }, 180_000);
@@ -71,15 +66,14 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     await engine?.stop();
   });
 
-  // The queue is emptied after the truncate, or a job left by the previous case lands on rows that
-  // no longer exist.
   beforeEach(async () => {
     await resetDatabase(pool);
-    await queue.obliterate({ force: true });
     await resetSearchIndex(app, engine);
     admin = await createTestAdminPrincipal(app);
     category = await createTestCategory(app, 'Sync');
   });
+  // Or a message left by the previous case lands on rows that no longer exist.
+  snapshotTransportBeforeEach(() => app);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -138,14 +132,15 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
   const inboxRowsFor = (messageId: string) =>
     db.select().from(schema.inbox).where(eq(schema.inbox.messageId, messageId));
 
-  /** Publishes the pending outbox rows and hands back the one job queued for this aggregate. */
-  async function relayJobFor(aggregateId: string): Promise<Job<DomainEventJob>> {
+  /** Publishes the pending outbox rows and hands back the one message published for this aggregate. */
+  async function relayedFor(aggregateId: string): Promise<PublishedEvent> {
     await relay.runOnce(100);
-    const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized']);
-    const mine = jobs.filter((job) => job.data.aggregateId === aggregateId);
+    const mine = (await publishedEnvelopes(app)).filter(({ envelope }) => envelope?.aggregateId === aggregateId);
     expect(mine).toHaveLength(1);
     return mine[0];
   }
+
+  const deliver = ({ envelope, consumer }: PublishedEvent) => processor.process(envelope!, consumer);
 
   interface SeededCategory {
     id: string;
@@ -217,27 +212,27 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
 
   it('retries a delivery whose engine write failed, leaving no claim behind in between', async () => {
     const productId = await createProduct('Retried Compass');
-    const job = await relayJobFor(productId);
+    const event = await relayedFor(productId);
     vi.spyOn(searchPort(), 'write').mockRejectedValueOnce(new Error('search engine unavailable'));
 
-    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).rejects.toThrow('search engine unavailable');
-    expect(await inboxRowsFor(job.data.outboxId)).toEqual([]);
+    await expect(deliver(event)).rejects.toThrow('search engine unavailable');
+    expect(await inboxRowsFor(event.envelope!.outboxId)).toEqual([]);
 
-    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
-    expect(await inboxRowsFor(job.data.outboxId)).toHaveLength(1);
+    await expect(deliver(event)).resolves.toBe('processed');
+    expect(await inboxRowsFor(event.envelope!.outboxId)).toHaveLength(1);
     await refreshSearchIndex(engine);
     expect(await found('Compass')).toEqual([productId]);
   });
 
   it('skips a redelivered message it already applied and leaves the document as it was', async () => {
     const productId = await createProduct('Echo Sextant');
-    const job = await relayJobFor(productId);
-    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+    const event = await relayedFor(productId);
+    await expect(deliver(event)).resolves.toBe('processed');
     await refreshSearchIndex(engine);
     const applied = await stored(productId);
     expect(applied).toEqual({ version: 0, name: 'Echo Sextant', status: 'ACTIVE' });
 
-    await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
+    await expect(deliver(event)).resolves.toBe('duplicate');
     await refreshSearchIndex(engine);
 
     expect(await stored(productId)).toEqual(applied);
@@ -250,7 +245,7 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     await converge();
 
     await send('patch', `/admin/products/${productId}`, { name: 'Drifting Buoy Alpha' }).expect(200);
-    const first = await relayJobFor(productId);
+    const first = await relayedFor(productId);
 
     const port = searchPort();
     const write = port.write.bind(port) as CatalogSearchPort['write'];
@@ -264,13 +259,12 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       return write(changes);
     });
 
-    const late = processor.process(first.data, DOMAIN_EVENTS_CONSUMER);
+    const late = deliver(first);
     await stalled;
 
     await send('patch', `/admin/products/${productId}`, { name: 'Drifting Buoy Bravo' }).expect(200);
-    await first.remove();
-    const second = await relayJobFor(productId);
-    await expect(processor.process(second.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+    const second = await relayedFor(productId);
+    await expect(deliver(second)).resolves.toBe('processed');
 
     release();
     await expect(late).resolves.toBe('processed');
@@ -321,16 +315,6 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     ]);
   });
 
-  // BullMQ serves every unprioritized job first; that ordering is its contract, not re-tested here.
-  it('queues a catalog event behind order and payment work', async () => {
-    const productId = await createProduct('Patient Kettle');
-
-    const job = await relayJobFor(productId);
-
-    expect(await job.getState()).toBe('prioritized');
-    expect(job.opts.priority).toBe(CATALOG_EVENT_PRIORITY);
-  });
-
   describe('category rename', () => {
     it('moves the active products of a renamed category to its new name', async () => {
       const seeded = await seedCategory();
@@ -370,14 +354,14 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     it('retries a rename whose fan-out failed, leaving no claim behind in between', async () => {
       const seeded = await seedCategory();
       await renameCategory(seeded.id, { name: 'Walnut Orchard' });
-      const job = await relayJobFor(seeded.id);
+      const event = await relayedFor(seeded.id);
       vi.spyOn(searchPort(), 'write').mockRejectedValueOnce(new Error('search engine unavailable'));
 
-      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).rejects.toThrow('search engine unavailable');
-      expect(await inboxRowsFor(job.data.outboxId)).toEqual([]);
+      await expect(deliver(event)).rejects.toThrow('search engine unavailable');
+      expect(await inboxRowsFor(event.envelope!.outboxId)).toEqual([]);
 
-      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
-      expect(await inboxRowsFor(job.data.outboxId)).toHaveLength(1);
+      await expect(deliver(event)).resolves.toBe('processed');
+      expect(await inboxRowsFor(event.envelope!.outboxId)).toHaveLength(1);
       await refreshSearchIndex(engine);
       expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
       await expectIndexedAtRowVersions(seeded.all);
@@ -386,12 +370,12 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     it('skips a redelivered rename it already applied and keeps the documents current', async () => {
       const seeded = await seedCategory();
       await renameCategory(seeded.id, { name: 'Walnut Orchard' });
-      const job = await relayJobFor(seeded.id);
-      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+      const event = await relayedFor(seeded.id);
+      await expect(deliver(event)).resolves.toBe('processed');
       await refreshSearchIndex(engine);
       expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
 
-      await expect(processor.process(job.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('duplicate');
+      await expect(deliver(event)).resolves.toBe('duplicate');
       await refreshSearchIndex(engine);
 
       expect(await found('Walnut Orchard', seeded.slug)).toEqual(seeded.active);
@@ -404,18 +388,18 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       const seeded = await seedCategory();
       const [edited] = seeded.active;
       await renameCategory(seeded.id, { name: 'Walnut Orchard' });
-      const rename = await relayJobFor(seeded.id);
+      const rename = await relayedFor(seeded.id);
 
       const port = searchPort();
       const write = port.write.bind(port) as CatalogSearchPort['write'];
       vi.spyOn(port, 'write').mockImplementationOnce(async (changes) => {
         await send('patch', `/admin/products/${edited}`, { name: 'Copper Kettle' }).expect(200);
-        const edit = await relayJobFor(edited);
-        await expect(processor.process(edit.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+        const edit = await relayedFor(edited);
+        await expect(deliver(edit)).resolves.toBe('processed');
         return write(changes);
       });
 
-      await expect(processor.process(rename.data, DOMAIN_EVENTS_CONSUMER)).resolves.toBe('processed');
+      await expect(deliver(rename)).resolves.toBe('processed');
       await refreshSearchIndex(engine);
 
       const hits = await search('Walnut Orchard', seeded.slug);
@@ -438,11 +422,47 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       expect(await found('Walnut Orchard', seeded.slug)).toEqual(stayed);
       await expectIndexedAtRowVersions(seeded.all);
     });
+  });
+
+  // BullMQ serves every unprioritized job first; that ordering is its contract, not re-tested here.
+  describe('over BullMQ', () => {
+    let bullmq: INestApplication;
+    let queue: Queue<DomainEventJob>;
+
+    beforeAll(async () => {
+      bullmq = await createTestApp({ ...searchEnv(engine), MESSAGING_TRANSPORT: 'bullmq' });
+      queue = bullmq.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
+    });
+
+    afterAll(async () => {
+      await bullmq.close();
+    });
+
+    beforeEach(async () => {
+      await queue.obliterate({ force: true });
+    });
+
+    async function queuedJobFor(aggregateId: string): Promise<Job<DomainEventJob>> {
+      await bullmq.get(OutboxRelay).runOnce(100);
+      const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized']);
+      const mine = jobs.filter((job) => job.data.aggregateId === aggregateId);
+      expect(mine).toHaveLength(1);
+      return mine[0];
+    }
+
+    it('queues a catalog event behind order and payment work', async () => {
+      const productId = await createProduct('Patient Kettle');
+
+      const job = await queuedJobFor(productId);
+
+      expect(await job.getState()).toBe('prioritized');
+      expect(job.opts.priority).toBe(CATALOG_EVENT_PRIORITY);
+    });
 
     it('queues a rename behind order and payment work like any catalog event', async () => {
       await renameCategory(category.id, { name: 'Patient Pantry' });
 
-      const job = await relayJobFor(category.id);
+      const job = await queuedJobFor(category.id);
 
       expect(job.data.eventType).toBe('catalog.category.renamed');
       expect(await job.getState()).toBe('prioritized');

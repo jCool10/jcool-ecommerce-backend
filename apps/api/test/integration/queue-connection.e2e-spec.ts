@@ -14,6 +14,8 @@ import { closeAppAfterAll, obliterateQueueBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { createTestApp } from '../setup/test-app.factory';
 
+const BULLMQ = { MESSAGING_TRANSPORT: 'bullmq' };
+
 // The lifecycle tests boot their own app because each breaks or closes its connection.
 describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   let app: INestApplication;
@@ -25,7 +27,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   const job = { outboxId: testId(), occurredAt: '2026-08-24T00:00:00.000Z' };
 
   beforeAll(async () => {
-    app = await createTestApp({ QUEUE_CONSUMER_ATTEMPTS: '5', QUEUE_CONSUMER_BACKOFF_MS: '250' });
+    app = await createTestApp({ ...BULLMQ, QUEUE_CONSUMER_ATTEMPTS: '5', QUEUE_CONSUMER_BACKOFF_MS: '250' });
     queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     connection = app.get<Redis>(QUEUE_CONNECTION);
     prefix = app.get(ConfigService).getOrThrow<string>('queue.prefix');
@@ -68,7 +70,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('rejects a publish mid-reconnect instead of buffering it in memory', async () => {
-    const isolated = await createTestApp();
+    const isolated = await createTestApp(BULLMQ);
     const isolatedQueue = isolated.get<Queue>(DOMAIN_EVENTS_QUEUE);
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
 
@@ -85,7 +87,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('closes the queue and its connection when the app shuts down', async () => {
-    const isolated = await createTestApp();
+    const isolated = await createTestApp(BULLMQ);
     const isolatedQueue = isolated.get<Queue>(DOMAIN_EVENTS_QUEUE);
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
 
@@ -99,7 +101,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('does not hang shutting down when Redis is already gone', async () => {
-    const isolated = await createTestApp();
+    const isolated = await createTestApp(BULLMQ);
     const lifecycle = isolated.get(QueueLifecycle);
     isolated.get<Redis>(QUEUE_CONNECTION).disconnect();
 

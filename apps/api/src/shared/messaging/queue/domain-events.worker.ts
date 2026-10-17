@@ -112,14 +112,16 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     // Waits for in-flight jobs so a claim never commits into a pool that has already closed. Bounded,
     // because a Redis that is gone would hang shutdown — and losing an in-flight consume costs
     // nothing, since an unapplied event leaves an unclaimed inbox row.
+    // One deadline for both waits: the shutdown budget counts this step once.
+    const deadline = timeout(CLOSE_TIMEOUT_MS);
     try {
-      await Promise.race([this.worker?.close() ?? Promise.resolve(), timeout(CLOSE_TIMEOUT_MS)]);
+      await Promise.race([this.worker?.close() ?? Promise.resolve(), deadline]);
     } catch (error: unknown) {
       this.logger.error({ err: toError(error) }, 'failed to close domain events worker');
     }
 
     // After the close, because the last job to fail raises 'failed' during it.
-    await Promise.race([Promise.allSettled(this.pendingRoutes), timeout(CLOSE_TIMEOUT_MS)]);
+    await Promise.race([Promise.allSettled(this.pendingRoutes), deadline]);
 
     if (!this.queueConnection) return;
     // quit() rejects outright when Redis is already gone, hence the unconditional fallback.

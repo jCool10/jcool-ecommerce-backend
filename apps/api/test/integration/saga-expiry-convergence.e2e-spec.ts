@@ -1,7 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
-import type { Queue } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +13,6 @@ import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructu
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import {
   lapseReservation,
@@ -58,7 +56,6 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
   let sweep: SweepExpiredReservationsUseCase;
   let reconcile: ReconcileStaleOrdersUseCase;
   let relay: OutboxRelay;
-  let queue: Queue;
   let db: DrizzleDB;
   let metrics: MetricsPort;
   let sku: SellableSku;
@@ -90,7 +87,6 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
     sweep = app.get(SweepExpiredReservationsUseCase);
     reconcile = app.get(ReconcileStaleOrdersUseCase);
     relay = app.get(OutboxRelay);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
     db = app.get<DrizzleDB>(DRIZZLE);
     metrics = app.get<MetricsPort>(METRICS);
   });
@@ -101,7 +97,6 @@ describe('Saga expiry convergence between the two sweeps (integration, real Post
 
   beforeEach(async () => {
     await resetDatabase(pool);
-    await queue.obliterate({ force: true });
     sku = await seedSellableSku(app, { onHand: STOCK });
   });
 

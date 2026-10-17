@@ -16,6 +16,13 @@ export const CONSUMER_GROUPS = {
 
 export type ConsumerName = keyof typeof CONSUMER_GROUPS;
 
+export function consumerFor(topic: KafkaTopic): ConsumerName {
+  const entry = Object.entries(CONSUMER_GROUPS).find(([, topics]) => (topics as readonly KafkaTopic[]).includes(topic));
+  // Unreachable while every topic has a group, which the topology spec checks.
+  if (!entry) throw new Error(`No consumer group reads ${topic}`);
+  return entry[0] as ConsumerName;
+}
+
 // Lands in topic names and group ids, which Kafka limits to these characters.
 export const KAFKA_PREFIX_PATTERN = /^[a-zA-Z0-9._-]{1,100}$/;
 
