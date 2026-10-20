@@ -50,6 +50,8 @@ export const MEDIA_BYTES_RECLAIMED_TOTAL = 'media_bytes_reclaimed_total';
 
 export const SESSION_EPOCH_LOOKUPS_TOTAL = 'session_epoch_lookups_total';
 
+export const TCC_BRANCH_TOTAL = 'tcc_branch_total';
+
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
 // across 1–150ms, where every route's p95/p99 sits; the 0.25s boundary is the latency-SLO
@@ -185,6 +187,11 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
     name: SESSION_EPOCH_LOOKUPS_TOTAL,
     help: 'Session-epoch reads from Redis, by result (hit, or miss = read through to the user-service). Keys are never evicted, so a sustained miss rate means Redis lost data, not that it is cold.',
     labelNames: ['result'],
+  }),
+  makeCounterProvider({
+    name: TCC_BRANCH_TOTAL,
+    help: 'TCC participant commands, by participant (inventory/payment), op and outcome. Business outcomes such as conflict or idempotent are answers, not failures; error is a command that threw (timeout, DB or provider fault) and will be retried by its caller.',
+    labelNames: ['participant', 'op', 'outcome'],
   }),
   makeHistogramProvider({
     name: CACHE_REBUILD_DURATION_SECONDS,

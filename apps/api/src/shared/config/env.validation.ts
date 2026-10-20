@@ -334,6 +334,31 @@ export class EnvironmentVariables extends PlatformEnv {
   INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
 
   @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  @Max(30_000)
+  INVENTORY_TRY_LOCK_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsStrictBoolean()
+  INVENTORY_HOLD_SWEEP_ENABLED?: string;
+
+  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1000)
+  INVENTORY_HOLD_SWEEP_INTERVAL_MS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  INVENTORY_HOLD_SWEEP_BATCH_SIZE?: number;
+
+  @IsOptional()
   @IsEnum(PaymentProvider)
   PAYMENT_PROVIDER?: PaymentProvider;
 

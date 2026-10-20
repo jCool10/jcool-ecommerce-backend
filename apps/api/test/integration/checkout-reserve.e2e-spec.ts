@@ -54,6 +54,20 @@ describe('Checkout holds stock (integration, real Postgres)', () => {
     expect(await db.select().from(schema.reservations)).toHaveLength(0);
   });
 
+  // The participant fence is not on the checkout path yet: checkout still holds through the in-tx port.
+  it('holds stock on a successful checkout without writing a participant header', async () => {
+    const token = await newPrincipalToken(app);
+    const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
+    await seedStock(app, variantId, 5);
+    await addToCart(app, token, variantId, 2);
+
+    const res = await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
+
+    expect(res.status).toBe(201);
+    expect(await stockOf(variantId)).toEqual({ onHand: 5, reserved: 2 });
+    expect(await db.select().from(schema.reservationOrders)).toHaveLength(0);
+  });
+
   it('answers a stock shortfall with a message that hides the available count', async () => {
     const token = await newPrincipalToken(app);
     const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });

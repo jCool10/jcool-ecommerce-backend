@@ -4,6 +4,7 @@ import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { InsufficientStockError } from '../../domain/stock/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../../domain/stock/errors/reservation-conflict.error';
 import { StockReservationError } from '../public/product-stock-reservation.port';
+import { fakeStockRepository } from '../../testing/stock-port.doubles';
 import { ReserveStockUseCase } from './reserve-stock.use-case';
 
 const TX = {} as DrizzleTx;
@@ -15,13 +16,13 @@ function build(strategy: string | undefined, reserveError?: Error) {
   const reservePessimistic = vi.fn(reserve);
   const reserveOptimistic = vi.fn(reserve);
   const useCase = new ReserveStockUseCase(
-    {
+    fakeStockRepository({
       reservePessimistic,
       reserveOptimistic,
       commitReservations: () => Promise.resolve(RESOLVED),
       releaseReservations: () => Promise.resolve(RESOLVED),
       findExpiredHolds: () => Promise.resolve([]),
-    },
+    }),
     fakeConfigService({ 'inventory.lockStrategy': strategy }),
   );
   return { useCase, reservePessimistic, reserveOptimistic };

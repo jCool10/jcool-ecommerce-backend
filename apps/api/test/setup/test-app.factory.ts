@@ -49,6 +49,7 @@ export async function createTestApp(
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
   process.env.RESERVATION_SWEEP_ENABLED = 'false';
+  process.env.INVENTORY_HOLD_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
   // is a plain sleep inside `app.close()`, so a developer's `SHUTDOWN_GRACE_PERIOD_MS=8000` charges
@@ -124,7 +125,9 @@ export async function createTestApp(
       // Bind a real port. supertest ephemeral-listens a non-listening server per request and tears
       // that listener down again; firing a herd of concurrent requests races those binds and
       // surfaces as `read ECONNRESET`, moving the race off the DB/cache/lock under test.
-      await app.listen(0);
+      // Loopback, not the `::` wildcard: on macOS a wildcard socket can share its port with another
+      // worker's 127.0.0.1 listener, and supertest then lands on that one.
+      await app.listen(0, '127.0.0.1');
       await waitForRedisReady(app.get(RedisService).getClient());
       return app;
     } catch (error) {

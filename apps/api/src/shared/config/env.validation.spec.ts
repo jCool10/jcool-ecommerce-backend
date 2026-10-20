@@ -65,6 +65,27 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, AUTH_JWKS_URL: 'jwks.json' })).toThrow(/AUTH_JWKS_URL/);
   });
 
+  it('bounds the inventory Try budget and the lapsed-hold sweep', () => {
+    const cases: Array<[string, string, boolean]> = [
+      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '99', false],
+      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '100', true],
+      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '30000', true],
+      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '30001', false],
+      ['INVENTORY_HOLD_SWEEP_INTERVAL_MS', '999', false],
+      ['INVENTORY_HOLD_SWEEP_INTERVAL_MS', '1000', true],
+      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '0', false],
+      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '500', true],
+      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '501', false],
+      ['INVENTORY_HOLD_SWEEP_ENABLED', '0', false],
+      ['INVENTORY_HOLD_SWEEP_ENABLED', 'false', true],
+    ];
+    for (const [key, value, valid] of cases) {
+      const run = () => validate({ ...BASE_ENV, [key]: value });
+      if (valid) expect(run, `${key}=${value}`).not.toThrow();
+      else expect(run, `${key}=${value}`).toThrow(new RegExp(key));
+    }
+  });
+
   it('caps the order.paid retry budget', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '31' })).toThrow(/ORDER_PAID_CONSUMER_ATTEMPTS/);
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();

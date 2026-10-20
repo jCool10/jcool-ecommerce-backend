@@ -95,6 +95,41 @@ export async function releaseOnceBlocked(
   }
 }
 
+/** The order's participant header, or undefined when no command ever reached it. */
+export async function readReservationOrder(app: INestApplication, orderId: string) {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  const [row] = await db.select().from(schema.reservationOrders).where(eq(schema.reservationOrders.orderId, orderId));
+  return row;
+}
+
+/** Moves the header's `hold_until` into the past, the one thing a sweep test cannot wait for. */
+export async function lapseHoldHeader(app: INestApplication, orderId: string, minutesAgo = 30): Promise<void> {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  await db
+    .update(schema.reservationOrders)
+    .set({ holdUntil: new Date(Date.now() - minutesAgo * 60_000) })
+    .where(eq(schema.reservationOrders.orderId, orderId));
+}
+
+/**
+ * Runs `lockSql` (a `SELECT ... FOR UPDATE`) in a transaction of its own and keeps it open, so a test
+ * can make a command wait on that lock for as long as it likes. The returned function rolls back.
+ */
+export async function holdRowLock(pool: Pool, lockSql: string, params: unknown[]): Promise<() => Promise<void>> {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  await client.query(lockSql, params);
+  return async () => {
+    await client.query('ROLLBACK');
+    client.release();
+  };
+}
+
+/** Clients handed out and not yet returned; a command that leaks one leaves this above its baseline. */
+export function checkedOutConnections(pool: Pool): number {
+  return pool.totalCount - pool.idleCount;
+}
+
 /** Must equal the number of winning holds after a race. */
 export async function countHeldReservations(app: INestApplication, variantId: string): Promise<number> {
   const db = app.get<DrizzleDB>(DRIZZLE);
