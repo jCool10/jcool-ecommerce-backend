@@ -150,6 +150,7 @@ services:
     # Unpublished, as on Railway: the gateway on 8080 is the way in.
     # .env carries the app's own secrets/config; the values below then override the host-oriented
     # ones it also holds (DATABASE_URL/REDIS_URL point at localhost there).
+    # NODE_ENV=production refuses to boot without a real sk_test_ STRIPE_SECRET_KEY and STRIPE_SUCCESS_URL in .env.
     env_file:
       - .env
     environment:

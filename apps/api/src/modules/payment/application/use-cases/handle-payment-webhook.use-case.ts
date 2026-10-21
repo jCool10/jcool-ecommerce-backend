@@ -6,6 +6,7 @@ import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { PaymentStatus } from '../../domain/payment-status';
 import { mapPaymentToOrderOutcome } from '../mappers/map-payment-to-order-outcome';
 import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';
+import type { TccWebhookResult } from './process-tcc-webhook-event.use-case';
 
 const LOG_CONTEXT = 'HandlePaymentWebhook';
 
@@ -25,8 +26,13 @@ export class HandlePaymentWebhookUseCase {
     logger.setContext(LOG_CONTEXT);
   }
 
-  async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
+  async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult | TccWebhookResult> {
     const result = await this.processWebhookEvent.execute(rawBody, headers);
+    // The saga moves a participant order off `payment.authorized`; nothing to finalize here.
+    if ('path' in result) {
+      this.logger.info({ ...result }, 'participant webhook event handled');
+      return result;
+    }
     // Only a first-delivery settle finalizes: on any other outcome the payment side already decided.
     if (result.outcome !== 'processed') {
       if (result.outcome === 'skipped' && result.conflict?.to === PaymentStatus.SUCCEEDED) {

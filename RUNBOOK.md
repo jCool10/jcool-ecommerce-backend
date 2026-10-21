@@ -22,6 +22,8 @@ Conventions used below:
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
+- [Enable Stripe test mode on Railway](#enable-stripe-test-mode-on-railway)
+- [Freeze checkout](#freeze-checkout)
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
@@ -494,6 +496,56 @@ gh api -X POST repos/jCool10/jcool-ecommerce-backend/environments/production-des
 `prevent_self_review` stays `false` while one person both merges and approves.
 
 Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs and run summaries.
+
+---
+
+## Enable Stripe test mode on Railway
+
+The api creates a Stripe Checkout Session on `/pay` and marks the order paid from the webhook. Production refuses to boot without `STRIPE_SECRET_KEY` and `STRIPE_SUCCESS_URL`, so set all four variables before the deploy that needs them. All of them are declared `preserve()`d in `.railway/railway.ts`, so an apply never reverts them.
+
+1. **Create the webhook endpoint** in the Stripe dashboard, in test mode: URL `https://<public domain>/webhooks/payment`, events `checkout.session.completed` and `checkout.session.expired`. Copy its signing secret (`whsec_…`).
+2. **Set the api variables**, the secret key last, each without a deploy of its own:
+
+   ```bash
+   # local, after `railway link`; paste the value, then press Enter (it is not echoed or kept in history)
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_SUCCESS_URL --stdin --service jcool-ecommerce-backend --skip-deploys
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_CANCEL_URL --stdin --service jcool-ecommerce-backend --skip-deploys
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set PAYMENT_WEBHOOK_SECRET --stdin --service jcool-ecommerce-backend --skip-deploys
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_SECRET_KEY --stdin --service jcool-ecommerce-backend --skip-deploys
+   ```
+
+   `STRIPE_SUCCESS_URL` must contain `{CHECKOUT_SESSION_ID}`, for example `https://<storefront>/payments/success?session_id={CHECKOUT_SESSION_ID}`. `PAYMENT_WEBHOOK_SECRET` is the `whsec_…` from step 1 and `STRIPE_SECRET_KEY` is the `sk_test_…` key.
+3. **Deploy**, then check:
+   - `POST /orders/<id>/pay` returns a `checkout.stripe.com` URL.
+   - Pay it with card `4242 4242 4242 4242`, any future expiry and any CVC.
+   - The order becomes `PAID` through the webhook, not through the redirect.
+
+---
+
+## Freeze checkout
+
+`CHECKOUT_WRITE_FREEZE=true` makes the gateway answer every `POST` to `/orders` and `/orders/*` (create, `/pay`, `/cancel`) with `503` and `Retry-After: 120`. Reads and `/webhooks/payment` are untouched, so a payment already in flight still lands. Use it while a change must not race an order write. It is off unless set, is set by hand, and is kept across every apply. The value is read when the gateway starts, so each change redeploys it.
+
+```bash
+# enable
+railway variable set CHECKOUT_WRITE_FREEZE=true --service gateway
+scripts/railway-wait-for-rollout.sh gateway
+curl -i -X POST https://<public domain>/orders
+curl -i -X POST https://<public domain>/orders/1/pay
+```
+
+Both probes must answer `503` with `Retry-After: 120`.
+
+```bash
+# disable
+railway variable set CHECKOUT_WRITE_FREEZE=false --service gateway
+scripts/railway-wait-for-rollout.sh gateway
+curl -i -X POST https://<public domain>/orders
+```
+
+The probe must no longer answer `503`; the api answers it, typically `401` without a token.
+
+If the public domain does not point at the gateway yet, probe through the gateway's temporary domain instead (see [Probe on a temporary domain](#probe-on-a-temporary-domain)).
 
 ---
 

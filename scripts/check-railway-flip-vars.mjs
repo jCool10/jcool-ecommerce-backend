@@ -11,7 +11,13 @@ const source = readFileSync(SOURCE_PATH, 'utf8');
 
 const REQUIRED = {
   'service(API_SERVICE': ['TRUST_PROXY'],
-  "service('gateway'": ['AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED', 'AUTH_WRITE_FREEZE', 'TRUSTED_PROXY_CIDRS'],
+  "service('gateway'": [
+    'AUTH_UPSTREAM',
+    'AUTH_UPSTREAM_REQUIRED',
+    'AUTH_WRITE_FREEZE',
+    'CHECKOUT_WRITE_FREEZE',
+    'TRUSTED_PROXY_CIDRS',
+  ],
 };
 
 function blockAfter(marker) {

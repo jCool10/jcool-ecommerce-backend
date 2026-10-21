@@ -31,6 +31,7 @@ const PRODUCED_EVENT_TYPES = Object.keys({
   'order.cancelled': true,
   'payment.succeeded': true,
   'payment.failed': true,
+  'payment.authorized': true,
   'catalog.product.changed': true,
   'catalog.category.renamed': true,
 } satisfies Record<
@@ -38,6 +39,7 @@ const PRODUCED_EVENT_TYPES = Object.keys({
   | 'order.placed'
   | 'payment.succeeded'
   | 'payment.failed'
+  | 'payment.authorized'
   | 'catalog.product.changed'
   | 'catalog.category.renamed',
   true
@@ -51,6 +53,18 @@ describe('DomainEventDispatcher', () => {
     const dispatcher = dispatcherWith();
 
     expect(PRODUCED_EVENT_TYPES.filter((type) => dispatcher.label(type) === 'unregistered')).toEqual([]);
+  });
+
+  it('consumes payment.authorized without touching the transaction', async () => {
+    const dispatcher = dispatcherWith();
+    const guarded = new Proxy({} as DrizzleTx, {
+      get: () => {
+        throw new Error('payment.authorized must not use the transaction');
+      },
+    });
+
+    await expect((await dispatcher.prepare(job('payment.authorized')))(guarded)).resolves.toBeUndefined();
+    expect(dispatcher.label('payment.authorized')).toBe('payment.authorized');
   });
 
   it('records an audit line for an order event it has nothing else to do for', async () => {

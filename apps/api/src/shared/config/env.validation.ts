@@ -390,6 +390,25 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsString()
   STRIPE_CANCEL_URL?: string;
 
+  // Zero is legal: the production-mode system stack runs against a fake Stripe with no floor.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(0)
+  PAYMENT_SESSION_MIN_TTL_SEC?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(0)
+  PAYMENT_SESSION_EXPIRY_MARGIN_SEC?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(500)
+  PAYMENT_CAPTURE_TIMEOUT_MS?: number;
+
   // The only way in: without it every token is refused, so it is required rather than optional.
   @IsUrl(HTTP_URL)
   AUTH_JWKS_URL!: string;
@@ -456,6 +475,10 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
     throw new Error(
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
     );
+  }
+  // Without a key the adapter fabricates sessions no buyer can pay, which only test and dev may run on.
+  if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
+    throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
   }
   return env;
 }

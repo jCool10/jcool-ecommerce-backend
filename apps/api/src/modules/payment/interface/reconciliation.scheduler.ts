@@ -6,7 +6,11 @@ import { PinoLogger } from 'nestjs-pino';
 import { requireIntConfig } from '@jcool/platform/config';
 import { runInJobContext, withSpan } from '@jcool/platform/observability';
 import { toError } from '@jcool/kernel';
-import { ReconcileStaleOrdersUseCase, type ReconcileInput } from '../application/use-cases';
+import {
+  ReconcileStaleOrdersUseCase,
+  ReconcileTccPaymentsUseCase,
+  type ReconcileInput,
+} from '../application/use-cases';
 
 const LOG_CONTEXT = 'ReconciliationScheduler';
 const INTERVAL_NAME = 'payment-reconcile-stale-orders';
@@ -26,6 +30,7 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly reconcileStaleOrders: ReconcileStaleOrdersUseCase,
+    private readonly reconcileTccPayments: ReconcileTccPaymentsUseCase,
     config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly cls: ClsService,
@@ -70,19 +75,34 @@ export class ReconciliationScheduler implements OnModuleInit, OnModuleDestroy {
       // correlation id there for readers with no tracing backend.
       await runInJobContext(this.cls, INTERVAL_NAME, () =>
         withSpan('payment.reconcile', async () => {
-          const summary = await this.reconcileStaleOrders.execute(this.sweep);
-          // Idle sweeps are the common case; logging them buries the ticks that did something.
-          if (summary.scanned > 0) {
-            this.logger.info({ ...summary }, 'reconciliation sweep completed');
-          }
+          await this.runSweep('orders', () => this.reconcileStaleOrders.execute(this.sweep));
+          await this.runSweep('participant', () =>
+            this.reconcileTccPayments.execute({
+              staleAfterSec: this.sweep.staleAfterSec,
+              batchSize: this.sweep.batchSize,
+            }),
+          );
         }),
       );
     } catch (error) {
-      // Per-order failures are already isolated, so this is the sweep itself breaking. Swallow it:
-      // an unhandled rejection in a timer kills the process.
-      this.logger.error({ err: toError(error) }, 'reconciliation sweep failed');
+      // Swallowed: an unhandled rejection in a timer kills the process.
+      this.logger.error({ err: toError(error) }, 'reconciliation tick failed');
     } finally {
       this.running = false;
+    }
+  }
+
+  // Per-payment failures are already isolated, so a throw here is the sweep itself breaking. Each
+  // sweep gets its own catch so one breaking never starves the other.
+  private async runSweep(sweep: string, run: () => Promise<{ scanned: number }>): Promise<void> {
+    try {
+      const summary = await run();
+      // Idle sweeps are the common case; logging them buries the ticks that did something.
+      if (summary.scanned > 0) {
+        this.logger.info({ sweep, ...summary }, 'reconciliation sweep completed');
+      }
+    } catch (error) {
+      this.logger.error({ sweep, err: toError(error) }, 'reconciliation sweep failed');
     }
   }
 }

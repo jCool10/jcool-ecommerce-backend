@@ -25,7 +25,7 @@ export class DrizzleWebhookEventRepository implements WebhookEventRepositoryPort
     const [inserted] = await executor
       .insert(webhookEvents)
       .values({
-        id: await mintOne(this.idGenerator),
+        id: input.id ?? (await mintOne(this.idGenerator)),
         provider: input.provider,
         providerEventId: input.providerEventId,
         type: input.type,

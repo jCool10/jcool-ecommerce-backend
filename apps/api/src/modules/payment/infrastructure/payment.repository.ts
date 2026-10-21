@@ -1,17 +1,20 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, notInArray, or } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx, isUniqueViolation } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
 import { Payment } from '../domain/payment.entity';
 import { PaymentStatus } from '../domain/payment-status';
+import { PaymentOrderStatus } from '../domain/payment-order-status';
 import {
   DuplicateActivePaymentError,
   type PaymentRepositoryPort,
   type UpdatePaymentStatusOptions,
 } from '../application/ports/payment-repository.port';
-import { payments } from './schema/payment.schema';
+import { paymentOrders, payments } from './schema/payment.schema';
 
 const ACTIVE_PAYMENT_INDEX = 'uq_payments_one_active_per_order';
+// Mirrors the active-payment index predicate.
+const RETIRED_STATUSES = [PaymentStatus.FAILED, PaymentStatus.EXPIRED];
 
 type PaymentRow = typeof payments.$inferSelect;
 
@@ -22,9 +25,9 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
-  async create(payment: Payment, tx?: DrizzleTx): Promise<Payment> {
+  async create(payment: Payment, tx?: DrizzleTx, mintedId?: string): Promise<Payment> {
     const executor = tx ?? this.db;
-    const id = await mintOne(this.idGenerator);
+    const id = mintedId ?? (await mintOne(this.idGenerator));
     try {
       const [row] = await executor
         .insert(payments)
@@ -98,6 +101,53 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     const [row] = await executor.update(payments).set(patch).where(where).returning();
     return row ? toDomain(row) : null;
   }
+
+  async findActiveByOrderIdForUpdate(tx: DrizzleTx, orderId: string): Promise<Payment | null> {
+    const [row] = await tx
+      .select()
+      .from(payments)
+      .where(and(eq(payments.orderId, orderId), notInArray(payments.status, RETIRED_STATUSES)))
+      .for('update');
+    return row ? toDomain(row) : null;
+  }
+
+  async findStaleTcc(options: { updatedBefore: Date; limit: number }): Promise<Payment[]> {
+    const rows = await this.db
+      .select({ payment: payments })
+      .from(payments)
+      .innerJoin(paymentOrders, eq(paymentOrders.orderId, payments.orderId))
+      .where(
+        and(
+          lt(payments.updatedAt, options.updatedBefore),
+          or(
+            eq(payments.status, PaymentStatus.PENDING),
+            and(
+              eq(payments.status, PaymentStatus.AUTHORIZED),
+              inArray(paymentOrders.status, [PaymentOrderStatus.CANCELLED, PaymentOrderStatus.FENCED]),
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(payments.updatedAt), asc(payments.id))
+      .limit(options.limit);
+    return rows.map(({ payment }) => toDomain(payment));
+  }
+
+  async bumpUpdatedAt(id: string, expectedStatus: PaymentStatus): Promise<void> {
+    await this.db
+      .update(payments)
+      .set({ updatedAt: new Date() })
+      .where(and(eq(payments.id, id), eq(payments.status, expectedStatus)));
+  }
+
+  async incrementKeyGen(id: string, expectedGen: number): Promise<boolean> {
+    const rows = await this.db
+      .update(payments)
+      .set({ stripeKeyGen: expectedGen + 1 })
+      .where(and(eq(payments.id, id), eq(payments.stripeKeyGen, expectedGen)))
+      .returning({ id: payments.id });
+    return rows.length === 1;
+  }
 }
 
 function toDomain(row: PaymentRow): Payment {
@@ -110,5 +160,6 @@ function toDomain(row: PaymentRow): Payment {
     amountMinor: row.amountMinor,
     currency: row.currency,
     status: row.status,
+    stripeKeyGen: row.stripeKeyGen,
   });
 }

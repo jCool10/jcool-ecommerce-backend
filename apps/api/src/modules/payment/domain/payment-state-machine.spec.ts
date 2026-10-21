@@ -6,6 +6,11 @@ const WIRED_TRANSITIONS: ReadonlyArray<[PaymentStatus, PaymentStatus]> = [
   [PaymentStatus.PENDING, PaymentStatus.SUCCEEDED],
   [PaymentStatus.PENDING, PaymentStatus.FAILED],
   [PaymentStatus.PENDING, PaymentStatus.EXPIRED],
+  [PaymentStatus.PENDING, PaymentStatus.AUTHORIZED],
+  [PaymentStatus.PENDING, PaymentStatus.VOIDED],
+  [PaymentStatus.AUTHORIZED, PaymentStatus.SUCCEEDED],
+  [PaymentStatus.AUTHORIZED, PaymentStatus.VOIDED],
+  [PaymentStatus.AUTHORIZED, PaymentStatus.FAILED],
 ];
 
 function isWired(from: PaymentStatus, to: PaymentStatus): boolean {
@@ -22,11 +27,21 @@ describe('payment state machine', () => {
   });
 
   it('rejects every transition out of a terminal state', () => {
-    for (const terminal of [PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.EXPIRED]) {
+    const terminals = [PaymentStatus.SUCCEEDED, PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.VOIDED];
+    for (const terminal of terminals) {
       for (const to of PAYMENT_STATUSES) {
         expect(canTransition(terminal, to)).toBe(false);
       }
     }
+  });
+
+  it.each([
+    [PaymentStatus.SUCCEEDED, PaymentStatus.VOIDED],
+    [PaymentStatus.VOIDED, PaymentStatus.SUCCEEDED],
+    [PaymentStatus.FAILED, PaymentStatus.AUTHORIZED],
+    [PaymentStatus.EXPIRED, PaymentStatus.AUTHORIZED],
+  ])('never lets money move back: %s → %s is refused', (from, to) => {
+    expect(() => assertTransition(from, to)).toThrow(PaymentTransitionError);
   });
 
   it('throws PaymentTransitionError carrying the from/to for an illegal transition', () => {

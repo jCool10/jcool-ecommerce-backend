@@ -8,6 +8,7 @@ import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment
 import type { WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import type { TransactionRunnerPort } from '../ports/transaction-runner.port';
 import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';
+import type { ProcessTccWebhookEventUseCase, TccWebhookResult } from './process-tcc-webhook-event.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PAYMENT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
@@ -62,7 +63,12 @@ function eventRow(): WebhookEvent {
   });
 }
 
-function build(opts: { verify?: VerifiedEvent; inserted?: boolean; existing?: Payment | null }) {
+function build(opts: {
+  verify?: VerifiedEvent;
+  inserted?: boolean;
+  existing?: Payment | null;
+  tcc?: TccWebhookResult | null;
+}) {
   const insertIfNew = vi.fn().mockResolvedValue({ inserted: opts.inserted ?? true, event: eventRow() });
   const markProcessed = vi.fn().mockResolvedValue(undefined);
   const markSkipped = vi.fn().mockResolvedValue(undefined);
@@ -78,6 +84,7 @@ function build(opts: { verify?: VerifiedEvent; inserted?: boolean; existing?: Pa
     run: vi.fn().mockImplementation((work: (t: unknown) => unknown) => work(tx)),
   } as unknown as TransactionRunnerPort;
   const append = vi.fn<OutboxWriterPort['append']>().mockResolvedValue(undefined);
+  const tccExecute = vi.fn<ProcessTccWebhookEventUseCase['execute']>().mockResolvedValue(opts.tcc ?? null);
 
   const useCase = new ProcessWebhookEventUseCase(
     txRunner,
@@ -85,14 +92,50 @@ function build(opts: { verify?: VerifiedEvent; inserted?: boolean; existing?: Pa
     webhookEvents,
     fakePaymentRepository({ findByProviderSessionId, updateStatus }),
     { append },
+    { execute: tccExecute } as unknown as ProcessTccWebhookEventUseCase,
   );
-  return { useCase, tx, insertIfNew, markProcessed, markSkipped, findByProviderSessionId, updateStatus, append };
+  return {
+    useCase,
+    tx,
+    insertIfNew,
+    markProcessed,
+    markSkipped,
+    findByProviderSessionId,
+    updateStatus,
+    append,
+    tccExecute,
+  };
 }
 
 const RAW = Buffer.from('{}');
 const HEADERS: Record<string, string> = {};
 
 describe('ProcessWebhookEventUseCase', () => {
+  it('hands a participant payment to the TCC path and never settles it here', async () => {
+    const tcc: TccWebhookResult = {
+      path: 'tcc',
+      outcome: 'processed',
+      orderId: ORDER_ID,
+      providerEventId: 'evt_1',
+      eventType: 'checkout.session.completed',
+    };
+    const { useCase, tccExecute, insertIfNew, updateStatus, append } = build({ tcc });
+
+    await expect(useCase.execute(RAW, HEADERS)).resolves.toBe(tcc);
+
+    expect(tccExecute).toHaveBeenCalledWith(expect.objectContaining({ kind: 'valid', providerEventId: 'evt_1' }));
+    expect(insertIfNew).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it('never asks the TCC path about a delivery that failed verification', async () => {
+    const { useCase, tccExecute } = build({ verify: { kind: 'invalid_signature' } });
+
+    await useCase.execute(RAW, HEADERS);
+    expect(tccExecute).not.toHaveBeenCalled();
+  });
+
   it('settles and emits in the one transaction that recorded the delivery', async () => {
     const { useCase, tx, insertIfNew, findByProviderSessionId, updateStatus, markProcessed, append } = build({
       verify: stripeEvent('checkout.session.completed', { intentId: 'pi_123' }),
@@ -142,7 +185,7 @@ describe('ProcessWebhookEventUseCase', () => {
       'no amount': { verify: completed({ amountMinor: null }) },
     };
 
-    const results: Record<string, WebhookProcessResult> = {};
+    const results: Record<string, WebhookProcessResult | TccWebhookResult> = {};
     const outcomes = await Promise.all(
       Object.entries(deliveries).map(async ([label, opts]) => {
         const { useCase, insertIfNew, updateStatus, markProcessed, markSkipped, append } = build(opts);

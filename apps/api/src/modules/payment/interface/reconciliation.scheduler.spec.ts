@@ -3,7 +3,12 @@ import type { ClsService } from 'nestjs-cls';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ReconcileStaleOrdersUseCase, ReconcileSummary } from '../application/use-cases';
+import type {
+  ReconcileStaleOrdersUseCase,
+  ReconcileSummary,
+  ReconcileTccPaymentsUseCase,
+  ReconcileTccSummary,
+} from '../application/use-cases';
 import { ReconciliationScheduler } from './reconciliation.scheduler';
 
 const CONFIG: Record<string, unknown> = {
@@ -24,18 +29,25 @@ const IDLE: ReconcileSummary = {
   errors: 0,
 };
 
-function build(overrides: Record<string, unknown> = {}, execute = vi.fn().mockResolvedValue(IDLE)) {
+const IDLE_TCC: ReconcileTccSummary = { scanned: 0, recorded: 0, expired: 0, voided: 0, deferred: 0, errors: 0 };
+
+function build(
+  overrides: Record<string, unknown> = {},
+  execute = vi.fn().mockResolvedValue(IDLE),
+  executeTcc = vi.fn().mockResolvedValue(IDLE_TCC),
+) {
   const registry = { addInterval: vi.fn(), deleteInterval: vi.fn(), doesExist: vi.fn().mockReturnValue(true) };
   const error = vi.fn();
   const make = () =>
     new ReconciliationScheduler(
       { execute } as unknown as ReconcileStaleOrdersUseCase,
+      { execute: executeTcc } as unknown as ReconcileTccPaymentsUseCase,
       fakeConfigService({ ...CONFIG, ...overrides }),
       registry as unknown as SchedulerRegistry,
       { run: (fn: () => unknown) => fn(), set: vi.fn() } as unknown as ClsService,
       fakePinoLogger({ error }),
     );
-  return { make, registry, error, execute };
+  return { make, registry, error, execute, executeTcc };
 }
 
 describe('ReconciliationScheduler', () => {
@@ -71,6 +83,24 @@ describe('ReconciliationScheduler', () => {
     expect(registry.addInterval).toHaveBeenCalledWith('payment-reconcile-stale-orders', expect.anything());
     expect(vi.getTimerCount()).toBe(1);
     expect(execute).toHaveBeenCalledWith({ staleAfterSec: 120, ttlSec: 900, batchSize: 50 });
+  });
+
+  it('runs the participant sweep in the same tick, after the order sweep', async () => {
+    const { make, execute, executeTcc } = build();
+
+    await make().tick();
+
+    expect(executeTcc).toHaveBeenCalledWith({ staleAfterSec: 120, batchSize: 50 });
+    expect(execute.mock.invocationCallOrder[0]).toBeLessThan(executeTcc.mock.invocationCallOrder[0]);
+  });
+
+  it('still runs the participant sweep when the order sweep fails', async () => {
+    const { make, error, executeTcc } = build({}, vi.fn().mockRejectedValue(new Error('orders query failed')));
+
+    await make().tick();
+
+    expect(executeTcc).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledOnce();
   });
 
   it('registers nothing at all when disabled', () => {

@@ -93,6 +93,8 @@ export class DomainEventDispatcher {
       // transaction moved money and nothing else, leaving the order still to settle.
       ['payment.succeeded', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
       ['payment.failed', inTransaction((job, tx) => paymentEvents.settle(job, tx))],
+      // No consumer yet; only tests emit it until checkout runs on the payment participant.
+      ['payment.authorized', inTransaction(() => Promise.resolve())],
       ['catalog.product.changed', beforeClaim((job) => productChanged.apply(job))],
       ['catalog.category.renamed', beforeClaim((job) => categoryRenamed.apply(job))],
     ]);

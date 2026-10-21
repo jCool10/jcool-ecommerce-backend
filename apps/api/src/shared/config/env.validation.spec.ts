@@ -16,9 +16,14 @@ const BASE_ENV = {
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
 };
 
+const STRIPE_ENV = {
+  STRIPE_SECRET_KEY: 'sk_test_not_a_real_key_0000',
+  STRIPE_SUCCESS_URL: 'https://shop.example.test/payments/success?session_id={CHECKOUT_SESSION_ID}',
+};
+
 describe('env validation', () => {
   it('refuses to boot in production until TRUST_PROXY is set to anything', () => {
-    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production };
+    const production = { ...BASE_ENV, ...STRIPE_ENV, NODE_ENV: NodeEnv.Production };
 
     expect(() => validate(production)).toThrow(/TRUST_PROXY/);
     for (const value of ['fd12::/16', '1', 'false']) {
@@ -28,6 +33,38 @@ describe('env validation', () => {
 
   it('leaves TRUST_PROXY optional outside production', () => {
     expect(() => validate(BASE_ENV)).not.toThrow();
+  });
+
+  it('refuses to boot in production without a Stripe key and success URL', () => {
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
+
+    expect(() => validate(production)).toThrow(/STRIPE_SECRET_KEY/);
+    expect(() => validate({ ...production, STRIPE_SECRET_KEY: STRIPE_ENV.STRIPE_SECRET_KEY })).toThrow(
+      /STRIPE_SUCCESS_URL/,
+    );
+    expect(() => validate({ ...production, ...STRIPE_ENV })).not.toThrow();
+  });
+
+  it('lets test and development run offline without Stripe', () => {
+    expect(() => validate(BASE_ENV)).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, NODE_ENV: NodeEnv.Development })).not.toThrow();
+  });
+
+  it('bounds the payment session floor and the capture timeout', () => {
+    const cases: Array<[string, string, boolean]> = [
+      ['PAYMENT_SESSION_MIN_TTL_SEC', '-1', false],
+      ['PAYMENT_SESSION_MIN_TTL_SEC', '0', true],
+      ['PAYMENT_SESSION_EXPIRY_MARGIN_SEC', '-1', false],
+      ['PAYMENT_SESSION_EXPIRY_MARGIN_SEC', '0', true],
+      ['PAYMENT_CAPTURE_TIMEOUT_MS', '499', false],
+      ['PAYMENT_CAPTURE_TIMEOUT_MS', '500', true],
+      ['PAYMENT_CAPTURE_TIMEOUT_MS', '1e4', false],
+    ];
+    for (const [key, value, valid] of cases) {
+      const run = () => validate({ ...BASE_ENV, [key]: value });
+      if (valid) expect(run, `${key}=${value}`).not.toThrow();
+      else expect(run, `${key}=${value}`).toThrow(new RegExp(key));
+    }
   });
 
   // Without any one of these the api boots and then refuses every caller.

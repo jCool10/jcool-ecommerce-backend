@@ -37,6 +37,7 @@ import {
   MESSAGING_PUBLISH_TOTAL,
   ORDERS_CREATED_TOTAL,
   ORDER_VALUE_MINOR,
+  PAYMENT_CAPTURE_CONFLICT_TOTAL,
   PAYMENT_REFUND_OWED_TOTAL,
   RATE_LIMIT_REJECTIONS_TOTAL,
   RESERVATION_EXPIRY_TOTAL,
@@ -86,6 +87,7 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(RATE_LIMIT_REJECTIONS_TOTAL) private readonly rateLimitRejections: Counter<string>,
     @InjectMetric(SESSION_EPOCH_LOOKUPS_TOTAL) private readonly sessionEpochLookups: Counter<string>,
     @InjectMetric(TCC_BRANCH_TOTAL) private readonly tccBranches: Counter<string>,
+    @InjectMetric(PAYMENT_CAPTURE_CONFLICT_TOTAL) private readonly captureConflicts: Counter<string>,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
@@ -192,6 +194,10 @@ export class BusinessMetrics implements MetricsPort {
 
   recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void {
     this.safely('tcc_branch', () => this.tccBranches.inc({ participant, op, outcome }));
+  }
+
+  recordCaptureConflict(): void {
+    this.safely('payment_capture_conflict', () => this.captureConflicts.inc());
   }
 
   // Swallow-and-log: a telemetry error is logged (so it's not invisible) but never rethrown.

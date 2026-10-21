@@ -9,7 +9,29 @@ export interface CreateSessionInput {
   // Passed to the gateway's own idempotency mechanism when it has one (Stripe: Idempotency-Key
   // header) so a retried session-create call returns the same session instead of a duplicate.
   idempotencyKey?: string;
+  /** `manual` only authorizes the card; the money moves on a later capture. */
+  captureMethod?: 'automatic' | 'manual';
+  /** Defaults to the shortest lifetime the gateway accepts. */
+  expiresAt?: Date;
 }
+
+export type IntentStatus =
+  'requires_capture' | 'succeeded' | 'canceled' | 'processing' | 'requires_payment_method' | 'other';
+
+/** A session read together with its PaymentIntent, which is where a manual-capture hold shows. */
+export interface SessionAuthorization {
+  /** `unknown` covers a handle the gateway never issued and the offline adapter. */
+  sessionStatus: 'open' | 'complete' | 'expired' | 'unknown';
+  redirectUrl?: string;
+  intentId?: string;
+  intentStatus?: IntentStatus;
+  amountCapturableMinor?: number;
+  currency?: string;
+}
+
+export type CaptureIntentResult = { kind: 'captured' } | { kind: 'not_capturable'; intentStatus: IntentStatus };
+
+export type VoidIntentOutcome = 'voided' | 'already_canceled' | 'already_captured';
 
 export interface GatewaySession {
   providerSessionId: string; // handle persisted on Payment (Stripe: cs_...)
@@ -78,15 +100,30 @@ export interface PaymentGatewayPort {
    * human a look.
    */
   expireSession(ref: string): Promise<ExpireSessionOutcome>;
+
+  // The participant path. Never answers a hold or a capture it has not seen: offline or unsure, it
+  // reports `unknown` or throws.
+  retrieveAuthorization(sessionRef: string): Promise<SessionAuthorization>;
+  /** The key must stay the same across every retry of one capture; see `retryWithFreshKey`. */
+  captureIntent(intentId: string, idempotencyKey: string): Promise<CaptureIntentResult>;
+  voidIntent(intentId: string, idempotencyKey: string): Promise<VoidIntentOutcome>;
 }
 
 // An upstream provider fault (→ 502), kept distinct from the domain 4xx a bad request raises.
 export class PaymentGatewayError extends Error {
+  /**
+   * The gateway stored a failure under the idempotency key while provably not applying the call, so
+   * resending the same key can only replay that failure.
+   */
+  readonly retryWithFreshKey: boolean;
+
   constructor(
     message: string,
     readonly cause?: unknown,
+    options: { retryWithFreshKey?: boolean } = {},
   ) {
     super(message);
     this.name = 'PaymentGatewayError';
+    this.retryWithFreshKey = options.retryWithFreshKey ?? false;
   }
 }

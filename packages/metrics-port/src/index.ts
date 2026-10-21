@@ -126,4 +126,6 @@ export interface MetricsPort {
   recordMediaBytesReclaimed(bytes: number): void;
   recordSessionEpochLookup(result: SessionEpochLookupResult): void;
   recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void;
+  /** Money was captured on a payment the order had already cancelled. Each one needs a human. */
+  recordCaptureConflict(): void;
 }

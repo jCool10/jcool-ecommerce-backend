@@ -1,6 +1,6 @@
 import { assertNonEmpty, assertPositive, Money } from '@jcool/kernel';
 import { PaymentStatus } from './payment-status';
-import { assertTransition } from './payment-state-machine';
+import { assertTransition, PaymentTransitionError } from './payment-state-machine';
 
 /**
  * Pure: no framework/DB imports. `amountMinor` is a frozen snapshot of the order total (integer minor
@@ -16,6 +16,8 @@ export class Payment {
     public readonly amountMinor: number,
     public readonly currency: string,
     public readonly status: PaymentStatus,
+    /** Generation of the Stripe idempotency keys for capture/void; moves only when Stripe provably did not apply one. */
+    public readonly stripeKeyGen: number,
   ) {}
 
   static create(props: {
@@ -43,6 +45,7 @@ export class Payment {
       money.amountMinor,
       money.currency,
       PaymentStatus.PENDING,
+      0,
     );
   }
 
@@ -56,6 +59,7 @@ export class Payment {
     amountMinor: number;
     currency: string;
     status: PaymentStatus;
+    stripeKeyGen?: number;
   }): Payment {
     return new Payment(
       props.id,
@@ -66,6 +70,7 @@ export class Payment {
       props.amountMinor,
       props.currency,
       props.status,
+      props.stripeKeyGen ?? 0,
     );
   }
 
@@ -89,6 +94,24 @@ export class Payment {
     return this.withStatus(PaymentStatus.EXPIRED);
   }
 
+  markAuthorized(providerIntentId: string): Payment {
+    assertTransition(this.status, PaymentStatus.AUTHORIZED);
+    return this.withStatus(PaymentStatus.AUTHORIZED, providerIntentId);
+  }
+
+  /** Narrower than `markSucceeded`: only a hold can be captured. */
+  markCaptured(): Payment {
+    if (this.status !== PaymentStatus.AUTHORIZED) {
+      throw new PaymentTransitionError(this.status, PaymentStatus.SUCCEEDED);
+    }
+    return this.withStatus(PaymentStatus.SUCCEEDED);
+  }
+
+  markVoided(providerIntentId?: string | null): Payment {
+    assertTransition(this.status, PaymentStatus.VOIDED);
+    return this.withStatus(PaymentStatus.VOIDED, providerIntentId);
+  }
+
   private withStatus(status: PaymentStatus, providerIntentId?: string | null): Payment {
     return new Payment(
       this.id,
@@ -99,6 +122,7 @@ export class Payment {
       this.amountMinor,
       this.currency,
       status,
+      this.stripeKeyGen,
     );
   }
 }

@@ -90,6 +90,12 @@ export default () => ({
     // cancel default below is not guarded that way, but it is reached before any money moves.
     successUrl: process.env.STRIPE_SUCCESS_URL,
     cancelUrl: process.env.STRIPE_CANCEL_URL ?? 'http://localhost:3000/payments/cancel',
+    // Stripe refuses a Checkout Session living under 30 minutes, measured on its clock at receipt, so
+    // the margin absorbs the network hop and any skew. Every session-opening path reads the floor here.
+    sessionMinTtlSec: parseIntOr(process.env.PAYMENT_SESSION_MIN_TTL_SEC, 1_800),
+    sessionExpiryMarginSec: parseIntOr(process.env.PAYMENT_SESSION_EXPIRY_MARGIN_SEC, 120),
+    // The only bound on one capture/void/expire/retrieve call: the Stripe SDK takes no AbortSignal.
+    captureTimeoutMs: parseIntOr(process.env.PAYMENT_CAPTURE_TIMEOUT_MS, 10_000),
   },
   reconcile: {
     // Off for e2e suites, which drive the use case directly, and for one-off job containers.

@@ -1,7 +1,12 @@
 import Stripe from 'stripe';
 import { describe, expect, it } from 'vitest';
 import { PaymentGatewayError } from '../../application/ports/payment-gateway.port';
-import { isSessionNotOpen, isStripeUnavailable } from './stripe-fault-classification';
+import {
+  isSessionNotOpen,
+  isStripeServerError,
+  isStripeUnavailable,
+  isUnexpectedIntentState,
+} from './stripe-fault-classification';
 
 const stripeError = (type: string, statusCode: number): Stripe.errors.StripeError =>
   Stripe.errors.StripeError.generate({ type, statusCode, message: `${type} ${statusCode}` } as never);
@@ -59,5 +64,33 @@ describe('isSessionNotOpen', () => {
     ];
 
     expect(faults.map(isSessionNotOpen)).toEqual([false, false, false, false, false, false]);
+  });
+});
+
+// A 409 (same key in flight), a 429 and a timeout say nothing about whether the call landed.
+describe('capture and void outcomes', () => {
+  it('treats only a 5xx as an answer Stripe may have stored under the key', () => {
+    const faults = [
+      stripeError('api_error', 500),
+      stripeError('api_error', 503),
+      stripeError('idempotency_error', 409),
+      stripeError('rate_limit_error', 429),
+      stripeError('invalid_request_error', 400),
+      transportFailure(),
+    ];
+
+    expect(faults.map(isStripeServerError)).toEqual([true, true, false, false, false, false]);
+  });
+
+  it('recognises a refusal because the intent already moved on', () => {
+    const unexpected = Stripe.errors.StripeError.generate({
+      type: 'invalid_request_error',
+      statusCode: 400,
+      code: 'payment_intent_unexpected_state',
+      message: 'This PaymentIntent could not be captured because it has a status of canceled.',
+    });
+
+    expect(isUnexpectedIntentState(unexpected)).toBe(true);
+    expect(isUnexpectedIntentState(stripeError('invalid_request_error', 400))).toBe(false);
   });
 });

@@ -211,6 +211,13 @@
       "when": 1792506991898,
       "tag": "0029_reservation_orders_fence",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792511947011,
+      "tag": "0030_payment_orders_fence",
+      "breakpoints": true
     }
   ]
 }

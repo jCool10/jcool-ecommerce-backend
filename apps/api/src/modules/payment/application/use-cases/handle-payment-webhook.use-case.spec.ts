@@ -5,6 +5,7 @@ import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { PaymentStatus } from '../../domain/payment-status';
 import { HandlePaymentWebhookUseCase } from './handle-payment-webhook.use-case';
 import type { ProcessWebhookEventUseCase, WebhookProcessResult } from './process-webhook-event.use-case';
+import type { TccWebhookResult } from './process-tcc-webhook-event.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const RAW = Buffer.from('{}');
@@ -20,7 +21,10 @@ function settled(status: PaymentStatus): WebhookProcessResult {
   };
 }
 
-function build(process: WebhookProcessResult, finalize = () => Promise.resolve<unknown>({ status: 'finalized' })) {
+function build(
+  process: WebhookProcessResult | TccWebhookResult,
+  finalize = () => Promise.resolve<unknown>({ status: 'finalized' }),
+) {
   const finalizeExec = vi.fn().mockImplementation(finalize);
   const metrics = fakeMetricsPort();
   const error = vi.fn();
@@ -36,6 +40,26 @@ function build(process: WebhookProcessResult, finalize = () => Promise.resolve<u
 // No sweep picks these up (reconcile's queue is orders still PENDING), so money that moved with no
 // order moving is a refund decision, not a wait-and-see.
 describe('HandlePaymentWebhookUseCase', () => {
+  // The saga owns a participant order; finalizing here would race it.
+  it('leaves the order of a participant payment alone, whatever the outcome', async () => {
+    const outcomes = ['processed', 'skipped', 'duplicate'] as const;
+
+    for (const outcome of outcomes) {
+      const tcc: TccWebhookResult = {
+        path: 'tcc',
+        outcome,
+        orderId: ORDER_ID,
+        providerEventId: 'evt_1',
+        eventType: 'checkout.session.completed',
+      };
+      const { useCase, finalizeExec, metrics } = build(tcc);
+
+      await expect(useCase.execute(RAW, HEADERS)).resolves.toBe(tcc);
+      expect(finalizeExec).not.toHaveBeenCalled();
+      expect(metrics.recordRefundOwed).not.toHaveBeenCalled();
+    }
+  });
+
   it('books a refund when a settled success moves no order', async () => {
     const cases: Array<[PaymentStatus, string]> = [
       [PaymentStatus.SUCCEEDED, 'not_found'],

@@ -10,6 +10,7 @@ import { chargeMatchesPayment } from '../mappers/charge-matches-payment';
 import { mapEventToOutcome } from '../mappers/map-event-to-outcome';
 import { readCheckoutSession } from '../mappers/read-checkout-session';
 import { toSettledOutboxRecord } from '../payment-outbox.mapper';
+import { ProcessTccWebhookEventUseCase, type TccWebhookResult } from './process-tcc-webhook-event.use-case';
 
 /**
  * `rejected` is the only non-2xx result (verify failed, nothing persisted); every other outcome means
@@ -51,14 +52,19 @@ export class ProcessWebhookEventUseCase {
     @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEventRepo: WebhookEventRepositoryPort,
     @Inject(PAYMENT_REPOSITORY) private readonly paymentRepo: PaymentRepositoryPort,
     @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
+    private readonly tccWebhookEvent: ProcessTccWebhookEventUseCase,
   ) {}
 
-  async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult> {
+  async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult | TccWebhookResult> {
     // Verify BEFORE any DB write — a forged or replayed body must never reach the event log.
     const verified = this.paymentGateway.verifyAndParseEvent(rawBody, headers);
     if (verified.kind !== 'valid') {
       return { outcome: 'rejected', reason: verified.kind };
     }
+    // A payment opened by the participant is decided there, before any of the logic below.
+    const tcc = await this.tccWebhookEvent.execute(verified);
+    if (tcc) return tcc;
+
     const delivery = { providerEventId: verified.providerEventId, eventType: verified.type };
 
     return this.transactionRunner.run(async (tx) => {
