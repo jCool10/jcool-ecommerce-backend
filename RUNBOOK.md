@@ -28,6 +28,8 @@ Conventions used below:
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
 - [The id-service's etcd](#the-id-services-etcd)
+- [Operate Temporal](#operate-temporal)
+- [Temporal down](#temporal-down)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
@@ -889,6 +891,98 @@ A new volume, or a keyspace wiped by hand, has no `initialized` marker, and the 
 2. **Lift the floors** from a replica's shell: `node dist/lease/lift-floors-cli.js`. It refuses while any node is held, writes the marker last, and the replicas claim within a second of it.
 
 With the replicas stopped (`railway down --service id-service --yes`) the wait still applies, and the next deploy's pre-deploy step does the lift.
+
+---
+
+## Operate Temporal
+
+`temporal` is a single Temporal server declared in `.railway/railway.ts`, built from `infra/temporal/` (`temporalio/server:1.32.1` plus the CLI and schema tools of `temporalio/admin-tools:1.32.1`). Its histories and visibility live in the `temporal-postgres` database, in the `temporal` and `temporal_visibility` databases. The api's `CheckoutSagaWorker` polls the task queue `checkout-saga` in the namespace `jcool`. Checkout runs dark for now: no route starts a saga, so the worker polls an empty queue and the workflow count stays 0.
+
+Like etcd and Elasticsearch it is outside `cd.yml` and has no repo source. A change to `infra/temporal/` deploys from the repo root with `railway up --ci --service temporal`, then `scripts/railway-wait-for-rollout.sh temporal`.
+
+What it depends on:
+
+- **No public surface, ever.** The frontend speaks gRPC on 7233 with no auth and no TLS: anything on the private network can start, signal or terminate a workflow. So: no domain and no TCP proxy. The frontend's HTTP API (7243) is left out of the server config (`infra/temporal/config/config_template.yaml`), and `netstat -ltn` in the container must never list 7243. There is no healthcheck path either, because Railway's probe is HTTP.
+- **The entrypoint does the bootstrap** (`infra/temporal/entrypoint.sh`) on every boot, and each step is safe to repeat. It creates both databases, sets up and updates their schema, creates the namespace or resets its retention to `TEMPORAL_NAMESPACE_RETENTION` (7d), and creates the search attributes `CheckoutStep` (Keyword) and `CheckoutDeadlineAt` (Datetime). Each step has a time limit, and a failed step exits 1 so Railway restarts the container. A good boot logs `temporal-bootstrap: schema ready`, then `temporal-bootstrap: namespace jcool ready (retention 7d)`.
+- **It binds `::`.** Railway's private network is IPv6-only. The server refuses a wildcard bind without a broadcast address, so the entrypoint takes the first address of `hostname -i`.
+- **`NUM_HISTORY_SHARDS` is 4 for the life of `temporal-postgres`.** The first boot records it in the database. Another value needs a new, empty database: drain first (below).
+- **Upgrades go one minor version at a time.** Bump `temporalio/server` and `temporalio/admin-tools` together in `infra/temporal/Dockerfile`, and back up first: the boot runs `update-schema`. Then compare the image's embedded config template with `config_template.yaml`, which is a copy of it without the frontend's `httpPort`.
+
+### Check it
+
+In the service's shell (`railway ssh --service temporal`):
+
+```sh
+# container (temporal); `::` also accepts 127.0.0.1
+t() { temporal --address 127.0.0.1:7233 "$@"; }
+t operator cluster health                                                  # SERVING
+t operator cluster describe --detail                                       # history shard count (4) and server version
+hostname -i                                                                # its first address is the one the cluster advertises
+t operator namespace describe --namespace jcool                            # WorkflowExecutionRetentionTtl 168h0m0s
+t operator search-attribute list --namespace jcool                         # CheckoutStep Keyword, CheckoutDeadlineAt Datetime
+t task-queue describe --task-queue checkout-saga --namespace jcool         # the api's pollers, workflow and activity
+t workflow count --namespace jcool --query 'ExecutionStatus="Running"'
+netstat -ltn                                                               # 7233 and the cluster's own ports; never 7243
+```
+
+The image has busybox `netstat`, not `ss`.
+
+### Back up `temporal-postgres`
+
+It holds every open saga. Back it up before an upgrade, and before anything that replaces the database. Run [Back up](#back-up) twice against the database's connection URL (Variables tab of `temporal-postgres`), with the path set to `/temporal` and then to `/temporal_visibility`. A restore rewinds every open run to the dump, while the stock and payment headers have moved on since. So right after a restore, check each running saga's headers as in [Temporal down](#temporal-down).
+
+### Changing the workflow while runs are open
+
+A run replays its history on every worker that picks it up, so a change to `checkout-saga.workflow.ts` or to anything it imports must stay deterministic for the histories already recorded. `checkout-saga.replay.spec.ts` replays the ones in `replay-histories/` in the unit suite, and a change that breaks it would break every open run. To keep such a change:
+
+- **guard the new branch with `patched('<change-name>')`**, so old runs keep their old path; or
+- **drain first**: [freeze checkout](#freeze-checkout), wait for the running count above to reach 0, deploy, then unfreeze. A saga lives up to `CHECKOUT_PAYMENT_DEADLINE_SEC` + `SAGA_AUTH_GRACE_SEC` (about an hour), longer while a compensation keeps failing.
+
+Then record the histories again, so the next change is checked against this one: `CHECKOUT_SAGA_HISTORY_OUT=src/modules/order/infrastructure/temporal/replay-histories pnpm -C apps/api test:e2e checkout-saga-workflow`.
+
+### The shutdown budget
+
+The api holds the worker, so after SIGTERM it runs these steps in order: readiness goes down, then it holds for `SHUTDOWN_GRACE_PERIOD_MS`, drains the Temporal worker (`TEMPORAL_WORKER_SHUTDOWN_GRACE_MS` + `TEMPORAL_WORKER_SHUTDOWN_FORCE_MS` + 1000), closes the BullMQ worker (two waits of 5000, then 1000 for the Redis quit), and closes the pools last. Those steps must end at least a second before `drainingSeconds`: 5000 + 4000 + 4000 + 1000 + 2 × 5000 + 1000 = 25000 ≤ 30 × 1000 − 1000. Raise `drainingSeconds` in `.railway/railway.ts` in the same change that raises any of those three variables. Past it, Railway kills the process mid-drain, and the BullMQ jobs it held stay active until stalled-job recovery picks them up.
+
+Two waits sit outside the steps and are not in that sum. Before them, the outbox relay waits up to 5000 for an open tick to commit. After them, the telemetry flush waits up to 3000, and then the Redis and pg pools close; the pg close also waits for a connection that an activity abandoned at the force deadline still holds, which only the participant's own timeouts (`PAYMENT_CAPTURE_TIMEOUT_MS` per gateway call) bound. When every bounded wait runs to its limit, the total is 33000, which is past the 30000 that `drainingSeconds` allows. That only happens when Postgres or Redis hangs during the deploy. The kill then lands in the telemetry flush, so the spans from the drain window are lost; an open transaction is rolled back with its connection, as with any kill.
+
+---
+
+## Temporal down
+
+**How it shows.**
+
+- The api logs `checkout saga worker unavailable; retrying with backoff` at most once a minute, with the error and the address.
+- If the image lacks the workflow bundle, it logs `checkout saga worker cannot start without its bundle` instead.
+- `task-queue describe` ([Check it](#check-it)) lists no poller from the api.
+- No alert covers this yet.
+
+`/health/ready` stays 200, by design: the api's readiness leaves Temporal out, so an outage never takes the api out of rotation. A freeze and a rollback both still deploy.
+
+**What it stops.** While checkout runs dark, nothing a user sees. Open runs wait where they are, since their state is in `temporal-postgres`. Once the server answers, the worker reconnects on its own (backoff up to 30s), and timers that fell due meanwhile fire at once.
+
+**If checkout must not take orders meanwhile**, [freeze checkout](#freeze-checkout). It only redeploys the gateway.
+
+**Rollback** is a forward commit that takes `CheckoutSagaWorker`, the engine and `temporalProviders` out of `OrderModule`. It deploys like any other commit, Temporal or not. Keep `.railway/railway.ts`, migration 0031 and `infra/temporal/`, and approve no destroy.
+
+**Terminate only once Temporal answers again, and only a run that cannot finish on its own**, such as a compensation that keeps failing or a nondeterminism error after a bad deploy. Every other open run resumes and compensates or completes by itself. A terminated run stops where it is, with no compensation, so first read its order and both participant headers on the api's database:
+
+```sql
+SELECT o.id, o.status, r.status AS stock, r.hold_until, p.status AS payment, p.authorized_at
+FROM orders o
+LEFT JOIN reservation_orders r ON r.order_id = o.id
+LEFT JOIN payment_orders p ON p.order_id = o.id
+WHERE o.id = <order id>;
+```
+
+A `HELD` stock row is released by the lapsed-hold sweep once `hold_until` passes. An `AUTHORIZED` payment holds the buyer's funds until Stripe voids it, after 7 days. So cancel its PaymentIntent in the Stripe dashboard first. Then:
+
+```sh
+# container (temporal), one run
+t workflow terminate --namespace jcool --workflow-id checkout-<order id> --reason "<why>"
+# every running saga, only after each one is reconciled as above; it asks to confirm with the count first
+t workflow terminate --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"' --reason "<why>"
+```
 
 ---
 

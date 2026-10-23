@@ -1,5 +1,6 @@
 import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
+import { CheckoutSagaEnv, assertCheckoutSagaEnv } from './checkout-saga.env';
 import {
   AppEnv,
   DatabaseEnv,
@@ -30,12 +31,13 @@ export enum PaymentProvider {
 const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
 );
+const ApiEnv = CheckoutSagaEnv(PlatformEnv);
 
 const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
 
 /** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS. */
-export class EnvironmentVariables extends PlatformEnv {
+export class EnvironmentVariables extends ApiEnv {
   // @IsNotEmpty because a blank prefix would silently produce a different, colliding key layout
   // rather than falling back to the default.
   @IsOptional()
@@ -480,5 +482,6 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
   if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
     throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
   }
+  assertCheckoutSagaEnv(env);
   return env;
 }

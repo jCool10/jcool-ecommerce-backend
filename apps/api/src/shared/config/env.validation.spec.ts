@@ -21,9 +21,16 @@ const STRIPE_ENV = {
   STRIPE_SUCCESS_URL: 'https://shop.example.test/payments/success?session_id={CHECKOUT_SESSION_ID}',
 };
 
+// Also required in production; covered on their own in checkout-saga.env.spec.ts.
+const TEMPORAL_ENV = {
+  TEMPORAL_ADDRESS: 'temporal.railway.internal:7233',
+  TEMPORAL_NAMESPACE: 'jcool',
+  TEMPORAL_TASK_QUEUE: 'checkout-saga',
+};
+
 describe('env validation', () => {
   it('refuses to boot in production until TRUST_PROXY is set to anything', () => {
-    const production = { ...BASE_ENV, ...STRIPE_ENV, NODE_ENV: NodeEnv.Production };
+    const production = { ...BASE_ENV, ...STRIPE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production };
 
     expect(() => validate(production)).toThrow(/TRUST_PROXY/);
     for (const value of ['fd12::/16', '1', 'false']) {
@@ -36,7 +43,7 @@ describe('env validation', () => {
   });
 
   it('refuses to boot in production without a Stripe key and success URL', () => {
-    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
+    const production = { ...BASE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
 
     expect(() => validate(production)).toThrow(/STRIPE_SECRET_KEY/);
     expect(() => validate({ ...production, STRIPE_SECRET_KEY: STRIPE_ENV.STRIPE_SECRET_KEY })).toThrow(
@@ -116,8 +123,14 @@ describe('env validation', () => {
       ['INVENTORY_HOLD_SWEEP_ENABLED', '0', false],
       ['INVENTORY_HOLD_SWEEP_ENABLED', 'false', true],
     ];
+    // A saga Try budget long enough for the largest participant budget, so only the range is tested here.
+    const longTry = {
+      CHECKOUT_TRY_TIMEOUT_MS: '30001',
+      CHECKOUT_RESERVE_WAIT_MS: '32001',
+      CHECKOUT_RESERVING_ORPHAN_SEC: '33',
+    };
     for (const [key, value, valid] of cases) {
-      const run = () => validate({ ...BASE_ENV, [key]: value });
+      const run = () => validate({ ...BASE_ENV, ...longTry, [key]: value });
       if (valid) expect(run, `${key}=${value}`).not.toThrow();
       else expect(run, `${key}=${value}`).toThrow(new RegExp(key));
     }

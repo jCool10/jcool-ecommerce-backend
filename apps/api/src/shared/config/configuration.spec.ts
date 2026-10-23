@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CHECKOUT_SAGA_DEFAULTS } from './checkout-saga.config';
+import { CROSS_RULE_FOREIGN_DEFAULTS } from './checkout-saga.env';
 import configuration from './configuration';
 
 // Clears the given keys before each test and puts them back after, so config keys never leak
@@ -44,5 +46,46 @@ describe('configuration', () => {
   // A localhost default would pass the adapter's live-key guard and send charged buyers nowhere.
   it('leaves the Stripe success URL undefined when unset', () => {
     expect(configuration().payment.successUrl).toBeUndefined();
+  });
+});
+
+describe('configuration: checkout saga', () => {
+  isolateEnv([...Object.keys(CHECKOUT_SAGA_DEFAULTS), ...Object.keys(CROSS_RULE_FOREIGN_DEFAULTS), 'TEMPORAL_ADDRESS']);
+
+  it('sizes the api pool for the saga worker by default, and lets DB_POOL_MAX win', () => {
+    expect(configuration().database.poolMax).toBe(20);
+
+    process.env.DB_POOL_MAX = '7';
+    expect(configuration().database.poolMax).toBe(7);
+  });
+
+  it('loads every saga default env validation assumes', () => {
+    const saga = configuration().checkoutSaga;
+
+    expect(saga).toMatchObject({
+      paymentDeadlineSec: CHECKOUT_SAGA_DEFAULTS.CHECKOUT_PAYMENT_DEADLINE_SEC,
+      payCutoffSec: CHECKOUT_SAGA_DEFAULTS.CHECKOUT_PAY_CUTOFF_SEC,
+      tryTimeoutMs: 3000,
+      reserveWaitMs: 6000,
+      activityConcurrency: 2,
+      localActivityConcurrency: 2,
+      temporal: { address: 'localhost:7233', namespace: 'jcool', taskQueue: 'checkout-saga', workerEnabled: true },
+    });
+  });
+
+  // The cross rules resolve an unset var to these; drifting from what loads would validate one
+  // config and run another.
+  it('mirrors the foreign defaults the cross rules resolve to', () => {
+    const config = configuration();
+
+    expect({
+      PAYMENT_CAPTURE_TIMEOUT_MS: config.payment.captureTimeoutMs,
+      BREAKER_TIMEOUT_MS: config.resilience.breaker.timeoutMs,
+      INVENTORY_TRY_LOCK_TIMEOUT_MS: config.inventory.tryLockTimeoutMs,
+      QUEUE_WORKER_CONCURRENCY: config.queue.workerConcurrency,
+      PAYMENT_SESSION_MIN_TTL_SEC: config.payment.sessionMinTtlSec,
+      PAYMENT_SESSION_EXPIRY_MARGIN_SEC: config.payment.sessionExpiryMarginSec,
+      DB_POOL_MAX: config.database.poolMax,
+    }).toEqual(CROSS_RULE_FOREIGN_DEFAULTS);
   });
 });

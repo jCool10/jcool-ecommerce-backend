@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OrderModule } from '@modules/order/order.module';
 import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
@@ -72,7 +72,8 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
  * FinalizeOrderUseCase — never Order's tables.
  */
 @Module({
-  imports: [OrderModule, ResilienceModule],
+  // forwardRef: Order imports this module back for the checkout saga's payment participant.
+  imports: [forwardRef(() => OrderModule), ResilienceModule],
   controllers: [PaymentController, WebhookController],
   providers: [
     { provide: PAYMENT_REPOSITORY, useClass: DrizzlePaymentRepository },

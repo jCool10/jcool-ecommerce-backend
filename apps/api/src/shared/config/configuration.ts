@@ -10,11 +10,15 @@ import {
   retentionConfig,
   throttleConfig,
 } from '@jcool/platform/config';
+import { API_DB_POOL_MAX_DEFAULT, checkoutSagaConfig } from './checkout-saga.config';
 
 export default () => ({
   ...appConfig(),
   ...observabilityConfig({ serviceName: 'jcool-api' }),
-  ...databaseConfig(),
+  database: {
+    ...databaseConfig().database,
+    poolMax: parseIntOr(process.env.DB_POOL_MAX, API_DB_POOL_MAX_DEFAULT),
+  },
   ...redisConfig(),
   queue: {
     // Namespaces every queue key, so one Redis can serve several environments without a job written
@@ -24,8 +28,8 @@ export default () => ({
     // want while they drive the processor by hand.
     workerEnabled: process.env.QUEUE_WORKER_ENABLED !== 'false',
     // Each job holds a pg connection for the length of its transaction, so this competes DIRECTLY
-    // with the HTTP path for DB_POOL_MAX (default 10) — size the two together rather than raising
-    // this alone.
+    // with the HTTP path and both saga activity pools for DB_POOL_MAX (default 20); env validation
+    // refuses a sum that leaves fewer than five connections spare.
     workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, 5),
     // Deliveries before a message is dead-lettered, the first included. Capped at 10 in the env
     // schema: the backoff below doubles, so the tail grows faster than the count suggests. Eight
@@ -210,4 +214,5 @@ export default () => ({
       batchSize: parseIntOr(process.env.INVENTORY_HOLD_SWEEP_BATCH_SIZE, 50),
     },
   },
+  ...checkoutSagaConfig(),
 });

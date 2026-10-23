@@ -17,6 +17,7 @@ import type { AuthenticatedUser } from '@jcool/platform/rbac';
 import { toError } from '@jcool/kernel';
 import {
   IDEMPOTENCY_STORE,
+  userIdempotencyScope,
   type IdempotencyRecord,
   type IdempotencyStorePort,
 } from '../application/ports/idempotency-store.port';
@@ -65,7 +66,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const scope = `user:${user.userId}`;
+    const scope = userIdempotencyScope(user.userId);
     const requestHash = computeRequestHash(request.method, request.path, scope, request.body);
     const insertInput = {
       ownerId: user.userId,

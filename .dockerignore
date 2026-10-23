@@ -53,6 +53,10 @@ k6
 !infra/elasticsearch/Dockerfile
 !infra/elasticsearch/elasticsearch.yml
 !infra/elasticsearch/railway-entrypoint.sh
+!infra/temporal/Dockerfile
+!infra/temporal/entrypoint.sh
+!infra/temporal/config
+!infra/temporal/dynamicconfig
 infra/prometheus/secrets
 
 # Not compiled into the image — tsconfig.build.json already excludes both.

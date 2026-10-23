@@ -5,6 +5,7 @@ import { afterAll, beforeEach } from 'vitest';
 import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
 import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { resetCheckoutSagas } from './fixtures/checkout-saga.fixture';
 import type { StartedObjectStorage } from './object-storage';
 import { resetDatabase } from './reset-database';
 import { createTestApp, type EnvOverrides, type ProviderOverride } from './test-app.factory';
@@ -44,8 +45,11 @@ export async function createTestAppWithFakeGateway(
   webhookSecret: string,
   envOverrides: EnvOverrides = {},
   providerOverrides: ProviderOverride[] = [],
+  // Another app's gateway, for two apps sharing a task queue: an activity sees the same fake state
+  // whichever app runs it. It must have been built with the same secret.
+  options: { gateway?: FakeSignerGatewayAdapter } = {},
 ): Promise<TestAppWithGateway> {
-  const gateway = new FakeSignerGatewayAdapter(webhookSecret);
+  const gateway = options.gateway ?? new FakeSignerGatewayAdapter(webhookSecret);
   // Secret after the spread, not before: it IS the wiring this wrapper exists to guarantee, so a
   // caller passing `PAYMENT_WEBHOOK_SECRET` in `envOverrides` would otherwise get a gateway signing
   // with one value and an app verifying with another, failing every webhook on signature.
@@ -102,6 +106,17 @@ export function closeAppAfterAll(getApp: () => INestApplication | undefined): vo
  */
 export function resetDatabaseBeforeEach(getPool: () => Pool): void {
   beforeEach(async () => {
+    await resetDatabase(getPool());
+  });
+}
+
+/**
+ * For suites with a Temporal worker. Saga runs outlive a TRUNCATE, so they are terminated first,
+ * while their order ids can still be read.
+ */
+export function resetSagasAndDatabaseBeforeEach(getApps: () => INestApplication[], getPool: () => Pool): void {
+  beforeEach(async () => {
+    await resetCheckoutSagas(getApps());
     await resetDatabase(getPool());
   });
 }

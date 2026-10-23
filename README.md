@@ -231,7 +231,7 @@ pnpm dev:link-env
 
 # 3. infrastructure (the ports below are the host-mapped ones). The id-service fleet stays in
 #    Compose: both apps mint ids through the gateway's load balancer on 127.0.0.1:4000.
-docker compose up -d postgres redis elasticsearch mailpit minio minio-init
+docker compose up -d postgres redis elasticsearch mailpit minio minio-init temporal
 docker compose --profile user-service up -d user-postgres
 docker compose up -d --build id-service gateway
 
@@ -247,7 +247,8 @@ pnpm dev
 
 - API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs> · user-service → <http://localhost:3002>
 - Mail inbox (Mailpit) → <http://localhost:8025> · MinIO console → <http://localhost:9001>
-- Postgres → `localhost:5433` (user-service: `localhost:5434`) · Redis → `localhost:6380` · Elasticsearch → `localhost:9200` · id-service load balancer → `localhost:4000`
+- Postgres → `localhost:5433` (user-service: `localhost:5434`) · Redis → `localhost:6380` · Elasticsearch → `localhost:9200` · id-service load balancer → `localhost:4000` · Temporal → `localhost:7233` (UI on `localhost:8233` with `--profile observability`)
+- Without Temporal the api still boots and serves; its checkout-saga worker logs `checkout saga worker unavailable; retrying with backoff` once a minute until the server answers.
 
 `pnpm dev` is `turbo watch dev`. It builds the packages, then runs `dev` in the api (`nest start --watch`) and the user-service. A change under `packages/` rebuilds that package and every package that depends on it, then restarts the apps that use them. A change in the api's `src/` is left to Nest's own incremental reload, because [`apps/api/turbo.json`](./apps/api/turbo.json) limits the inputs of the api's `dev` task to its config files (`futureFlags.watchUsingTaskInputs` in the root `turbo.json`). The user-service has no watcher of its own, so turbo rebuilds it with `tsc` and restarts it. To run one app with the packages it uses: `pnpm turbo watch dev --filter=@jcool/api`. With a filter, turbo 2.11.6 still starts `dev` in the other apps that depend on a package you change; without `watchUsingTaskInputs` it honours the filter, but every save in the api then restarts it twice. Keep `SHUTDOWN_GRACE_PERIOD_MS` at `0` locally, since each restart and Ctrl+C waits it out. Turbo runs tasks in strict env mode, so a variable set on the command line (`PORT=3005 pnpm dev`) never reaches the app; put overrides in the `.env` files. Don't run the user-service container alongside `pnpm dev`: both bind port 3002.
 

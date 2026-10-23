@@ -1,0 +1,85 @@
+# enable-template
+# The server image's embedded template (temporalio/server:1.32.1), cut down to Postgres. The one
+# change that matters: the frontend has no httpPort, so the unauthenticated HTTP API (7243) never
+# listens. FRONTEND_HTTP_PORT=0 does not turn it off; leaving the key out does.
+log:
+    stdout: true
+    level: {{ default "info" (env "LOG_LEVEL") }}
+
+persistence:
+    numHistoryShards: {{ env "NUM_HISTORY_SHARDS" }}
+    defaultStore: default
+    visibilityStore: visibility
+    datastores:
+        default:
+            sql:
+                pluginName: "{{ env "DB" }}"
+                databaseName: "{{ default "temporal" (env "DBNAME") }}"
+                connectAddr: "{{ env "POSTGRES_SEEDS" }}:{{ default "5432" (env "DB_PORT") }}"
+                connectProtocol: "tcp"
+                user: "{{ env "POSTGRES_USER" }}"
+                password: "{{ env "POSTGRES_PWD" }}"
+                maxConns: {{ default "20" (env "SQL_MAX_CONNS") }}
+                maxIdleConns: {{ default "20" (env "SQL_MAX_IDLE_CONNS") }}
+                maxConnLifetime: "1h"
+        visibility:
+            sql:
+                pluginName: "{{ env "DB" }}"
+                databaseName: "{{ default "temporal_visibility" (env "VISIBILITY_DBNAME") }}"
+                connectAddr: "{{ env "POSTGRES_SEEDS" }}:{{ default "5432" (env "DB_PORT") }}"
+                connectProtocol: "tcp"
+                user: "{{ env "POSTGRES_USER" }}"
+                password: "{{ env "POSTGRES_PWD" }}"
+                maxConns: {{ default "10" (env "SQL_VIS_MAX_CONNS") }}
+                maxIdleConns: {{ default "10" (env "SQL_VIS_MAX_IDLE_CONNS") }}
+                maxConnLifetime: "1h"
+
+global:
+    membership:
+        maxJoinDuration: 30s
+        broadcastAddress: "{{ default "" (env "TEMPORAL_BROADCAST_ADDRESS") }}"
+    pprof:
+        port: 0
+
+{{- $bindOnIP := default "127.0.0.1" (env "BIND_ON_IP") }}
+{{- $clusterAddress := default $bindOnIP (env "TEMPORAL_BROADCAST_ADDRESS") }}
+services:
+    frontend:
+        rpc:
+            grpcPort: 7233
+            membershipPort: 6933
+            bindOnIP: "{{ $bindOnIP }}"
+    matching:
+        rpc:
+            grpcPort: 7235
+            membershipPort: 6935
+            bindOnIP: "{{ $bindOnIP }}"
+    history:
+        rpc:
+            grpcPort: 7234
+            membershipPort: 6934
+            bindOnIP: "{{ $bindOnIP }}"
+    worker:
+        rpc:
+            grpcPort: 7239
+            membershipPort: 6939
+            bindOnIP: "{{ $bindOnIP }}"
+
+clusterMetadata:
+    enableGlobalNamespace: false
+    failoverVersionIncrement: 10
+    masterClusterName: "active"
+    currentClusterName: "active"
+    clusterInformation:
+        active:
+            enabled: true
+            initialFailoverVersion: 1
+            rpcName: "frontend"
+            rpcAddress: "{{ $clusterAddress }}:7233"
+
+dcRedirectionPolicy:
+    policy: "noop"
+
+dynamicConfigClient:
+    filepath: "{{ env "DYNAMIC_CONFIG_FILE_PATH" }}"
+    pollInterval: "60s"

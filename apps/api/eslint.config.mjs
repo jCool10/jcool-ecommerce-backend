@@ -141,6 +141,7 @@ export default tseslint.config(
       'src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
       'src/shared/messaging/queue/replay-dlq.cli.ts',
       'src/modules/product/infrastructure/catalog/search/reindex.ts',
+      'src/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.ts',
       'src/**/*.spec.ts',
     ],
     rules: {

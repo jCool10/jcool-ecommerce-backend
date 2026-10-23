@@ -1,7 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
 import { Order } from '../domain/order.entity';
 import { OrderStatus } from '../domain/order-status';
 import { OrderItem } from '../domain/order-item.entity';
@@ -9,22 +10,37 @@ import { MAX_PENDING_ORDERS_PER_USER } from '../order.constants';
 import {
   TooManyPendingOrdersError,
   type AdminOrderPageQuery,
+  type ApplyOrderChangeInput,
+  type ApplyTryResultInput,
   type CheckoutPersistResult,
   type OrderPage,
   type OrderPageQuery,
   type OrderRepositoryPort,
+  type ReservingCreateResult,
+  type SagaWriteResult,
   type StalePendingOrder,
 } from '../application/ports/order-repository.port';
+import {
+  IDEMPOTENCY_STORE,
+  userIdempotencyScope,
+  type IdempotencyStorePort,
+} from '../application/ports/idempotency-store.port';
+import { toFinalizedOutboxRecord, toPlacedOutboxRecord } from '../application/order-outbox.mapper';
+import { toView } from '../application/order-view.mapper';
 import { orderItems, orders } from './schema/order.schema';
 
 type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
+
+const IN_FLIGHT_STATUSES = [OrderStatus.RESERVING, OrderStatus.PENDING, OrderStatus.CONFIRMING];
 
 @Injectable()
 export class DrizzleOrderRepository implements OrderRepositoryPort {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
+    @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
+    @Inject(IDEMPOTENCY_STORE) private readonly idempotencyStore: IdempotencyStorePort,
   ) {}
 
   async createCheckout(
@@ -96,6 +112,126 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     });
   }
 
+  async createReserving({
+    order,
+    idempotencyKey,
+  }: {
+    order: Order;
+    idempotencyKey: string | null;
+  }): Promise<ReservingCreateResult> {
+    const [orderId, ...itemIds] = await this.idGenerator.mint(1 + order.items.length);
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${order.userId}::bigint)`);
+
+      if (idempotencyKey) {
+        const [existing] = await tx
+          .select()
+          .from(orders)
+          .where(and(eq(orders.idempotencyKey, idempotencyKey), eq(orders.userId, order.userId)))
+          .limit(1);
+        if (existing) {
+          return { created: false, order: toDomainOrder(existing, await this.itemRowsOf(existing.id, tx)) };
+        }
+      }
+
+      const [{ value: inFlight }] = await tx
+        .select({ value: count() })
+        .from(orders)
+        .where(and(eq(orders.userId, order.userId), inArray(orders.status, IN_FLIGHT_STATUSES)));
+      if (inFlight >= MAX_PENDING_ORDERS_PER_USER) {
+        throw new TooManyPendingOrdersError(order.userId, inFlight);
+      }
+
+      await tx.insert(orders).values({
+        id: orderId,
+        userId: order.userId,
+        status: order.status,
+        currency: order.currency,
+        totalAmount: order.totalAmountMinor,
+        idempotencyKey,
+        placedAt: order.placedAt,
+        paymentDeadlineAt: order.paymentDeadlineAt,
+      });
+      await tx.insert(orderItems).values(
+        order.items.map((item, index) => ({
+          id: itemIds[index],
+          orderId,
+          skuId: item.skuId,
+          productName: item.productName,
+          unitPrice: item.unitPriceMinor,
+          quantity: item.quantity,
+        })),
+      );
+      return { created: true, order: withId(order, orderId) };
+    });
+  }
+
+  async applyTryResult(input: ApplyTryResultInput): Promise<SagaWriteResult> {
+    const target = input.outcome === 'HELD' ? OrderStatus.PENDING : OrderStatus.REJECTED;
+    // Only a placed order emits an event. Minted up front so the row lock never waits on the id service.
+    const outboxId = target === OrderStatus.PENDING ? (await this.idGenerator.mint(1))[0] : undefined;
+
+    return this.db.transaction(async (tx) => {
+      const locked = await this.lockOrder(input.orderId, tx);
+      if (!locked) return 'stale';
+      const { order, idempotencyKey } = locked;
+      if (order.status === target) return 'already';
+      if (order.status !== OrderStatus.RESERVING) return 'stale';
+
+      if (input.outcome !== 'HELD') {
+        const rejected = order.reject(input.reason, new Date());
+        // Clearing the key lets a retry under it place a fresh order instead of replaying this one.
+        await tx
+          .update(orders)
+          .set({
+            status: rejected.status,
+            finalizedAt: rejected.finalizedAt,
+            finalizeReason: rejected.finalizeReason,
+            idempotencyKey: null,
+          })
+          .where(eq(orders.id, input.orderId));
+        return 'applied';
+      }
+
+      const placed = order.confirmPlaced();
+      await tx.update(orders).set({ status: placed.status }).where(eq(orders.id, input.orderId));
+      await this.outboxWriter.append(tx, toPlacedOutboxRecord(placed.toPlacedEvent()), { id: outboxId });
+      if (idempotencyKey !== null) {
+        await this.idempotencyStore.markCompleted(
+          {
+            scope: userIdempotencyScope(placed.userId),
+            key: idempotencyKey,
+            responseStatus: HttpStatus.CREATED,
+            responseBody: toView(placed),
+            orderId: input.orderId,
+          },
+          tx,
+        );
+      }
+      return 'applied';
+    });
+  }
+
+  async applyOrderChange({ orderId, from, to, reason, paymentRef }: ApplyOrderChangeInput): Promise<SagaWriteResult> {
+    const emitsEvent = to !== OrderStatus.CONFIRMING;
+    const outboxId = emitsEvent ? (await this.idGenerator.mint(1))[0] : undefined;
+
+    return this.db.transaction(async (tx) => {
+      const locked = await this.lockOrder(orderId, tx);
+      if (!locked) return 'stale';
+      const { order } = locked;
+      if (order.status === to) return 'already';
+      if (!from.includes(order.status)) return 'stale';
+
+      const changed = moveForSaga(order, to, { now: new Date(), reason, paymentRef });
+      await this.persistFinalization(changed, tx);
+      if (emitsEvent) {
+        await this.outboxWriter.append(tx, toFinalizedOutboxRecord(changed.toFinalizedEvent()), { id: outboxId });
+      }
+      return 'applied';
+    });
+  }
+
   async withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>, join?: DrizzleTx): Promise<T> {
     // Reused as-is rather than nested: a nested drizzle transaction is a SAVEPOINT, which would let
     // this unit roll back on its own and leave the caller's — the inbox claim, say — committed.
@@ -103,17 +239,27 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
   }
 
   async findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null> {
-    // The order row only: items are immutable snapshots, so they need no lock.
+    return (await this.lockOrder(orderId, tx))?.order ?? null;
+  }
+
+  // The order row only: items are immutable snapshots, so they need no lock.
+  private async lockOrder(
+    orderId: string,
+    tx: DrizzleTx,
+  ): Promise<{ order: Order; idempotencyKey: string | null } | null> {
     const [row] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update').limit(1);
     if (!row) {
       return null;
     }
-    const itemRows = await tx
+    return { order: toDomainOrder(row, await this.itemRowsOf(orderId, tx)), idempotencyKey: row.idempotencyKey };
+  }
+
+  private itemRowsOf(orderId: string, tx: DrizzleTx): Promise<OrderItemRow[]> {
+    return tx
       .select()
       .from(orderItems)
       .where(eq(orderItems.orderId, orderId))
       .orderBy(orderItems.createdAt, orderItems.id);
-    return toDomainOrder(row, itemRows);
   }
 
   async persistFinalization(order: Order, tx: DrizzleTx): Promise<void> {
@@ -242,6 +388,29 @@ function toDomainOrder(row: OrderRow, itemRows: OrderItemRow[]): Order {
     finalizedAt: row.finalizedAt,
     finalizeReason: row.finalizeReason,
     paymentRef: row.paymentRef,
+    paymentDeadlineAt: row.paymentDeadlineAt,
     items: itemRows.map((item) => OrderItem.of(item.skuId, item.productName, item.unitPrice, item.quantity)),
   });
+}
+
+function withId(order: Order, id: string): Order {
+  return Order.rehydrate({ ...order, id, items: [...order.items] });
+}
+
+function moveForSaga(
+  order: Order,
+  to: OrderStatus,
+  meta: { now: Date; reason: string | null; paymentRef?: string | null },
+): Order {
+  switch (to) {
+    case OrderStatus.CONFIRMING:
+      return order.beginConfirming();
+    case OrderStatus.PAID:
+    case OrderStatus.FAILED:
+    case OrderStatus.EXPIRED:
+    case OrderStatus.CANCELLED:
+      return order.finalize(to, meta);
+    default:
+      throw new Error(`A saga order change cannot target ${to}`);
+  }
 }

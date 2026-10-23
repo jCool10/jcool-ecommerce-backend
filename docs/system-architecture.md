@@ -8,13 +8,16 @@ Current boundaries and the decision ledger behind them. The topology and context
 
 Four processes: `apps/api` (the modular monolith, five bounded contexts — [README → Architecture](../README.md#architecture)), `apps/user-service` (`/auth`, sessions, token signing), `apps/id-service` (id minting, N replicas behind a leased node id) and `apps/gateway` (Caddy — public entry plus the id-service's private load balancer, [README → Project layout](../README.md#project-layout)). `packages/` holds what they share.
 
-Each service owns its own store, a Postgres database for the api and the user-service and an etcd keyspace for the id-service, and there is no foreign key between any two of them; what a restore of one does to the others is in [RUNBOOK → Backup and restore](../RUNBOOK.md#backup-and-restore). Within `apps/api` itself, the same rule holds context to context ([README → Bounded contexts](../README.md#bounded-contexts)).
+The api also hosts a Temporal worker for the checkout saga ([the decision](#checkout-saga-orchestration-on-temporal-tcc-on-stock-and-payment)), polling a self-hosted Temporal server (`infra/temporal`) on the private network. The saga runs dark until checkout is cut over to it: the worker polls, but no route starts a workflow. The api's readiness leaves Temporal out, so an outage never takes the api out of rotation ([RUNBOOK → Temporal down](../RUNBOOK.md#temporal-down)).
+
+Each service owns its own store: a Postgres database for the api, the user-service and Temporal, and an etcd keyspace for the id-service. There is no foreign key between any two of them; what a restore of one does to the others is in [RUNBOOK → Backup and restore](../RUNBOOK.md#backup-and-restore). Within `apps/api` itself, the same rule holds context to context ([README → Bounded contexts](../README.md#bounded-contexts)).
 
 | Service | Owning schema |
 | --- | --- |
 | api | [`shared/infrastructure/database/schema`](../apps/api/src/shared/infrastructure/database/schema) (barrel over every context's tables) |
 | user-service | [`modules/user/infrastructure/schema/user.schema.ts`](../apps/user-service/src/modules/user/infrastructure/schema/user.schema.ts) |
 | id-service | no Postgres; an etcd keyspace, `/jcool/id-service/nodes/NNN/owner` and `floor` per node plus `initialized`, defined in [`etcd-lease-keyspace.ts`](../apps/id-service/src/lease/etcd-lease-keyspace.ts) |
+| Temporal | Temporal's own schema in `temporal` and `temporal_visibility`, applied on every boot by [`infra/temporal/entrypoint.sh`](../infra/temporal/entrypoint.sh), which also creates the `jcool` namespace and the `CheckoutStep` / `CheckoutDeadlineAt` search attributes |
 
 ### Auth trust flow
 

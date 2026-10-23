@@ -1,9 +1,10 @@
-import { Injectable, type BeforeApplicationShutdown, type OnModuleInit } from '@nestjs/common';
+import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Worker } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
+import { SHUTDOWN_STEP_ORDER, ShutdownService } from '@jcool/platform/health';
 import { runInJobContext } from '@jcool/platform/observability';
 import { toError } from '@jcool/kernel';
 import type { ConsumeResult } from '@jcool/metrics-port';
@@ -14,15 +15,18 @@ import { createQueueConnection } from './queue-connection';
 import { QUEUE_DOMAIN_EVENTS, cappedBackoffMs } from './queue.constants';
 
 const LOG_CONTEXT = 'DomainEventsWorker';
-// Long enough for a job that is merely slow, short enough that SIGTERM never waits on a dead Redis.
-const CLOSE_TIMEOUT_MS = 10_000;
+// Per wait, and there are two: long enough for a job that is merely slow, short enough that the
+// whole drain still fits Railway's draining window when Redis is dead.
+const CLOSE_TIMEOUT_MS = 5_000;
+// A healthy Redis answers QUIT in milliseconds.
+const QUIT_TIMEOUT_MS = 1_000;
 
 /**
  * Holds no logic of its own on purpose: everything worth asserting lives in the processor, which a
  * test can drive one delivery at a time without a running queue.
  */
 @Injectable()
-export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdown {
+export class DomainEventsWorker implements OnModuleInit {
   private worker: Worker<DomainEventJob, ConsumeResult> | null = null;
   private queueConnection: Redis | null = null;
   // BullMQ's 'failed' listener is synchronous, so routing to the dead-letter queue outlives the
@@ -42,6 +46,7 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     private readonly deadLetterRouter: DeadLetterRouter,
     config: ConfigService,
     private readonly cls: ClsService,
+    private readonly shutdown: ShutdownService,
     private readonly logger: PinoLogger,
   ) {
     this.enabled = config.get<boolean>('queue.workerEnabled') === true;
@@ -105,13 +110,18 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
       this.pendingRoutes.add(route);
     });
 
+    // A step rather than a lifecycle hook: steps run before every onApplicationShutdown, where the pg
+    // pool drains.
+    this.shutdown.registerStep({
+      name: 'domain-events-worker',
+      order: SHUTDOWN_STEP_ORDER.CLOSE_QUEUE_WORKER,
+      run: () => this.close(),
+    });
+
     this.logger.info({ concurrency: this.concurrency }, 'domain events worker started');
   }
 
-  // beforeApplicationShutdown, NOT onApplicationShutdown: the pg pool drains in the latter, and Nest
-  // orders same-phase hooks by module registration — so sharing that phase would make "the worker
-  // stops before the pool closes" a property of import order in app.module.ts rather than of this class.
-  async beforeApplicationShutdown(): Promise<void> {
+  private async close(): Promise<void> {
     // Waits for in-flight jobs so a claim never commits into a pool that has already closed. Bounded,
     // because a Redis that is gone would hang shutdown — and losing an in-flight consume costs
     // nothing, since an unapplied event leaves an unclaimed inbox row.
@@ -126,10 +136,13 @@ export class DomainEventsWorker implements OnModuleInit, BeforeApplicationShutdo
     await Promise.race([Promise.allSettled(this.pendingRoutes), timeout(CLOSE_TIMEOUT_MS)]);
 
     if (!this.queueConnection) return;
-    // quit() rejects outright when Redis is already gone, hence the unconditional fallback.
-    try {
-      await this.queueConnection.quit();
-    } catch {
+    // quit() rejects outright when Redis is already gone, and waits behind the offline queue while it
+    // reconnects; either way the connection is torn down instead.
+    const quit = this.queueConnection.quit().then(
+      () => true,
+      () => false,
+    );
+    if (!(await Promise.race([quit, timeout(QUIT_TIMEOUT_MS).then(() => false)]))) {
       this.queueConnection.disconnect();
     }
   }

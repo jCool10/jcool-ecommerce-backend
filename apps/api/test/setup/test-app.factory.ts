@@ -5,12 +5,14 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { expect } from 'vitest';
+import { expect, inject } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
 import { idServiceStub } from './id-service-stub';
 import { waitForRedisReady } from './redis-ready';
+import { TEMPORAL_TEST_NAMESPACE } from './temporal-server';
+import { temporalTaskQueueForCurrentSpec } from './temporal-task-queue';
 import { userServiceStub } from './user-service-stub';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
 
@@ -66,6 +68,13 @@ export async function createTestApp(
   // applies events its own test never published. Same value for every app in a file, because a
   // suite may drive one app's relay and read the queue through another's.
   process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
+  // Off unless a saga suite opts in: an app polling a queue would pick up another file's activities.
+  // The queue is per spec file and per worker for the same reason as QUEUE_PREFIX.
+  process.env.TEMPORAL_WORKER_ENABLED = 'false';
+  process.env.TEMPORAL_ADDRESS = inject('TEMPORAL_ADDRESS');
+  process.env.TEMPORAL_NAMESPACE = TEMPORAL_TEST_NAMESPACE;
+  process.env.TEMPORAL_TASK_QUEUE = temporalTaskQueueForCurrentSpec();
+  process.env.TEMPORAL_WORKFLOW_BUNDLE_PATH = inject('TEMPORAL_WORKFLOW_BUNDLE_PATH');
   // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
   // live path, billable and non-deterministic.
   if (!('STRIPE_SECRET_KEY' in envOverrides)) {
