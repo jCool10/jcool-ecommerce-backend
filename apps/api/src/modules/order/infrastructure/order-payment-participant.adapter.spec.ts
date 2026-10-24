@@ -1,4 +1,7 @@
-import type { PaymentParticipant } from '@modules/payment/application/public/payment-participant.port';
+import {
+  PaymentGatewayError,
+  type PaymentParticipant,
+} from '@modules/payment/application/public/payment-participant.port';
 import type { OrderPaymentParticipantPort } from '../application/ports/order-payment-participant.port';
 import { OrderPaymentParticipantAdapter } from './order-payment-participant.adapter';
 
@@ -27,6 +30,20 @@ describe('OrderPaymentParticipantAdapter', () => {
 
     await expect(adapter.openSession(input)).resolves.toEqual(opened);
     expect(participant.openSession).toHaveBeenCalledWith(input);
+  });
+
+  it('reports a provider refusal on open as its own error, and lets other faults through', async () => {
+    const { adapter, participant } = build();
+    const input = { orderId: 'o-1', amountMinor: 250_000, currency: 'VND', expiresAt: new Date() };
+    const refused = new PaymentGatewayError('circuit open');
+    const dbDown = new Error('db down');
+    participant.openSession.mockRejectedValueOnce(refused).mockRejectedValueOnce(dbDown);
+
+    await expect(adapter.openSession(input)).rejects.toMatchObject({
+      name: 'PaymentProviderUnavailableError',
+      cause: refused,
+    });
+    await expect(adapter.openSession(input)).rejects.toBe(dbDown);
   });
 
   it('captures and cancels by order id, outcomes untouched', async () => {

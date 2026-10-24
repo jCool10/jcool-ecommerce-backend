@@ -50,9 +50,9 @@ export async function createTestApp(
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
-  process.env.RESERVATION_SWEEP_ENABLED = 'false';
   process.env.INVENTORY_HOLD_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
+  process.env.CHECKOUT_REAPER_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
   // is a plain sleep inside `app.close()`, so a developer's `SHUTDOWN_GRACE_PERIOD_MS=8000` charges
   // every app in every file 8 seconds of doing nothing. Nothing asserts on the window's length:
@@ -68,9 +68,9 @@ export async function createTestApp(
   // applies events its own test never published. Same value for every app in a file, because a
   // suite may drive one app's relay and read the queue through another's.
   process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
-  // Off unless a saga suite opts in: an app polling a queue would pick up another file's activities.
+  // On: every checkout runs the saga, so an app without a worker would answer 503 to POST /orders.
   // The queue is per spec file and per worker for the same reason as QUEUE_PREFIX.
-  process.env.TEMPORAL_WORKER_ENABLED = 'false';
+  process.env.TEMPORAL_WORKER_ENABLED = 'true';
   process.env.TEMPORAL_ADDRESS = inject('TEMPORAL_ADDRESS');
   process.env.TEMPORAL_NAMESPACE = TEMPORAL_TEST_NAMESPACE;
   process.env.TEMPORAL_TASK_QUEUE = temporalTaskQueueForCurrentSpec();

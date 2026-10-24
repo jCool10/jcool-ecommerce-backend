@@ -12,6 +12,14 @@ export interface PaymentSessionInput {
   expiresAt: Date;
 }
 
+/** The provider, or the breaker in front of it, refused the call. Nothing was opened. */
+export class PaymentProviderUnavailableError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super('Payment provider unavailable', options);
+    this.name = 'PaymentProviderUnavailableError';
+  }
+}
+
 export type PaymentSessionResult =
   | { outcome: 'OPENED'; paymentId: string; redirectUrl?: string; clientSecret?: string; providerSessionId: string }
   | { outcome: 'CLOSED' };

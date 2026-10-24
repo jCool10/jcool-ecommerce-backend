@@ -3,10 +3,7 @@ import { ORDER_STATUSES, OrderStatus } from './order-status';
 import { assertTransition, canTransition, isTerminal, OrderTransitionError } from './order-state-machine';
 
 const WIRED_TRANSITIONS: ReadonlyArray<[OrderStatus, OrderStatus]> = [
-  [OrderStatus.DRAFT, OrderStatus.PENDING],
   [OrderStatus.DRAFT, OrderStatus.CANCELLED],
-  [OrderStatus.PENDING, OrderStatus.PAID],
-  [OrderStatus.PENDING, OrderStatus.FAILED],
   [OrderStatus.PENDING, OrderStatus.EXPIRED],
   [OrderStatus.PENDING, OrderStatus.CANCELLED],
   [OrderStatus.DRAFT, OrderStatus.RESERVING],
@@ -66,6 +63,13 @@ describe('order state machine', () => {
         expect(canTransition(from, to)).toBe(false);
       }
     }
+  });
+
+  // Payment is taken only through CONFIRMING, so nothing can mark an order PAID behind the saga's back.
+  it('places only through RESERVING and settles payment only through CONFIRMING', () => {
+    expect(canTransition(OrderStatus.DRAFT, OrderStatus.PENDING)).toBe(false);
+    expect(canTransition(OrderStatus.PENDING, OrderStatus.PAID)).toBe(false);
+    expect(canTransition(OrderStatus.PENDING, OrderStatus.FAILED)).toBe(false);
   });
 
   it('throws OrderTransitionError carrying the from/to for an illegal transition', () => {

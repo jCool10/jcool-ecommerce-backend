@@ -26,6 +26,7 @@ const WINDOWS = {
   RETENTION_INBOX_DAYS: '7',
   RETENTION_WEBHOOK_EVENT_DAYS: '14',
   RETENTION_IDEMPOTENCY_GRACE_SEC: '0',
+  RETENTION_REJECTED_ORDER_DAYS: '30',
 };
 
 // Each table exists to make some retry safe, so every test asserts on the survivor: over-collecting
@@ -75,6 +76,16 @@ describe('Retention sweeps (integration, real Postgres)', () => {
   const keysLeft = async () =>
     (await db.select({ key: schema.idempotencyKeys.key }).from(schema.idempotencyKeys)).map((r) => r.key);
 
+  const orderRow = (status: 'REJECTED' | 'CANCELLED', finalizedAt: Date) => ({
+    id: testId(),
+    userId: USER_ID,
+    status,
+    currency: 'VND',
+    totalAmount: 100_000,
+    placedAt: finalizedAt,
+    finalizedAt,
+  });
+
   beforeAll(async () => {
     ({ app, pool, db } = await createTestAppWithPool(WINDOWS));
     registry = app.get(RetentionSweepRegistry);
@@ -91,6 +102,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       'messaging:inbox',
       'messaging:outbox',
       'order:idempotency-keys',
+      'order:rejected-orders',
       'payment:webhook-events',
     ]);
   });
@@ -170,6 +182,38 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
       expect(await sweepNamed('order:idempotency-keys').sweep(2)).toBe(2);
       expect(await keysLeft()).toHaveLength(3);
+    });
+  });
+
+  describe('order:rejected-orders', () => {
+    // Only REJECTED is disposable: every other terminal order is the buyer's record.
+    it('collects a REJECTED order past the window with its lines, and keeps everything else', async () => {
+      const stale = orderRow('REJECTED', daysAgo(31));
+      const recent = orderRow('REJECTED', daysAgo(29));
+      const cancelled = orderRow('CANCELLED', daysAgo(100));
+      await db.insert(schema.orders).values([stale, recent, cancelled]);
+      await db.insert(schema.orderItems).values({
+        id: testId(),
+        orderId: stale.id,
+        skuId: testId(),
+        productName: 'Tee',
+        unitPrice: 100_000,
+        quantity: 1,
+      });
+
+      const deleted = await sweepNamed('order:rejected-orders').sweep(500);
+
+      expect(deleted).toBe(1);
+      const left = await db.select({ id: schema.orders.id }).from(schema.orders);
+      expect(left.map((row) => row.id).sort()).toEqual([recent.id, cancelled.id].sort());
+      expect(await db.select().from(schema.orderItems)).toHaveLength(0);
+    });
+
+    it('deletes no more than the batch allows', async () => {
+      await db.insert(schema.orders).values([1, 2, 3].map(() => orderRow('REJECTED', daysAgo(31))));
+
+      expect(await sweepNamed('order:rejected-orders').sweep(2)).toBe(2);
+      expect(await db.select().from(schema.orders)).toHaveLength(1);
     });
   });
 

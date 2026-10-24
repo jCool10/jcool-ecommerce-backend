@@ -1,9 +1,14 @@
 import type { ReservationOrderStatus } from '../../domain/stock/reservation-order-status';
-import type { ReservationLine } from './product-stock-reservation.port';
 
 export const INVENTORY_PARTICIPANT = Symbol('INVENTORY_PARTICIPANT');
 
-export type { ReservationLine, ReservationOrderStatus };
+export type { ReservationOrderStatus };
+
+/** At most one line per `variantId` — a duplicate variant is held once, not summed. */
+export interface ReservationLine {
+  variantId: string;
+  quantity: number;
+}
 
 export type TryReserveOutcome = 'RESERVED' | 'OUT_OF_STOCK' | 'CONTENDED' | 'CONFLICT';
 

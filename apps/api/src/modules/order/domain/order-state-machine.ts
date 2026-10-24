@@ -13,14 +13,11 @@ interface Transition {
   wired: boolean;
 }
 
+// Every edge past DRAFT is written by the checkout saga and nothing else.
 const TRANSITIONS: readonly Transition[] = [
-  { from: OrderStatus.DRAFT, to: OrderStatus.PENDING, wired: true }, // place order
   { from: OrderStatus.DRAFT, to: OrderStatus.CANCELLED, wired: true }, // discard a draft
-  { from: OrderStatus.PENDING, to: OrderStatus.PAID, wired: true }, // finalize: payment webhook success / reconcile paid
-  { from: OrderStatus.PENDING, to: OrderStatus.FAILED, wired: true }, // finalize: payment webhook failure / reconcile failed
-  { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // finalize: expiry sweep on an unpaid hold
-  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: true }, // finalize: user/admin cancel
-  // Checkout saga. Only the saga writes these, and nothing public starts a saga yet.
+  { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // payment deadline passed unpaid
+  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: true }, // user/admin cancel
   { from: OrderStatus.DRAFT, to: OrderStatus.RESERVING, wired: true }, // place, before the stock Try answers
   { from: OrderStatus.RESERVING, to: OrderStatus.PENDING, wired: true }, // Try held the stock
   { from: OrderStatus.RESERVING, to: OrderStatus.REJECTED, wired: true }, // Try refused, timed out or never ran

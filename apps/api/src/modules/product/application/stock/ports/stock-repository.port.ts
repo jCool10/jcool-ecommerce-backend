@@ -2,16 +2,18 @@
 // runtime drizzle module into the application layer.
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import type { ReservationOrderStatus } from '../../../domain/stock/reservation-order-status';
-import type {
-  ExpiredHold,
-  ExpiredHoldQuery,
-  ReservationLine,
-  StockResolveResult,
-} from '../../public/product-stock-reservation.port';
+import type { ReservationLine } from '../../public/inventory-participant.port';
 
-export type { ExpiredHold, ExpiredHoldQuery, ReservationLine, StockResolveResult };
+export type { ReservationLine };
 
 export const STOCK_REPOSITORY = Symbol('STOCK_REPOSITORY');
+
+/** Both false = the order had no lines in the source status at all. */
+export interface StockResolveResult {
+  applied: boolean;
+  alreadyResolved: boolean;
+  count: number;
+}
 
 /** `available` is derived, never stored. */
 export interface StockView {
@@ -28,11 +30,10 @@ export interface StockTransactionOptions {
   deadline?: number;
 }
 
-/** Omitted fields keep the legacy behaviour: expiry from the configured TTL, ids minted inside the tx. */
 export interface HoldOptions {
-  expiresAt?: Date;
+  expiresAt: Date;
   /** One per line, minted by the caller before its transaction opened. */
-  reservationIds?: string[];
+  reservationIds: string[];
 }
 
 export interface ReservationOrderHeader {
@@ -44,7 +45,7 @@ export interface StockRepositoryPort {
   transaction<T>(work: (tx: DrizzleTx) => Promise<T>, options?: StockTransactionOptions): Promise<T>;
 
   /** Locks the stock rows; throws `InsufficientStockError` on a shortfall, rolling back `tx`. */
-  reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[], options?: HoldOptions): Promise<void>;
+  reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[], options: HoldOptions): Promise<void>;
 
   /**
    * Version-CAS with a bounded retry budget; throws `InsufficientStockError` on a real shortfall and
@@ -52,7 +53,7 @@ export interface StockRepositoryPort {
    * pessimistic path, concurrent duplicates of one order included. On the participant path the order's
    * header lock already serializes duplicates before they reach this.
    */
-  reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[], options?: HoldOptions): Promise<void>;
+  reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[], options: HoldOptions): Promise<void>;
 
   /** HELD → COMMITTED, dropping both `onHand` and `reserved`. Guarded on HELD, so a re-run is a no-op. */
   commitReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
@@ -62,9 +63,6 @@ export interface StockRepositoryPort {
 
   /** COMMITTED → RESTOCKED, raising `onHand` back. Guarded on COMMITTED, so a re-run is a no-op. */
   restockReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
-
-  /** Distinct orders holding HELD stock past `expiredBefore`, oldest expiry first. */
-  findExpiredHolds(query: ExpiredHoldQuery): Promise<ExpiredHold[]>;
 
   /** Inserts a HELD header; false when the order already has one. */
   insertHeader(tx: DrizzleTx, input: { orderId: string; holdUntil: Date }): Promise<boolean>;

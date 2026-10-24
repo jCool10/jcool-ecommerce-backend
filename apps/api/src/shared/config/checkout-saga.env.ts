@@ -46,6 +46,12 @@ export function CheckoutSagaEnv<TBase extends EnvBase>(Base: TBase) {
     CHECKOUT_CANCEL_WAIT_MS?: number;
 
     @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1)
+    CHECKOUT_RETRY_AFTER_SEC?: number;
+
+    @IsOptional()
     @IsStrictBoolean()
     CHECKOUT_REAPER_ENABLED?: string;
 

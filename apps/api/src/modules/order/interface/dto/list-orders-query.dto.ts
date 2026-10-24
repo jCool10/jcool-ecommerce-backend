@@ -2,8 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { IsSnowflakeId } from '@jcool/platform/interface';
-import type { OrderStatus } from '../../domain/order-status';
-import { PUBLISHED_ORDER_STATUSES } from './order-response.dto';
+import { ORDER_STATUSES, type OrderStatus } from '../../domain/order-status';
 
 export class ListOrdersQueryDto {
   @ApiPropertyOptional({ minimum: 1, maximum: 10_000, default: 1, description: 'Page (1-based, max 10000)' })
@@ -24,9 +23,9 @@ export class ListOrdersQueryDto {
 }
 
 export class ListAdminOrdersQueryDto extends ListOrdersQueryDto {
-  @ApiPropertyOptional({ enum: PUBLISHED_ORDER_STATUSES, description: 'Only orders in this status' })
+  @ApiPropertyOptional({ enum: ORDER_STATUSES, description: 'Only orders in this status' })
   @IsOptional()
-  @IsIn(PUBLISHED_ORDER_STATUSES)
+  @IsIn(ORDER_STATUSES)
   status?: OrderStatus;
 
   @ApiPropertyOptional({ example: '137465797020397179', description: 'Only orders placed by this user' })

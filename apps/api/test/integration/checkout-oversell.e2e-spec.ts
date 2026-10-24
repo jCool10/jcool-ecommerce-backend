@@ -6,20 +6,19 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';
+import { eventually } from '../setup/eventually';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { countHeldReservations, getStockView, seedStock } from '../setup/fixtures/inventory.fixture';
 import { addToCart } from '../setup/fixtures/order-flow.fixture';
 import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 
-// N distinct buyers race POST /orders for the last unit(s), each on its own connection so the row
-// lock / version-CAS actually contends. Each buyer has its own user, cart, and Idempotency-Key, so
-// the idempotency layer is transparent and only STOCK contends. Asserted on outcomes, not timing.
+// N distinct buyers race POST /orders for the last unit(s). Each has its own user, cart, and
+// Idempotency-Key, so only STOCK contends. Asserted on outcomes, not timing.
 //
-// > pool max (10) so the DB, not the app, is where the race is decided. No-deadlock rests on each
-// checkout using exactly one connection for its whole transaction (cart/catalog reads happen before
-// the tx opens; the contended stock-row lock is always held by a tx that waits on nothing else).
+// > pool max (10) so the DB, not the app, decides the race. Each Try holds its stock row lock in a
+// transaction that waits on nothing else, so the race cannot deadlock.
 const CONTENDERS = 16;
 
 const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
@@ -33,7 +32,10 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     ({ app, pool, db } = await createTestAppWithPool({ INVENTORY_LOCK_STRATEGY: strategy }));
   });
   closeAppAfterAll(() => app);
-  resetDatabaseBeforeEach(() => pool);
+  resetSagasAndDatabaseBeforeEach(
+    () => [app],
+    () => pool,
+  );
 
   const server = () => app.getHttpServer();
 
@@ -58,28 +60,36 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     return { variantId: product.variantId, statuses };
   }
 
-  async function orderLineCount(variantId: string): Promise<number> {
-    const rows = await db
-      .select({ id: schema.orderItems.id })
-      .from(schema.orderItems)
-      .where(eq(schema.orderItems.skuId, variantId));
-    return rows.length;
+  // A buyer answered 503 may still be RESERVING; the saga settles it either way.
+  async function settledOrderStatuses(variantId: string): Promise<string[]> {
+    const read = async () =>
+      (
+        await db
+          .select({ status: schema.orders.status })
+          .from(schema.orders)
+          .innerJoin(schema.orderItems, eq(schema.orderItems.orderId, schema.orders.id))
+          .where(eq(schema.orderItems.skuId, variantId))
+      ).map((row) => row.status);
+    return eventually(read, (statuses) => !statuses.includes('RESERVING'));
   }
 
-  it('sells the last unit to exactly one of many buyers and 409s the rest', async () => {
+  async function expectSoldOut(variantId: string, units: number): Promise<void> {
+    // Available pinned at exactly 0, never negative, and on-hand undecremented.
+    expect(await getStockView(app, variantId)).toEqual({ onHand: units, reserved: units, available: 0 });
+    expect(await countHeldReservations(app, variantId)).toBe(units);
+
+    const orders = await settledOrderStatuses(variantId);
+    expect(orders.filter((status) => status === 'PENDING')).toHaveLength(units);
+    expect(orders.filter((status) => status === 'REJECTED')).toHaveLength(CONTENDERS - units);
+  }
+
+  it('sells the last unit to exactly one of many buyers and refuses the rest', async () => {
     const { variantId, statuses } = await race(1, CONTENDERS);
 
-    const winners = statuses.filter((s) => s === 201);
-    const losers = statuses.filter((s) => s === 409);
-    expect(winners).toHaveLength(1);
-    expect(losers).toHaveLength(CONTENDERS - 1); // every non-winner answered a clean 409, none errored
-
-    const stock = await getStockView(app, variantId);
-    // Available pinned at exactly 0, never negative, and on-hand undecremented.
-    expect(stock).toEqual({ onHand: 1, reserved: 1, available: 0 });
-    expect(await countHeldReservations(app, variantId)).toBe(1);
-    // Every loser's checkout rolled fully back: exactly one order carries the SKU (the winner's).
-    expect(await orderLineCount(variantId)).toBe(1);
+    expect(statuses.filter((s) => s === 201)).toHaveLength(1);
+    // Refused cleanly, none errored: sold out, or the Try outlived its budget.
+    expect(statuses.filter((s) => s === 409 || s === 503)).toHaveLength(CONTENDERS - 1);
+    await expectSoldOut(variantId, 1);
   });
 
   // K equals the default optimistic retry budget (3) on purpose: every CAS miss implies a rival's
@@ -91,11 +101,7 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     const { variantId, statuses } = await race(K, CONTENDERS);
 
     expect(statuses.filter((s) => s === 201)).toHaveLength(K);
-    expect(statuses.filter((s) => s === 409)).toHaveLength(CONTENDERS - K);
-
-    const stock = await getStockView(app, variantId);
-    expect(stock).toEqual({ onHand: K, reserved: K, available: 0 });
-    expect(await countHeldReservations(app, variantId)).toBe(K);
-    expect(await orderLineCount(variantId)).toBe(K);
+    expect(statuses.filter((s) => s === 409 || s === 503)).toHaveLength(CONTENDERS - K);
+    await expectSoldOut(variantId, K);
   });
 });

@@ -8,6 +8,7 @@ export const CHECKOUT_SAGA_DEFAULTS = {
   CHECKOUT_TRY_TIMEOUT_MS: 3000,
   CHECKOUT_RESERVE_WAIT_MS: 6000,
   CHECKOUT_CANCEL_WAIT_MS: 10_000,
+  CHECKOUT_RETRY_AFTER_SEC: 5,
   CHECKOUT_REAPER_INTERVAL_MS: 60_000,
   CHECKOUT_RESERVING_ORPHAN_SEC: 60,
   SAGA_AUTH_GRACE_SEC: 180,
@@ -37,6 +38,8 @@ export const checkoutSagaConfig = () => ({
     tryTimeoutMs: int('CHECKOUT_TRY_TIMEOUT_MS'),
     reserveWaitMs: int('CHECKOUT_RESERVE_WAIT_MS'),
     cancelWaitMs: int('CHECKOUT_CANCEL_WAIT_MS'),
+    // Retry-After on a checkout or cancel that got no answer in its wait.
+    retryAfterSec: int('CHECKOUT_RETRY_AFTER_SEC'),
     reaper: {
       enabled: process.env.CHECKOUT_REAPER_ENABLED !== 'false',
       intervalMs: int('CHECKOUT_REAPER_INTERVAL_MS'),

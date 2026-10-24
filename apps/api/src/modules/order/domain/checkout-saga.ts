@@ -238,7 +238,7 @@ export function canCancel(state: CheckoutSagaState): boolean {
 
 export function onCancelRequested(state: CheckoutSagaState, by: CancelBy): Transition {
   if (state.step !== CheckoutStep.AWAITING_AUTH) return noop(state);
-  // Same reasons the legacy cancel route writes, so the two read alike.
+  // The reasons cancelled orders carried before the saga, so old and new rows read alike.
   const reason = by === 'buyer' ? 'user:cancel' : 'admin:cancel';
   return compensate(
     { ...state, orderStatus: OrderStatus.CANCELLED },

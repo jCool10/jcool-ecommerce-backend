@@ -1,18 +1,17 @@
 import type { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { and, desc, eq } from 'drizzle-orm';
 import request from 'supertest';
+import { PAYMENT_GATEWAY } from '../../../src/modules/payment/application/ports/payment-gateway.port';
+import { FakeSignerGatewayAdapter } from '../../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../bearer.helper';
+import { eventually } from '../eventually';
 import { idempotencyKeyHeader } from '../idempotency.helper';
-import {
-  checkoutSessionCompleted,
-  checkoutSessionExpired,
-  signWebhook,
-  type SessionCharge,
-  type SignedWebhook,
-} from '../sign-webhook.helper';
+import { checkoutSessionCompleted, signWebhook, type SessionCharge, type SignedWebhook } from '../sign-webhook.helper';
 import { createTestProduct } from './catalog.fixture';
+import { relayAuthorization } from './checkout-saga.fixture';
 import { seedStock } from './inventory.fixture';
 import { newPrincipalToken } from './principal.fixture';
 
@@ -83,21 +82,40 @@ export async function placeAndOpenSession(app: INestApplication, sku: SellableSk
   };
 }
 
-export type WebhookOutcome = 'PAID' | 'FAILED';
+/** A PENDING order taken to PAID: `/pay`, the buyer's card hold, its signed webhook, then the saga. */
+export async function driveToPaid(app: INestApplication, token: string, orderId: string): Promise<void> {
+  const pay = await openSession(app, token, orderId).expect(201);
+  await authorizeSession(app, pay.body.providerSessionId as string, orderId);
+  await relayAuthorization(app, orderId);
+  await untilOrderStatus(app, orderId, 'PAID');
+}
 
-export function signOutcome(
-  secret: string,
+/**
+ * The buyer completes the manual-capture session: the fake gateway now holds the charge and the
+ * provider reports it with a signed `checkout.session.completed`. Returns the intent id.
+ */
+export async function authorizeSession(
+  app: INestApplication,
   sessionId: string,
-  charge: SessionCharge,
-  outcome: WebhookOutcome,
-  eventId: string,
-  paymentIntent = 'pi_e2e',
-): SignedWebhook {
-  const event =
-    outcome === 'PAID'
-      ? checkoutSessionCompleted(sessionId, charge, { eventId, paymentIntent })
-      : checkoutSessionExpired(sessionId, { eventId });
-  return signWebhook({ secret, event });
+  orderId: string,
+  eventId = `evt_auth_${orderId}`,
+): Promise<string> {
+  const gateway = app.get(PAYMENT_GATEWAY);
+  if (!(gateway instanceof FakeSignerGatewayAdapter)) throw new Error('authorizeSession needs the fake gateway');
+  const intentId = gateway.authorize(sessionId);
+  const { amountMinor, currency } = await readPayment(app, orderId);
+  const secret = app.get(ConfigService).getOrThrow<string>('payment.webhookSecret');
+  const event = checkoutSessionCompleted(sessionId, { amountMinor, currency, paymentStatus: 'unpaid' }, { eventId });
+  await postWebhook(app, signWebhook({ secret, event })).expect(200);
+  return intentId;
+}
+
+export function untilOrderStatus(app: INestApplication, orderId: string, status: string, timeoutMs?: number) {
+  return eventually(
+    async () => (await readOrder(app, orderId))?.status,
+    (current) => current === status,
+    timeoutMs,
+  );
 }
 
 export function postWebhook(app: INestApplication, signed: SignedWebhook): request.Test {
@@ -135,15 +153,6 @@ export async function readStock(app: INestApplication, variantId: string) {
   return row;
 }
 
-/**
- * The hold an order placed. `variantId` narrows it for the multi-line cases; an order with one line
- * has exactly one reservation either way.
- */
-export async function readReservation(app: INestApplication, orderId: string, variantId?: string) {
-  const [row] = await reservationsFor(app, orderId, variantId);
-  return row;
-}
-
 export async function reservationsFor(app: INestApplication, orderId: string, variantId?: string) {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const byOrder = eq(schema.reservations.orderId, orderId);
@@ -151,15 +160,6 @@ export async function reservationsFor(app: INestApplication, orderId: string, va
     .select()
     .from(schema.reservations)
     .where(variantId === undefined ? byOrder : and(byOrder, eq(schema.reservations.variantId, variantId)));
-}
-
-/** Ages a hold past its expiry, the one thing a test cannot wait for. */
-export async function lapseReservation(app: INestApplication, orderId: string, minutesAgo = 30): Promise<void> {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  await db
-    .update(schema.reservations)
-    .set({ expiresAt: new Date(Date.now() - minutesAgo * 60_000) })
-    .where(eq(schema.reservations.orderId, orderId));
 }
 
 export interface LedgerAuditReport {
@@ -181,20 +181,31 @@ export async function auditLedgerInvariants(
   seededOnHand: Record<string, number> = {},
 ): Promise<LedgerAuditReport> {
   const db = app.get<DrizzleDB>(DRIZZLE);
-  const [orders, reservations, payments, stock] = await Promise.all([
+  const [orders, reservations, payments, stock, stockHeaders, paymentHeaders] = await Promise.all([
     db.select().from(schema.orders),
     db.select().from(schema.reservations),
     db.select().from(schema.payments),
     db.select().from(schema.stockLevels),
+    db.select().from(schema.reservationOrders),
+    db.select().from(schema.paymentOrders),
   ]);
 
   const violations: string[] = [];
   const pending: string[] = [];
 
+  for (const header of paymentHeaders) {
+    // `ck_payment_orders_amount_when_not_fenced` enforces it; re-asserted so dropping it fails here too.
+    if (header.status !== 'FENCED' && header.amountMinor === null) {
+      violations.push(`payment header ${header.orderId} is ${header.status} without a charge`);
+    }
+  }
+
   for (const order of orders) {
     const holds = reservations.filter((r) => r.orderId === order.id);
     const linked = payments.filter((p) => p.orderId === order.id);
     const succeeded = linked.filter((p) => p.status === 'SUCCEEDED');
+    const stockHeader = stockHeaders.find((h) => h.orderId === order.id)?.status;
+    const paymentHeader = paymentHeaders.find((h) => h.orderId === order.id)?.status;
 
     if (succeeded.length > 1) {
       violations.push(`order ${order.id}: ${succeeded.length} SUCCEEDED payments: double charge`);
@@ -217,20 +228,39 @@ export async function auditLedgerInvariants(
         if (succeeded.length !== 1) {
           violations.push(`PAID order ${order.id} has no SUCCEEDED payment: [${statuses(linked)}]`);
         }
+        if (stockHeader !== 'COMMITTED') violations.push(`PAID order ${order.id} has stock header ${stockHeader}`);
+        if (paymentHeader !== 'CAPTURED') violations.push(`PAID order ${order.id} has payment header ${paymentHeader}`);
         break;
       }
       case 'FAILED':
       case 'EXPIRED':
       case 'CANCELLED': {
         if (holds.length === 0) violations.push(`${order.status} order ${order.id} settled without ever holding stock`);
-        const wrong = holds.filter((r) => r.status !== 'RELEASED');
+        // RESTOCKED is a commit undone after a failed capture: the units are back on the shelf.
+        const wrong = holds.filter((r) => r.status !== 'RELEASED' && r.status !== 'RESTOCKED');
         if (wrong.length > 0)
           violations.push(`${order.status} order ${order.id} still holds stock: ${statuses(wrong)}`);
         if (succeeded.length > 0) {
           violations.push(`${order.status} order ${order.id} carries a SUCCEEDED payment: money without an order`);
         }
+        const authorized = linked.filter((p) => p.status === 'AUTHORIZED');
+        if (authorized.length > 0 || paymentHeader === 'AUTHORIZED') {
+          violations.push(`${order.status} order ${order.id} left a card hold in place`);
+        }
+        if (stockHeader === 'HELD') violations.push(`${order.status} order ${order.id} has its stock header HELD`);
         break;
       }
+      case 'REJECTED': {
+        const held = holds.filter((r) => r.status === 'HELD');
+        if (held.length > 0) violations.push(`REJECTED order ${order.id} still holds stock: ${statuses(held)}`);
+        if (stockHeader === 'HELD') violations.push(`REJECTED order ${order.id} has its stock header HELD`);
+        if (linked.length > 0) violations.push(`REJECTED order ${order.id} has payments: [${statuses(linked)}]`);
+        break;
+      }
+      case 'RESERVING':
+      case 'CONFIRMING':
+        violations.push(`order ${order.id} is still ${order.status}: its saga never got past that step`);
+        break;
       default:
         // DRAFT, or anything a later state machine adds: unclassified, so unaudited, not benign.
         violations.push(`order ${order.id} sits in ${order.status}, which this audit does not know how to check`);

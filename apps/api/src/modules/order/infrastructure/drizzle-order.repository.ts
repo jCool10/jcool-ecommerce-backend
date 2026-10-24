@@ -1,5 +1,5 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { and, asc, count, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lt, notInArray, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
@@ -12,13 +12,11 @@ import {
   type AdminOrderPageQuery,
   type ApplyOrderChangeInput,
   type ApplyTryResultInput,
-  type CheckoutPersistResult,
   type OrderPage,
   type OrderPageQuery,
   type OrderRepositoryPort,
   type ReservingCreateResult,
   type SagaWriteResult,
-  type StalePendingOrder,
 } from '../application/ports/order-repository.port';
 import {
   IDEMPOTENCY_STORE,
@@ -33,6 +31,9 @@ type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
 
 const IN_FLIGHT_STATUSES = [OrderStatus.RESERVING, OrderStatus.PENDING, OrderStatus.CONFIRMING];
+// Never placed as far as the buyer knows: every buyer read answers as if the order did not exist.
+const HIDDEN_FROM_BUYER = [OrderStatus.RESERVING, OrderStatus.REJECTED];
+const visibleToBuyer = (userId: string) => and(eq(orders.userId, userId), notInArray(orders.status, HIDDEN_FROM_BUYER));
 
 @Injectable()
 export class DrizzleOrderRepository implements OrderRepositoryPort {
@@ -43,75 +44,6 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     @Inject(IDEMPOTENCY_STORE) private readonly idempotencyStore: IdempotencyStorePort,
   ) {}
 
-  async createCheckout(
-    order: Order,
-    idempotencyKey: string | null,
-    reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
-    appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
-    complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
-  ): Promise<CheckoutPersistResult> {
-    // Before the transaction, so no lock waits on the id service. A replayed key wastes them.
-    const [orderId, ...itemIds] = await this.idGenerator.mint(1 + order.items.length);
-    return this.db.transaction(async (tx) => {
-      // One checkout per user at a time, so the pending count below is race-safe. Taken before any
-      // stock row lock, so it cannot cycle with them.
-      await tx.execute(sql`select pg_advisory_xact_lock(${order.userId}::bigint)`);
-
-      if (idempotencyKey) {
-        // Exit-defense: a prior attempt already committed an order under this key (its idempotency
-        // row was then reclaimed). Serialized by the idempotency-key entry gate — at most one
-        // checkout runs per key at a time — so this read-then-insert cannot lose a race; the unique
-        // `orders.idempotency_key` is the final backstop if that ever fails to hold.
-        const [existing] = await tx
-          .select({ id: orders.id })
-          .from(orders)
-          .where(and(eq(orders.idempotencyKey, idempotencyKey), eq(orders.userId, order.userId)))
-          .limit(1);
-        if (existing) {
-          return { orderId: existing.id, created: false };
-        }
-      }
-
-      const [{ value: pendingCount }] = await tx
-        .select({ value: count() })
-        .from(orders)
-        .where(and(eq(orders.userId, order.userId), eq(orders.status, OrderStatus.PENDING)));
-      if (pendingCount >= MAX_PENDING_ORDERS_PER_USER) {
-        throw new TooManyPendingOrdersError(order.userId, pendingCount);
-      }
-
-      await tx.insert(orders).values({
-        id: orderId,
-        userId: order.userId,
-        status: order.status,
-        currency: order.currency,
-        totalAmount: order.totalAmountMinor,
-        idempotencyKey,
-        placedAt: order.placedAt,
-      });
-
-      await tx.insert(orderItems).values(
-        order.items.map((item, index) => ({
-          id: itemIds[index],
-          orderId,
-          skuId: item.skuId,
-          productName: item.productName,
-          unitPrice: item.unitPriceMinor,
-          quantity: item.quantity,
-        })),
-      );
-
-      // Same tx as the insert above, so there can be no placed order without its event and no event
-      // for an order that never committed. The event goes first because appending mints an id, and
-      // `reserve` takes the stock row locks every other checkout queues on. `complete` is last: any
-      // earlier failure aborts before the idempotency key is marked COMPLETED.
-      await appendEvent(tx, orderId);
-      await reserve(tx, orderId);
-      await complete(tx, orderId);
-      return { orderId, created: true };
-    });
-  }
-
   async createReserving({
     order,
     idempotencyKey,
@@ -119,11 +51,15 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     order: Order;
     idempotencyKey: string | null;
   }): Promise<ReservingCreateResult> {
+    // Before the transaction, so no lock waits on the id service. A replayed key wastes them.
     const [orderId, ...itemIds] = await this.idGenerator.mint(1 + order.items.length);
     return this.db.transaction(async (tx) => {
+      // One checkout per user at a time, so the in-flight count below is race-safe.
       await tx.execute(sql`select pg_advisory_xact_lock(${order.userId}::bigint)`);
 
       if (idempotencyKey) {
+        // Exit-defense for a key whose idempotency row was reclaimed after its order committed. The
+        // key's entry gate already serializes this read-then-insert; the unique column backstops it.
         const [existing] = await tx
           .select()
           .from(orders)
@@ -224,22 +160,12 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
       if (!from.includes(order.status)) return 'stale';
 
       const changed = moveForSaga(order, to, { now: new Date(), reason, paymentRef });
-      await this.persistFinalization(changed, tx);
+      await this.writeStatusChange(changed, tx);
       if (emitsEvent) {
         await this.outboxWriter.append(tx, toFinalizedOutboxRecord(changed.toFinalizedEvent()), { id: outboxId });
       }
       return 'applied';
     });
-  }
-
-  async withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>, join?: DrizzleTx): Promise<T> {
-    // Reused as-is rather than nested: a nested drizzle transaction is a SAVEPOINT, which would let
-    // this unit roll back on its own and leave the caller's — the inbox claim, say — committed.
-    return join ? fn(join) : this.db.transaction(fn);
-  }
-
-  async findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null> {
-    return (await this.lockOrder(orderId, tx))?.order ?? null;
   }
 
   // The order row only: items are immutable snapshots, so they need no lock.
@@ -262,9 +188,9 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
       .orderBy(orderItems.createdAt, orderItems.id);
   }
 
-  async persistFinalization(order: Order, tx: DrizzleTx): Promise<void> {
+  private async writeStatusChange(order: Order, tx: DrizzleTx): Promise<void> {
     if (order.id === null) {
-      throw new Error('Cannot persist finalization for an unsaved order');
+      throw new Error('Cannot write a status change for an unsaved order');
     }
     await tx
       .update(orders)
@@ -281,7 +207,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     const [row] = await this.db
       .select()
       .from(orders)
-      .where(and(eq(orders.id, orderId), eq(orders.userId, userId)))
+      .where(and(eq(orders.id, orderId), visibleToBuyer(userId)))
       .limit(1);
     if (!row) {
       return null;
@@ -308,7 +234,7 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
   }
 
   findPageForUser(userId: string, query: OrderPageQuery): Promise<OrderPage> {
-    return this.readPage(eq(orders.userId, userId), query);
+    return this.readPage(visibleToBuyer(userId), query);
   }
 
   findPage({ status, userId, ...query }: AdminOrderPageQuery): Promise<OrderPage> {
@@ -339,40 +265,55 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
           .orderBy(desc(orders.createdAt), desc(orders.id))
           .limit(pageSize)
           .offset((page - 1) * pageSize);
-        if (orderRows.length === 0) {
-          return { items: [], total };
-        }
-
-        const ids = orderRows.map((row) => row.id);
-        const itemRows = await tx
-          .select()
-          .from(orderItems)
-          .where(inArray(orderItems.orderId, ids))
-          .orderBy(orderItems.createdAt, orderItems.id);
-
-        const itemsByOrder = new Map<string, OrderItemRow[]>();
-        for (const item of itemRows) {
-          const bucket = itemsByOrder.get(item.orderId) ?? [];
-          bucket.push(item);
-          itemsByOrder.set(item.orderId, bucket);
-        }
-
-        return { items: orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? [])), total };
+        return { items: await this.withItems(orderRows, tx), total };
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
   }
 
-  async findStalePending({ placedBefore, limit }: { placedBefore: Date; limit: number }): Promise<StalePendingOrder[]> {
-    // `placed_at < :t` also drops NULLs, so the cast below is safe.
+  async findReservingOlderThan(cutoff: Date, limit: number): Promise<Order[]> {
     const rows = await this.db
-      .select({ id: orders.id, placedAt: orders.placedAt })
+      .select()
       .from(orders)
-      .where(and(eq(orders.status, OrderStatus.PENDING), lt(orders.placedAt, placedBefore)))
-      .orderBy(asc(orders.placedAt))
-      .limit(limit)
-      .for('update', { skipLocked: true });
-    return rows.map((row) => ({ id: row.id, placedAt: row.placedAt as Date }));
+      .where(and(eq(orders.status, OrderStatus.RESERVING), lt(orders.placedAt, cutoff)))
+      .orderBy(asc(orders.placedAt), asc(orders.id))
+      .limit(limit);
+    return this.withItems(rows, this.db);
+  }
+
+  async deleteRejectedBefore(cutoff: Date, limit: number): Promise<number> {
+    // No LIMIT on DELETE in Postgres, so the batch comes from a subquery; order_items cascade.
+    const doomed = this.db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(and(eq(orders.status, OrderStatus.REJECTED), lt(orders.finalizedAt, cutoff)))
+      .limit(limit);
+    const deleted = await this.db.delete(orders).where(inArray(orders.id, doomed)).returning({ id: orders.id });
+    return deleted.length;
+  }
+
+  private async withItems(orderRows: OrderRow[], db: DrizzleDB | DrizzleTx): Promise<Order[]> {
+    if (orderRows.length === 0) {
+      return [];
+    }
+    const itemRows = await db
+      .select()
+      .from(orderItems)
+      .where(
+        inArray(
+          orderItems.orderId,
+          orderRows.map(({ id }) => id),
+        ),
+      )
+      .orderBy(orderItems.createdAt, orderItems.id);
+
+    const itemsByOrder = new Map<string, OrderItemRow[]>();
+    for (const item of itemRows) {
+      const bucket = itemsByOrder.get(item.orderId) ?? [];
+      bucket.push(item);
+      itemsByOrder.set(item.orderId, bucket);
+    }
+    return orderRows.map((row) => toDomainOrder(row, itemsByOrder.get(row.id) ?? []));
   }
 }
 

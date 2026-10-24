@@ -99,6 +99,17 @@ describe('OutboxRelay', () => {
     expect(published).toEqual(rows.map((r) => [r.id, jobIdFor(r.id)]));
   });
 
+  // BullMQ takes attempts from the producer, so the relay is where the long ladder is set.
+  it('adds a payment.authorized job on the long ladder the config sizes', async () => {
+    const t = build([row({ aggregateType: 'Payment', eventType: 'payment.authorized' }), row()]);
+
+    await t.relay.runOnce(10);
+
+    const [[, , authorized], [, , placed]] = t.add.mock.calls as [unknown, unknown, JobsOptions][];
+    expect(authorized).toMatchObject({ attempts: 15, backoff: { type: 'order-paid' } });
+    expect(placed.attempts).toBeUndefined();
+  });
+
   // Each refusal can cost a full command timeout while the batch's row locks stay held.
   it('gives up on the batch after three refusals', async () => {
     const t = build(Array.from({ length: 20 }, () => row()));

@@ -22,6 +22,8 @@ const SKU = testId();
 const ORDER_A = testId();
 const ORDER_B = testId();
 
+const holdOptions = () => ({ expiresAt: new Date(Date.now() + 60 * 60_000), reservationIds: [testId()] });
+
 interface Contenders {
   db: DrizzleDB;
   pool: Pool;
@@ -48,14 +50,14 @@ async function forceCasMiss(
   const aHasReserved = new Promise<void>((resolve) => (aReserved = resolve));
 
   const a = db.transaction(async (tx) => {
-    await repo.reserveOptimistic(tx, ORDER_A, [line]);
+    await repo.reserveOptimistic(tx, ORDER_A, [line], holdOptions());
     aReserved();
     await aMayCommit; // hold the tx open so B contends against the stale version
   });
   await aHasReserved;
 
   const b = db.transaction(async (tx) => {
-    await repo.reserveOptimistic(tx, ORDER_B, [line]);
+    await repo.reserveOptimistic(tx, ORDER_B, [line], holdOptions());
   });
   // B is expected to reject, and it is not observed until the `allSettled` below. Marking it handled
   // at creation keeps a failure before that point from surfacing as an unhandled rejection at pool

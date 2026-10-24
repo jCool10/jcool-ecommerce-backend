@@ -1,6 +1,6 @@
 import type { DomainEvent } from '@jcool/kernel';
 
-/** `paymentRef` is null when the outcome carried no gateway handle — the sweep can confirm PAID without echoing one. */
+/** `paymentRef` is null only when the change that paid the order named no payment. */
 export class OrderPaidEvent implements DomainEvent {
   readonly eventName = 'order.paid';
 

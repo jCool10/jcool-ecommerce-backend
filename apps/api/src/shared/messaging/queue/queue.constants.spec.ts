@@ -74,10 +74,14 @@ describe('jobOptionsFor', () => {
     expect(jobOptionsFor('order.placed', 15)).toEqual({});
   });
 
-  // The dead-letter fix: these two used to fall through to the short shared ladder (~2 minutes),
-  // dead-lettering long before a Stripe Checkout Session dies on its own.
-  it('gives order.expired and order.cancelled the same long ladder as order.paid', () => {
-    expect(jobOptionsFor('order.expired', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
-    expect(jobOptionsFor('order.cancelled', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
+  // Forwarding it waits on Temporal; a short ladder would dead-letter a buyer's payment in a brief outage.
+  it('puts payment.authorized on the same long ladder as order.paid', () => {
+    expect(jobOptionsFor('payment.authorized', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
+  });
+
+  // The saga closes the checkout session now; these two only record.
+  it('leaves order.expired and order.cancelled on the defaults', () => {
+    expect(jobOptionsFor('order.expired', 15)).toEqual({});
+    expect(jobOptionsFor('order.cancelled', 15)).toEqual({});
   });
 });

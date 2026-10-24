@@ -3,6 +3,7 @@ import type { DrizzleDB } from '@shared/infrastructure/database/drizzle.tokens';
 import type { MetricsPort } from '@jcool/metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { UnhandledEventError } from '../errors';
+import type { OrderEventsHandler } from '../handlers/order-events.handler';
 import type { InboxStore } from '../inbox/inbox.store';
 import { dispatcherWith, type DispatcherHandlerDoubles } from '../testing/domain-event-dispatcher.double';
 import { sampleId } from '@shared/testing/id-generator.double';
@@ -89,8 +90,10 @@ describe('DomainEventProcessor', () => {
   });
 
   it('counts a failed consume under a bounded event label', async () => {
-    const closeExpired = vi.fn().mockRejectedValue(new Error('handler exploded'));
-    const { processor, recordEventConsumed } = build({ handlers: { closeExpired } });
+    const orderEvents = { record: vi.fn().mockRejectedValue(new Error('handler exploded')) };
+    const { processor, recordEventConsumed } = build({
+      handlers: { orderEvents: orderEvents as unknown as OrderEventsHandler },
+    });
 
     await expect(processor.process(job({ eventType: 'order.expired' }))).rejects.toThrow('handler exploded');
     // A new id, because this fake keeps the claim a real rollback would release.

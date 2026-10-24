@@ -225,6 +225,13 @@
       "when": 1792569015539,
       "tag": "0031_order_saga_statuses_and_payment_deadline",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792745429664,
+      "tag": "0032_drop_pending_orders_placed_at_index",
+      "breakpoints": true
     }
   ]
 }

@@ -67,6 +67,7 @@ describe('configuration: checkout saga', () => {
       payCutoffSec: CHECKOUT_SAGA_DEFAULTS.CHECKOUT_PAY_CUTOFF_SEC,
       tryTimeoutMs: 3000,
       reserveWaitMs: 6000,
+      retryAfterSec: 5,
       activityConcurrency: 2,
       localActivityConcurrency: 2,
       temporal: { address: 'localhost:7233', namespace: 'jcool', taskQueue: 'checkout-saga', workerEnabled: true },

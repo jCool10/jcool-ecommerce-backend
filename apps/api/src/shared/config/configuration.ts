@@ -106,19 +106,8 @@ export default () => ({
     enabled: process.env.RECONCILE_ENABLED !== 'false',
     intervalMs: parseIntOr(process.env.RECONCILE_INTERVAL_MS, 60_000),
     batchSize: parseIntOr(process.env.RECONCILE_BATCH_SIZE, 50),
-    // Below this age an order is still waiting on a webhook probably in flight; polling burns a call.
+    // Below this age a payment is still waiting on a webhook probably in flight; polling burns a call.
     staleAfterSec: parseIntOr(process.env.ORDER_STALE_THRESHOLD_SEC, 120),
-    // Matches INVENTORY_RESERVATION_TTL, so an order never outlives the stock hold it depends on.
-    orderTtlSec: parseIntOr(process.env.ORDER_TTL_SEC, 900),
-  },
-  reservationSweep: {
-    enabled: process.env.RESERVATION_SWEEP_ENABLED !== 'false',
-    intervalMs: parseIntOr(process.env.RESERVATION_SWEEP_INTERVAL_MS, 60_000),
-    batchSize: parseIntOr(process.env.RESERVATION_SWEEP_BATCH_SIZE, 50),
-    // Extra age past a hold's `expires_at` before this sweep expires the order. A full ORDER_TTL_SEC
-    // by default, so the gateway-driven reconcile — the only sweep that can also close the checkout
-    // session — always gets there first, and this one only clears what that could not settle.
-    graceSec: parseIntOr(process.env.RESERVATION_SWEEP_GRACE_SEC, 900),
   },
   retention: {
     ...retentionConfig().retention,
@@ -133,6 +122,8 @@ export default () => ({
     // Must outlast the GATEWAY's redelivery window, not the queue's — this table is the replay
     // defence at ingress. Stripe retries for ~72h; floored at 14 days in env.validation.
     webhookEventDays: parseIntOr(process.env.RETENTION_WEBHOOK_EVENT_DAYS, 30),
+    // Days a REJECTED order is kept after the saga rejected it; buyers never see one.
+    rejectedOrderDays: parseIntOr(process.env.RETENTION_REJECTED_ORDER_DAYS, 30),
   },
   catalog: {
     // Catalog's own fresh window; the stale window, jitter and lock bounds below are shared. The
@@ -198,9 +189,6 @@ export default () => ({
   inventory: {
     // 'pessimistic' (SELECT ... FOR UPDATE) or 'optimistic' (version CAS + retry).
     lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',
-    // How far ahead a HELD reservation stamps `expiresAt` — the deadline the expiry sweep reclaims
-    // an unpaid hold from.
-    reservationTtl: process.env.INVENTORY_RESERVATION_TTL ?? '15m',
     // Re-CAS attempts after losing a version race before giving up with a 409 (0 = never retry).
     // Real shortfalls never consume a retry. A NaN budget would leave the CAS loop unbounded, so
     // this must never fall through to a bare parseInt.

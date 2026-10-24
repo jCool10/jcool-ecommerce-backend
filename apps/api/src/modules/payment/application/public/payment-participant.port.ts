@@ -3,6 +3,8 @@ import type { PaymentOrderStatus } from '../../domain/payment-order-status';
 export const PAYMENT_PARTICIPANT = Symbol('PAYMENT_PARTICIPANT');
 
 export type { PaymentOrderStatus };
+// What every command throws when Stripe or its breaker refuses; the caller may tell it from a DB fault.
+export { PaymentGatewayError } from '../ports/payment-gateway.port';
 
 export interface OpenSessionInput {
   orderId: string;

@@ -73,6 +73,8 @@ describe('checkout saga env', () => {
       ['CHECKOUT_REAPER_INTERVAL_MS', '999', false],
       ['CHECKOUT_REAPER_INTERVAL_MS', '1000', true],
       ['CHECKOUT_RESERVING_ORPHAN_SEC', '0', false],
+      ['CHECKOUT_RETRY_AFTER_SEC', '0', false],
+      ['CHECKOUT_RETRY_AFTER_SEC', '1', true],
       ['SAGA_AUTH_GRACE_SEC', '-1', false],
       ['SAGA_AUTH_GRACE_SEC', '0', true],
       ['SAGA_ACTIVITY_TIMEOUT_MS', '999', false],

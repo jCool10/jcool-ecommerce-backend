@@ -29,9 +29,9 @@ export interface TccWebhookResult {
 type Applied = Pick<TccWebhookResult, 'outcome' | 'reason'>;
 
 /**
- * The webhook for payments opened through the participant. Unlike the legacy path it asks Stripe
- * before writing (under manual capture only the intent shows the hold), so the round-trip and every
- * mint happen first and the transaction only logs the event and applies.
+ * The webhook for payments opened through the participant. It asks Stripe before writing (under
+ * manual capture only the intent shows the hold), so the round-trip and every mint happen first and
+ * the transaction only logs the event and applies.
  */
 @Injectable()
 export class ProcessTccWebhookEventUseCase {
@@ -45,7 +45,7 @@ export class ProcessTccWebhookEventUseCase {
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
   ) {}
 
-  /** Null when the event is not about a participant payment; the legacy path takes it. */
+  /** Null when the event is not about a participant payment. */
   async execute(event: ValidEvent): Promise<TccWebhookResult | null> {
     if (event.type !== COMPLETED && event.type !== EXPIRED) return null;
     const { sessionId } = readCheckoutSession(event.payload);

@@ -111,11 +111,6 @@ export class Order {
     return Money.of(this.totalAmountMinor, this.currency);
   }
 
-  /** Throws `OrderTransitionError` from any non-DRAFT state; the use case maps that to a 409. */
-  place(now: Date): Order {
-    return this.moveTo(OrderStatus.PENDING, { placedAt: now });
-  }
-
   /** Placed through the checkout saga: stock is not held until its Try answers. */
   reserve(now: Date, paymentDeadlineAt: Date): Order {
     return this.moveTo(OrderStatus.RESERVING, { placedAt: now, paymentDeadlineAt });
@@ -140,7 +135,7 @@ export class Order {
     return isTerminal(this.status);
   }
 
-  /** Idempotency is the use case's job (terminal check + row lock) before it ever gets here. */
+  /** Idempotency is the caller's job (status guard under the row lock) before it ever gets here. */
   finalize(outcome: FinalizeOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
     return this.moveTo(outcome, {
       finalizedAt: meta.now,

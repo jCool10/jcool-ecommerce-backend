@@ -17,9 +17,10 @@ import type {
   TryReserveOutcome,
 } from '../public/inventory-participant.port';
 import { STOCK_REPOSITORY, type StockRepositoryPort } from './ports/stock-repository.port';
-import type { LockStrategy } from './reserve-stock.use-case';
 
 const LOG_CONTEXT = 'InventoryParticipant';
+
+type LockStrategy = 'pessimistic' | 'optimistic';
 
 type CommandOp = 'commit' | 'release' | 'restock';
 

@@ -14,7 +14,6 @@ export function fakeStockRepository(overrides: Partial<StockRepositoryPort> = {}
     commitReservations: () => Promise.resolve(NOTHING_RESOLVED),
     releaseReservations: () => Promise.resolve(NOTHING_RESOLVED),
     restockReservations: () => Promise.resolve(NOTHING_RESOLVED),
-    findExpiredHolds: () => Promise.resolve([]),
     insertHeader: () => Promise.resolve(true),
     insertFencedHeader: () => Promise.resolve(true),
     findHeaderForUpdate: () => Promise.resolve(null),

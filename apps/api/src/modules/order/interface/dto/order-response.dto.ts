@@ -1,17 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { OrderStatus } from '../../domain/order-status';
+import { ORDER_STATUSES, OrderStatus } from '../../domain/order-status';
 import type { OrderView } from '../../application/order-view.mapper';
-
-// What the API has always advertised, in its published order. The saga's statuses stay off the
-// contract until the public checkout produces them.
-export const PUBLISHED_ORDER_STATUSES: readonly OrderStatus[] = [
-  OrderStatus.DRAFT,
-  OrderStatus.PENDING,
-  OrderStatus.PAID,
-  OrderStatus.FAILED,
-  OrderStatus.EXPIRED,
-  OrderStatus.CANCELLED,
-];
 
 export class OrderItemResponseDto {
   @ApiProperty({ example: '137465797020397179', description: 'Product-variant id (SKU)' })
@@ -34,7 +23,8 @@ export class OrderResponseDto {
   @ApiProperty({ example: '137465797020397179' })
   id!: string;
 
-  @ApiProperty({ enum: PUBLISHED_ORDER_STATUSES, example: OrderStatus.DRAFT })
+  // Buyers never see RESERVING or REJECTED; admins see every status.
+  @ApiProperty({ enum: ORDER_STATUSES, example: OrderStatus.DRAFT })
   status!: OrderStatus;
 
   @ApiProperty({ example: 'VND' })
@@ -55,6 +45,14 @@ export class OrderResponseDto {
   })
   placedAt!: string | null;
 
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: null,
+    description: 'Why the order settled the way it did (user:cancel, admin:cancel, saga:…); null until it settles.',
+  })
+  finalizeReason!: string | null;
+
   @ApiProperty({ type: [OrderItemResponseDto] })
   items!: OrderItemResponseDto[];
 
@@ -65,6 +63,7 @@ export class OrderResponseDto {
       currency: view.currency,
       totalAmountMinor: view.totalAmountMinor,
       placedAt: view.placedAt,
+      finalizeReason: view.finalizeReason,
       items: view.items.map((line) => ({ ...line })),
     };
   }

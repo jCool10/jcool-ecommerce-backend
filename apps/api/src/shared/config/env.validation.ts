@@ -123,38 +123,6 @@ export class EnvironmentVariables extends ApiEnv {
   @Min(0)
   ORDER_STALE_THRESHOLD_SEC?: number;
 
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  ORDER_TTL_SEC?: number;
-
-  @IsOptional()
-  @IsStrictBoolean()
-  RESERVATION_SWEEP_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1000)
-  RESERVATION_SWEEP_INTERVAL_MS?: number;
-
-  // Capped because each distinct order in the batch costs a finalize transaction.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  @Max(500)
-  RESERVATION_SWEEP_BATCH_SIZE?: number;
-
-  // 0 is legal — e2e drives the sweep deterministically.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  RESERVATION_SWEEP_GRACE_SEC?: number;
-
   // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
   @StrictInt()
@@ -167,6 +135,12 @@ export class EnvironmentVariables extends ApiEnv {
   @IsInt()
   @Min(1)
   RETENTION_OUTBOX_DAYS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  RETENTION_REJECTED_ORDER_DAYS?: number;
 
   // A correctness bound: while the queue can still redeliver a message, its claim is the only thing
   // stopping the effect being applied twice. The floor is DERIVED from the queue's failed-job
@@ -320,12 +294,6 @@ export class EnvironmentVariables extends ApiEnv {
   @IsOptional()
   @IsEnum(InventoryLockStrategy)
   INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
-
-  // Duration form ("15m"/"1h").
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  INVENTORY_RESERVATION_TTL?: string;
 
   // Capped so a misconfig can't spin the CAS loop while it pins the stock row's write-lock.
   @IsOptional()

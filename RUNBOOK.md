@@ -29,7 +29,9 @@ Conventions used below:
 - [Deploy Elasticsearch](#deploy-elasticsearch)
 - [The id-service's etcd](#the-id-services-etcd)
 - [Operate Temporal](#operate-temporal)
+- [The checkout saga](#the-checkout-saga)
 - [Temporal down](#temporal-down)
+- [Cut over checkout to the saga](#cut-over-checkout-to-the-saga)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
@@ -291,7 +293,7 @@ The CLI reads its Redis URL, queue prefix **and inbox window** through the app's
 
 ## Retention sweeps
 
-Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — five sweeps in the api, the three `auth-tokens:*` ones in the user-service. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
+Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — six sweeps in the api, the three `auth-tokens:*` ones in the user-service. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
 
 Every window is sized by **what still has to be able to retry against the row**, never by disk. Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say only during an incident.
 
@@ -301,6 +303,7 @@ Every window is sized by **what still has to be able to retry against the row**,
 | `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
 | `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
 | `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
+| `order:rejected-orders` | `orders` (and their `order_items`) | `REJECTED` with `finalized_at` older than the window | Every other status — those are the buyer's record | `RETENTION_REJECTED_ORDER_DAYS` (30, floor 1) |
 | `auth-tokens:email-verification` *(user-service)* | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
 | `auth-tokens:password-reset` *(user-service)* | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
 | `auth-tokens:refresh` *(user-service)* | `refresh_tokens` | expired past the token grace **and never revoked**, or revoked past the refresh grace | A revoked token inside its own, much longer grace — whether or not it has also expired | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` (30, floor 30) |
@@ -308,7 +311,7 @@ Every window is sized by **what still has to be able to retry against the row**,
 
 `media:assets` is the only sweep that deletes something outside Postgres, and the only one whose work is not undoable by restoring a backup. It deletes **the object first, then the row**: a crash between the two leaves a row whose object is gone, which the next pass re-scans and finishes (deleting an absent object is a no-op). The reverse order would leave bytes nothing points at — unfindable and billed forever. If a pass dies mid-flight the claim is left at `SWEEPING`, and a claim older than the sweep's own timeout is assumed dead and picked up again.
 
-`reservations` is deliberately **not** in this list. Those rows are released by the reservation expiry sweep, which is a state machine driving stock back to available — not retention.
+`reservations` is deliberately **not** in this list. Those rows are released by the checkout saga, or by the lapsed-hold sweep behind it, which is a state machine driving stock back to available — not retention.
 
 ### The two horizons that are not preferences
 
@@ -362,17 +365,17 @@ When a sweep is actively working off a backlog the planner correctly prefers a s
 
 `payment_refund_owed_total` rising means money reached a buyer's payment for an order that will not be fulfilled. **This service does not refund anything automatically** — automatic refunds are out of scope — so every increment is a person's job, and nothing retries it away.
 
-How it happens: an order dies unpaid (a cancel, or the TTL sweep) while the buyer still has the hosted checkout page open, and they pay on it. Stock has already been released and possibly resold; the money has not been.
+How it happens: checkout sessions are manual capture, so a buyer who authorizes after a cancel or the payment deadline is voided, never charged, and owes nothing. What is left is a webhook reporting cleared money on a session no `payment_orders` header owns: a session opened outside this service, or one whose header a restore or a manual cleanup lost. Nothing will ever capture or void it.
 
-The counter counts **observations, not refunds.** One stranded payment is normally seen twice — usually `expire_session` first, then `webhook_direct` — so do not read the unlabelled total as a count of buyers. The label names the path that noticed, not a separate incident.
+The counter counts **observations, not refunds**: a redelivered webhook is deduplicated before it counts, but the same session reported under two event ids counts twice.
 
 | `source` | Who saw it |
 | -------- | ---------- |
-| `expire_session` | Closing the checkout session failed because it had already taken money (`ExpirePaymentSession`) |
-| `webhook_direct` | The gateway's webhook settled a payment and found the order already terminal (`HandlePaymentWebhook`) |
-| `settlement_event` | The durable half of the same webhook, re-run through the queue (`PaymentEventsHandler`) |
+| `webhook_direct` | The gateway's webhook reported a cleared charge for a session no checkout owns (`HandlePaymentWebhook`); the event is recorded `SKIPPED` |
 
-To act on one, find the order: every source logs at `error` with `orderId` and, for the first two, `paymentId`. Then read the money and the order side back —
+The metric still accepts the labels `expire_session` and `settlement_event` from the settlement path the saga replaced; nothing raises them.
+
+To act on one, find the session: the log line is at `error` with `providerEventId` and `sessionId`. The session's `order_id` metadata in the gateway dashboard names the order, if any. Then read the money and the order side back —
 
 ```sql
 SELECT o.id, o.status, o.finalize_reason, o.total_amount,
@@ -381,13 +384,7 @@ FROM orders o JOIN payments p ON p.order_id = o.id
 WHERE o.id = '<orderId>';
 ```
 
-An order in `CANCELLED` / `EXPIRED` / `FAILED` carrying a `SUCCEEDED` payment is owed a refund. Refund `provider_intent_id` in the gateway's own dashboard; the order and the stock are already correct and must not be edited to match. If the order reads `PAID`, nothing is owed — the settlement won the race after all, and the alarm was a second observation of an order that resolved itself.
-
-**`payment_status = PENDING` does not mean nothing is owed.** The `expire_session` path deliberately leaves the row `PENDING`: it learned about the money from the gateway refusing to close the session, not from a settlement, and it must not fabricate one. If the webhook is late or lost, `PENDING` is all the database will ever say. For that source the authority is the session itself — read `provider_session_id` in the gateway dashboard:
-
-- `payment_status = paid` → the money landed. **Refund owed**, from the session's payment intent.
-- `status = complete`, `payment_status = unpaid` → an asynchronous method is still clearing. Nothing is owed *yet*; re-check later, or wait for `async_payment_failed`, which means nothing was ever taken.
-- `status = expired` → the close did land after all. Nothing owed.
+An order in `CANCELLED` / `EXPIRED` / `FAILED` carrying a `SUCCEEDED` payment is owed a refund. Refund `provider_intent_id` in the gateway's own dashboard; the order and the stock are already correct and must not be edited to match. If the order reads `PAID`, nothing is owed: the saga captured that charge itself. When no local payment matches the session at all, the gateway dashboard is the only record, and the refund is owed from the session's payment intent once its `payment_status` reads `paid`.
 
 To find every candidate rather than chase one log line — orders that died holding money that was never resolved:
 
@@ -400,7 +397,7 @@ WHERE o.status IN ('CANCELLED', 'EXPIRED', 'FAILED')
 ORDER BY o.updated_at DESC;
 ```
 
-`SUCCEEDED` rows there are owed refunds outright. `PENDING` rows need the session check above; most are the ordinary case of a buyer who simply never paid, and their sessions read `expired`.
+`SUCCEEDED` rows there are owed refunds outright. `PENDING` rows are almost always a buyer who simply never paid, and their sessions read `expired`; check the session in the dashboard when in doubt.
 
 ---
 
@@ -520,7 +517,7 @@ The api creates a Stripe Checkout Session on `/pay` and marks the order paid fro
 3. **Deploy**, then check:
    - `POST /orders/<id>/pay` returns a `checkout.stripe.com` URL.
    - Pay it with card `4242 4242 4242 4242`, any future expiry and any CVC.
-   - The order becomes `PAID` through the webhook, not through the redirect.
+   - The order becomes `PAID` once the saga captures the authorization the webhook reported, not through the redirect.
 
 ---
 
@@ -896,7 +893,7 @@ With the replicas stopped (`railway down --service id-service --yes`) the wait s
 
 ## Operate Temporal
 
-`temporal` is a single Temporal server declared in `.railway/railway.ts`, built from `infra/temporal/` (`temporalio/server:1.32.1` plus the CLI and schema tools of `temporalio/admin-tools:1.32.1`). Its histories and visibility live in the `temporal-postgres` database, in the `temporal` and `temporal_visibility` databases. The api's `CheckoutSagaWorker` polls the task queue `checkout-saga` in the namespace `jcool`. Checkout runs dark for now: no route starts a saga, so the worker polls an empty queue and the workflow count stays 0.
+`temporal` is a single Temporal server declared in `.railway/railway.ts`, built from `infra/temporal/` (`temporalio/server:1.32.1` plus the CLI and schema tools of `temporalio/admin-tools:1.32.1`). Its histories and visibility live in the `temporal-postgres` database, in the `temporal` and `temporal_visibility` databases. The api's `CheckoutSagaWorker` polls the task queue `checkout-saga` in the namespace `jcool`. Every checkout starts a saga there ([The checkout saga](#the-checkout-saga)).
 
 Like etcd and Elasticsearch it is outside `cd.yml` and has no repo source. A change to `infra/temporal/` deploys from the repo root with `railway up --ci --service temporal`, then `scripts/railway-wait-for-rollout.sh temporal`.
 
@@ -948,6 +945,55 @@ Two waits sit outside the steps and are not in that sum. Before them, the outbox
 
 ---
 
+## The checkout saga
+
+Every order past `DRAFT` has one workflow, `checkout-<order id>` (a `RESERVING` order whose start never reached Temporal gets it from the reaper), and that workflow is the only writer of the order's status ([decision record](./docs/system-architecture.md#checkout-saga-orchestration-on-temporal-tcc-on-stock-and-payment)). The order row says what the buyer sees; the workflow says where the saga is.
+
+### Read a saga
+
+```sh
+# container (temporal), with t() from Check it
+t workflow list --namespace jcool --query 'WorkflowId="checkout-<order id>"'       # Running, Completed, Terminated, ... (describe leaves it out while running)
+t workflow describe --namespace jcool --workflow-id checkout-<order id>            # CheckoutStep, pending activities and their last failure
+t workflow query --namespace jcool --workflow-id checkout-<order id> --name state  # step, order status, Try outcome, authorization
+for s in RESERVING AWAITING_AUTH COMMITTING_STOCK CAPTURING COMPENSATING; do
+  echo "$s $(t workflow count --namespace jcool --query "CheckoutStep=\"$s\" AND ExecutionStatus=\"Running\"")"
+done
+```
+
+| `CheckoutStep` | Order | Means |
+| --- | --- | --- |
+| `RESERVING` | `RESERVING` | The stock Try or tx B is running |
+| `AWAITING_AUTH` | `PENDING` | Stock held; waiting for `payment.authorized` or the payment deadline |
+| `COMMITTING_STOCK`, `CAPTURING` | `CONFIRMING` | Authorization verified; stock commit, then the capture |
+| `COMPENSATING` | terminal | Releasing stock or voiding the hold. An activity failing here retries without limit; `describe` shows the last failure |
+
+A run that stays in one step is almost always an activity retrying against a participant or the gateway. Fix what it is failing on; the run then moves by itself.
+
+### Checkout answers 503 and the order stays `RESERVING`
+
+tx B mints its outbox id before it opens, so an id-service or database outage makes it throw. The local activity retries it with backoff (`SAGA_RETRY_BASE_MS` to `SAGA_RETRY_CAP_MS`) while the buyer gets `503` after `CHECKOUT_RESERVE_WAIT_MS`. The order stays `RESERVING`, hidden from the buyer, with its stock `HELD`. Once the dependency is back, tx B commits: the order turns `PENDING` with exactly one `order.placed`, and a retry under the same `Idempotency-Key` answers `201` with that order.
+
+```sql
+SELECT o.id, o.placed_at, r.status AS stock
+FROM orders o LEFT JOIN reservation_orders r ON r.order_id = o.id
+WHERE o.status = 'RESERVING' ORDER BY o.placed_at;
+```
+
+A `RESERVING` order with no hold and no workflow is one whose start never reached Temporal. The reaper hands it back to its saga once it is older than `CHECKOUT_RESERVING_ORPHAN_SEC`, every `CHECKOUT_REAPER_INTERVAL_MS`, and the saga rejects it because its Try budget is long spent. A reaper tick stops at the first order the engine cannot take, so a Temporal outage costs one failed call per tick.
+
+The reaper cannot hand back an order whose run has already closed, which only a terminated or timed-out run leaves behind. It logs `RESERVING order whose checkout saga has already closed` at error on every tick and moves on; the order keeps one of the buyer's three checkout slots, and fifty of them fill the reaper's batch so newer orphans wait. Close it by hand as in [Terminate a saga](#terminate-a-saga): clean up its inventory header first, then `UPDATE orders SET status = 'REJECTED', finalized_at = now(), finalize_reason = 'ops:closed_saga' WHERE id = '<order id>' AND status = 'RESERVING';`.
+
+### A `payment.authorized` in the dead-letter queue
+
+Its consumer signals the order's saga, so the job rides the long ladder (`ORDER_PAID_CONSUMER_*`, about 33 minutes) to outlast a Temporal outage. Past that it dead-letters. Once Temporal answers, replay it ([Replay the dead-letter queue](#replay-the-dead-letter-queue)): the saga takes one authorization per order and captures once, and an authorization arriving after the order closed is voided, not captured.
+
+### Terminate a saga
+
+Only as in [Temporal down](#temporal-down): once Temporal answers, for a run that cannot finish by itself, and only after both participant headers have been cleaned up by hand.
+
+---
+
 ## Temporal down
 
 **How it shows.**
@@ -957,13 +1003,24 @@ Two waits sit outside the steps and are not in that sum. Before them, the outbox
 - `task-queue describe` ([Check it](#check-it)) lists no poller from the api.
 - No alert covers this yet.
 
+- `POST /orders` and both cancel routes answer `503` with `Retry-After` after their wait (`CHECKOUT_RESERVE_WAIT_MS`, `CHECKOUT_CANCEL_WAIT_MS`), logged as `checkout saga engine unavailable` or `cancel got no answer from the checkout saga`.
+- A buyer who retries with a fresh `Idempotency-Key` each time leaves one hidden `RESERVING` order per attempt, and those count against the in-flight cap: the fourth such attempt answers `409 Too many pending orders` instead of `503`. Once Temporal is back the reaper rejects them, after `CHECKOUT_RESERVING_ORPHAN_SEC` and one `CHECKOUT_REAPER_INTERVAL_MS`. A retry under the same key adds no order.
+
 `/health/ready` stays 200, by design: the api's readiness leaves Temporal out, so an outage never takes the api out of rotation. A freeze and a rollback both still deploy.
 
-**What it stops.** While checkout runs dark, nothing a user sees. Open runs wait where they are, since their state is in `temporal-postgres`. Once the server answers, the worker reconnects on its own (backoff up to 30s), and timers that fell due meanwhile fire at once.
+**What it stops.** Checkout and cancel: no new stock is held and no money is taken. Catalog, cart, `/pay` and the webhook keep serving, and a buyer who authorizes on an open session loses nothing: the webhook records the hold, and its `payment.authorized` job waits on the long ladder (about 33 minutes) before the dead-letter queue. Open runs wait where they are, since their state is in `temporal-postgres`. Once the server answers, the worker reconnects on its own (backoff up to 30s), and timers that fell due meanwhile fire at once.
 
-**If checkout must not take orders meanwhile**, [freeze checkout](#freeze-checkout). It only redeploys the gateway.
+**If checkout must not take orders meanwhile**, [freeze checkout](#freeze-checkout). It only redeploys the gateway, and turns the api's `503`s into the gateway's.
 
-**Rollback** is a forward commit that takes `CheckoutSagaWorker`, the engine and `temporalProviders` out of `OrderModule`. It deploys like any other commit, Temporal or not. Keep `.railway/railway.ts`, migration 0031 and `infra/temporal/`, and approve no destroy.
+While the CLI cannot reach the server, read the in-flight sagas from the api's database instead of `temporal workflow count`:
+
+```sql
+SELECT status, count(*) FROM orders WHERE status IN ('RESERVING', 'PENDING', 'CONFIRMING') GROUP BY status;
+SELECT status, count(*) FROM reservation_orders WHERE status = 'HELD' GROUP BY status;
+SELECT status, count(*) FROM payment_orders WHERE status IN ('OPEN', 'AUTHORIZED') GROUP BY status;
+```
+
+**Rollback** to the checkout before the saga is in [Roll back to the checkout before the saga](#roll-back-to-the-checkout-before-the-saga). Its deploy needs no Temporal, but closing the sagas still open does.
 
 **Terminate only once Temporal answers again, and only a run that cannot finish on its own**, such as a compensation that keeps failing or a nondeterminism error after a bad deploy. Every other open run resumes and compensates or completes by itself. A terminated run stops where it is, with no compensation, so first read its order and both participant headers on the api's database:
 
@@ -983,6 +1040,43 @@ t workflow terminate --namespace jcool --workflow-id checkout-<order id> --reaso
 # every running saga, only after each one is reconciled as above; it asks to confirm with the count first
 t workflow terminate --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"' --reason "<why>"
 ```
+
+---
+
+## Cut over checkout to the saga
+
+The one-time switch from the single-transaction checkout to the saga, kept as the record of how it was done and as the way back. Checkout is frozen, orders from the old path drain on their own (the old TTL and reconcile sweeps close them and their sessions; no SQL by hand), and the saga code merges behind the freeze. No step assumes Temporal is healthy: a freeze is a gateway redeploy, and the gateway's healthcheck goes through the api's `/health/ready`, which leaves Temporal out. If Temporal stops at any step, keep the freeze on (or turn it back on) and work through [Temporal down](#temporal-down).
+
+1. **Back up** the api's `Postgres`: a Railway snapshot, and a `pg_dump` through `railway connect Postgres` ([Back up](#back-up)).
+2. **Freeze** ([Freeze checkout](#freeze-checkout)), then probe both `POST /orders` and `POST /orders/1/pay` on the public domain: each must answer `503` with `Retry-After`. If not, unfreeze and stop.
+3. **Drain**, about 32 minutes. In `psql`, all four must reach zero rows:
+
+   ```sql
+   SELECT count(*) FROM orders WHERE status = 'PENDING';
+   SELECT count(*) FROM payments WHERE status = 'PENDING';
+   SELECT count(*) FROM reservations r
+   WHERE r.status = 'HELD' AND NOT EXISTS (SELECT 1 FROM reservation_orders h WHERE h.order_id = r.order_id);
+   SELECT status, count(*) FROM orders WHERE status IN ('RESERVING', 'CONFIRMING') GROUP BY status;
+   ```
+
+   Run the candidate query of [A refund is owed](#a-refund-is-owed) and keep its output; it does not block. Rows left after 45 minutes: stop and investigate, do not merge.
+4. **Check the plan and Temporal.** `railway config plan` from the rebased branch must be empty, since the cut-over adds no service. In `railway ssh --service temporal`, with `t()` from [Check it](#check-it), `t operator cluster health` answers `SERVING` and `t task-queue describe --task-queue checkout-saga --namespace jcool` lists the api's pollers. If either fails, do not merge: unfreeze (the old checkout needs no Temporal) and work through [Temporal down](#temporal-down).
+5. **Merge**, after probing the freeze once more. CI and CD apply migration 0032 in `preDeployCommand`, deploy the id-service, the api and the gateway, smoke `/health/ready`, then the user-service.
+6. **Check the deploy.** `/health/ready` answers 200, which says nothing about Temporal. `SELECT status, count(*) FROM orders WHERE status IN ('RESERVING', 'PENDING', 'CONFIRMING') GROUP BY status;` is empty. The task queue lists pollers and `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga"'` is 0.
+7. **Unfreeze**, then check out at once with a test account on the public domain: `POST /orders` answers `201`; the run is `Running` in `t workflow list --namespace jcool --query 'WorkflowId="checkout-<order id>"'` and `t workflow describe --namespace jcool --workflow-id checkout-<order id>` shows `CheckoutStep` `AWAITING_AUTH`; `POST /orders/<order id>/pay` answers `201`, and paying it with a Stripe test card takes the order to `PAID` within a minute and the run to `Completed` in the same list. A second order cancels with `200` and `quantity_reserved` returns to where it was. If any of this fails, freeze again and fix forward.
+
+### Roll back to the checkout before the saga
+
+A forward commit that restores the old checkout's wiring. Keep `.railway/railway.ts`, every migration (0032 stays: the `(status, placed_at)` index from 0031 serves the old queries), `infra/temporal/` and the freeze matcher. Never run `--confirm-destructive` or approve a destroy. The rollback deploys without Temporal, but closing the open sagas needs it, because their state lives only there.
+
+1. **Freeze** and probe as in step 2 above; this works with Temporal down.
+2. **Close every saga.** Admin-cancel each `CheckoutSaga` running in `AWAITING_AUTH` (`POST /admin/orders/<id>/cancel`), then wait for `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` to reach 0. With Temporal down, admin cancel answers `503` and the CLI cannot connect:
+   - **Temporal is paused** (server or worker gone, `temporal-postgres` intact): take no shortcut. Keep the freeze, bring Temporal back ([Temporal down](#temporal-down)), then run this step as written. A buyer who pays on an open session meanwhile keeps the authorization, since its `payment.authorized` job waits on the long ladder. Track progress with the three queries in [Temporal down](#temporal-down), and do not merge the rollback while any saga order is not terminal.
+   - **Temporal lost its state** (`temporal-postgres` broken beyond restore): no run will ever continue, so cleaning up in SQL is safe. Void every `requires_capture` PaymentIntent of those orders in the Stripe dashboard; a `CONFIRMING` order whose charge was already captured is a refund owed ([A refund is owed](#a-refund-is-owed)). After a `pg_dump`, reset the `RESERVING`, `PENDING` and `CONFIRMING` orders the way demo data is reset. The three queries must come back empty before the merge.
+3. **Settle the leftover authorizations**: for each `SELECT order_id FROM payment_orders WHERE status = 'AUTHORIZED';`, capture if the order is `PAID`, otherwise void it in the Stripe dashboard, and note it down.
+4. **Delete the `REJECTED` orders**, which the old code would show to their buyers: `DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status = 'REJECTED'); DELETE FROM orders WHERE status = 'REJECTED';`.
+5. **Commit** the old routes, use cases, consumers and config back (everything this cut-over removed, migrations and the kept files aside), pass typecheck, `test:cov` and the old checkout's e2e suites, merge, and let CD deploy. Its `/health/ready` smoke passes with Temporal down; the old saga worker only logs connection errors.
+6. **Unfreeze**, and check out once through the old path, which needs no Temporal.
 
 ---
 

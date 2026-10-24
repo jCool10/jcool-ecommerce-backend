@@ -5,12 +5,7 @@ import {
   INVENTORY_PARTICIPANT,
   type InventoryParticipant,
 } from '../../src/modules/product/application/public/inventory-participant.port';
-import {
-  PRODUCT_STOCK_RESERVATION,
-  type ProductStockReservation,
-} from '../../src/modules/product/application/public/product-stock-reservation.port';
 import { ReleaseLapsedHoldsUseCase } from '../../src/modules/product/application/stock/release-lapsed-holds.use-case';
-import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import {
   getStockView,
   holdRowLock,
@@ -18,7 +13,6 @@ import {
   readReservationOrder,
   seedStock,
 } from '../setup/fixtures/inventory.fixture';
-import { lapseReservation, reservationsFor } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 
@@ -28,12 +22,11 @@ const BATCH = { batchSize: 50 };
 describe('Lapsed participant hold sweep (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let db: DrizzleDB;
   let participant: InventoryParticipant;
   let sweep: ReleaseLapsedHoldsUseCase;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({ INVENTORY_TRY_LOCK_TIMEOUT_MS: String(BUDGET_MS) }));
+    ({ app, pool } = await createTestAppWithPool({ INVENTORY_TRY_LOCK_TIMEOUT_MS: String(BUDGET_MS) }));
     participant = app.get<InventoryParticipant>(INVENTORY_PARTICIPANT);
     sweep = app.get(ReleaseLapsedHoldsUseCase);
   });
@@ -69,20 +62,6 @@ describe('Lapsed participant hold sweep (integration, real Postgres)', () => {
     expect((await sweep.execute(BATCH)).scanned).toBe(0);
 
     expect((await readReservationOrder(app, order))?.status).toBe('HELD');
-    expect((await getStockView(app, sku))?.reserved).toBe(2);
-  });
-
-  // Those belong to checkout's own sweep, which settles the order along with the stock.
-  it('never touches a lapsed reservation placed through the in-transaction port', async () => {
-    const [order, sku] = [testId(), testId()];
-    await seedStock(app, sku, 5);
-    const legacy = app.get<ProductStockReservation>(PRODUCT_STOCK_RESERVATION);
-    await db.transaction((tx) => legacy.reserve(tx, order, [{ variantId: sku, quantity: 2 }]));
-    await lapseReservation(app, order);
-
-    expect((await sweep.execute(BATCH)).scanned).toBe(0);
-
-    expect((await reservationsFor(app, order)).map((line) => line.status)).toEqual(['HELD']);
     expect((await getStockView(app, sku))?.reserved).toBe(2);
   });
 

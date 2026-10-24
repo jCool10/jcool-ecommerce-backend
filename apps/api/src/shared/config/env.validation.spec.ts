@@ -141,6 +141,13 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
   });
 
+  it('keeps a rejected order at least a day', () => {
+    expect(() => validate({ ...BASE_ENV, RETENTION_REJECTED_ORDER_DAYS: '0' })).toThrow(
+      /RETENTION_REJECTED_ORDER_DAYS/,
+    );
+    expect(() => validate({ ...BASE_ENV, RETENTION_REJECTED_ORDER_DAYS: '1' })).not.toThrow();
+  });
+
   // The platform injects its own variables, and a retired key can linger in a deployment.
   it('boots with env keys the schema does not declare', () => {
     expect(() => validate({ ...BASE_ENV, RAILWAY_DEPLOYMENT_DRAINING_SECONDS: 'not-a-number' })).not.toThrow();

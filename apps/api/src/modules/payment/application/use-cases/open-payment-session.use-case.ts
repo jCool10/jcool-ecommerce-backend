@@ -167,7 +167,7 @@ export class OpenPaymentSessionUseCase {
         return this.payments.create(payment, tx, paymentId);
       });
     } catch (error) {
-      // A payment opened by the legacy /pay path, which never takes the header lock.
+      // An active payment the pre-saga /pay left on this order; it never took the header lock.
       if (error instanceof DuplicateActivePaymentError) return null;
       throw error;
     }

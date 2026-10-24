@@ -1,4 +1,4 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseFilters, UseGuards } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -16,6 +16,7 @@ import { Role, Roles } from '@jcool/platform/rbac';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import { CancelOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
+import { ApiCheckoutUnavailableResponse, CheckoutUnavailableFilter } from './checkout-unavailable.filter';
 import { ListAdminOrdersQueryDto } from './dto/list-orders-query.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
 import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto';
@@ -28,6 +29,7 @@ import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto'
 @ApiForbiddenResponse({ description: 'Authenticated but not an admin' })
 @ApiBadRequestResponse({ description: 'Malformed id or invalid query' })
 @Roles(Role.Admin)
+@UseFilters(CheckoutUnavailableFilter)
 @Controller('admin/orders')
 export class AdminOrderController {
   constructor(
@@ -67,6 +69,7 @@ export class AdminOrderController {
   @ApiOkResponse({ type: OrderResponseDto })
   @ApiNotFoundResponse({ description: 'Order not found' })
   @ApiConflictResponse({ description: 'Order has already settled and can no longer be cancelled' })
+  @ApiCheckoutUnavailableResponse('The cancel could not be confirmed in time; retry')
   async cancel(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<OrderResponseDto> {
     return OrderResponseDto.fromView(await this.cancelOrder.cancelAsAdmin(id));
   }

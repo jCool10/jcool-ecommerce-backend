@@ -257,7 +257,7 @@ services:
     pull_policy: never
     restart: unless-stopped
     deploy:
-      replicas: 3
+      replicas: 1
     environment:
       NODE_ENV: production
       PORT: 3000
