@@ -29,15 +29,13 @@ const PRODUCED_EVENT_TYPES = Object.keys({
   'order.failed': true,
   'order.expired': true,
   'order.cancelled': true,
-  'payment.succeeded': true,
-  'payment.failed': true,
+  'payment.authorized': true,
   'catalog.product.changed': true,
   'catalog.category.renamed': true,
 } satisfies Record<
   | OrderFinalizedEvent['eventName']
   | 'order.placed'
-  | 'payment.succeeded'
-  | 'payment.failed'
+  | 'payment.authorized'
   | 'catalog.product.changed'
   | 'catalog.category.renamed',
   true
@@ -51,6 +49,29 @@ describe('DomainEventDispatcher', () => {
     const dispatcher = dispatcherWith();
 
     expect(PRODUCED_EVENT_TYPES.filter((type) => dispatcher.label(type) === 'unregistered')).toEqual([]);
+  });
+
+  // A signal to Temporal cannot roll back with the claim; it must land before the claim commits.
+  it('forwards payment.authorized before the transaction and leaves the step empty', async () => {
+    const forwardAuthorization = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = dispatcherWith({ forwardAuthorization });
+    const guarded = new Proxy({} as DrizzleTx, {
+      get: () => {
+        throw new Error('payment.authorized must not use the transaction');
+      },
+    });
+
+    const step = await dispatcher.prepare(job('payment.authorized'));
+    expect(forwardAuthorization).toHaveBeenCalledOnce();
+
+    await expect(step(guarded)).resolves.toBeUndefined();
+  });
+
+  it('fails the prepare when the authorization cannot be forwarded', async () => {
+    const outage = new Error('temporal unavailable');
+    const dispatcher = dispatcherWith({ forwardAuthorization: vi.fn().mockRejectedValue(outage) });
+
+    await expect(dispatcher.prepare(job('payment.authorized'))).rejects.toBe(outage);
   });
 
   it('records an audit line for an order event it has nothing else to do for', async () => {
@@ -110,35 +131,19 @@ describe('DomainEventDispatcher', () => {
     await expect(dispatcher.prepare(job(eventType))).rejects.toBe(outage);
   });
 
-  it('runs each effectful event on its own handler inside the consumer transaction', async () => {
-    const settle = vi.fn();
-    const closeExpired = vi.fn();
-    const closeCancelled = vi.fn();
-    const dispatcher = dispatcherWith({ settle, closeExpired, closeCancelled });
+  // The saga has already closed the payment session by the time either is emitted.
+  it('only records order.expired and order.cancelled', async () => {
+    const info = vi.fn();
+    const dispatcher = dispatcherWith({ orderEvents: new OrderEventsHandler(fakePinoLogger({ info })) });
 
-    for (const eventType of ['order.expired', 'order.cancelled', 'payment.succeeded', 'payment.failed']) {
-      await run(dispatcher, job(eventType));
+    for (const eventType of ['order.expired', 'order.cancelled']) {
+      await expect(run(dispatcher, job(eventType))).resolves.toBeUndefined();
     }
 
-    const routed = (handler: typeof settle) =>
-      handler.mock.calls.map(([event, onTx]) => [(event as DomainEventJob).eventType, onTx === tx]);
-    expect({ expired: routed(closeExpired), cancelled: routed(closeCancelled), settled: routed(settle) }).toEqual({
-      expired: [['order.expired', true]],
-      cancelled: [['order.cancelled', true]],
-      settled: [
-        ['payment.succeeded', true],
-        ['payment.failed', true],
-      ],
-    });
-  });
-
-  // Swallowed, the inbox claim would commit and the checkout session would stay open for good.
-  it('fails the consume when the payment session cannot be closed', async () => {
-    const unreachable = () => vi.fn().mockRejectedValue(new Error('gateway unreachable'));
-    const dispatcher = dispatcherWith({ closeExpired: unreachable(), closeCancelled: unreachable() });
-
-    await expect(run(dispatcher, job('order.expired'))).rejects.toThrow('gateway unreachable');
-    await expect(run(dispatcher, job('order.cancelled'))).rejects.toThrow('gateway unreachable');
+    expect(info.mock.calls.map(([fields]) => (fields as { eventType: string }).eventType)).toEqual([
+      'order.expired',
+      'order.cancelled',
+    ]);
   });
 
   it('refuses an event it has no handler for', async () => {

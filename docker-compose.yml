@@ -150,6 +150,7 @@ services:
     # Unpublished, as on Railway: the gateway on 8080 is the way in.
     # .env carries the app's own secrets/config; the values below then override the host-oriented
     # ones it also holds (DATABASE_URL/REDIS_URL point at localhost there).
+    # NODE_ENV=production refuses to boot without a real sk_test_ STRIPE_SECRET_KEY and STRIPE_SUCCESS_URL in .env.
     env_file:
       - .env
     environment:
@@ -175,6 +176,9 @@ services:
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: jcool
+      TEMPORAL_TASK_QUEUE: checkout-saga
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -189,7 +193,10 @@ services:
         condition: service_completed_successfully
       gateway:
         condition: service_started
-    # Probes with node (present in the image) because alpine has no curl/wget.
+      # The app boots without it, but its saga worker would only retry until it came up.
+      temporal:
+        condition: service_healthy
+    # Probes with node (present in the image) because node:24-slim has no curl/wget.
     healthcheck:
       test:
         [
@@ -250,7 +257,7 @@ services:
     pull_policy: never
     restart: unless-stopped
     deploy:
-      replicas: 3
+      replicas: 1
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -273,6 +280,74 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    networks:
+      - jcool-net
+
+  # Holds the checkout saga's state for the Temporal server below: databases temporal and
+  # temporal_visibility, which the server's entrypoint creates on first boot.
+  temporal-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-temporal-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+    volumes:
+      - temporalpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # Self-hosted, as on Railway. gRPC only, on loopback: the frontend has no auth.
+  temporal:
+    build:
+      context: .
+      dockerfile: infra/temporal/Dockerfile
+    container_name: jcool-temporal
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TEMPORAL_HOST_PORT:-7233}:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: temporal-postgres
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      BIND_ON_IP: 0.0.0.0
+      # Fixed for the life of the volume.
+      NUM_HISTORY_SHARDS: 4
+      TEMPORAL_NAMESPACE: jcool
+      TEMPORAL_NAMESPACE_RETENTION: 1d
+    # The entrypoint creates the search attributes last, so their presence means bootstrap finished.
+    healthcheck:
+      test: ["CMD-SHELL", "temporal --address 127.0.0.1:7233 operator search-attribute list --namespace jcool | grep -q CheckoutDeadlineAt"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  temporal-ui:
+    image: temporalio/ui:2.55.0
+    container_name: jcool-temporal-ui
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_DEFAULT_NAMESPACE: jcool
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_HOST_PORT:-8233}:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
     networks:
       - jcool-net
 
@@ -466,6 +541,7 @@ services:
 volumes:
   pgdata:
   idetcddata:
+  temporalpgdata:
   userpgdata:
   redisdata:
   esdata:

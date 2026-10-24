@@ -17,6 +17,7 @@ const METHODS = [
   'recordAuthEvent',
   'recordBreakerCall',
   'recordBreakerTransition',
+  'recordCaptureConflict',
   'recordCartOperation',
   'recordCatalogCacheOperation',
   'recordCompensation',
@@ -34,6 +35,7 @@ const METHODS = [
   'recordRetentionSweepFailure',
   'recordSagaStep',
   'recordSessionEpochLookup',
+  'recordTccBranch',
   'setBreakerState',
 ] as const satisfies readonly (keyof MetricsPort)[];
 

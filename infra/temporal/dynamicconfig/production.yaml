@@ -1,0 +1,3 @@
+# The server refuses to boot without a dynamic config file, and 1.32.1 needs no key changed:
+# Update-with-Start is on by default. Never add the dev-only
+# system.forceSearchAttributesCacheRefreshOnRead here.

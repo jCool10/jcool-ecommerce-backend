@@ -99,10 +99,12 @@ describe('replay-dlq CLI', () => {
     const options = (name: string) => built.queues.find((queue) => queue.name === name)?.opts;
 
     expect(options(QUEUE_DOMAIN_EVENTS)?.defaultJobOptions).toEqual(buildJobOptions(ATTEMPTS, BACKOFF_MS));
-    expect(built.replayOptions?.jobOptionsFor('order.paid')).toEqual({
-      attempts: ORDER_PAID_ATTEMPTS,
-      backoff: { type: ORDER_PAID_BACKOFF },
-    });
+    for (const eventType of ['order.paid', 'payment.authorized']) {
+      expect(built.replayOptions?.jobOptionsFor(eventType), eventType).toEqual({
+        attempts: ORDER_PAID_ATTEMPTS,
+        backoff: { type: ORDER_PAID_BACKOFF },
+      });
+    }
     expect(options(QUEUE_DOMAIN_EVENTS_DLQ)).toBeDefined();
     expect(options(QUEUE_DOMAIN_EVENTS_DLQ)?.defaultJobOptions).toBeUndefined();
   });

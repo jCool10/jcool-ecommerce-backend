@@ -13,13 +13,17 @@ interface Transition {
   wired: boolean;
 }
 
+// Every edge past DRAFT is written by the checkout saga and nothing else.
 const TRANSITIONS: readonly Transition[] = [
-  { from: OrderStatus.DRAFT, to: OrderStatus.PENDING, wired: true }, // place order
   { from: OrderStatus.DRAFT, to: OrderStatus.CANCELLED, wired: true }, // discard a draft
-  { from: OrderStatus.PENDING, to: OrderStatus.PAID, wired: true }, // finalize: payment webhook success / reconcile paid
-  { from: OrderStatus.PENDING, to: OrderStatus.FAILED, wired: true }, // finalize: payment webhook failure / reconcile failed
-  { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // finalize: expiry sweep on an unpaid hold
-  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: true }, // finalize: user/admin cancel
+  { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // payment deadline passed unpaid
+  { from: OrderStatus.PENDING, to: OrderStatus.CANCELLED, wired: true }, // user/admin cancel
+  { from: OrderStatus.DRAFT, to: OrderStatus.RESERVING, wired: true }, // place, before the stock Try answers
+  { from: OrderStatus.RESERVING, to: OrderStatus.PENDING, wired: true }, // Try held the stock
+  { from: OrderStatus.RESERVING, to: OrderStatus.REJECTED, wired: true }, // Try refused, timed out or never ran
+  { from: OrderStatus.PENDING, to: OrderStatus.CONFIRMING, wired: true }, // authorization verified
+  { from: OrderStatus.CONFIRMING, to: OrderStatus.PAID, wired: true }, // captured
+  { from: OrderStatus.CONFIRMING, to: OrderStatus.FAILED, wired: true }, // commit conflicted or hold lost
 ];
 
 // The guard that turns an at-least-once webhook into an exactly-once effect: nothing leaves these.
@@ -28,6 +32,7 @@ const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
   OrderStatus.FAILED,
   OrderStatus.EXPIRED,
   OrderStatus.CANCELLED,
+  OrderStatus.REJECTED,
 ]);
 
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {

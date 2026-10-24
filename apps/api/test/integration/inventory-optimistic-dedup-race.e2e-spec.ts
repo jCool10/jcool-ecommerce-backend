@@ -11,6 +11,7 @@ import {
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
   STOCK_REPOSITORY,
+  type HoldOptions,
   type ReservationLine,
   type StockRepositoryPort,
 } from '../../src/modules/product/application/stock/ports/stock-repository.port';
@@ -26,7 +27,9 @@ const ORDER = testId();
 const STOCK = 10;
 const QUANTITY = 1;
 
-type Hold = (tx: DrizzleTx, orderId: string, lines: ReservationLine[]) => Promise<void>;
+type Hold = (tx: DrizzleTx, orderId: string, lines: ReservationLine[], options: HoldOptions) => Promise<void>;
+
+const holdOptions = (): HoldOptions => ({ expiresAt: new Date(Date.now() + 60 * 60_000), reservationIds: [testId()] });
 
 // A holds its transaction open until B is parked on a lock, so B's dedup read has already run. By
 // default B parks on A's stock row lock at its CAS write. With `lockStockTable` B parks earlier, at its
@@ -47,14 +50,14 @@ async function raceDuplicateSubmission(
     if (lockStockTable) {
       await tx.execute(sql`LOCK TABLE stock_levels IN ACCESS EXCLUSIVE MODE`);
     }
-    await hold(tx, ORDER, [line]);
+    await hold(tx, ORDER, [line], holdOptions());
     aHasHeld();
     await aMayCommit;
   });
   await aHeld;
 
   const b = db.transaction(async (tx) => {
-    await hold(tx, ORDER, [line]);
+    await hold(tx, ORDER, [line], holdOptions());
   });
   // Observed by the allSettled below; marked handled so an early rejection is not reported elsewhere.
   b.catch(() => {});

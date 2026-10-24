@@ -1,74 +1,94 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
+import { PinoLogger } from 'nestjs-pino';
+import type { CancelBy } from '../../domain/checkout-saga';
 import { OrderStatus } from '../../domain/order-status';
 import type { Order } from '../../domain/order.entity';
+import { CheckoutUnavailableError } from '../checkout-unavailable.error';
+import {
+  CHECKOUT_SAGA_ENGINE,
+  CheckoutCancelRejectedError,
+  CheckoutEngineUnavailableError,
+  CheckoutSagaClosedError,
+  type CheckoutSagaEnginePort,
+} from '../ports/checkout-saga-engine.port';
 import { ORDER_REPOSITORY, type OrderRepositoryPort } from '../ports/order-repository.port';
 import { toView, type OrderView } from '../order-view.mapper';
-import { FinalizeOrderUseCase } from './finalize-order.use-case';
+
+const LOG_CONTEXT = 'CancelOrder';
 
 /**
- * Authorization runs under the same row lock as the finalize, which joins this transaction;
- * otherwise the order could settle some other way in between and this would answer 200 for a cancel
- * that never happened. Closing the gateway session is NOT done here — reaching the gateway would
- * hold that row lock for a network call; Payment reacts to `order.cancelled` instead.
+ * The saga owns the order once it is placed, so a cancel is a command to it. Its update returns only
+ * after stock and payment are compensated, so a 200 means the stock is already back. Whenever the
+ * saga cannot answer, the order row decides: a CANCELLED order is a cancel that landed.
  */
 @Injectable()
 export class CancelOrderUseCase {
   constructor(
     @Inject(ORDER_REPOSITORY) private readonly orderRepo: OrderRepositoryPort,
-    private readonly finalizeOrder: FinalizeOrderUseCase,
-  ) {}
-
-  cancelOwn(orderId: string, userId: string): Promise<OrderView> {
-    return this.cancel(orderId, 'user:cancel', (order) => {
-      // 404, not 403, for someone else's order: the same answer an id that does not exist gets, so
-      // the endpoint cannot be used to discover which order ids are real.
-      if (order.userId !== userId) {
-        throw new NotFoundException(`Order not found: ${orderId}`);
-      }
-    });
+    @Inject(CHECKOUT_SAGA_ENGINE) private readonly engine: CheckoutSagaEnginePort,
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(LOG_CONTEXT);
   }
 
-  cancelAsAdmin(orderId: string): Promise<OrderView> {
-    return this.cancel(orderId, 'admin:cancel');
+  async cancelOwn(orderId: string, userId: string): Promise<OrderView> {
+    // Someone else's order answers like a missing one, so the route cannot probe which ids exist.
+    return this.cancel(await this.orderRepo.findForUser(orderId, userId), orderId, 'buyer');
   }
 
-  private async cancel(orderId: string, reason: string, authorize?: (order: Order) => void): Promise<OrderView> {
-    const { view, report } = await this.orderRepo.withTransaction<CancelOutcome>(async (tx: DrizzleTx) => {
-      const order = await this.orderRepo.findByIdForUpdate(orderId, tx);
-      if (!order) {
-        throw new NotFoundException(`Order not found: ${orderId}`);
-      }
-      authorize?.(order);
-
-      // Re-cancelling is the same request answered again, not a conflict: a client that lost the
-      // first response must be able to retry it.
-      if (order.status === OrderStatus.CANCELLED) {
-        return { view: toView(order) };
-      }
-      // Everything else refuses, PAID included — unwinding that is a refund, which this shop
-      // does not do.
-      if (order.status !== OrderStatus.PENDING) {
-        throw new ConflictException(`Order cannot be cancelled in status ${order.status}`);
-      }
-
-      const result = await this.finalizeOrder.execute({ orderId, outcome: OrderStatus.CANCELLED, reason }, tx);
-      if (result.status === 'finalized' || result.status === 'noop') {
-        return { view: toView(result.order as Order), report: result.reportFinalized };
-      }
-      // Unreachable while the row lock holds, but if the finalize refuses anyway, answer from its
-      // view of the order rather than the stale one above.
-      throw new ConflictException(`Order cannot be cancelled in status ${result.order?.status ?? 'UNKNOWN'}`);
-    });
-
-    // The finalize joined the transaction above, so its counters and audit line only describe
-    // something that happened once that transaction has committed.
-    report?.();
-    return view;
+  async cancelAsAdmin(orderId: string): Promise<OrderView> {
+    return this.cancel(await this.orderRepo.findById(orderId), orderId, 'admin');
   }
-}
 
-interface CancelOutcome {
-  view: OrderView;
-  report?: () => void;
+  private async cancel(order: Order | null, orderId: string, by: CancelBy): Promise<OrderView> {
+    if (!order) {
+      throw new NotFoundException(`Order not found: ${orderId}`);
+    }
+    // A repeat is the same request answered again, so a client that lost the first 200 can retry.
+    if (order.status === OrderStatus.CANCELLED) {
+      return toView(order);
+    }
+    // PAID included: unwinding that is a refund, which this shop does not do.
+    if (order.status !== OrderStatus.PENDING) {
+      throw new ConflictException(`Order cannot be cancelled in status ${order.status}`);
+    }
+
+    try {
+      await this.engine.cancel(orderId, by);
+    } catch (error) {
+      if (error instanceof CheckoutCancelRejectedError) {
+        this.logger.info({ orderId, step: error.step }, 'cancel refused: payment already under way');
+        throw new ConflictException('Order cannot be cancelled while its payment is being taken');
+      }
+      if (error instanceof CheckoutSagaClosedError) {
+        return this.settledAs(
+          orderId,
+          (status) => new ConflictException(`Order cannot be cancelled in status ${status}`),
+        );
+      }
+      if (error instanceof CheckoutEngineUnavailableError) {
+        this.logger.warn({ orderId, err: error }, 'cancel got no answer from the checkout saga');
+        return this.settledAs(
+          orderId,
+          () => new CheckoutUnavailableError(orderId, 'cancel unconfirmed', { cause: error }),
+        );
+      }
+      throw error;
+    }
+    return toView(await this.reread(orderId));
+  }
+
+  private async settledAs(orderId: string, otherwise: (status: OrderStatus) => Error): Promise<OrderView> {
+    const order = await this.reread(orderId);
+    if (order.status !== OrderStatus.CANCELLED) throw otherwise(order.status);
+    return toView(order);
+  }
+
+  private async reread(orderId: string): Promise<Order> {
+    const order = await this.orderRepo.findById(orderId);
+    if (!order) {
+      throw new Error(`Order ${orderId} vanished during its cancel`);
+    }
+    return order;
+  }
 }

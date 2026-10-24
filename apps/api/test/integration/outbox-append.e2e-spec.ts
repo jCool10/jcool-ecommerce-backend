@@ -3,6 +3,7 @@ import { asc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
@@ -12,15 +13,24 @@ import {
 } from '../../src/shared/messaging/outbox/outbox-writer.port';
 import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
+import { relayAuthorization } from '../setup/fixtures/checkout-saga.fixture';
+import { readReservationOrder } from '../setup/fixtures/inventory.fixture';
 import {
-  seedSellableSku,
   buyerWithCart,
   placeAndOpenSession,
   postWebhook,
-  signOutcome,
+  readPayment,
+  seedSellableSku,
+  untilOrderStatus,
 } from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
+import {
+  closeAppAfterAll,
+  createTestAppWithFakeGateway,
+  createTestAppWithPool,
+  resetSagasAndDatabaseBeforeEach,
+} from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
+import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
 
 const WEBHOOK_SECRET = 'whsec_e2e_outbox_secret_0123456789';
 const STOCK = 5;
@@ -32,12 +42,16 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
+  let gateway: FakeSignerGatewayAdapter;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({ PAYMENT_WEBHOOK_SECRET: WEBHOOK_SECRET }));
+    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
   });
   closeAppAfterAll(() => app);
-  resetDatabaseBeforeEach(() => pool);
+  resetSagasAndDatabaseBeforeEach(
+    () => [app],
+    () => pool,
+  );
 
   const readOutbox = (orderId: string) =>
     db.select().from(schema.outbox).where(eq(schema.outbox.aggregateId, orderId)).orderBy(asc(schema.outbox.createdAt));
@@ -118,10 +132,20 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   it('appends order.paid once in the finalize transaction, however often delivered', async () => {
     const sku = await seedSellableSku(app, { onHand: STOCK, priceMinor: PRICE });
     const open = await placeAndOpenSession(app, sku);
-    const signed = signOutcome(WEBHOOK_SECRET, open.sessionId, open.charge, 'PAID', 'evt_outbox_paid');
+    gateway.authorize(open.sessionId);
+    const signed = signWebhook({
+      secret: WEBHOOK_SECRET,
+      event: checkoutSessionCompleted(
+        open.sessionId,
+        { ...open.charge, paymentStatus: 'unpaid' },
+        { eventId: 'evt_outbox_paid' },
+      ),
+    });
 
     await postWebhook(app, signed).expect(200);
     await postWebhook(app, signed).expect(200); // at-least-once delivery: the same event again
+    await relayAuthorization(app, open.orderId);
+    await untilOrderStatus(app, open.orderId, 'PAID');
 
     const rows = await readOutbox(open.orderId);
     expect(rows.map((row) => row.eventType)).toEqual(['order.placed', 'order.paid']);
@@ -130,15 +154,15 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
       orderId: open.orderId,
       totalAmountMinor: open.charge.amountMinor,
       currency: open.charge.currency,
-      paymentRef: expect.any(String),
+      paymentRef: (await readPayment(app, open.orderId)).id,
       occurredAt: expect.any(String),
     });
   });
 });
 
-// A writer that fails must take the whole checkout down with it, so an event the system could not
-// record is never skipped in favour of a placed order.
-describe('Outbox append failure rolls back the checkout (integration, real Postgres)', () => {
+// The Try has already committed its hold when the append fails, so the order waits in RESERVING
+// for the outbox rather than rolling back; checkout-saga-try-failures covers the recovery.
+describe('Outbox append failure strands the checkout in RESERVING (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
@@ -156,19 +180,24 @@ describe('Outbox append failure rolls back the checkout (integration, real Postg
     ]));
   });
   closeAppAfterAll(() => app);
-  resetDatabaseBeforeEach(() => pool);
+  resetSagasAndDatabaseBeforeEach(
+    () => [app],
+    () => pool,
+  );
 
-  it('leaves no order, no event, and no stock hold when the append throws', async () => {
+  it('answers 503 and keeps the order RESERVING with its hold and no event when the append throws', async () => {
     const sku = await seedSellableSku(app, { onHand: STOCK, priceMinor: PRICE });
     const token = await buyerWithCart(app, sku.variantId, 2);
 
-    await request(app.getHttpServer()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(500);
+    const res = await request(app.getHttpServer()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader());
 
-    expect(await db.select().from(schema.orders)).toHaveLength(0);
+    expect(res.status).toBe(503);
+    expect(res.headers['retry-after']).toBeDefined();
+    const [order] = await db.select().from(schema.orders);
+    expect(order.status).toBe('RESERVING');
+    expect((await readReservationOrder(app, order.id))?.status).toBe('HELD');
     expect(await db.select().from(schema.outbox)).toHaveLength(0);
-    expect(await db.select().from(schema.reservations)).toHaveLength(0);
-    // Stock untouched: the hold rolled back with everything else.
     const [stock] = await db.select().from(schema.stockLevels).where(eq(schema.stockLevels.variantId, sku.variantId));
-    expect(stock).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 0 });
+    expect(stock).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 2 });
   });
 });

@@ -12,6 +12,8 @@ const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
 const LOKI_PORT = '3100';
 const ELASTICSEARCH_PORT = '9200';
+const TEMPORAL_PORT = '7233';
+const TEMPORAL_NAMESPACE = 'jcool';
 
 // Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
 const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
@@ -36,6 +38,9 @@ const API_VARIABLES = [
   'STORAGE_BUCKET',
   'STORAGE_ENDPOINT',
   'STORAGE_SECRET_ACCESS_KEY',
+  'STRIPE_CANCEL_URL',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_SUCCESS_URL',
   'SWAGGER_ENABLED',
   'THROTTLE_ENABLED',
   // Flipped by hand with the public domain (RUNBOOK), so an apply never reverts it.
@@ -85,7 +90,7 @@ export default defineRailway(() => {
       healthcheckTimeout: 120,
       restartPolicyMaxRetries: 5,
       overlapSeconds: 20,
-      drainingSeconds: 15,
+      drainingSeconds: 30,
     },
     env: {
       ...preserved(API_VARIABLES),
@@ -93,8 +98,16 @@ export default defineRailway(() => {
       PORT: API_PORT,
       DATABASE_URL: API_DATABASE_URL,
       REDIS_URL,
-      // Railway keeps routing to the old deployment for a moment after SIGTERM; fits drainingSeconds.
+      // Railway keeps routing to the old deployment for a moment after SIGTERM, and kills it when
+      // drainingSeconds runs out. The shutdown steps take at most this grace + Temporal worker grace
+      // and force (defaults) + 1000 stop slack + two BullMQ closes of 5000 each + 1000 Redis quit
+      // = 5000 + 4000 + 4000 + 1000 + 2 × 5000 + 1000 = 25000 ≤ 30 × 1000 − 1000. The outbox relay drain
+      // (5000, before the steps) and the telemetry flush (3000, after them) are not in that sum;
+      // RUNBOOK "The shutdown budget".
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
+      TEMPORAL_ADDRESS: `\${{temporal.RAILWAY_PRIVATE_DOMAIN}}:${TEMPORAL_PORT}`,
+      TEMPORAL_NAMESPACE,
+      TEMPORAL_TASK_QUEUE: 'checkout-saga',
       // Every request depends on these: the api verifies what the user-service signed, and reads
       // an epoch or an address from it. Referenced, not preserved, so the two cannot drift.
       JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
@@ -172,9 +185,15 @@ export default defineRailway(() => {
       ID_LB_PORT,
       ID_LB_IP_VERSIONS: 'ipv6',
       // Set by hand: the edge ranges come from a probe, the auth upstream from its RUNBOOK step,
-      // and the write freeze only while auth writes have to stop. check-railway-flip-vars.mjs
-      // keeps them declared here.
-      ...preserved(['TRUSTED_PROXY_CIDRS', 'AUTH_UPSTREAM', 'AUTH_UPSTREAM_REQUIRED', 'AUTH_WRITE_FREEZE']),
+      // and the write freezes only while auth or checkout writes have to stop.
+      // check-railway-flip-vars.mjs keeps them declared here.
+      ...preserved([
+        'TRUSTED_PROXY_CIDRS',
+        'AUTH_UPSTREAM',
+        'AUTH_UPSTREAM_REQUIRED',
+        'AUTH_WRITE_FREEZE',
+        'CHECKOUT_WRITE_FREEZE',
+      ]),
     },
   });
 
@@ -207,6 +226,32 @@ export default defineRailway(() => {
       TRUST_PROXY: 'fd12::/16',
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
       LOKI_URL,
+    },
+  });
+
+  // Workflow histories and visibility. Losing it loses every open saga (RUNBOOK: Operate Temporal).
+  const temporalPostgres = database('temporal-postgres', 'postgres', {
+    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    defaultMountPath: '/var/lib/postgresql/data',
+  });
+
+  // No source: deployed by hand with `railway up` (RUNBOOK). No domain, no TCP proxy and no
+  // healthcheck path: the frontend speaks gRPC only and has no auth, so it stays private.
+  const temporal = service('temporal', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'infra/temporal/Dockerfile' },
+    deploy: { numReplicas: 1, restartPolicyMaxRetries: 5 },
+    env: {
+      DB: 'postgres12',
+      DB_PORT: temporalPostgres.env.PGPORT,
+      POSTGRES_SEEDS: temporalPostgres.env.PGHOST,
+      POSTGRES_USER: temporalPostgres.env.PGUSER,
+      POSTGRES_PWD: temporalPostgres.env.PGPASSWORD,
+      // The private network is IPv6.
+      BIND_ON_IP: '::',
+      // Fixed for the life of temporal-postgres: changing it means a new database.
+      NUM_HISTORY_SHARDS: '4',
+      TEMPORAL_NAMESPACE,
+      TEMPORAL_NAMESPACE_RETENTION: '7d',
     },
   });
 
@@ -304,6 +349,8 @@ export default defineRailway(() => {
       gateway,
       userPostgres,
       userService,
+      temporalPostgres,
+      temporal,
       elasticsearchData,
       elasticsearch,
       prometheusData,

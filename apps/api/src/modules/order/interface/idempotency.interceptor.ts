@@ -17,6 +17,7 @@ import type { AuthenticatedUser } from '@jcool/platform/rbac';
 import { toError } from '@jcool/kernel';
 import {
   IDEMPOTENCY_STORE,
+  userIdempotencyScope,
   type IdempotencyRecord,
   type IdempotencyStorePort,
 } from '../application/ports/idempotency-store.port';
@@ -27,10 +28,10 @@ const LOG_CONTEXT = 'IdempotencyInterceptor';
 // How long a COMPLETED response stays replayable.
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
-// How long an IN_PROGRESS row is trusted before its owner counts as crashed. Checkout is one local
-// transaction, normally tens of ms. Reclaiming under a request that is still running stays safe: the
-// per-user checkout lock, UNIQUE (user_id, idempotency_key) on orders and the reclaim heal converge
-// both attempts on one order.
+// How long an IN_PROGRESS row is trusted before its owner counts as crashed. Checkout answers within
+// CHECKOUT_RESERVE_WAIT_MS plus two short transactions. Reclaiming under a request that is still running
+// stays safe: the per-user checkout lock, UNIQUE (user_id, idempotency_key) on orders and the reclaim
+// heal converge both attempts on one order.
 const IN_PROGRESS_LEASE_MS = 30 * 1000;
 
 /**
@@ -65,7 +66,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const scope = `user:${user.userId}`;
+    const scope = userIdempotencyScope(user.userId);
     const requestHash = computeRequestHash(request.method, request.path, scope, request.body);
     const insertInput = {
       ownerId: user.userId,
@@ -119,14 +120,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
   }
 
   private runHandler(scope: string, key: string, next: CallHandler): Observable<unknown> {
-    // Handed over CLS because the checkout transaction flips this row to COMPLETED inside the same
-    // unit of work as the order + reservation; on success this interceptor does nothing more.
+    // Handed over CLS because the transaction that moves the order to PENDING also flips this row to
+    // COMPLETED; on success this interceptor does nothing more.
     setIdempotencyContext(this.cls, { scope, key });
 
     return next.handle().pipe(
-      // Handler failure (business 4xx or unexpected 5xx): the checkout tx rolled back, so nothing
-      // committed and the row was never marked COMPLETED. Drop the IN_PROGRESS row so the client can
-      // retry. Cleanup failure must not mask the original error.
+      // Handler failure (business 4xx or unexpected 5xx): the row was never marked COMPLETED. Drop the
+      // IN_PROGRESS row so the client can retry; an order left RESERVING carries the key itself, so
+      // the retry finds it again. Cleanup failure must not mask the original error.
       catchError((err: unknown) =>
         from(this.idempotencyStore.deleteInProgress(scope, key)).pipe(
           catchError((cleanupErr: unknown) => {

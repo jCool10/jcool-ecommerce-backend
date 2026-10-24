@@ -17,6 +17,8 @@ export interface OrderView {
   currency: string;
   totalAmountMinor: number;
   placedAt: string | null;
+  /** Why the order settled the way it did, e.g. `user:cancel` or `saga:expired`; null until then. */
+  finalizeReason: string | null;
   items: OrderItemView[];
 }
 
@@ -28,6 +30,7 @@ export function toView(order: Order): OrderView {
     currency: order.currency,
     totalAmountMinor: order.total().amountMinor,
     placedAt: order.placedAt ? order.placedAt.toISOString() : null,
+    finalizeReason: order.finalizeReason,
     items: order.items.map((item) => ({
       skuId: item.skuId,
       productName: item.productName,

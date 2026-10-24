@@ -1,52 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
-import { Payment } from '../../domain/payment.entity';
-import { PaymentStatus } from '../../domain/payment-status';
 import { WebhookEvent } from '../../domain/webhook-event.entity';
 import type { VerifiedEvent } from '../ports/payment-gateway.port';
-import { fakePaymentGateway, fakePaymentRepository } from '../../testing/payment-port.doubles';
+import { fakePaymentGateway } from '../../testing/payment-port.doubles';
 import type { WebhookEventRepositoryPort } from '../ports/webhook-event-repository.port';
 import type { TransactionRunnerPort } from '../ports/transaction-runner.port';
-import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';
+import { ProcessWebhookEventUseCase } from './process-webhook-event.use-case';
+import type { ProcessTccWebhookEventUseCase, TccWebhookResult } from './process-tcc-webhook-event.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const PAYMENT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const EVENT_ROW_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 const SESSION_ID = 'cs_fake_session';
-const AMOUNT_MINOR = 150_000;
-const CURRENCY = 'VND';
 
-/**
- * Defaults describe a cleared charge that matches the payment. `null` means the gateway omitted the
- * field entirely, which is distinct from sending a wrong value.
- */
-function stripeEvent(
-  type: string,
-  opts: {
-    intentId?: string;
-    paymentStatus?: string | null;
-    amountMinor?: number | null;
-    currency?: string | null;
-  } = {},
-): VerifiedEvent {
-  const object: Record<string, unknown> = { id: SESSION_ID, payment_intent: opts.intentId };
-  if (opts.paymentStatus !== null) object.payment_status = opts.paymentStatus ?? 'paid';
-  if (opts.amountMinor !== null) object.amount_total = opts.amountMinor ?? AMOUNT_MINOR;
-  if (opts.currency !== null) object.currency = opts.currency ?? CURRENCY.toLowerCase();
+function stripeEvent(type: string, paymentStatus?: string): VerifiedEvent {
+  const object: Record<string, unknown> = { id: SESSION_ID, payment_intent: 'pi_123', amount_total: 150_000 };
+  if (paymentStatus !== undefined) object.payment_status = paymentStatus;
   return { kind: 'valid', providerEventId: 'evt_1', type, payload: { id: 'evt_1', type, data: { object } } };
-}
-
-function payment(status: PaymentStatus): Payment {
-  return Payment.rehydrate({
-    id: PAYMENT_ID,
-    orderId: ORDER_ID,
-    provider: 'stripe',
-    providerSessionId: SESSION_ID,
-    providerIntentId: null,
-    amountMinor: AMOUNT_MINOR,
-    currency: CURRENCY,
-    status,
-  });
 }
 
 function eventRow(): WebhookEvent {
@@ -62,197 +30,123 @@ function eventRow(): WebhookEvent {
   });
 }
 
-function build(opts: { verify?: VerifiedEvent; inserted?: boolean; existing?: Payment | null }) {
+function build(opts: { verify?: VerifiedEvent; inserted?: boolean; tcc?: TccWebhookResult | null } = {}) {
   const insertIfNew = vi.fn().mockResolvedValue({ inserted: opts.inserted ?? true, event: eventRow() });
   const markProcessed = vi.fn().mockResolvedValue(undefined);
   const markSkipped = vi.fn().mockResolvedValue(undefined);
-  const existing = opts.existing === undefined ? payment(PaymentStatus.PENDING) : opts.existing;
-  const findByProviderSessionId = vi.fn().mockResolvedValue(existing);
-  const updateStatus = vi.fn().mockResolvedValue(existing);
-  const verifyAndParseEvent = vi.fn().mockReturnValue(opts.verify ?? stripeEvent('checkout.session.completed'));
+  const verifyAndParseEvent = vi.fn().mockReturnValue(opts.verify ?? stripeEvent('checkout.session.completed', 'paid'));
 
   const webhookEvents = { insertIfNew, markProcessed, markSkipped } as unknown as WebhookEventRepositoryPort;
-  // Every DB call must receive this exact object to prove the whole unit runs in one transaction.
   const tx = { __tx: true };
   const txRunner = {
     run: vi.fn().mockImplementation((work: (t: unknown) => unknown) => work(tx)),
   } as unknown as TransactionRunnerPort;
-  const append = vi.fn<OutboxWriterPort['append']>().mockResolvedValue(undefined);
+  const tccExecute = vi.fn<ProcessTccWebhookEventUseCase['execute']>().mockResolvedValue(opts.tcc ?? null);
 
-  const useCase = new ProcessWebhookEventUseCase(
-    txRunner,
-    fakePaymentGateway({ verifyAndParseEvent }),
-    webhookEvents,
-    fakePaymentRepository({ findByProviderSessionId, updateStatus }),
-    { append },
-  );
-  return { useCase, tx, insertIfNew, markProcessed, markSkipped, findByProviderSessionId, updateStatus, append };
+  const useCase = new ProcessWebhookEventUseCase(txRunner, fakePaymentGateway({ verifyAndParseEvent }), webhookEvents, {
+    execute: tccExecute,
+  } as unknown as ProcessTccWebhookEventUseCase);
+  return { useCase, tx, insertIfNew, markProcessed, markSkipped, tccExecute };
 }
 
 const RAW = Buffer.from('{}');
 const HEADERS: Record<string, string> = {};
 
 describe('ProcessWebhookEventUseCase', () => {
-  it('settles and emits in the one transaction that recorded the delivery', async () => {
-    const { useCase, tx, insertIfNew, findByProviderSessionId, updateStatus, markProcessed, append } = build({
-      verify: stripeEvent('checkout.session.completed', { intentId: 'pi_123' }),
-    });
-
-    const result = await useCase.execute(RAW, HEADERS);
-
-    expect(result).toEqual({
+  it('hands a participant payment to the TCC path and logs nothing itself', async () => {
+    const tcc: TccWebhookResult = {
+      path: 'tcc',
       outcome: 'processed',
-      status: PaymentStatus.SUCCEEDED,
       orderId: ORDER_ID,
-      paymentRef: 'pi_123',
+      providerEventId: 'evt_1',
       eventType: 'checkout.session.completed',
-    });
-    expect(insertIfNew).toHaveBeenCalledWith(expect.anything(), tx);
-    expect(findByProviderSessionId).toHaveBeenCalledWith(SESSION_ID, tx);
-    expect(updateStatus).toHaveBeenCalledWith(
-      PAYMENT_ID,
-      PaymentStatus.SUCCEEDED,
-      expect.objectContaining({ tx, providerIntentId: 'pi_123' }),
-    );
-    expect(markProcessed).toHaveBeenCalledWith(EVENT_ROW_ID, tx);
-    // A payment that commits without its event leaves the order to the sweep alone.
-    expect(append).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({
-        aggregateId: PAYMENT_ID,
-        eventType: 'payment.succeeded',
-        payload: expect.objectContaining({ orderId: ORDER_ID, paymentRef: 'pi_123' }) as unknown,
-      }),
-    );
-  });
-
-  // Emitting on any of these would drive an order off a settlement that never happened.
-  it('writes and emits nothing for a delivery that does not settle the payment', async () => {
-    const completed = (opts: Parameters<typeof stripeEvent>[1]) => stripeEvent('checkout.session.completed', opts);
-    const deliveries: Record<string, Parameters<typeof build>[0]> = {
-      'invalid signature': { verify: { kind: 'invalid_signature' } },
-      'expired timestamp': { verify: { kind: 'expired_timestamp' } },
-      duplicate: { inserted: false },
-      'unhandled type': { verify: stripeEvent('charge.refunded') },
-      'no local payment': { existing: null },
-      unpaid: { verify: completed({ paymentStatus: 'unpaid' }) },
-      'no payment_status': { verify: completed({ paymentStatus: null }) },
-      'wrong amount': { verify: completed({ amountMinor: 1 }) },
-      'wrong currency': { verify: completed({ currency: 'usd' }) },
-      'no amount': { verify: completed({ amountMinor: null }) },
     };
+    const { useCase, tccExecute, insertIfNew } = build({ tcc });
 
-    const results: Record<string, WebhookProcessResult> = {};
-    const outcomes = await Promise.all(
-      Object.entries(deliveries).map(async ([label, opts]) => {
-        const { useCase, insertIfNew, updateStatus, markProcessed, markSkipped, append } = build(opts);
-        const result = await useCase.execute(RAW, HEADERS);
-        results[label] = result;
-        const verdict = 'reason' in result ? result.reason : result.outcome;
-        const recorded = insertIfNew.mock.calls.length > 0;
-        const writes = updateStatus.mock.calls.length + markProcessed.mock.calls.length + append.mock.calls.length;
-        return [label, verdict, recorded, markSkipped.mock.calls.length, writes];
-      }),
-    );
+    await expect(useCase.execute(RAW, HEADERS)).resolves.toBe(tcc);
 
-    expect(outcomes).toEqual([
-      ['invalid signature', 'invalid_signature', false, 0, 0],
-      ['expired timestamp', 'expired_timestamp', false, 0, 0],
-      ['duplicate', 'duplicate', true, 0, 0],
-      ['unhandled type', 'ignored', true, 0, 0],
-      ['no local payment', 'payment_not_found', true, 1, 0],
-      ['unpaid', 'awaiting_payment', true, 1, 0],
-      ['no payment_status', 'awaiting_payment', true, 1, 0],
-      ['wrong amount', 'amount_mismatch', true, 1, 0],
-      ['wrong currency', 'amount_mismatch', true, 1, 0],
-      ['no amount', 'amount_mismatch', true, 1, 0],
-    ]);
-    // What a human reviewing the unsettled payment needs to see.
-    expect(results['wrong amount']).toMatchObject({
-      charge: {
-        orderId: ORDER_ID,
-        expectedMinor: AMOUNT_MINOR,
-        expectedCurrency: CURRENCY,
-        actualMinor: 1,
-        actualCurrency: CURRENCY.toLowerCase(),
-      },
-    });
+    expect(tccExecute).toHaveBeenCalledWith(expect.objectContaining({ kind: 'valid', providerEventId: 'evt_1' }));
+    expect(insertIfNew).not.toHaveBeenCalled();
   });
 
-  it('settles an expiry without an amount check, since releasing stock must not depend on a charge', async () => {
-    const { useCase, updateStatus } = build({
-      verify: stripeEvent('checkout.session.expired', { paymentStatus: null, amountMinor: null, currency: null }),
-    });
+  it('never asks the TCC path about a delivery that failed verification', async () => {
+    const { useCase, tccExecute } = build({ verify: { kind: 'invalid_signature' } });
 
-    const result = await useCase.execute(RAW, HEADERS);
-
-    expect(result).toMatchObject({ outcome: 'processed', status: PaymentStatus.FAILED });
-    expect(updateStatus).toHaveBeenCalledWith(PAYMENT_ID, PaymentStatus.FAILED, expect.anything());
+    await useCase.execute(RAW, HEADERS);
+    expect(tccExecute).not.toHaveBeenCalled();
   });
 
-  // Reconcile (or an earlier delivery) already settled the payment to the very outcome this event
-  // reports; a fresh event id for the same session is a redelivery in substance, not a conflict.
-  it('treats a repeat notification of the already-settled outcome as an idempotent no-op', async () => {
-    const cases: Array<[PaymentStatus, string]> = [
-      [PaymentStatus.SUCCEEDED, 'checkout.session.completed'],
-      [PaymentStatus.FAILED, 'checkout.session.expired'],
-    ];
-
-    const outcomes = await Promise.all(
-      cases.map(async ([status, eventType]) => {
-        const { useCase, updateStatus, markSkipped, append } = build({
-          verify: stripeEvent(eventType),
-          existing: payment(status),
-        });
-
-        const result = await useCase.execute(RAW, HEADERS);
-        return [result, updateStatus.mock.calls.length, append.mock.calls.length, markSkipped.mock.calls.length];
-      }),
-    );
-
-    expect(outcomes).toEqual([
-      [
-        {
-          outcome: 'skipped',
-          reason: 'already_settled',
-          providerEventId: 'evt_1',
-          eventType: 'checkout.session.completed',
-        },
-        0,
-        0,
-        1,
-      ],
-      [
-        {
-          outcome: 'skipped',
-          reason: 'already_settled',
-          providerEventId: 'evt_1',
-          eventType: 'checkout.session.expired',
-        },
-        0,
-        0,
-        1,
-      ],
-    ]);
-  });
-
-  it('skips a conflicting transition (failure after success) without clobbering the payment', async () => {
-    const { useCase, updateStatus, markSkipped, append } = build({
-      verify: stripeEvent('checkout.session.expired'),
-      existing: payment(PaymentStatus.SUCCEEDED),
-    });
+  it('logs a session with no payment header as skipped, in the transaction that recorded it', async () => {
+    const { useCase, tx, insertIfNew, markSkipped, markProcessed } = build();
 
     const result = await useCase.execute(RAW, HEADERS);
 
     expect(result).toEqual({
       outcome: 'skipped',
-      reason: 'conflict',
+      reason: 'no_payment_header',
       providerEventId: 'evt_1',
-      eventType: 'checkout.session.expired',
-      conflict: { orderId: ORDER_ID, from: PaymentStatus.SUCCEEDED, to: PaymentStatus.FAILED },
+      eventType: 'checkout.session.completed',
+      sessionId: SESSION_ID,
+      moneyMoved: true,
     });
-    expect(markSkipped).toHaveBeenCalledWith(EVENT_ROW_ID, expect.anything());
-    expect(updateStatus).not.toHaveBeenCalled();
-    expect(append).not.toHaveBeenCalled();
+    expect(insertIfNew).toHaveBeenCalledWith(expect.objectContaining({ providerEventId: 'evt_1' }), tx);
+    expect(markSkipped).toHaveBeenCalledExactlyOnceWith(EVENT_ROW_ID, tx);
+    expect(markProcessed).not.toHaveBeenCalled();
+  });
+
+  // Only a cleared charge leaves money to hand back; an unpaid or expired session moved none.
+  it('flags money as moved only for a completed session that cleared', async () => {
+    const deliveries: Array<[string, VerifiedEvent]> = [
+      ['paid', stripeEvent('checkout.session.completed', 'paid')],
+      ['nothing due', stripeEvent('checkout.session.completed', 'no_payment_required')],
+      ['unpaid', stripeEvent('checkout.session.completed', 'unpaid')],
+      ['no payment_status', stripeEvent('checkout.session.completed')],
+      ['expired', stripeEvent('checkout.session.expired')],
+    ];
+
+    const outcomes = await Promise.all(
+      deliveries.map(async ([label, verify]) => {
+        const result = await build({ verify }).useCase.execute(RAW, HEADERS);
+        return [label, 'moneyMoved' in result ? result.moneyMoved : result.outcome];
+      }),
+    );
+
+    expect(outcomes).toEqual([
+      ['paid', true],
+      ['nothing due', false],
+      ['unpaid', false],
+      ['no payment_status', false],
+      ['expired', false],
+    ]);
+  });
+
+  it('writes nothing past the event log for a delivery it does not act on', async () => {
+    const deliveries: Record<string, Parameters<typeof build>[0]> = {
+      'invalid signature': { verify: { kind: 'invalid_signature' } },
+      'expired timestamp': { verify: { kind: 'expired_timestamp' } },
+      duplicate: { inserted: false },
+      'unhandled type': { verify: stripeEvent('charge.refunded') },
+    };
+
+    const outcomes = await Promise.all(
+      Object.entries(deliveries).map(async ([label, opts]) => {
+        const { useCase, insertIfNew, markSkipped, markProcessed } = build(opts);
+        const result = await useCase.execute(RAW, HEADERS);
+        const verdict = 'reason' in result ? result.reason : result.outcome;
+        return [
+          label,
+          verdict,
+          insertIfNew.mock.calls.length,
+          markSkipped.mock.calls.length + markProcessed.mock.calls.length,
+        ];
+      }),
+    );
+
+    expect(outcomes).toEqual([
+      ['invalid signature', 'invalid_signature', 0, 0],
+      ['expired timestamp', 'expired_timestamp', 0, 0],
+      ['duplicate', 'duplicate', 1, 0],
+      ['unhandled type', 'ignored', 1, 0],
+    ]);
   });
 });

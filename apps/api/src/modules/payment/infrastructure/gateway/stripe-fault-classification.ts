@@ -26,3 +26,16 @@ export function isSessionNotOpen(error: unknown): boolean {
   const cause = error instanceof PaymentGatewayError ? error.cause : error;
   return cause instanceof Stripe.errors.StripeInvalidRequestError && cause.statusCode === 400;
 }
+
+/**
+ * The capture/void call may or may not have been applied, and Stripe keeps this answer under the
+ * idempotency key. Only reading the PaymentIntent back says which.
+ */
+export function isStripeServerError(error: unknown): boolean {
+  return error instanceof Stripe.errors.StripeError && (error.statusCode ?? 0) >= 500;
+}
+
+/** Stripe refused because the intent had already moved on (captured, canceled, lapsed). */
+export function isUnexpectedIntentState(error: unknown): boolean {
+  return error instanceof Stripe.errors.StripeError && error.code === 'payment_intent_unexpected_state';
+}

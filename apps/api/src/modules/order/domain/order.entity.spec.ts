@@ -6,6 +6,7 @@ import { OrderItem } from './order-item.entity';
 import { OrderStatus } from './order-status';
 import { OrderTransitionError } from './order-state-machine';
 import { OrderPaidEvent } from './events/order-paid.event';
+import { OrderPlacedEvent } from './events/order-placed.event';
 import { OrderFailedEvent } from './events/order-failed.event';
 import { OrderExpiredEvent } from './events/order-expired.event';
 import { OrderCancelledEvent } from './events/order-cancelled.event';
@@ -63,39 +64,105 @@ describe('Order entity', () => {
     expect(order.items[0].quantity).toBe(MAX_QUANTITY_PER_ORDER_LINE + 1);
   });
 
-  it('place() moves a draft to PENDING and stamps placedAt, leaving the original untouched', () => {
-    const now = new Date('2026-01-01T00:00:00.000Z');
-    const draft = Order.create('u', 'VND', [line(100_000, 1)]);
-
-    const placed = draft.place(now);
-
-    expect(placed.status).toBe(OrderStatus.PENDING);
-    expect(placed.placedAt).toBe(now);
-    expect(draft.status).toBe(OrderStatus.DRAFT);
-    expect(draft.placedAt).toBeNull();
-  });
-
   describe('finalize()', () => {
     const now = new Date('2026-02-02T00:00:00.000Z');
 
-    it('moves a pending order to PAID and stamps the settlement, leaving the original untouched', () => {
-      const pending = pendingOrder();
+    it('moves a confirming order to PAID and stamps the settlement, leaving the original untouched', () => {
+      const confirming = pendingOrder(OrderStatus.CONFIRMING);
 
-      const paid = pending.finalize(OrderStatus.PAID, { now, reason: 'webhook:paid', paymentRef: 'pay_123' });
+      const paid = confirming.finalize(OrderStatus.PAID, { now, reason: 'saga:captured', paymentRef: 'pay_123' });
 
       expect(paid.status).toBe(OrderStatus.PAID);
       expect(paid.isTerminal()).toBe(true);
       expect(paid.finalizedAt).toBe(now);
-      expect(paid.finalizeReason).toBe('webhook:paid');
+      expect(paid.finalizeReason).toBe('saga:captured');
       expect(paid.paymentRef).toBe('pay_123');
-      expect(pending.status).toBe(OrderStatus.PENDING);
-      expect(pending.isTerminal()).toBe(false);
-      expect(pending.finalizedAt).toBeNull();
+      expect(confirming.status).toBe(OrderStatus.CONFIRMING);
+      expect(confirming.isTerminal()).toBe(false);
+      expect(confirming.finalizedAt).toBeNull();
     });
 
-    it('throws OrderTransitionError when finalizing a non-PENDING order', () => {
+    it('throws OrderTransitionError for an outcome the current status cannot reach', () => {
       expect(() => pendingOrder(OrderStatus.DRAFT).finalize(OrderStatus.PAID, { now })).toThrow(OrderTransitionError);
+      expect(() => pendingOrder().finalize(OrderStatus.PAID, { now })).toThrow(OrderTransitionError);
       expect(() => pendingOrder(OrderStatus.PAID).finalize(OrderStatus.FAILED, { now })).toThrow(OrderTransitionError);
+    });
+  });
+
+  describe('saga transitions', () => {
+    const placedAt = new Date('2026-03-03T00:00:00.000Z');
+    const deadline = new Date('2026-03-03T01:00:00.000Z');
+    const reserving = (): Order =>
+      Order.rehydrate({
+        id: 'order-1',
+        userId: 'u',
+        status: OrderStatus.RESERVING,
+        currency: 'VND',
+        items: [line(100_000, 1)],
+        totalAmountMinor: 100_000,
+        placedAt,
+        paymentDeadlineAt: deadline,
+      });
+
+    it('reserve() moves a draft to RESERVING with placedAt and the payment deadline', () => {
+      const draft = Order.create('u', 'VND', [line(100_000, 1)]);
+
+      const order = draft.reserve(placedAt, deadline);
+
+      expect(order).toMatchObject({ status: OrderStatus.RESERVING, placedAt, paymentDeadlineAt: deadline });
+      expect(draft.status).toBe(OrderStatus.DRAFT);
+      expect(draft.paymentDeadlineAt).toBeNull();
+    });
+
+    it('confirmPlaced() moves RESERVING to PENDING and can then produce the placed event', () => {
+      const pending = reserving().confirmPlaced();
+
+      expect(pending).toMatchObject({ status: OrderStatus.PENDING, placedAt, paymentDeadlineAt: deadline });
+      expect(pending.toPlacedEvent()).toEqual(new OrderPlacedEvent('order-1', 'u', 100_000, 'VND', placedAt));
+    });
+
+    it('reject() settles a RESERVING order without an event', () => {
+      const now = new Date('2026-03-03T00:00:03.000Z');
+
+      const rejected = reserving().reject('saga:try_failed', now);
+
+      expect(rejected).toMatchObject({
+        status: OrderStatus.REJECTED,
+        finalizedAt: now,
+        finalizeReason: 'saga:try_failed',
+      });
+      expect(rejected.isTerminal()).toBe(true);
+      expect(() => rejected.toFinalizedEvent()).toThrow(DomainError);
+    });
+
+    it('beginConfirming() moves PENDING to CONFIRMING, and finalize() settles it', () => {
+      const now = new Date('2026-03-03T00:10:00.000Z');
+      const confirming = reserving().confirmPlaced().beginConfirming();
+
+      expect(confirming.status).toBe(OrderStatus.CONFIRMING);
+      expect(confirming.finalizedAt).toBeNull();
+      expect(confirming.finalize(OrderStatus.PAID, { now, paymentRef: 'pay_9' })).toMatchObject({
+        status: OrderStatus.PAID,
+        paymentRef: 'pay_9',
+        paymentDeadlineAt: deadline,
+      });
+      expect(confirming.finalize(OrderStatus.FAILED, { now }).status).toBe(OrderStatus.FAILED);
+      expect(() => confirming.finalize(OrderStatus.CANCELLED, { now })).toThrow(OrderTransitionError);
+    });
+
+    it('refuses each saga step from the wrong source', () => {
+      const now = new Date('2026-03-03T00:10:00.000Z');
+
+      expect(() => pendingOrder().reserve(placedAt, deadline)).toThrow(OrderTransitionError);
+      expect(() => pendingOrder().confirmPlaced()).toThrow(OrderTransitionError);
+      expect(() => pendingOrder().reject('saga:try_failed', now)).toThrow(OrderTransitionError);
+      expect(() => reserving().beginConfirming()).toThrow(OrderTransitionError);
+      expect(() => reserving().finalize(OrderStatus.PAID, { now })).toThrow(OrderTransitionError);
+    });
+
+    it('rehydrate() reads the payment deadline and defaults it to null', () => {
+      expect(reserving().paymentDeadlineAt).toBe(deadline);
+      expect(pendingOrder().paymentDeadlineAt).toBeNull();
     });
   });
 
@@ -103,7 +170,8 @@ describe('Order entity', () => {
     const now = new Date('2026-02-02T00:00:00.000Z');
 
     it('produces the event matching the terminal outcome', () => {
-      const paid = pendingOrder().finalize(OrderStatus.PAID, { now, paymentRef: 'pay_1' }).toFinalizedEvent();
+      const confirming = pendingOrder(OrderStatus.CONFIRMING);
+      const paid = confirming.finalize(OrderStatus.PAID, { now, paymentRef: 'pay_1' }).toFinalizedEvent();
       expect(paid).toBeInstanceOf(OrderPaidEvent);
       expect(paid).toMatchObject({
         eventName: 'order.paid',
@@ -112,7 +180,7 @@ describe('Order entity', () => {
         occurredAt: now,
       });
 
-      const failed = pendingOrder().finalize(OrderStatus.FAILED, { now }).toFinalizedEvent();
+      const failed = confirming.finalize(OrderStatus.FAILED, { now }).toFinalizedEvent();
       expect(failed).toBeInstanceOf(OrderFailedEvent);
       expect(failed).toMatchObject({ reason: null });
       expect(pendingOrder().finalize(OrderStatus.EXPIRED, { now }).toFinalizedEvent()).toBeInstanceOf(

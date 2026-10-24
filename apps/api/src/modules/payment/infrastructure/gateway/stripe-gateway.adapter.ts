@@ -3,26 +3,23 @@ import Stripe from 'stripe';
 import { v7 as uuidv7 } from 'uuid';
 import {
   PaymentGatewayError,
+  type CaptureIntentResult,
   type CreateSessionInput,
   type ExpireSessionOutcome,
   type GatewaySession,
   type GatewayPaymentStatus,
   type GatewayStatus,
+  type IntentStatus,
   type PaymentGatewayPort,
   type RetrievedSession,
+  type SessionAuthorization,
   type VerifiedEvent,
+  type VoidIntentOutcome,
 } from '../../application/ports/payment-gateway.port';
 import { verifyAndParseStripeEvent } from './hmac-signature';
-import { isSessionNotOpen } from './stripe-fault-classification';
+import { isSessionNotOpen, isStripeServerError, isUnexpectedIntentState } from './stripe-fault-classification';
 
-// Stripe's minimum, against a 24h default. The backstop for every session no path here manages to
-// close; it clears the 15-minute stock hold and the reconcile threshold with room to spare. The
-// queue's retry ladders are sized against it.
-export const SESSION_LIFETIME_SEC = 30 * 60;
-// Stripe validates the sent value against ITS clock at receipt, not ours at build time: a network
-// hop, an SDK retry of this same body, or slight negative skew would otherwise land under the
-// 30-minute minimum and 400. The backstop only has a lower bound, so extra seconds cost nothing.
-export const EXPIRY_CLOCK_MARGIN_SEC = 120;
+type StripeClient = Pick<Stripe, 'checkout' | 'paymentIntents'>;
 
 export interface StripeGatewayOptions {
   webhookSecret?: string;
@@ -33,18 +30,34 @@ export interface StripeGatewayOptions {
   secretKey?: string;
   successUrl?: string;
   cancelUrl?: string;
+  /** Lifetime of a session opened without an explicit `expiresAt`: the floor plus the margin. */
+  sessionMinTtlSec: number;
+  sessionExpiryMarginSec: number;
+  /** Bounds each capture, void, expire and authorization read; the SDK does not retry them. */
+  captureTimeoutMs: number;
   // Test seam: inject a Stripe-shaped client so the live branch is covered without a key or network.
-  stripeClient?: Pick<Stripe, 'checkout'>;
+  stripeClient?: StripeClient;
 }
+
+const KNOWN_INTENT_STATUSES: ReadonlySet<string> = new Set<IntentStatus>([
+  'requires_capture',
+  'succeeded',
+  'canceled',
+  'processing',
+  'requires_payment_method',
+]);
 
 @Injectable()
 export class StripeGatewayAdapter implements PaymentGatewayPort {
   readonly provider = 'stripe';
   private readonly webhookSecret: string;
   private readonly toleranceSec: number;
-  private readonly stripe?: Pick<Stripe, 'checkout'>;
+  private readonly stripe?: StripeClient;
   private readonly successUrl?: string;
   private readonly cancelUrl?: string;
+  private readonly sessionLifetimeSec: number;
+  // Retries belong to the caller (saga, sweep), which knows how long it can wait.
+  private readonly bounded: Stripe.RequestOptions;
 
   constructor(options: StripeGatewayOptions) {
     // Fail-fast on the real path: a missing/blank webhook secret would silently accept forged
@@ -59,6 +72,8 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
     }
     this.webhookSecret = options.webhookSecret;
     this.toleranceSec = options.toleranceSec;
+    this.sessionLifetimeSec = options.sessionMinTtlSec + options.sessionExpiryMarginSec;
+    this.bounded = { timeout: options.captureTimeoutMs, maxNetworkRetries: 0 };
 
     const secretKey = options.secretKey?.trim();
     this.stripe =
@@ -89,6 +104,9 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
       return { providerSessionId: sessionId, redirectUrl: `https://checkout.stripe.test/pay/${sessionId}` };
     }
 
+    const expiresAtSec = input.expiresAt
+      ? Math.floor(input.expiresAt.getTime() / 1000)
+      : Math.floor(Date.now() / 1000) + this.sessionLifetimeSec;
     try {
       // One line item for the order's frozen total: the amount is snapshotted server-side, so no
       // per-item breakdown is needed to collect it.
@@ -109,7 +127,8 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
           cancel_url: this.cancelUrl,
           client_reference_id: input.orderId,
           metadata: { order_id: input.orderId },
-          expires_at: Math.floor(Date.now() / 1000) + SESSION_LIFETIME_SEC + EXPIRY_CLOCK_MARGIN_SEC,
+          expires_at: expiresAtSec,
+          ...(input.captureMethod === 'manual' ? { payment_intent_data: { capture_method: 'manual' as const } } : {}),
         },
         input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
       );
@@ -180,7 +199,7 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
     }
 
     try {
-      await this.stripe.checkout.sessions.expire(ref);
+      await this.stripe.checkout.sessions.expire(ref, undefined, this.bounded);
       return 'expired';
     } catch (error) {
       if (isUnknownHandle(error)) {
@@ -198,12 +217,7 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
   private async classifyRefusal(ref: string, refusal: unknown): Promise<ExpireSessionOutcome> {
     let status: Stripe.Checkout.Session['status'];
     try {
-      // Tighter than the client default (20s × 2 retries): this runs inside the consumer's
-      // transaction, so this bound is how long that transaction is held.
-      const session = await this.stripe!.checkout.sessions.retrieve(ref, undefined, {
-        timeout: 5_000,
-        maxNetworkRetries: 0,
-      });
+      const session = await this.stripe!.checkout.sessions.retrieve(ref, undefined, this.bounded);
       status = session.status;
     } catch (error) {
       if (isUnknownHandle(error)) {
@@ -223,6 +237,95 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
     // Refused while still open — a reason we do not model. Retrying is the honest response.
     throw new PaymentGatewayError(`Stripe refused to expire an open checkout session (${describe(refusal)})`, refusal);
   }
+
+  async retrieveAuthorization(sessionRef: string): Promise<SessionAuthorization> {
+    if (!this.stripe) {
+      return { sessionStatus: 'unknown' };
+    }
+
+    let session: Stripe.Checkout.Session;
+    try {
+      session = await this.stripe.checkout.sessions.retrieve(sessionRef, { expand: ['payment_intent'] }, this.bounded);
+    } catch (error) {
+      if (isUnknownHandle(error)) {
+        return { sessionStatus: 'unknown' };
+      }
+      throw new PaymentGatewayError(`Stripe checkout session retrieve failed (${describe(error)})`, error);
+    }
+
+    // Under manual capture a held session reads `complete` + `unpaid`; only the intent shows the hold.
+    const intent = typeof session.payment_intent === 'object' ? session.payment_intent : null;
+    return {
+      sessionStatus: toSessionStatus(session.status),
+      redirectUrl: session.url ?? undefined,
+      intentId: intent?.id ?? extractIntentId(session) ?? undefined,
+      intentStatus: intent ? toIntentStatus(intent.status) : undefined,
+      amountCapturableMinor: intent?.amount_capturable,
+      currency: intent?.currency,
+    };
+  }
+
+  async captureIntent(intentId: string, idempotencyKey: string): Promise<CaptureIntentResult> {
+    const stripe = this.requireLive('capture');
+    try {
+      await stripe.paymentIntents.capture(intentId, {}, { idempotencyKey, ...this.bounded });
+      return { kind: 'captured' };
+    } catch (error) {
+      const status = await this.readIntentAfter('capture', intentId, error);
+      if (status === 'succeeded') return { kind: 'captured' };
+      if (status === 'canceled' || status === 'requires_payment_method') {
+        return { kind: 'not_capturable', intentStatus: status };
+      }
+      throw this.unresolved('capture', status, error);
+    }
+  }
+
+  async voidIntent(intentId: string, idempotencyKey: string): Promise<VoidIntentOutcome> {
+    const stripe = this.requireLive('void');
+    try {
+      await stripe.paymentIntents.cancel(intentId, {}, { idempotencyKey, ...this.bounded });
+      return 'voided';
+    } catch (error) {
+      const status = await this.readIntentAfter('void', intentId, error);
+      if (status === 'canceled') return 'already_canceled';
+      if (status === 'succeeded') return 'already_captured';
+      throw this.unresolved('void', status, error);
+    }
+  }
+
+  private requireLive(op: string): StripeClient {
+    if (!this.stripe) {
+      throw new PaymentGatewayError(`Stripe is not configured; cannot ${op} a PaymentIntent`);
+    }
+    return this.stripe;
+  }
+
+  /**
+   * Only a 5xx or an "unexpected state" refusal is worth reading back. A timeout, a 409 for the same
+   * key still in flight, a 429 or any other refusal is an unknown outcome: thrown, key kept.
+   */
+  private async readIntentAfter(op: 'capture' | 'void', intentId: string, error: unknown): Promise<IntentStatus> {
+    if (!isStripeServerError(error) && !isUnexpectedIntentState(error)) {
+      throw new PaymentGatewayError(`Stripe ${op} failed (${describe(error)})`, error);
+    }
+    try {
+      const intent = await this.stripe!.paymentIntents.retrieve(intentId, undefined, this.bounded);
+      return toIntentStatus(intent.status);
+    } catch (readError) {
+      throw new PaymentGatewayError(
+        `Stripe ${op} failed (${describe(error)}) and the intent could not be read back (${describe(readError)})`,
+        error,
+      );
+    }
+  }
+
+  // A hold still in place after a 5xx means the call did not land, yet Stripe replays that 5xx for
+  // the same key: the caller must move to a new one.
+  private unresolved(op: 'capture' | 'void', status: IntentStatus, error: unknown): PaymentGatewayError {
+    return new PaymentGatewayError(`Stripe ${op} failed with the intent ${status} (${describe(error)})`, error, {
+      retryWithFreshKey: status === 'requires_capture' && isStripeServerError(error),
+    });
+  }
 }
 
 // An `expired` session maps to FAILED so it reconciles to the same order state its
@@ -239,6 +342,14 @@ function mapSessionStatus(session: Pick<Stripe.Checkout.Session, 'status' | 'pay
     return 'PENDING';
   }
   return 'UNKNOWN';
+}
+
+function toIntentStatus(status: string): IntentStatus {
+  return KNOWN_INTENT_STATUSES.has(status) ? (status as IntentStatus) : 'other';
+}
+
+function toSessionStatus(status: string | null): SessionAuthorization['sessionStatus'] {
+  return status === 'open' || status === 'complete' || status === 'expired' ? status : 'unknown';
 }
 
 // `payment_intent` is a bare id unless the caller expanded it; both shapes yield the same handle.

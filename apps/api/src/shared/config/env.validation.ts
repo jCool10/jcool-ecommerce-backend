@@ -1,5 +1,6 @@
 import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
 import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
+import { CheckoutSagaEnv, assertCheckoutSagaEnv } from './checkout-saga.env';
 import {
   AppEnv,
   DatabaseEnv,
@@ -30,12 +31,13 @@ export enum PaymentProvider {
 const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
 );
+const ApiEnv = CheckoutSagaEnv(PlatformEnv);
 
 const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
 
 /** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS. */
-export class EnvironmentVariables extends PlatformEnv {
+export class EnvironmentVariables extends ApiEnv {
   // @IsNotEmpty because a blank prefix would silently produce a different, colliding key layout
   // rather than falling back to the default.
   @IsOptional()
@@ -121,38 +123,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(0)
   ORDER_STALE_THRESHOLD_SEC?: number;
 
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  ORDER_TTL_SEC?: number;
-
-  @IsOptional()
-  @IsStrictBoolean()
-  RESERVATION_SWEEP_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1000)
-  RESERVATION_SWEEP_INTERVAL_MS?: number;
-
-  // Capped because each distinct order in the batch costs a finalize transaction.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  @Max(500)
-  RESERVATION_SWEEP_BATCH_SIZE?: number;
-
-  // 0 is legal — e2e drives the sweep deterministically.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  RESERVATION_SWEEP_GRACE_SEC?: number;
-
   // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
   @StrictInt()
@@ -165,6 +135,12 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsInt()
   @Min(1)
   RETENTION_OUTBOX_DAYS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  RETENTION_REJECTED_ORDER_DAYS?: number;
 
   // A correctness bound: while the queue can still redeliver a message, its claim is the only thing
   // stopping the effect being applied twice. The floor is DERIVED from the queue's failed-job
@@ -319,12 +295,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsEnum(InventoryLockStrategy)
   INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
 
-  // Duration form ("15m"/"1h").
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  INVENTORY_RESERVATION_TTL?: string;
-
   // Capped so a misconfig can't spin the CAS loop while it pins the stock row's write-lock.
   @IsOptional()
   @StrictInt()
@@ -332,6 +302,31 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(0)
   @Max(10)
   INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  @Max(30_000)
+  INVENTORY_TRY_LOCK_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsStrictBoolean()
+  INVENTORY_HOLD_SWEEP_ENABLED?: string;
+
+  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1000)
+  INVENTORY_HOLD_SWEEP_INTERVAL_MS?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  INVENTORY_HOLD_SWEEP_BATCH_SIZE?: number;
 
   @IsOptional()
   @IsEnum(PaymentProvider)
@@ -364,6 +359,25 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsOptional()
   @IsString()
   STRIPE_CANCEL_URL?: string;
+
+  // Zero is legal: the production-mode system stack runs against a fake Stripe with no floor.
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(0)
+  PAYMENT_SESSION_MIN_TTL_SEC?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(0)
+  PAYMENT_SESSION_EXPIRY_MARGIN_SEC?: number;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(500)
+  PAYMENT_CAPTURE_TIMEOUT_MS?: number;
 
   // The only way in: without it every token is refused, so it is required rather than optional.
   @IsUrl(HTTP_URL)
@@ -432,5 +446,10 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
     );
   }
+  // Without a key the adapter fabricates sessions no buyer can pay, which only test and dev may run on.
+  if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
+    throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
+  }
+  assertCheckoutSagaEnv(env);
   return env;
 }

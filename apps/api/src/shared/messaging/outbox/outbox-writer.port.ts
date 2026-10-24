@@ -18,6 +18,7 @@ export interface OutboxWriterPort {
   /**
    * Appends using the CALLER'S transaction, never its own: the business change and its event commit
    * or roll back as one write, so there is no window in which one exists without the other.
+   * Pass `id` when it was minted before the transaction opened.
    */
-  append(tx: DrizzleTx, record: OutboxRecord): Promise<void>;
+  append(tx: DrizzleTx, record: OutboxRecord, options?: { id?: string }): Promise<void>;
 }

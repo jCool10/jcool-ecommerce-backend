@@ -17,6 +17,7 @@ const SKU_A = testId();
 const SKU_B = testId();
 const ORDER_1 = testId();
 const ORDER_2 = testId();
+const HOLD_UNTIL = new Date(Date.now() + 60 * 60_000);
 
 // Single-caller contract of both strategies. Races live in checkout-oversell and the
 // inventory-optimistic-* and inventory-mixed-strategy suites.
@@ -35,7 +36,9 @@ describe('Inventory reserve (integration, real Postgres)', () => {
 
   describe.each(['reservePessimistic', 'reserveOptimistic'] as const)('%s', (method) => {
     const reserve = (orderId: string, lines: ReservationLine[]): Promise<void> =>
-      db.transaction((tx) => repo[method](tx, orderId, lines));
+      db.transaction((tx) =>
+        repo[method](tx, orderId, lines, { expiresAt: HOLD_UNTIL, reservationIds: lines.map(() => testId()) }),
+      );
 
     it('holds stock for each order and bumps the version once per hold', async () => {
       await seedStock(app, SKU_A, 10);
@@ -45,8 +48,7 @@ describe('Inventory reserve (integration, real Postgres)', () => {
 
       expect(await readStock(app, SKU_A)).toMatchObject({ quantityOnHand: 10, quantityReserved: 5, version: 2 });
       const [held] = await reservationsFor(app, ORDER_1, SKU_A);
-      expect(held).toMatchObject({ status: 'HELD', quantity: 3 });
-      expect(held.expiresAt!.getTime()).toBeGreaterThan(Date.now());
+      expect(held).toMatchObject({ status: 'HELD', quantity: 3, expiresAt: HOLD_UNTIL });
     });
 
     it('refuses a shortfall and changes nothing', async () => {

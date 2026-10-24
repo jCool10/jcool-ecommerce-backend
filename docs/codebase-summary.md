@@ -21,12 +21,26 @@ CLIs (the api's migrate, DLQ replay, search reindex and storage verify also have
 | DLQ replay | [`apps/api/src/shared/messaging/queue/replay-dlq.cli.ts`](../apps/api/src/shared/messaging/queue/replay-dlq.cli.ts) |
 | search reindex | [`apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts`](../apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts) |
 | storage verify | [`apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts`](../apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts) |
+| checkout saga workflow bundle (the second half of `pnpm build`) | [`apps/api/src/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.ts`](../apps/api/src/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.ts) |
 | id-service floor lift (pre-deploy form: `--if-uninitialized`) | [`apps/id-service/src/lease/lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts) |
 | user-service migrate | [`apps/user-service/src/database/migrate-cli.ts`](../apps/user-service/src/database/migrate-cli.ts) |
 
 ## Bounded contexts
 
 Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `media`, `order`, `payment`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer is split again into `catalog/` and `stock/`, with the published ports in `application/public/`. What each context owns and publishes is the README's [bounded-context table](../README.md#bounded-contexts); this is only the path to open.
+
+## Checkout saga
+
+The saga's decisions are pure domain code in [`apps/api/src/modules/order/domain/checkout-saga.ts`](../apps/api/src/modules/order/domain/checkout-saga.ts); the rest is under [`apps/api/src/modules/order/infrastructure/temporal`](../apps/api/src/modules/order/infrastructure/temporal):
+
+| Concern | File |
+| --- | --- |
+| Workflow (sandboxed, imports only the contract and the domain) | [`workflows/checkout-saga.workflow.ts`](../apps/api/src/modules/order/infrastructure/temporal/workflows/checkout-saga.workflow.ts) |
+| Names, signals, updates, input and activity signatures shared by both sides | [`checkout-saga.contract.ts`](../apps/api/src/modules/order/infrastructure/temporal/checkout-saga.contract.ts) |
+| Activities over the order repository and the two participant ports | [`checkout-saga.activities.ts`](../apps/api/src/modules/order/infrastructure/temporal/checkout-saga.activities.ts) |
+| Client side, behind `CHECKOUT_SAGA_ENGINE` | [`temporal-checkout-saga.engine.ts`](../apps/api/src/modules/order/infrastructure/temporal/temporal-checkout-saga.engine.ts), port in [`checkout-saga-engine.port.ts`](../apps/api/src/modules/order/application/ports/checkout-saga-engine.port.ts) |
+| Worker supervisor and its shutdown step | [`checkout-saga.worker.ts`](../apps/api/src/modules/order/infrastructure/temporal/checkout-saga.worker.ts) |
+| Recorded histories the replay spec checks every change against | [`replay-histories/`](../apps/api/src/modules/order/infrastructure/temporal/replay-histories), [`checkout-saga.replay.spec.ts`](../apps/api/src/modules/order/infrastructure/temporal/checkout-saga.replay.spec.ts) |
 
 ## Shared / messaging
 
@@ -72,6 +86,7 @@ Discover the current suite rather than trusting a count: `find apps -name '*.e2e
 | Grafana dashboards/datasources | [`infra/grafana/provisioning`](../infra/grafana/provisioning) |
 | Loki | [`infra/loki/config.yaml`](../infra/loki/config.yaml) |
 | OTel Collector | [`infra/otel-collector/config.yaml`](../infra/otel-collector/config.yaml) |
+| Temporal server image, bootstrap and server config | [`infra/temporal`](../infra/temporal) |
 | Railway images that bake the config above (Prometheus, Grafana, Loki) and run Elasticsearch and the id-service's etcd | `infra/*/Dockerfile`, e.g. [`infra/etcd/Dockerfile`](../infra/etcd/Dockerfile), [`infra/elasticsearch/Dockerfile`](../infra/elasticsearch/Dockerfile) |
 
 ## Scripts

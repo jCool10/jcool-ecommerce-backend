@@ -4,9 +4,21 @@ import { StripeGatewayAdapter, type StripeGatewayOptions } from './stripe-gatewa
 import { PaymentGatewayError } from '../../application/ports/payment-gateway.port';
 
 const SECRET = 'whsec_test_secret_value_0000';
+const CAPTURE_TIMEOUT_MS = 10_000;
+const BOUNDED = { timeout: CAPTURE_TIMEOUT_MS, maxNetworkRetries: 0 };
+
+const BASE: StripeGatewayOptions = {
+  webhookSecret: SECRET,
+  toleranceSec: 300,
+  sessionMinTtlSec: 30 * 60,
+  sessionExpiryMarginSec: 120,
+  captureTimeoutMs: CAPTURE_TIMEOUT_MS,
+};
+
+type StripeClient = NonNullable<StripeGatewayOptions['stripeClient']>;
 
 function adapter(): StripeGatewayAdapter {
-  return new StripeGatewayAdapter({ webhookSecret: SECRET, toleranceSec: 300 });
+  return new StripeGatewayAdapter(BASE);
 }
 
 // Live mode via an injected Stripe-shaped client: exercises the real branch with no key or network.
@@ -14,10 +26,9 @@ function liveAdapter(
   create: (...args: unknown[]) => unknown,
   overrides: Partial<StripeGatewayOptions> = {},
 ): StripeGatewayAdapter {
-  const stripeClient = { checkout: { sessions: { create } } } as unknown as Pick<Stripe, 'checkout'>;
+  const stripeClient = { checkout: { sessions: { create } } } as unknown as StripeClient;
   return new StripeGatewayAdapter({
-    webhookSecret: SECRET,
-    toleranceSec: 300,
+    ...BASE,
     successUrl: 'https://app.test/ok?session_id={CHECKOUT_SESSION_ID}',
     cancelUrl: 'https://app.test/cancel',
     stripeClient,
@@ -25,25 +36,31 @@ function liveAdapter(
   });
 }
 
-// Live mode for the reconciliation calls, which read/close a session instead of creating one.
-function statusAdapter(sessions: Record<string, unknown>): StripeGatewayAdapter {
+// Live mode for the calls that read, close, capture or void instead of creating.
+function statusAdapter(
+  sessions: Record<string, unknown>,
+  paymentIntents: Record<string, unknown> = {},
+): StripeGatewayAdapter {
   return new StripeGatewayAdapter({
-    webhookSecret: SECRET,
-    toleranceSec: 300,
+    ...BASE,
     successUrl: 'https://app.test/ok',
-    stripeClient: { checkout: { sessions } } as unknown as Pick<Stripe, 'checkout'>,
+    stripeClient: { checkout: { sessions }, paymentIntents } as unknown as StripeClient,
   });
 }
 
-function stripeError(statusCode: number, type: Stripe.StripeRawError['type'] = 'invalid_request_error'): unknown {
-  return Stripe.errors.StripeError.generate({ statusCode, type, message: 'stripe says no' });
+function stripeError(
+  statusCode: number,
+  type: Stripe.StripeRawError['type'] = 'invalid_request_error',
+  code?: string,
+): unknown {
+  return Stripe.errors.StripeError.generate({ statusCode, type, code, message: 'stripe says no' });
 }
 
 describe('StripeGatewayAdapter', () => {
   describe('construction fail-fast', () => {
     it('throws when the webhook secret is missing or blank', () => {
       for (const webhookSecret of [undefined, '   ']) {
-        expect(() => new StripeGatewayAdapter({ webhookSecret, toleranceSec: 300 }), String(webhookSecret)).toThrow(
+        expect(() => new StripeGatewayAdapter({ ...BASE, webhookSecret }), String(webhookSecret)).toThrow(
           /PAYMENT_WEBHOOK_SECRET is required/,
         );
       }
@@ -52,7 +69,7 @@ describe('StripeGatewayAdapter', () => {
     // A blank env var parses to NaN, which would silently switch replay defense off.
     it('throws when the tolerance window is NaN or negative', () => {
       for (const toleranceSec of [NaN, -1]) {
-        expect(() => new StripeGatewayAdapter({ webhookSecret: SECRET, toleranceSec }), String(toleranceSec)).toThrow(
+        expect(() => new StripeGatewayAdapter({ ...BASE, toleranceSec }), String(toleranceSec)).toThrow(
           /PAYMENT_WEBHOOK_TOLERANCE_SEC must be a non-negative number/,
         );
       }
@@ -106,6 +123,24 @@ describe('StripeGatewayAdapter', () => {
       const [params] = create.mock.calls[0] as [Stripe.Checkout.SessionCreateParams];
       expect(params.expires_at).toBeGreaterThanOrEqual(before + 30 * 60 + 120);
       expect(params.expires_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 30 * 60 + 120);
+      expect(params.payment_intent_data).toBeUndefined();
+    });
+
+    it('opens a manual-capture session that expires exactly when the caller says', async () => {
+      const create = vi.fn().mockResolvedValue({ id: 'cs_test_manual', url: null });
+      const expiresAt = new Date('2026-10-20T10:45:30.900Z');
+
+      await liveAdapter(create).createSession({
+        orderId: 'o',
+        amountMinor: 1,
+        currency: 'VND',
+        captureMethod: 'manual',
+        expiresAt,
+      });
+
+      const [params] = create.mock.calls[0] as [Stripe.Checkout.SessionCreateParams];
+      expect(params.payment_intent_data).toEqual({ capture_method: 'manual' });
+      expect(params.expires_at).toBe(Math.floor(expiresAt.getTime() / 1000));
     });
 
     it('wraps a provider failure in PaymentGatewayError so the caller can map it to 502', async () => {
@@ -216,6 +251,13 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
   });
 
   describe('expireSession', () => {
+    it('bounds the call by the capture timeout and leaves retries to the caller', async () => {
+      const expire = vi.fn().mockResolvedValue({ id: 'cs_live_1', status: 'expired' });
+
+      await expect(statusAdapter({ expire }).expireSession('cs_live_1')).resolves.toBe('expired');
+      expect(expire).toHaveBeenCalledWith('cs_live_1', undefined, BOUNDED);
+    });
+
     it('accepts an unrecognised handle as already unpayable, without reading it back', async () => {
       const expire = vi.fn().mockRejectedValue(stripeError(404));
       const retrieve = vi.fn();
@@ -237,7 +279,7 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
       );
 
       // Bounded, because this runs inside the consumer's transaction.
-      const readBack = [['cs_live_1', undefined, { timeout: 5_000, maxNetworkRetries: 0 }]];
+      const readBack = [['cs_live_1', undefined, BOUNDED]];
       expect(outcomes).toEqual([
         ['already_completed', readBack],
         ['already_closed', readBack],
@@ -279,6 +321,201 @@ describe('StripeGatewayAdapter reconciliation calls', () => {
       await expect(statusAdapter({ expire, retrieve }).expireSession('cs_live_1')).rejects.toBeInstanceOf(
         PaymentGatewayError,
       );
+      expect(retrieve).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('StripeGatewayAdapter participant calls', () => {
+  const intent = (status: string, extra: Record<string, unknown> = {}) => ({ id: 'pi_1', status, ...extra });
+  const unknownOutcomes: Array<[string, unknown]> = [
+    ['a timeout', new Stripe.errors.StripeConnectionError({ message: 'Request aborted due to timeout' })],
+    ['a request with the same key still in flight', stripeError(409, 'idempotency_error')],
+    ['a rate limit', stripeError(429, 'invalid_request_error')],
+    ['any other refusal', stripeError(400, 'invalid_request_error', 'parameter_invalid_integer')],
+  ];
+
+  // Offline must never invent a hold or a capture: either would move an order on money that does not exist.
+  it('fails closed offline', async () => {
+    await expect(adapter().retrieveAuthorization('cs_test_x')).resolves.toEqual({ sessionStatus: 'unknown' });
+    await expect(adapter().captureIntent('pi_x', 'capture:1:0')).rejects.toBeInstanceOf(PaymentGatewayError);
+    await expect(adapter().voidIntent('pi_x', 'void:1:0')).rejects.toBeInstanceOf(PaymentGatewayError);
+  });
+
+  describe('retrieveAuthorization', () => {
+    it('reads the session with its PaymentIntent expanded, bounded and without SDK retries', async () => {
+      const retrieve = vi.fn().mockResolvedValue({
+        status: 'complete',
+        url: null,
+        payment_intent: intent('requires_capture', { amount_capturable: 150_000, currency: 'vnd' }),
+      });
+
+      await expect(statusAdapter({ retrieve }).retrieveAuthorization('cs_live_1')).resolves.toEqual({
+        sessionStatus: 'complete',
+        intentId: 'pi_1',
+        intentStatus: 'requires_capture',
+        amountCapturableMinor: 150_000,
+        currency: 'vnd',
+      });
+      expect(retrieve).toHaveBeenCalledWith('cs_live_1', { expand: ['payment_intent'] }, BOUNDED);
+    });
+
+    it('maps every PaymentIntent status it acts on, and folds the rest into other', async () => {
+      const statuses = [
+        'requires_capture',
+        'succeeded',
+        'canceled',
+        'processing',
+        'requires_payment_method',
+        'requires_action',
+      ];
+
+      const mapped = await Promise.all(
+        statuses.map(async (status) => {
+          const retrieve = vi.fn().mockResolvedValue({ status: 'complete', payment_intent: intent(status) });
+          return (await statusAdapter({ retrieve }).retrieveAuthorization('cs_live_1')).intentStatus;
+        }),
+      );
+
+      expect(mapped).toEqual([
+        'requires_capture',
+        'succeeded',
+        'canceled',
+        'processing',
+        'requires_payment_method',
+        'other',
+      ]);
+    });
+
+    it('hands back the payment page of a session that is still open', async () => {
+      const retrieve = vi
+        .fn()
+        .mockResolvedValue({ status: 'open', url: 'https://checkout.stripe.com/c/pay/cs_1', payment_intent: null });
+
+      await expect(statusAdapter({ retrieve }).retrieveAuthorization('cs_live_1')).resolves.toEqual({
+        sessionStatus: 'open',
+        redirectUrl: 'https://checkout.stripe.com/c/pay/cs_1',
+      });
+    });
+
+    it('reports a handle Stripe does not recognise as unknown and throws on an outage', async () => {
+      const gone = vi.fn().mockRejectedValue(stripeError(404));
+      const down = vi.fn().mockRejectedValue(stripeError(503, 'api_error'));
+
+      await expect(statusAdapter({ retrieve: gone }).retrieveAuthorization('cs_x')).resolves.toEqual({
+        sessionStatus: 'unknown',
+      });
+      await expect(statusAdapter({ retrieve: down }).retrieveAuthorization('cs_x')).rejects.toBeInstanceOf(
+        PaymentGatewayError,
+      );
+    });
+  });
+
+  describe('captureIntent', () => {
+    it('captures under the caller key, bounded and without SDK retries', async () => {
+      const capture = vi.fn().mockResolvedValue(intent('succeeded'));
+
+      await expect(statusAdapter({}, { capture }).captureIntent('pi_1', 'capture:7:0')).resolves.toEqual({
+        kind: 'captured',
+      });
+      expect(capture).toHaveBeenCalledWith('pi_1', {}, { idempotencyKey: 'capture:7:0', ...BOUNDED });
+    });
+
+    // Stripe replays a stored 5xx for the same key, so only reading the intent says what happened.
+    it.each([
+      ['succeeded', { kind: 'captured' }],
+      ['canceled', { kind: 'not_capturable', intentStatus: 'canceled' }],
+      ['requires_payment_method', { kind: 'not_capturable', intentStatus: 'requires_payment_method' }],
+    ])('reads the intent back after a 5xx: %s', async (status, expected) => {
+      const capture = vi.fn().mockRejectedValue(stripeError(500, 'api_error'));
+      const retrieve = vi.fn().mockResolvedValue(intent(status));
+
+      await expect(statusAdapter({}, { capture, retrieve }).captureIntent('pi_1', 'k')).resolves.toEqual(expected);
+      expect(retrieve).toHaveBeenCalledWith('pi_1', undefined, BOUNDED);
+    });
+
+    it('asks for a fresh key when the intent is still capturable after a 5xx', async () => {
+      const capture = vi.fn().mockRejectedValue(stripeError(500, 'api_error'));
+      const retrieve = vi.fn().mockResolvedValue(intent('requires_capture'));
+
+      await expect(statusAdapter({}, { capture, retrieve }).captureIntent('pi_1', 'k')).rejects.toMatchObject({
+        name: 'PaymentGatewayError',
+        retryWithFreshKey: true,
+      });
+    });
+
+    it('reads the intent back when Stripe refuses it in an unexpected state', async () => {
+      const capture = vi
+        .fn()
+        .mockRejectedValue(stripeError(400, 'invalid_request_error', 'payment_intent_unexpected_state'));
+      const retrieve = vi.fn().mockResolvedValue(intent('canceled'));
+
+      await expect(statusAdapter({}, { capture, retrieve }).captureIntent('pi_1', 'k')).resolves.toEqual({
+        kind: 'not_capturable',
+        intentStatus: 'canceled',
+      });
+    });
+
+    it.each(unknownOutcomes)(
+      'throws on %s, keeping the key and never calling it not capturable',
+      async (_label, error) => {
+        const capture = vi.fn().mockRejectedValue(error);
+        const retrieve = vi.fn();
+
+        await expect(statusAdapter({}, { capture, retrieve }).captureIntent('pi_1', 'k')).rejects.toMatchObject({
+          name: 'PaymentGatewayError',
+          retryWithFreshKey: false,
+        });
+        expect(retrieve).not.toHaveBeenCalled();
+      },
+    );
+
+    it('keeps the key when the read-back after a 5xx fails too', async () => {
+      const capture = vi.fn().mockRejectedValue(stripeError(502, 'api_error'));
+      const retrieve = vi.fn().mockRejectedValue(stripeError(503, 'api_error'));
+
+      await expect(statusAdapter({}, { capture, retrieve }).captureIntent('pi_1', 'k')).rejects.toMatchObject({
+        retryWithFreshKey: false,
+      });
+    });
+  });
+
+  describe('voidIntent', () => {
+    it('cancels the intent under the caller key, bounded and without SDK retries', async () => {
+      const cancel = vi.fn().mockResolvedValue(intent('canceled'));
+
+      await expect(statusAdapter({}, { cancel }).voidIntent('pi_1', 'void:7:0')).resolves.toBe('voided');
+      expect(cancel).toHaveBeenCalledWith('pi_1', {}, { idempotencyKey: 'void:7:0', ...BOUNDED });
+    });
+
+    it.each([
+      [stripeError(500, 'api_error'), 'canceled', 'already_canceled'],
+      [stripeError(500, 'api_error'), 'succeeded', 'already_captured'],
+      [stripeError(400, 'invalid_request_error', 'payment_intent_unexpected_state'), 'canceled', 'already_canceled'],
+      [stripeError(400, 'invalid_request_error', 'payment_intent_unexpected_state'), 'succeeded', 'already_captured'],
+    ])('reads the intent back after %o: %s → %s', async (error, status, expected) => {
+      const cancel = vi.fn().mockRejectedValue(error);
+      const retrieve = vi.fn().mockResolvedValue(intent(status));
+
+      await expect(statusAdapter({}, { cancel, retrieve }).voidIntent('pi_1', 'k')).resolves.toBe(expected);
+    });
+
+    it('asks for a fresh key when the hold is still there after a 5xx', async () => {
+      const cancel = vi.fn().mockRejectedValue(stripeError(500, 'api_error'));
+      const retrieve = vi.fn().mockResolvedValue(intent('requires_capture'));
+
+      await expect(statusAdapter({}, { cancel, retrieve }).voidIntent('pi_1', 'k')).rejects.toMatchObject({
+        retryWithFreshKey: true,
+      });
+    });
+
+    it.each(unknownOutcomes)('throws on %s and keeps the key', async (_label, error) => {
+      const cancel = vi.fn().mockRejectedValue(error);
+      const retrieve = vi.fn();
+
+      await expect(statusAdapter({}, { cancel, retrieve }).voidIntent('pi_1', 'k')).rejects.toMatchObject({
+        retryWithFreshKey: false,
+      });
       expect(retrieve).not.toHaveBeenCalled();
     });
   });

@@ -8,6 +8,8 @@ export interface NewWebhookEvent {
   providerEventId: string;
   type: string;
   payload: unknown;
+  /** Minted before the transaction by callers that must not mint inside it. */
+  id?: string;
 }
 
 export interface InsertWebhookEventResult {

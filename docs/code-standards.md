@@ -31,10 +31,10 @@ One decision the README does not place: `Idempotency-Key` support is not a platf
 | Name | Used by | Persisted / on the wire |
 | --- | --- | --- |
 | `skuId` | Cart, Order, Product's catalog side and its published `PRODUCT_SKU_QUERY` port | `cart_items.sku_id`, `order_items.sku_id`; `/cart/items/:skuId`, `/admin/skus/:skuId/price` |
-| `variantId` | Product's stock side, prices, and the published `PRODUCT_STOCK_RESERVATION` port | `prices.variant_id`, `stock_levels.variant_id`, `reservations.variant_id`; `/admin/inventory/:variantId` |
+| `variantId` | Product's stock side, prices, and the published `INVENTORY_PARTICIPANT` port | `prices.variant_id`, `stock_levels.variant_id`, `reservations.variant_id`; `/admin/inventory/:variantId` |
 | `sku` | `product_variants.sku` | The human-readable SKU code (`TSHIRT-RED-M`) — never an id |
 
-A new field takes the name of the side it lives on. The crossing is translated in one place — Order's [`inventory-reservation.adapter.ts`](../apps/api/src/modules/order/infrastructure/inventory-reservation.adapter.ts) maps `skuId` to `variantId` — never inline in a use case. Both names are persisted and on the wire, so unifying them is a migration plus a breaking API change, not a rename. The one route where they meet, `PUT /admin/skus/:skuId/price`, answers with `variantId`.
+A new field takes the name of the side it lives on. The crossing is translated in one place — Order's [`order-inventory-participant.adapter.ts`](../apps/api/src/modules/order/infrastructure/order-inventory-participant.adapter.ts) maps `skuId` to `variantId` — never inline in a use case. Both names are persisted and on the wire, so unifying them is a migration plus a breaking API change, not a rename. The one route where they meet, `PUT /admin/skus/:skuId/price`, answers with `variantId`.
 
 ### Injected dependencies
 

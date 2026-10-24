@@ -23,6 +23,7 @@ export class OrderResponseDto {
   @ApiProperty({ example: '137465797020397179' })
   id!: string;
 
+  // Buyers never see RESERVING or REJECTED; admins see every status.
   @ApiProperty({ enum: ORDER_STATUSES, example: OrderStatus.DRAFT })
   status!: OrderStatus;
 
@@ -44,6 +45,14 @@ export class OrderResponseDto {
   })
   placedAt!: string | null;
 
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: null,
+    description: 'Why the order settled the way it did (user:cancel, admin:cancel, saga:…); null until it settles.',
+  })
+  finalizeReason!: string | null;
+
   @ApiProperty({ type: [OrderItemResponseDto] })
   items!: OrderItemResponseDto[];
 
@@ -54,6 +63,7 @@ export class OrderResponseDto {
       currency: view.currency,
       totalAmountMinor: view.totalAmountMinor,
       placedAt: view.placedAt,
+      finalizeReason: view.finalizeReason,
       items: view.items.map((line) => ({ ...line })),
     };
   }

@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import configuration from '@shared/config/configuration';
 import {
-  EXPIRY_CLOCK_MARGIN_SEC,
-  SESSION_LIFETIME_SEC,
-} from '@modules/payment/infrastructure/gateway/stripe-gateway.adapter';
-import {
   CATALOG_EVENT_PRIORITY,
   ORDER_PAID_BACKOFF,
   cappedBackoffMs,
@@ -48,13 +44,15 @@ describe('retry ladders', () => {
   // fix depends on: a Checkout Session that outlives every retry must still die at Stripe's own clock
   // before this ladder gives up, or a dead-lettered close leaves a payable page on released stock.
   it('outlasts a Checkout Session lifetime, with margin, on the ladder order.expired and order.cancelled share with order.paid', () => {
-    for (const key of LADDER_ENV) vi.stubEnv(key, '');
-    const { queue } = configuration();
+    for (const key of [...LADDER_ENV, 'PAYMENT_SESSION_MIN_TTL_SEC', 'PAYMENT_SESSION_EXPIRY_MARGIN_SEC']) {
+      vi.stubEnv(key, '');
+    }
+    const { queue, payment } = configuration();
 
     const horizon = retryHorizonMs(queue.orderPaidAttempts, (n) =>
       cappedBackoffMs(n, queue.consumerBackoffMs, queue.orderPaidBackoffCapMs),
     );
-    const sessionLifetimeMs = (SESSION_LIFETIME_SEC + EXPIRY_CLOCK_MARGIN_SEC) * 1000;
+    const sessionLifetimeMs = (payment.sessionMinTtlSec + payment.sessionExpiryMarginSec) * 1000;
 
     expect(horizon).toBeGreaterThan(sessionLifetimeMs);
   });
@@ -76,10 +74,14 @@ describe('jobOptionsFor', () => {
     expect(jobOptionsFor('order.placed', 15)).toEqual({});
   });
 
-  // The dead-letter fix: these two used to fall through to the short shared ladder (~2 minutes),
-  // dead-lettering long before a Stripe Checkout Session dies on its own.
-  it('gives order.expired and order.cancelled the same long ladder as order.paid', () => {
-    expect(jobOptionsFor('order.expired', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
-    expect(jobOptionsFor('order.cancelled', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
+  // Forwarding it waits on Temporal; a short ladder would dead-letter a buyer's payment in a brief outage.
+  it('puts payment.authorized on the same long ladder as order.paid', () => {
+    expect(jobOptionsFor('payment.authorized', 15)).toEqual({ attempts: 15, backoff: { type: ORDER_PAID_BACKOFF } });
+  });
+
+  // The saga closes the checkout session now; these two only record.
+  it('leaves order.expired and order.cancelled on the defaults', () => {
+    expect(jobOptionsFor('order.expired', 15)).toEqual({});
+    expect(jobOptionsFor('order.cancelled', 15)).toEqual({});
   });
 });

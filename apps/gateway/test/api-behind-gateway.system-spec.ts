@@ -27,7 +27,13 @@ const API_ENV = {
   INTERNAL_API_TOKEN: randomBytes(32).toString('hex'),
   // Nothing listens there either: no case here reaches a write.
   ID_SERVICE_URL: 'http://id-service.invalid',
+  // Required in production; the api serves without Temporal while its saga worker retries.
+  TEMPORAL_ADDRESS: 'temporal.invalid:7233',
+  TEMPORAL_NAMESPACE: 'jcool',
+  TEMPORAL_TASK_QUEUE: 'checkout-saga',
   PAYMENT_WEBHOOK_SECRET: randomBytes(16).toString('hex'),
+  STRIPE_SECRET_KEY: `sk_test_${randomBytes(12).toString('hex')}`,
+  STRIPE_SUCCESS_URL: 'https://shop.system-test.invalid/payments/success?session_id={CHECKOUT_SESSION_ID}',
   SMTP_URL: 'smtp://smtp.invalid:587',
   MAIL_FROM: 'system-test@example.invalid',
   STORAGE_ENDPOINT: 'http://storage.invalid:9000',

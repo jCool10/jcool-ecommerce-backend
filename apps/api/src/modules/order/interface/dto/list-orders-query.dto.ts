@@ -2,7 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { IsSnowflakeId } from '@jcool/platform/interface';
-import { ORDER_STATUSES, OrderStatus } from '../../domain/order-status';
+import { ORDER_STATUSES, type OrderStatus } from '../../domain/order-status';
 
 export class ListOrdersQueryDto {
   @ApiPropertyOptional({ minimum: 1, maximum: 10_000, default: 1, description: 'Page (1-based, max 10000)' })

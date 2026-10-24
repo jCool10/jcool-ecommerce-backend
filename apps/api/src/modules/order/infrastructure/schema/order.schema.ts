@@ -1,8 +1,18 @@
-import { sql } from 'drizzle-orm';
 import { bigint, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 
-export const orderStatus = pgEnum('order_status', ['DRAFT', 'PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED']);
+// Same order as ORDER_STATUSES: drizzle-kit then adds a new value BEFORE its neighbour.
+export const orderStatus = pgEnum('order_status', [
+  'DRAFT',
+  'RESERVING',
+  'PENDING',
+  'CONFIRMING',
+  'PAID',
+  'FAILED',
+  'EXPIRED',
+  'CANCELLED',
+  'REJECTED',
+]);
 
 // No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
@@ -34,13 +44,15 @@ export const orders = pgTable(
     // backstop for retry-safety. Scoped per user by the composite unique below, so two users may
     // reuse the same key value without colliding.
     idempotencyKey: text('idempotency_key'),
-    // Set when DRAFT → PENDING; null while still a draft.
+    // Set when checkout writes RESERVING; null while still a draft.
     placedAt: timestamp('placed_at', { withTimezone: true }),
-    // Stamped once, when the order settles; null while DRAFT/PENDING. Idempotency reads `status`,
-    // not these — they carry the when/why for reconciliation.
+    // Stamped once, when the order settles (REJECTED included); null while in flight. Idempotency
+    // reads `status`, not these — they carry the when/why for reconciliation.
     finalizedAt: timestamp('finalized_at', { withTimezone: true }),
-    finalizeReason: text('finalize_reason'), // e.g. 'webhook:failed' | 'reconcile:paid' | 'expired'
-    paymentRef: text('payment_ref'), // gateway transaction id, when a paid outcome carried one
+    finalizeReason: text('finalize_reason'), // e.g. 'user:cancel' | 'saga:expired' | 'saga:try_failed'
+    paymentRef: text('payment_ref'), // the payment the saga captured, on a PAID order
+    // Saga orders only: placed_at + CHECKOUT_PAYMENT_DEADLINE_SEC. Null on legacy orders.
+    paymentDeadlineAt: timestamp('payment_deadline_at', { withTimezone: true }),
     ...stamps,
   },
   (t) => [
@@ -51,11 +63,9 @@ export const orders = pgTable(
     // (user, key). NULL keys don't collide (Postgres treats them as distinct), so pre-idempotency
     // orders are unaffected. The final backstop behind the per-key entry gate.
     uniqueIndex('uq_orders_user_idempotency_key').on(t.userId, t.idempotencyKey),
-    // Partial: the sweep's queue is only ever PENDING rows, so the index stays proportional to
-    // orders in flight rather than to every order ever placed.
-    index('idx_orders_pending_placed_at')
-      .on(t.placedAt)
-      .where(sql`${t.status} = 'PENDING'`),
+    // No predicate: a partial index naming a value added to the enum in the same migration fails
+    // (unsafe use of a new enum value), and the saga's reaper scans RESERVING and PENDING alike.
+    index('idx_orders_status_placed_at').on(t.status, t.placedAt),
   ],
 );
 

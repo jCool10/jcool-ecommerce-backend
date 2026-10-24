@@ -69,8 +69,21 @@
 		}
 	}
 	handle {
-		reverse_proxy {$API_UPSTREAM} {
-			import upstream
+		# Stops order writes while checkout is being cut over; reads and the payment webhook pass.
+		# Substituted at parse time like the auth flag, so it needs a redeploy.
+		@checkoutFrozen {
+			method POST
+			path /orders /orders/*
+			expression `"{$CHECKOUT_WRITE_FREEZE:false}" == "true"`
+		}
+		handle @checkoutFrozen {
+			header Retry-After 120
+			respond "checkout is read-only during a migration" 503
+		}
+		handle {
+			reverse_proxy {$API_UPSTREAM} {
+				import upstream
+			}
 		}
 	}
 }

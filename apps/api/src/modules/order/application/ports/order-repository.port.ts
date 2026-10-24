@@ -1,12 +1,12 @@
 import { DomainError } from '@jcool/kernel';
-import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
+import type { ReserveOutcome } from '../../domain/checkout-saga';
 import type { Order } from '../../domain/order.entity';
 import type { OrderStatus } from '../../domain/order-status';
 import { MAX_PENDING_ORDERS_PER_USER } from '../../order.constants';
 
 export const ORDER_REPOSITORY = Symbol('ORDER_REPOSITORY');
 
-/** Thrown by `createCheckout` before any stock hold, so a refusal leaves no order and no reservation. */
+/** Thrown by `createReserving` before the Try, so a refusal leaves no order and no reservation. */
 export class TooManyPendingOrdersError extends DomainError {
   constructor(
     public readonly userId: string,
@@ -15,17 +15,6 @@ export class TooManyPendingOrdersError extends DomainError {
     super(`User ${userId} already has ${pendingCount} pending orders (max ${MAX_PENDING_ORDERS_PER_USER})`);
     this.name = 'TooManyPendingOrdersError';
   }
-}
-
-export interface CheckoutPersistResult {
-  orderId: string;
-  /** false = an earlier attempt already committed this order under the same key; returned untouched. */
-  created: boolean;
-}
-
-export interface StalePendingOrder {
-  id: string;
-  placedAt: Date;
 }
 
 export interface OrderPageQuery {
@@ -45,58 +34,65 @@ export interface OrderPage {
   total: number;
 }
 
+export interface ReservingCreateResult {
+  /** false = an order already carries this key; it is returned as it is now, in any status. */
+  created: boolean;
+  order: Order;
+}
+
+/** `already`: the order is in the target status, nothing was written. `stale`: it is somewhere else. */
+export type SagaWriteResult = 'applied' | 'already' | 'stale';
+
+/** `reason` is the rejected order's finalize_reason. */
+export type ApplyTryResultInput =
+  | { orderId: string; outcome: 'HELD'; reason: null }
+  | { orderId: string; outcome: Exclude<ReserveOutcome, 'HELD'>; reason: string };
+
+export interface ApplyOrderChangeInput {
+  orderId: string;
+  from: OrderStatus[];
+  to: OrderStatus;
+  reason: string | null;
+  paymentRef?: string | null;
+}
+
 export interface OrderRepositoryPort {
   /**
-   * Order + stock hold + outbox event + idempotency flip commit or roll back together, in one
-   * transaction. An existing order under the same key returns `created: false` and runs none of the
-   * callbacks; the unique `orders.idempotency_key` still backstops a race that slips past that
-   * check. `appendEvent` runs only for a genuinely new order — a reclaim heal re-emits nothing.
-   * Serializes per user with `pg_advisory_xact_lock` before counting this user's PENDING orders,
-   * throwing `TooManyPendingOrdersError` at the cap instead of opening a new hold.
+   * The saga's first transaction: the order alone, RESERVING, with no hold, event or key flip. An
+   * order already under the same key comes back with `created: false`. Serialized per user with
+   * `pg_advisory_xact_lock`, then throws `TooManyPendingOrdersError` once the user has the cap of
+   * orders still in flight (RESERVING, PENDING, CONFIRMING).
    */
-  createCheckout(
-    order: Order,
-    idempotencyKey: string | null,
-    reserve: (tx: DrizzleTx, orderId: string) => Promise<void>,
-    appendEvent: (tx: DrizzleTx, orderId: string) => Promise<void>,
-    complete: (tx: DrizzleTx, orderId: string) => Promise<void>,
-  ): Promise<CheckoutPersistResult>;
+  createReserving(input: { order: Order; idempotencyKey: string | null }): Promise<ReservingCreateResult>;
 
   /**
-   * Run `fn` in one transaction — the application layer owns the finalize unit of work. A caller
-   * that already holds one passes it in and `fn` joins it instead, so a finalize driven from a
-   * message commits or rolls back with whatever else that transaction is protecting.
+   * The saga's second transaction, after the Try answered. HELD moves the order to PENDING, appends
+   * `order.placed` and freezes the key with the 201 body; anything else rejects it and clears the
+   * order's key, so a retry under the same key places a new order.
    */
-  withTransaction<T>(fn: (tx: DrizzleTx) => Promise<T>, join?: DrizzleTx): Promise<T>;
+  applyTryResult(input: ApplyTryResultInput): Promise<SagaWriteResult>;
+
+  /** One saga status change, compare-and-set on `from`, with the target status's event if it has one. */
+  applyOrderChange(input: ApplyOrderChangeInput): Promise<SagaWriteResult>;
 
   /**
-   * The row lock that serializes concurrent finalizers: the second waits, re-reads the now-terminal
-   * row, and no-ops. Not user-scoped — the caller authorizes against the aggregate itself.
+   * Null when the order is absent, someone else's, RESERVING or REJECTED — all indistinguishable, so
+   * a buyer cannot probe ids or the saga's internal states.
    */
-  findByIdForUpdate(orderId: string, tx: DrizzleTx): Promise<Order | null>;
-
-  /** Only ever called on a row already locked by `findByIdForUpdate`. */
-  persistFinalization(order: Order, tx: DrizzleTx): Promise<void>;
-
-  /** Null when the order is absent or owned by someone else — the two are indistinguishable. */
   findForUser(orderId: string, userId: string): Promise<Order | null>;
 
   /** Not user-scoped — for cross-context callers that authorize ownership themselves. */
   findById(orderId: string): Promise<Order | null>;
 
-  /** Newest first. */
+  /** Newest first; leaves out RESERVING and REJECTED, from the page and the total alike. */
   findPageForUser(userId: string, query: OrderPageQuery): Promise<OrderPage>;
 
-  /**
-   * The same page unscoped, for the admin queue. Filtering by status has no index to use
-   * (`idx_orders_pending_placed_at` is partial on PENDING), so it is a scan the page size bounds.
-   */
-  findPage(query: AdminOrderPageQuery): Promise<OrderPage>;
+  /** RESERVING orders placed before `cutoff`, oldest first. */
+  findReservingOlderThan(cutoff: Date, limit: number): Promise<Order[]>;
 
-  /**
-   * The reconciliation sweep's work queue, read `FOR UPDATE SKIP LOCKED` so it never queues behind a
-   * finalize in progress. The lock lasts only for the statement, so two sweeps can still pick the
-   * same order — finalize's terminal guard, not this read, is what makes that harmless.
-   */
-  findStalePending(input: { placedBefore: Date; limit: number }): Promise<StalePendingOrder[]>;
+  /** Deletes up to `limit` REJECTED orders, items included, finalized before `cutoff`. Returns the count. */
+  deleteRejectedBefore(cutoff: Date, limit: number): Promise<number>;
+
+  /** The same page unscoped, for the admin queue. A status filter rides `idx_orders_status_placed_at`. */
+  findPage(query: AdminOrderPageQuery): Promise<OrderPage>;
 }

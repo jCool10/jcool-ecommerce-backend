@@ -46,4 +46,69 @@ describe('FakeSignerGatewayAdapter', () => {
       await expect(gateway.retrieveSession('cs_never_issued')).resolves.toEqual({ status: 'UNKNOWN' });
     });
   });
+
+  describe('manual capture', () => {
+    async function heldSession() {
+      const gateway = new FakeSignerGatewayAdapter(SECRET);
+      const { providerSessionId } = await gateway.createSession({
+        orderId: 'o1',
+        amountMinor: 150_000,
+        currency: 'VND',
+      });
+      return { gateway, sessionRef: providerSessionId, intentId: gateway.authorize(providerSessionId) };
+    }
+
+    it('reports a session as open until the buyer authorizes it, then the hold it carries', async () => {
+      const gateway = new FakeSignerGatewayAdapter(SECRET);
+      const { providerSessionId } = await gateway.createSession({
+        orderId: 'o1',
+        amountMinor: 150_000,
+        currency: 'VND',
+      });
+
+      await expect(gateway.retrieveAuthorization(providerSessionId)).resolves.toMatchObject({ sessionStatus: 'open' });
+      const intentId = gateway.authorize(providerSessionId);
+      await expect(gateway.retrieveAuthorization(providerSessionId)).resolves.toEqual({
+        sessionStatus: 'complete',
+        intentId,
+        intentStatus: 'requires_capture',
+        amountCapturableMinor: 150_000,
+        currency: 'vnd',
+      });
+      await expect(gateway.expireSession(providerSessionId)).resolves.toBe('already_completed');
+    });
+
+    // The property key rotation exists for: resending the key only replays the stored failure.
+    it('replays a stored 5xx for its key until a fresh key captures', async () => {
+      const { gateway, intentId } = await heldSession();
+      gateway.failCapture(intentId, 'server_error');
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(gateway.captureIntent(intentId, 'capture:1:0')).rejects.toMatchObject({ retryWithFreshKey: true });
+      }
+      await expect(gateway.captureIntent(intentId, 'capture:1:1')).resolves.toEqual({ kind: 'captured' });
+      expect(gateway.captureCalls(intentId)).toBe(1);
+    });
+
+    it('answers a capture that landed before its 5xx as captured, once', async () => {
+      const { gateway, intentId } = await heldSession();
+      gateway.failCapture(intentId, 'applied_then_500');
+
+      await expect(gateway.captureIntent(intentId, 'capture:1:0')).resolves.toEqual({ kind: 'captured' });
+      await expect(gateway.captureIntent(intentId, 'capture:1:0')).resolves.toEqual({ kind: 'captured' });
+      expect(gateway.captureCalls(intentId)).toBe(1);
+    });
+
+    it('voids a hold and reports a second void as already canceled', async () => {
+      const { gateway, intentId } = await heldSession();
+
+      await expect(gateway.voidIntent(intentId, 'void:1:0')).resolves.toBe('voided');
+      await expect(gateway.voidIntent(intentId, 'void:1:1')).resolves.toBe('already_canceled');
+      await expect(gateway.captureIntent(intentId, 'capture:1:0')).resolves.toEqual({
+        kind: 'not_capturable',
+        intentStatus: 'canceled',
+      });
+      expect(gateway.wasVoided(intentId)).toBe(true);
+    });
+  });
 });

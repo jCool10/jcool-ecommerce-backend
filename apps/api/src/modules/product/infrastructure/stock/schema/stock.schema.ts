@@ -5,7 +5,15 @@ import { routableIdCheck, snowflakeId } from '@jcool/platform/database';
 // No cross-context FK (variantId → product_variants, orderId → orders): the boundary is kept at the
 // app layer. Stock is held (reserved) at placement, never subtracted from on-hand until commit.
 
-export const reservationStatus = pgEnum('reservation_status', ['HELD', 'RELEASED', 'COMMITTED']);
+export const reservationStatus = pgEnum('reservation_status', ['HELD', 'RELEASED', 'COMMITTED', 'RESTOCKED']);
+
+export const reservationOrderStatus = pgEnum('reservation_order_status', [
+  'HELD',
+  'COMMITTED',
+  'RELEASED',
+  'FENCED',
+  'RESTOCKED',
+]);
 
 // No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
@@ -63,6 +71,25 @@ export const reservations = pgTable(
     // flight rather than to every reservation ever written — and it supplies the oldest-first sort.
     index('idx_reservations_held_expires_at')
       .on(t.expiresAt)
+      .where(sql`${t.status} = 'HELD'`),
+  ],
+);
+
+// One row per order that went through the participant API. It is the TCC fence: every command locks
+// it first, which is what makes a late Try after a Cancel (hanging) and a Cancel with no Try (empty
+// rollback) answerable. Orders reserved through the legacy in-tx port never get one.
+export const reservationOrders = pgTable(
+  'reservation_orders',
+  {
+    orderId: snowflakeId('order_id').primaryKey(),
+    status: reservationOrderStatus('status').notNull(),
+    holdUntil: timestamp('hold_until', { withTimezone: true }),
+    ...stamps,
+  },
+  (t) => [
+    routableIdCheck('ck_reservation_orders_order_id_routable', t.orderId),
+    index('idx_reservation_orders_held_hold_until')
+      .on(t.holdUntil)
       .where(sql`${t.status} = 'HELD'`),
   ],
 );

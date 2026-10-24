@@ -6,7 +6,7 @@ Where each environment runs, what owns each deploy target's config, and the rati
 
 | Environment | What runs | Start |
 | --- | --- | --- |
-| Local dev | Compose infrastructure (Postgres ×2, Redis, Elasticsearch, Mailpit, MinIO) and the id-service fleet behind the gateway, plus the api and the user-service on the host under `pnpm dev` | [`README.md#quick-start`](../README.md#quick-start) |
+| Local dev | Compose infrastructure (Postgres ×2, Redis, Elasticsearch, Mailpit, MinIO, Temporal with its own Postgres) and the id-service fleet behind the gateway, plus the api and the user-service on the host under `pnpm dev` | [`README.md#quick-start`](../README.md#quick-start) |
 | Full stack, in Compose | Every service containerized, reached through the gateway; the user-service is opt-in via a Compose profile | [`README.md#quick-start`](../README.md#quick-start) |
 | Railway (production) | The service topology below, deployed by `cd.yml` | this document |
 
@@ -19,6 +19,7 @@ Where each environment runs, what owns each deploy target's config, and the rati
 | id-service image | [`apps/id-service/Dockerfile`](../apps/id-service/Dockerfile) |
 | user-service image | [`apps/user-service/Dockerfile`](../apps/user-service/Dockerfile) |
 | gateway image | [`apps/gateway/Dockerfile`](../apps/gateway/Dockerfile) |
+| Temporal server image and its bootstrap (databases, schema, namespace, search attributes) | [`infra/temporal/Dockerfile`](../infra/temporal/Dockerfile), [`infra/temporal/entrypoint.sh`](../infra/temporal/entrypoint.sh) |
 | gateway routing — public site plus the private id-service load balancer | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) |
 | Production deploy pipeline | [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) |
 | Gate CD deploys from | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
@@ -34,11 +35,13 @@ Where each environment runs, what owns each deploy target's config, and the rati
 | Why `railway up --ci` returning is not the success gate | [`scripts/railway-wait-for-rollout.sh`](../scripts/railway-wait-for-rollout.sh) |
 | Why hand-flipped variables must stay declared and `preserve()`d, and which ones | [`scripts/check-railway-flip-vars.mjs`](../scripts/check-railway-flip-vars.mjs), run by `ci.yml` |
 | How the gateway's drain window relates to Railway's `drainingSeconds` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile), global options |
+| Why the api's `drainingSeconds` is 30, as a sum of its shutdown steps | [`.railway/railway.ts`](../.railway/railway.ts), next to `SHUTDOWN_GRACE_PERIOD_MS` |
 
-Two facts none of those files state:
+Three facts none of those files state:
 
 - **id-service deploys first** because the api mints every row id through it, and a dependency goes live before its dependents ([`README.md#known-limits`](../README.md#known-limits)).
 - **Every Node service runs a Railway `preDeployCommand`**, not just the api the README walks through: the api and the user-service migrate their own databases, and the id-service lifts its etcd floors if the keyspace is empty ([`lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts)); see each service's `deploy` block in [`.railway/railway.ts`](../.railway/railway.ts).
+- **`temporal` is deployed by hand**, outside `cd.yml`, like etcd and Elasticsearch: it has no repo source. CD does not wait on it, and it does not need to, since the api boots and stays ready without Temporal ([RUNBOOK → Operate Temporal](../RUNBOOK.md#operate-temporal)).
 
 ## Production-required settings
 
@@ -52,3 +55,4 @@ Every manual operation is in [`RUNBOOK.md`](../RUNBOOK.md), indexed by its own c
 - a variable to add, remove or flip on a Railway service → [Change Railway service config](../RUNBOOK.md#change-railway-service-config)
 - a migration that must not wait for the next deploy → [Apply migrations out of band](../RUNBOOK.md#apply-migrations-out-of-band)
 - moving the public domain onto the gateway → [Put the gateway in front of the api](../RUNBOOK.md#put-the-gateway-in-front-of-the-api)
+- the api's worker cannot reach Temporal → [Temporal down](../RUNBOOK.md#temporal-down)

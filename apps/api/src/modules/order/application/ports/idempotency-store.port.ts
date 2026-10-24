@@ -4,6 +4,9 @@ import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 // racing duplicate loses the INSERT rather than creating a second order.
 export const IDEMPOTENCY_STORE = Symbol('IDEMPOTENCY_STORE');
 
+/** Keys are scoped per user, so one client can never read or collide with another's response. */
+export const userIdempotencyScope = (userId: string): string => `user:${userId}`;
+
 export type IdempotencyStatus = 'IN_PROGRESS' | 'COMPLETED';
 
 export interface IdempotencyRecord {

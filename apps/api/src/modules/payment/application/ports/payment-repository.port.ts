@@ -23,7 +23,8 @@ export interface UpdatePaymentStatusOptions {
 }
 
 export interface PaymentRepositoryPort {
-  create(payment: Payment, tx?: DrizzleTx): Promise<Payment>;
+  /** `id` is minted by the caller when the insert runs inside a transaction; omitted, the repository mints. */
+  create(payment: Payment, tx?: DrizzleTx, id?: string): Promise<Payment>;
 
   /** The latest payment for an order — a retried checkout leaves older rows behind. */
   findByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment | null>;
@@ -33,4 +34,19 @@ export interface PaymentRepositoryPort {
   /** Null when the id is unknown or `expectedStatus` no longer matches. The adapter only writes —
    * the state-machine guard lives in the domain entity. */
   updateStatus(id: string, status: PaymentStatus, options?: UpdatePaymentStatusOptions): Promise<Payment | null>;
+
+  /** The order's one payment not FAILED/EXPIRED, locked. Lock the order's header first. */
+  findActiveByOrderIdForUpdate(tx: DrizzleTx, orderId: string): Promise<Payment | null>;
+
+  /**
+   * Participant payments the reconciler should look at, oldest first: PENDING under any header, and
+   * AUTHORIZED under a CANCELLED/FENCED header (a hold nobody will capture).
+   */
+  findStaleTcc(options: { updatedBefore: Date; limit: number }): Promise<Payment[]>;
+
+  /** Moves a payment that had nothing to report to the back of the reconcile queue. */
+  bumpUpdatedAt(id: string, expectedStatus: PaymentStatus): Promise<void>;
+
+  /** CAS from `expectedGen`; false when another attempt already rotated the key. */
+  incrementKeyGen(id: string, expectedGen: number): Promise<boolean>;
 }

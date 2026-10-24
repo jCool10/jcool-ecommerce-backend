@@ -1,96 +1,140 @@
-import { HttpException } from '@nestjs/common';
+import { ConflictException, HttpException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
-import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { Order } from '../../domain/order.entity';
 import { OrderStatus } from '../../domain/order-status';
+import { CheckoutUnavailableError } from '../checkout-unavailable.error';
+import {
+  CheckoutCancelRejectedError,
+  CheckoutEngineUnavailableError,
+  CheckoutSagaClosedError,
+  type CheckoutSagaEnginePort,
+} from '../ports/checkout-saga-engine.port';
 import type { OrderRepositoryPort } from '../ports/order-repository.port';
 import { CancelOrderUseCase } from './cancel-order.use-case';
-import type { FinalizeOrderUseCase } from './finalize-order.use-case';
 
-const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000001';
-const OWNER = 'bbbbbbbb-bbbb-4bbb-8bbb-000000000001';
-const STRANGER = 'cccccccc-cccc-4ccc-8ccc-000000000001';
+const ORDER_ID = 'order-1';
+const OWNER = 'u1';
 
-function order(status: OrderStatus, userId = OWNER): Order {
+function order(status: OrderStatus, finalizeReason: string | null = null): Order {
   return Order.rehydrate({
     id: ORDER_ID,
-    userId,
+    userId: OWNER,
     status,
     currency: 'VND',
     items: [],
     totalAmountMinor: 100_000,
-    placedAt: new Date('2026-01-01T00:00:00Z'),
+    placedAt: new Date('2026-10-20T08:00:00Z'),
+    finalizeReason,
   });
 }
 
-function build(found: Order | null, reportFinalized?: () => void) {
-  const findByIdForUpdate = vi.fn().mockResolvedValue(found);
-  // Stands in for the COMMIT so a test can tell what ran inside the transaction from what ran after.
-  const commit = vi.fn();
-  const repo = {
-    withTransaction: vi.fn(async <T>(fn: (tx: DrizzleTx) => Promise<T>) => {
-      const outcome = await fn({} as DrizzleTx);
-      commit();
-      return outcome;
-    }),
-    findByIdForUpdate,
-  } as unknown as OrderRepositoryPort;
-  const execute = vi.fn().mockResolvedValue({
-    status: 'finalized',
-    reportFinalized,
-    order: order(OrderStatus.CANCELLED),
-  });
-  const useCase = new CancelOrderUseCase(repo, { execute } as unknown as FinalizeOrderUseCase);
-  return { useCase, finalize: execute, findByIdForUpdate, commit };
+const CANCELLED = order(OrderStatus.CANCELLED, 'user:cancel');
+
+/** `found` is what a read sees before the engine call, `reread` what it sees after. */
+function build(found: Order | null, opts: { engine?: Error; reread?: Order } = {}) {
+  const cancel = vi.fn(() => (opts.engine ? Promise.reject(opts.engine) : Promise.resolve()));
+  const findForUser = vi.fn().mockResolvedValue(found);
+  const findById = vi.fn(() => Promise.resolve(cancel.mock.calls.length > 0 ? (opts.reread ?? CANCELLED) : found));
+  const useCase = new CancelOrderUseCase(
+    { findForUser, findById } as unknown as OrderRepositoryPort,
+    { cancel } as unknown as CheckoutSagaEnginePort,
+    fakePinoLogger(),
+  );
+  return { useCase, cancel, findForUser };
 }
+
+const statusOf = (promise: Promise<unknown>) =>
+  promise.then(
+    () => 200,
+    (error: unknown) => {
+      if (error instanceof HttpException) return error.getStatus();
+      if (error instanceof CheckoutUnavailableError) return 503;
+      throw error;
+    },
+  );
 
 describe('CancelOrderUseCase', () => {
-  it('joins the caller transaction rather than letting the finalize open its own', async () => {
-    const { useCase, finalize, findByIdForUpdate } = build(order(OrderStatus.PENDING));
+  it('cancels through the saga and answers the order as it now reads', async () => {
+    const { useCase, cancel } = build(order(OrderStatus.PENDING));
 
-    await useCase.cancelOwn(ORDER_ID, OWNER);
+    const view = await useCase.cancelOwn(ORDER_ID, OWNER);
 
-    // Otherwise the order could settle some other way between the ownership check and the cancel.
-    expect(finalize.mock.calls[0][1]).toBe(findByIdForUpdate.mock.calls[0][1]);
+    expect(cancel).toHaveBeenCalledExactlyOnceWith(ORDER_ID, 'buyer');
+    expect(view).toMatchObject({ id: ORDER_ID, status: OrderStatus.CANCELLED, finalizeReason: 'user:cancel' });
   });
 
-  it('runs the finalize reporting only after the transaction commits', async () => {
-    const report = vi.fn();
-    const { useCase, commit } = build(order(OrderStatus.PENDING), report);
+  it('tells the saga an admin cancelled', async () => {
+    const { useCase, cancel, findForUser } = build(order(OrderStatus.PENDING));
 
-    await useCase.cancelOwn(ORDER_ID, OWNER);
+    await useCase.cancelAsAdmin(ORDER_ID);
 
-    expect(report).toHaveBeenCalledOnce();
-    expect(report.mock.invocationCallOrder[0]).toBeGreaterThan(commit.mock.invocationCallOrder[0]);
+    expect(cancel).toHaveBeenCalledExactlyOnceWith(ORDER_ID, 'admin');
+    expect(findForUser).not.toHaveBeenCalled();
   });
 
-  it("refuses a missing or someone else's order with 404 and any non-pending one with 409", async () => {
-    const cases: Array<[string, Order | null]> = [
-      ['missing', null],
-      ["stranger's", order(OrderStatus.PENDING, STRANGER)],
-      ...[OrderStatus.PAID, OrderStatus.DRAFT, OrderStatus.FAILED, OrderStatus.EXPIRED].map(
-        (status): [string, Order] => [status, order(status)],
-      ),
-    ];
+  it('answers 404 for an order the buyer cannot see, before the saga hears of it', async () => {
+    const { useCase, cancel } = build(null);
 
-    const outcomes = await Promise.all(
-      cases.map(async ([label, found]) => {
-        const { useCase, finalize } = build(found);
-        const status = await useCase.cancelOwn(ORDER_ID, OWNER).then(
-          () => 'resolved',
-          (error: unknown) => (error instanceof HttpException ? error.getStatus() : error),
-        );
-        return [label, status, finalize.mock.calls.length];
-      }),
+    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toThrow(
+      new NotFoundException(`Order not found: ${ORDER_ID}`),
     );
+    await expect(useCase.cancelAsAdmin(ORDER_ID)).rejects.toThrow(NotFoundException);
+    expect(cancel).not.toHaveBeenCalled();
+  });
 
-    expect(outcomes).toEqual([
-      ['missing', 404, 0],
-      ["stranger's", 404, 0],
-      [OrderStatus.PAID, 409, 0],
-      [OrderStatus.DRAFT, 409, 0],
-      [OrderStatus.FAILED, 409, 0],
-      [OrderStatus.EXPIRED, 409, 0],
-    ]);
+  it('answers a cancelled order again without asking the saga', async () => {
+    const { useCase, cancel } = build(CANCELLED);
+
+    expect(await useCase.cancelOwn(ORDER_ID, OWNER)).toMatchObject({ status: OrderStatus.CANCELLED });
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 for an order past PENDING', async () => {
+    for (const status of [OrderStatus.CONFIRMING, OrderStatus.PAID, OrderStatus.FAILED, OrderStatus.EXPIRED]) {
+      const { useCase, cancel } = build(order(status));
+
+      await expect(useCase.cancelAsAdmin(ORDER_ID)).rejects.toThrow(
+        new ConflictException(`Order cannot be cancelled in status ${status}`),
+      );
+      expect(cancel).not.toHaveBeenCalled();
+    }
+  });
+
+  it('answers 409 when the saga is already taking the payment', async () => {
+    const { useCase } = build(order(OrderStatus.PENDING), {
+      engine: new CheckoutCancelRejectedError(ORDER_ID, 'COMMITTING_STOCK'),
+    });
+
+    expect(await statusOf(useCase.cancelOwn(ORDER_ID, OWNER))).toBe(409);
+  });
+
+  it('answers a closed saga from the order it left behind', async () => {
+    const closed = new CheckoutSagaClosedError(ORDER_ID);
+
+    const cancelled = build(order(OrderStatus.PENDING), { engine: closed, reread: CANCELLED });
+    const expired = build(order(OrderStatus.PENDING), { engine: closed, reread: order(OrderStatus.EXPIRED) });
+
+    expect(await statusOf(cancelled.useCase.cancelOwn(ORDER_ID, OWNER))).toBe(200);
+    await expect(expired.useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toThrow(
+      new ConflictException('Order cannot be cancelled in status EXPIRED'),
+    );
+  });
+
+  it('answers 200 once the cancel is recorded even if the compensations are still running, 503 before', async () => {
+    const unavailable = new CheckoutEngineUnavailableError();
+
+    const recorded = build(order(OrderStatus.PENDING), { engine: unavailable, reread: CANCELLED });
+    const pending = build(order(OrderStatus.PENDING), { engine: unavailable, reread: order(OrderStatus.PENDING) });
+
+    expect(await statusOf(recorded.useCase.cancelOwn(ORDER_ID, OWNER))).toBe(200);
+    expect(await statusOf(pending.useCase.cancelOwn(ORDER_ID, OWNER))).toBe(503);
+  });
+
+  it('lets an unexpected engine fault through', async () => {
+    const boom = new Error('boom');
+    const { useCase } = build(order(OrderStatus.PENDING), { engine: boom });
+
+    await expect(useCase.cancelOwn(ORDER_ID, OWNER)).rejects.toBe(boom);
   });
 });

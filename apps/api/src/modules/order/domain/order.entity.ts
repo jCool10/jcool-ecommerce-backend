@@ -14,6 +14,15 @@ export type FinalizeOutcome =
 
 export type OrderFinalizedEvent = OrderPaidEvent | OrderFailedEvent | OrderExpiredEvent | OrderCancelledEvent;
 
+interface OrderState {
+  status: OrderStatus;
+  placedAt: Date | null;
+  finalizedAt: Date | null;
+  finalizeReason: string | null;
+  paymentRef: string | null;
+  paymentDeadlineAt: Date | null;
+}
+
 /**
  * The transactional source of truth, and pure: no framework or DB imports. The total is computed
  * once from the snapshot lines at creation, then persisted and read back — never recomputed against
@@ -28,10 +37,12 @@ export class Order {
     public readonly items: readonly OrderItem[],
     public readonly totalAmountMinor: number,
     public readonly placedAt: Date | null,
-    // Stamped once, when the order settles; null while DRAFT/PENDING.
+    // Stamped once, when the order settles; null while DRAFT/RESERVING/PENDING/CONFIRMING.
     public readonly finalizedAt: Date | null,
     public readonly finalizeReason: string | null,
     public readonly paymentRef: string | null,
+    // Saga orders only: the instant an unpaid order expires. Null on orders placed the legacy way.
+    public readonly paymentDeadlineAt: Date | null,
   ) {}
 
   static create(userId: string, currency: string, items: OrderItem[]): Order {
@@ -63,6 +74,7 @@ export class Order {
       null,
       null,
       null,
+      null,
     );
   }
 
@@ -78,6 +90,7 @@ export class Order {
     finalizedAt?: Date | null;
     finalizeReason?: string | null;
     paymentRef?: string | null;
+    paymentDeadlineAt?: Date | null;
   }): Order {
     return new Order(
       props.id,
@@ -90,6 +103,7 @@ export class Order {
       props.finalizedAt ?? null,
       props.finalizeReason ?? null,
       props.paymentRef ?? null,
+      props.paymentDeadlineAt ?? null,
     );
   }
 
@@ -97,42 +111,37 @@ export class Order {
     return Money.of(this.totalAmountMinor, this.currency);
   }
 
-  /** Throws `OrderTransitionError` from any non-DRAFT state; the use case maps that to a 409. */
-  place(now: Date): Order {
-    assertTransition(this.status, OrderStatus.PENDING);
-    return new Order(
-      this.id,
-      this.userId,
-      OrderStatus.PENDING,
-      this.currency,
-      this.items,
-      this.totalAmountMinor,
-      now,
-      null,
-      null,
-      null,
-    );
+  /** Placed through the checkout saga: stock is not held until its Try answers. */
+  reserve(now: Date, paymentDeadlineAt: Date): Order {
+    return this.moveTo(OrderStatus.RESERVING, { placedAt: now, paymentDeadlineAt });
+  }
+
+  /** The Try held the stock; from here the order reads as an ordinary PENDING one, placed event included. */
+  confirmPlaced(): Order {
+    return this.moveTo(OrderStatus.PENDING, {});
+  }
+
+  /** Terminal without an event: nothing downstream ever heard of the order. */
+  reject(reason: string, now: Date): Order {
+    return this.moveTo(OrderStatus.REJECTED, { finalizedAt: now, finalizeReason: reason });
+  }
+
+  /** Authorization verified; a cancel is no longer accepted. */
+  beginConfirming(): Order {
+    return this.moveTo(OrderStatus.CONFIRMING, {});
   }
 
   isTerminal(): boolean {
     return isTerminal(this.status);
   }
 
-  /** Idempotency is the use case's job (terminal check + row lock) before it ever gets here. */
+  /** Idempotency is the caller's job (status guard under the row lock) before it ever gets here. */
   finalize(outcome: FinalizeOutcome, meta: { now: Date; reason?: string | null; paymentRef?: string | null }): Order {
-    assertTransition(this.status, outcome);
-    return new Order(
-      this.id,
-      this.userId,
-      outcome,
-      this.currency,
-      this.items,
-      this.totalAmountMinor,
-      this.placedAt,
-      meta.now,
-      meta.reason ?? null,
-      meta.paymentRef ?? null,
-    );
+    return this.moveTo(outcome, {
+      finalizedAt: meta.now,
+      finalizeReason: meta.reason ?? null,
+      paymentRef: meta.paymentRef ?? null,
+    });
   }
 
   toPlacedEvent(): OrderPlacedEvent {
@@ -165,5 +174,31 @@ export class Order {
       default:
         throw new DomainError(`Order in status ${this.status} has no finalization event`);
     }
+  }
+
+  private moveTo(status: OrderStatus, changes: Partial<Omit<OrderState, 'status'>>): Order {
+    assertTransition(this.status, status);
+    const next: OrderState = {
+      status,
+      placedAt: this.placedAt,
+      finalizedAt: this.finalizedAt,
+      finalizeReason: this.finalizeReason,
+      paymentRef: this.paymentRef,
+      paymentDeadlineAt: this.paymentDeadlineAt,
+      ...changes,
+    };
+    return new Order(
+      this.id,
+      this.userId,
+      next.status,
+      this.currency,
+      this.items,
+      this.totalAmountMinor,
+      next.placedAt,
+      next.finalizedAt,
+      next.finalizeReason,
+      next.paymentRef,
+      next.paymentDeadlineAt,
+    );
   }
 }

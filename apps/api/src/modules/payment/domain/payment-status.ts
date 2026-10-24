@@ -5,10 +5,15 @@
  */
 export const PaymentStatus = {
   PENDING: 'PENDING',
+  /** Money taken: auto-captured on the legacy path, captured after a hold on the participant path. */
   SUCCEEDED: 'SUCCEEDED',
   FAILED: 'FAILED',
   /** Session lapsed without an outcome; set by the reconciliation sweep, never by a webhook. */
   EXPIRED: 'EXPIRED',
+  /** The buyer's card holds the amount; nothing is taken until a capture. */
+  AUTHORIZED: 'AUTHORIZED',
+  /** The hold was released at Stripe. */
+  VOIDED: 'VOIDED',
 } as const;
 
 export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
