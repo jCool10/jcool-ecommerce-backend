@@ -61,4 +61,7 @@ export interface CheckoutSagaEnginePort {
 
   /** No-op while a run is open; throws CheckoutSagaClosedError once it has closed. */
   ensureStarted(start: CheckoutSagaStart): Promise<void>;
+
+  /** Which of these orders, at most 200, still have a run open. Read from visibility, which lags. */
+  runningOrderIds(orderIds: string[]): Promise<Set<string>>;
 }

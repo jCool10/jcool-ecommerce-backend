@@ -95,6 +95,25 @@ describe('checkout saga env', () => {
       ['TEMPORAL_WORKFLOW_BUNDLE_PATH', '', false],
       ['TEMPORAL_WORKFLOW_BUNDLE_PATH', '/tmp/checkout-saga.bundle.js', true],
       ['SAGA_ACTIVITY_TIMEOUT_MS', '6e4', false],
+      ['SAGA_OVERDUE_GRACE_SEC', '0', false],
+      ['CHECKOUT_INVARIANT_ENABLED', '0', false],
+      ['CHECKOUT_INVARIANT_ENABLED', 'false', true],
+      ['CHECKOUT_INVARIANT_INTERVAL_MS', '999', false],
+      ['CHECKOUT_INVARIANT_INTERVAL_MS', '1000', true],
+      ['CHECKOUT_INVARIANT_SETTLE_SEC', '-1', false],
+      ['CHECKOUT_INVARIANT_SETTLE_SEC', '0', true],
+      ['CHECKOUT_INVARIANT_BATCH_SIZE', '0', false],
+      ['CHECKOUT_INVARIANT_BATCH_SIZE', '200', true],
+      ['CHECKOUT_INVARIANT_BATCH_SIZE', '201', false],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-10-24T03:00:00Z', true],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-10-24T10:00:00.250+07:00', true],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-10-24', false],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-10-24T03:00:00', false],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-W43-5T03:00:00Z', false],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-13-40T03:00:00Z', false],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-02-30T03:00:00Z', false],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', '', false],
+      ['CHECKOUT_INVARIANT_NOT_BEFORE', 'yesterday', false],
     ];
     for (const [key, value, valid] of cases) {
       const env = { ...BASE_ENV, [key]: value };
@@ -158,6 +177,23 @@ describe('checkout saga env', () => {
         { ...BASE_ENV, CHECKOUT_RESERVING_ORPHAN_SEC: '6' },
         /CHECKOUT_RESERVING_ORPHAN_SEC \(6\) × 1000 must exceed CHECKOUT_RESERVE_WAIT_MS \(6000\)/,
       );
+    });
+
+    // A run waiting out its grace must not read as overdue.
+    it('ends the authorization grace before a saga counts as overdue', () => {
+      expectInvalid(
+        { ...BASE_ENV, SAGA_OVERDUE_GRACE_SEC: '180' },
+        /SAGA_AUTH_GRACE_SEC \(180\) must be below SAGA_OVERDUE_GRACE_SEC \(180\)/,
+      );
+      expectValid({ ...BASE_ENV, SAGA_OVERDUE_GRACE_SEC: '181' });
+    });
+
+    it('scans a window wider than the settle delay it leaves out', () => {
+      expectInvalid(
+        { ...BASE_ENV, CHECKOUT_INVARIANT_WINDOW_SEC: '600' },
+        /CHECKOUT_INVARIANT_WINDOW_SEC \(600\) must exceed CHECKOUT_INVARIANT_SETTLE_SEC \(600\)/,
+      );
+      expectValid({ ...BASE_ENV, CHECKOUT_INVARIANT_SETTLE_SEC: '0', CHECKOUT_INVARIANT_WINDOW_SEC: '1' });
     });
 
     it('ends the authorization grace before the stock hold', () => {

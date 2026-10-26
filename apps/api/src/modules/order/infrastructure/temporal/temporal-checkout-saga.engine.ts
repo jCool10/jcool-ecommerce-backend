@@ -11,6 +11,7 @@ import {
   type Client,
   type WorkflowStartOptions,
 } from '@temporalio/client';
+import { isRoutableId } from '@jcool/id-codec';
 import type { CheckoutSagaConfig } from '@shared/config/checkout-saga.config';
 import {
   CheckoutCancelRejectedError,
@@ -41,8 +42,11 @@ import {
 import { TEMPORAL_CLIENT } from './temporal.providers';
 import type { CheckoutSaga } from './workflows/checkout-saga.workflow';
 
-// Not a config knob: both callers retry on their own, a queue job or the reaper's next tick.
+// Not a config knob: every caller retries on its own, a queue job or the next reaper or checker tick.
 const START_WAIT_MS = 5000;
+const VISIBILITY_WAIT_MS = 5000;
+// The checker's batch cap, so one `WorkflowId IN (...)` stays a short query.
+export const MAX_VISIBILITY_IDS = 200;
 
 // What a ServiceError's cause carries when Temporal cannot answer now. FAILED_PRECONDITION from
 // Update-with-Start means the workflow task keeps failing: retry or investigate, never a refusal.
@@ -110,6 +114,27 @@ export class TemporalCheckoutSagaEngine implements CheckoutSagaEnginePort {
     );
   }
 
+  async runningOrderIds(orderIds: string[]): Promise<Set<string>> {
+    if (orderIds.length === 0) return new Set();
+    if (orderIds.length > MAX_VISIBILITY_IDS) {
+      throw new RangeError(`at most ${MAX_VISIBILITY_IDS} order ids per visibility query, got ${orderIds.length}`);
+    }
+    // Spliced into the query, so only a snowflake gets in.
+    const stray = orderIds.find((orderId) => !isRoutableId(orderId));
+    if (stray !== undefined) throw new Error(`${JSON.stringify(stray)} is not an order id`);
+
+    const workflowIds = orderIds.map((orderId) => `'${checkoutWorkflowId(orderId)}'`).join(', ');
+    const query = `${checkoutSagaRunsOf(this.config.temporal.taskQueue)} AND ExecutionStatus = 'Running' AND WorkflowId IN (${workflowIds})`;
+    const prefix = checkoutWorkflowId('');
+    return this.call(orderIds[0], VISIBILITY_WAIT_MS, null, async () => {
+      const running = new Set<string>();
+      for await (const { workflowId } of this.client.workflow.list({ query })) {
+        running.add(workflowId.slice(prefix.length));
+      }
+      return running;
+    });
+  }
+
   private startOptions(start: CheckoutSagaStart): WorkflowStartOptions<typeof CheckoutSaga> {
     return {
       workflowId: checkoutWorkflowId(start.orderId),
@@ -161,6 +186,11 @@ export class TemporalCheckoutSagaEngine implements CheckoutSagaEnginePort {
       throw toEngineError(error, orderId, closedBy);
     }
   }
+}
+
+/** Narrows a visibility query to the sagas of one task queue, never another queue's on the namespace. */
+export function checkoutSagaRunsOf(taskQueue: string): string {
+  return `WorkflowType = '${CHECKOUT_SAGA_WORKFLOW}' AND TaskQueue = '${taskQueue}'`;
 }
 
 type ClosedRunError = typeof WorkflowNotFoundError | typeof WorkflowExecutionAlreadyStartedError;

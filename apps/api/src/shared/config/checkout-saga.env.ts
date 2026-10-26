@@ -1,10 +1,12 @@
-import { IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
+import { IsInt, IsISO8601, IsNotEmpty, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 import { IsStrictBoolean, NodeEnv, StrictInt, type EnvBase } from '@jcool/platform/config';
 import { API_DB_POOL_MAX_DEFAULT, CHECKOUT_SAGA_DEFAULTS } from './checkout-saga.config';
 
 // Bracketed IPv6 or a hostname, then a port. No scheme: the SDK dials gRPC on the bare address.
 const HOST_PORT =
   /^(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):([1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$/;
+const INSTANT =
+  /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,3})?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/;
 
 export function CheckoutSagaEnv<TBase extends EnvBase>(Base: TBase) {
   class CheckoutSagaEnv extends Base {
@@ -141,6 +143,50 @@ export function CheckoutSagaEnv<TBase extends EnvBase>(Base: TBase) {
     @IsString()
     @IsNotEmpty()
     TEMPORAL_WORKFLOW_BUNDLE_PATH?: string;
+
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1)
+    SAGA_OVERDUE_GRACE_SEC?: number;
+
+    @IsOptional()
+    @IsStrictBoolean()
+    CHECKOUT_INVARIANT_ENABLED?: string;
+
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1000)
+    CHECKOUT_INVARIANT_INTERVAL_MS?: number;
+
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(0)
+    CHECKOUT_INVARIANT_SETTLE_SEC?: number;
+
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1)
+    CHECKOUT_INVARIANT_WINDOW_SEC?: number;
+
+    // One batch is one statusOf call per participant, and statusOf takes 200 ids at most.
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1)
+    @Max(200)
+    CHECKOUT_INVARIANT_BATCH_SIZE?: number;
+
+    // A full instant with its offset: `Date` reads a bare date as UTC and a bare time as local.
+    @IsOptional()
+    @IsString()
+    @Matches(INSTANT, { message: 'CHECKOUT_INVARIANT_NOT_BEFORE must be an ISO-8601 instant with an offset' })
+    // The pattern alone lets 02-30 through, and Date rolls it into March.
+    @IsISO8601({ strict: true }, { message: 'CHECKOUT_INVARIANT_NOT_BEFORE must be a real calendar date' })
+    CHECKOUT_INVARIANT_NOT_BEFORE?: string;
   }
   return CheckoutSagaEnv;
 }
@@ -211,6 +257,12 @@ export function assertCheckoutSagaEnv(env: CrossRuleEnv): void {
     v(
       'CHECKOUT_HOLD_SAFETY_SEC',
     ), `${shown('SAGA_AUTH_GRACE_SEC')} must be below ${shown('CHECKOUT_HOLD_SAFETY_SEC')}`);
+  require(v('SAGA_AUTH_GRACE_SEC') <
+    v('SAGA_OVERDUE_GRACE_SEC'), `${shown('SAGA_AUTH_GRACE_SEC')} must be below ${shown('SAGA_OVERDUE_GRACE_SEC')}`);
+  require(v('CHECKOUT_INVARIANT_WINDOW_SEC') >
+    v(
+      'CHECKOUT_INVARIANT_SETTLE_SEC',
+    ), `${shown('CHECKOUT_INVARIANT_WINDOW_SEC')} must exceed ${shown('CHECKOUT_INVARIANT_SETTLE_SEC')}`);
   require(v('QUEUE_WORKER_CONCURRENCY') +
     v('SAGA_ACTIVITY_CONCURRENCY') +
     v('SAGA_LOCAL_ACTIVITY_CONCURRENCY') +

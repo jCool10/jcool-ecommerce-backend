@@ -21,6 +21,8 @@ const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
+  // Set by hand at a service cut-over (RUNBOOK), unset otherwise.
+  'CHECKOUT_INVARIANT_NOT_BEFORE',
   'LOG_LEVEL',
   'MAIL_FROM',
   // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.

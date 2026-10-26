@@ -1,5 +1,5 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { and, asc, count, desc, eq, inArray, lt, notInArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, lt, lte, notInArray, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
@@ -17,7 +17,10 @@ import {
   type OrderRepositoryPort,
   type ReservingCreateResult,
   type SagaWriteResult,
+  type SettledSagaOrder,
+  type SettledSagaOrderCursor,
 } from '../application/ports/order-repository.port';
+import { TERMINAL_SAGA_STATUSES } from '../domain/checkout-invariants';
 import {
   IDEMPOTENCY_STORE,
   userIdempotencyScope,
@@ -279,6 +282,33 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
       .orderBy(asc(orders.placedAt), asc(orders.id))
       .limit(limit);
     return this.withItems(rows, this.db);
+  }
+
+  async findTerminalSagaOrdersInWindow(
+    { from, to }: { from: Date; to: Date },
+    after: SettledSagaOrderCursor | null,
+    limit: number,
+  ): Promise<SettledSagaOrder[]> {
+    // Keyed at the cursor's millisecond precision: on a microsecond stamp written by SQL, a cursor
+    // read back as a Date would sort before its own row and return the same page forever.
+    const finalizedMs = sql`date_trunc('milliseconds', ${orders.finalizedAt})`;
+    const rows = await this.db
+      .select({ id: orders.id, status: orders.status, finalizedAt: finalizedMs.mapWith(orders.finalizedAt) })
+      .from(orders)
+      .where(
+        and(
+          inArray(orders.status, [...TERMINAL_SAGA_STATUSES]),
+          isNotNull(orders.paymentDeadlineAt),
+          gte(orders.finalizedAt, from),
+          lte(orders.finalizedAt, to),
+          after
+            ? sql`(${finalizedMs}, ${orders.id}) > (${after.finalizedAt.toISOString()}::timestamptz, ${after.id})`
+            : undefined,
+        ),
+      )
+      .orderBy(asc(finalizedMs), asc(orders.id))
+      .limit(limit);
+    return rows as SettledSagaOrder[];
   }
 
   async deleteRejectedBefore(cutoff: Date, limit: number): Promise<number> {

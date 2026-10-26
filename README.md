@@ -222,35 +222,39 @@ The parts worth reading the code for. Each row names the file to open.
 # 1. install
 pnpm install
 
-# 2. configure — both templates boot as-is against the Compose stack below, once the
+# 2. configure — the templates boot as-is against the Compose stack below, once the
 #    user-service's .env has a signing key (JWT_ES256_PRIVATE_KEYS; the openssl one-liner is in
 #    its template). The api runs from apps/api, so link the root .env there.
 cp .env.example .env
 cp apps/user-service/.env.example apps/user-service/.env
+cp apps/id-service/.env.example apps/id-service/.env
 pnpm dev:link-env
 
-# 3. infrastructure (the ports below are the host-mapped ones). The id-service fleet stays in
-#    Compose: both apps mint ids through the gateway's load balancer on 127.0.0.1:4000.
-docker compose up -d postgres redis elasticsearch mailpit minio minio-init temporal
+# 3. infrastructure (the ports below are the host-mapped ones). The gateway fronts the host:
+#    its load balancer on 127.0.0.1:4000, where both apps mint ids, dials the id-service on 3003,
+#    and 8080 reaches the api and the user-service as in production.
+docker compose up -d postgres redis elasticsearch mailpit minio minio-init temporal id-etcd
 docker compose --profile user-service up -d user-postgres
-docker compose up -d --build id-service gateway
+pnpm dev:gateway
 
-# 4. build, schema + sample data (the user-service migrates from its build)
+# 4. build, schema + sample data (the user-service migrates from its build). A fresh etcd has no
+#    floors, and the id-service claims no node until it has them.
 pnpm build
+pnpm --filter @jcool/id-service lease:lift-floors --if-uninitialized
 pnpm db:migrate
 pnpm --filter @jcool/user-service db:migrate
 pnpm db:seed
 
-# 5. run the api and the user-service on the host
+# 5. run the api, the user-service and the id-service on the host
 pnpm dev
 ```
 
-- API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs> · user-service → <http://localhost:3002>
+- API → <http://localhost:3000> · OpenAPI → <http://localhost:3000/docs> · user-service → <http://localhost:3002> · id-service → <http://localhost:3003> · gateway → <http://localhost:8080>
 - Mail inbox (Mailpit) → <http://localhost:8025> · MinIO console → <http://localhost:9001>
 - Postgres → `localhost:5433` (user-service: `localhost:5434`) · Redis → `localhost:6380` · Elasticsearch → `localhost:9200` · id-service load balancer → `localhost:4000` · Temporal → `localhost:7233` (UI on `localhost:8233` with `--profile observability`)
 - Without Temporal the api still boots and serves everything but checkout and cancel, which answer `503`; its checkout-saga worker logs `checkout saga worker unavailable; retrying with backoff` once a minute until the server answers.
 
-`pnpm dev` is `turbo watch dev`. It builds the packages, then runs `dev` in the api (`nest start --watch`) and the user-service. A change under `packages/` rebuilds that package and every package that depends on it, then restarts the apps that use them. A change in the api's `src/` is left to Nest's own incremental reload, because [`apps/api/turbo.json`](./apps/api/turbo.json) limits the inputs of the api's `dev` task to its config files (`futureFlags.watchUsingTaskInputs` in the root `turbo.json`). The user-service has no watcher of its own, so turbo rebuilds it with `tsc` and restarts it. To run one app with the packages it uses: `pnpm turbo watch dev --filter=@jcool/api`. With a filter, turbo 2.11.6 still starts `dev` in the other apps that depend on a package you change; without `watchUsingTaskInputs` it honours the filter, but every save in the api then restarts it twice. Keep `SHUTDOWN_GRACE_PERIOD_MS` at `0` locally, since each restart and Ctrl+C waits it out. Turbo runs tasks in strict env mode, so a variable set on the command line (`PORT=3005 pnpm dev`) never reaches the app; put overrides in the `.env` files. Don't run the user-service container alongside `pnpm dev`: both bind port 3002.
+`pnpm dev` is `turbo watch dev`. It builds the packages, then runs `dev` in the api (`nest start --watch`), the user-service and the id-service. A change under `packages/` rebuilds that package and every package that depends on it, then restarts the apps that use them. A change in the api's `src/` is left to Nest's own incremental reload, because [`apps/api/turbo.json`](./apps/api/turbo.json) limits the inputs of the api's `dev` task to its config files (`futureFlags.watchUsingTaskInputs` in the root `turbo.json`). The user-service and the id-service have no watcher of their own, so turbo rebuilds them with `tsc` and restarts them; the id-service releases its node on each restart and claims another. To run one app with the packages it uses: `pnpm turbo watch dev --filter=@jcool/api`. With a filter, turbo 2.11.6 still starts `dev` in the other apps that depend on a package you change; without `watchUsingTaskInputs` it honours the filter, but every save in the api then restarts it twice. Keep `SHUTDOWN_GRACE_PERIOD_MS` at `0` locally, since each restart and Ctrl+C waits it out. Turbo runs tasks in strict env mode, so a variable set on the command line (`PORT=3005 pnpm dev`) never reaches the app; put overrides in the `.env` files. Don't run the user-service container alongside `pnpm dev`: both bind port 3002. `pnpm dev:gateway` stops the id-service containers and recreates the gateway with every upstream on `host.docker.internal`, so the gateway answers `502` while `pnpm dev` is down; `docker compose up -d id-service gateway` puts it back in front of the containers.
 
 `minio-init` is a one-shot that creates `STORAGE_BUCKET` and exits; the app waits on it, so a fresh `docker compose up` has a bucket before the first upload. Elasticsearch is only needed with `SEARCH_ENABLED=true`, and on a Linux host it wants `sudo sysctl -w vm.max_map_count=262144` first (Docker Desktop already sets it). Skipping Mailpit does **not** fall back to the log sink — `.env.example` ships `SMTP_URL` uncommented, so sends would fail against a dead relay; comment it out to use the log sink.
 
@@ -376,9 +380,9 @@ A rejected `complete` leaves the asset `PENDING` on purpose — the sweep alread
 Two tiers, kept separate on purpose.
 
 ```bash
-pnpm test           # ~760 unit tests, 186 files across every workspace; hermetic, no Docker
+pnpm test           # ~1,300 unit tests, 212 files across every workspace; hermetic, no Docker
 pnpm test:cov       # same, with the coverage floors CI enforces
-pnpm test:e2e       # 98 integration suites (api 65, user-service 23, id-service 10); requires Docker
+pnpm test:e2e       # 113 integration suites (api 80, user-service 23, id-service 10); requires Docker
 ```
 
 `E2E_WORKERS` (default **4**) sets how many workers the integration tier runs across; `E2E_WORKERS=1` serialises it. Each worker gets its own Postgres database and its own Redis logical database, so the number is bounded by Redis's 16 indices and by the databases `globalSetup` pre-creates.
@@ -388,7 +392,7 @@ pnpm test:e2e       # 98 integration suites (api 65, user-service 23, id-service
 
 Details worth stealing: the e2e app factory quarantines the developer's `.env` so a local file cannot change test behaviour; each spec file gets its own BullMQ keyspace; webhook fixtures are signed by the **production** signer, so verification runs unmocked against a test secret; and Redis outages are scripted rather than mocked.
 
-The api's and the user-service's coverage floors are **glob-scoped**, not global: `src/**/{domain,application}/**` only, at `statements 82 / branches 80 / functions 79 / lines 82` for the api and `92 / 83 / 88 / 93` for the user-service. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested, and the usual fix for that is either to lower the floor until it means nothing or to keep unit tests that repeat an e2e test only to hold the number. The numbers are the measured values minus two points, not a round 80. The id-service (`98 / 90 / 98 / 98`) and the packages keep global floors.
+The api's and the user-service's coverage floors are **glob-scoped**, not global: `src/**/{domain,application}/**` only, at `statements 88 / branches 86 / functions 87 / lines 88` for the api and `92 / 83 / 88 / 93` for the user-service. Repositories, adapters and controllers are covered by the e2e tier, so a global floor would fail on code that is in fact tested, and the usual fix for that is either to lower the floor until it means nothing or to keep unit tests that repeat an e2e test only to hold the number. The numbers are the measured values minus two points, not a round 80. The id-service (`98 / 90 / 98 / 98`) and the packages keep global floors.
 
 A unit test that repeats what an integration suite already proves on real infrastructure is deleted rather than kept for coverage. What stays at the unit tier is what the integration tier cannot reach: exhaustive state-machine matrices, clock and lease edge cases, the throttler composition, breaker timing, and races staged with deferred promises.
 
@@ -451,7 +455,9 @@ Three pillars plus error tracking, wired **around** the Clean Architecture core 
 - **Traces** — OpenTelemetry, off by default. The SDK loads via `node --import ./dist/instrumentation.js` *before* Nest boots, so auto-instrumentation patches `http`/`express`/`pg`/`ioredis` before those modules are required.
 - **Errors** — Sentry, off unless `SENTRY_DSN` is set; it reuses the app's own OTel SDK (`skipOpenTelemetrySetup`) rather than starting a second one, which would duplicate every span.
 
-Alerting ships as code: four Prometheus rule files (multi-window burn-rate SLOs, resilience, identity clock, log pipeline) with matching `promtool` unit tests that pin both **firing and clearing** behaviour, run in CI.
+Alerting ships as code: seven Prometheus rule files (multi-window burn-rate SLOs, resilience, identity clock, log pipeline, checkout saga, queue consumers, scrape targets) with matching `promtool` unit tests that pin both **firing and clearing** behaviour, run in CI.
+
+**The checkout saga** reports through the api's own `/metrics`, since Prometheus never scrapes Temporal. Activities count each step and compensation (`saga_step_total`, `saga_compensation_total`); at scrape time the api reads from Temporal the open sagas per step, the overdue ones, the abnormal closes and the task queue's pollers and backlog, all within 2s, and reports `checkout_saga_engine_up` 0 with the rest withdrawn when it cannot. An invariant checker compares each settled order with its stock and payment participants every minute and reports what disagrees by kind. Alongside it, `payment_authorized_uncaptured_oldest_seconds` and the BullMQ queue gauges (`messaging_queue_jobs`, `messaging_queue_oldest_waiting_seconds`) cover the money held on cards and the queue that carries `payment.authorized` to the saga. The api's readiness leaves Temporal out, so `CheckoutSagaEngineDown` and `CheckoutSagaWorkerStalled` are its only Temporal signals, and `ApiScrapeDown` covers the case where every other alert is blind. Each alert has its section in [RUNBOOK → The checkout saga](./RUNBOOK.md#its-alerts).
 
 **On Railway**, `.railway/railway.ts` deploys Prometheus, Loki and Grafana next to the services. Prometheus scrapes the api's `/metrics` and Loki's own push metrics; the api, user-service and id-service push their logs to Loki, whose chunks live in a Railway bucket with a 30-day retention. Grafana is the only public part of the stack and requires a login. No trace backend runs there, so Grafana links a `traceId` to that trace's log lines across services instead ([RUNBOOK → Logs in Loki](./RUNBOOK.md#logs-in-loki)).
 
@@ -472,7 +478,7 @@ Prometheus <http://localhost:9090> · Grafana <http://localhost:3001> · Jaeger 
 
 ## Operations
 
-[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: the permanent id layout and how to change it, backup/restore per database (including restoring a dump into one pinned to a different id layout), rotating the JWKS and `INTERNAL_API_TOKEN`, deploying Elasticsearch and rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, and what to do when a refund is owed.
+[**RUNBOOK.md**](./RUNBOOK.md) holds the procedures an operator needs and the code cannot express: the permanent id layout and how to change it, backup/restore per database (including restoring a dump into one pinned to a different id layout), rotating the JWKS and `INTERNAL_API_TOKEN`, deploying Elasticsearch and rebuilding the search index, replaying the dead-letter queue, reconciling the object bucket against `media_assets`, retention horizons, what to do when a refund is owed, and one section per checkout saga alert.
 
 **Image.** A multi-stage `Dockerfile` produces a lean Node 24 Alpine image running as non-root with production dependencies only: the builder runs `pnpm deploy --prod` for `@jcool/api`, and the runtime stage takes its `node_modules` plus the app's `dist/` **and** the migration `.sql` files, so the image can apply its own migrations: `npm run db:migrate:prod` runs as a *release command*, separate from app bootstrap — a failed migration then stops the rollout instead of crashlooping the app and taking down the version that was serving fine.
 

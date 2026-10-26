@@ -15,6 +15,7 @@ import { OUTBOX_WRITER } from './outbox/outbox-writer.port';
 import { DeadLetterRouter } from './queue/dead-letter';
 import { DomainEventProcessor } from './queue/domain-event.processor';
 import { DomainEventsWorker } from './queue/domain-events.worker';
+import { QUEUE_DEPTH_COLLECTOR_PROVIDERS } from './queue/queue-depth.collector';
 import { QueueLifecycle } from './queue/queue.lifecycle';
 import { QUEUE_PROVIDERS } from './queue/queue.providers';
 
@@ -32,6 +33,7 @@ import { QUEUE_PROVIDERS } from './queue/queue.providers';
     { provide: OUTBOX_WRITER, useClass: DrizzleOutboxWriter },
     ...OUTBOX_BACKLOG_PROVIDERS,
     ...QUEUE_PROVIDERS,
+    ...QUEUE_DEPTH_COLLECTOR_PROVIDERS,
     QueueLifecycle,
     OutboxRelay,
     OutboxRelayScheduler,

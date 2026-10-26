@@ -25,18 +25,19 @@ const METHODS = [
   'recordDeadLetter',
   'recordEventConsumed',
   'recordEventPublished',
+  'recordInvariantCheck',
   'recordMailSendFailure',
   'recordMediaBytesReclaimed',
   'recordOrderCreated',
   'recordRateLimitRejection',
   'recordRefundOwed',
-  'recordReservationExpiry',
   'recordRetentionSweep',
   'recordRetentionSweepFailure',
   'recordSagaStep',
   'recordSessionEpochLookup',
   'recordTccBranch',
   'setBreakerState',
+  'setCheckoutInvariantViolations',
 ] as const satisfies readonly (keyof MetricsPort)[];
 
 /**

@@ -14,6 +14,7 @@ import {
   ForwardPaymentAuthorizationUseCase,
   PayOrderUseCase,
   ReapReservingOrdersUseCase,
+  RunCheckoutInvariantsUseCase,
   SweepIdempotencyKeysUseCase,
   SweepRejectedOrdersUseCase,
 } from './application/use-cases';
@@ -34,10 +35,12 @@ import { OrderInventoryParticipantAdapter } from './infrastructure/order-invento
 import { OrderPaymentParticipantAdapter } from './infrastructure/order-payment-participant.adapter';
 import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempotency-key.repository';
 import { CheckoutSagaActivities } from './infrastructure/temporal/checkout-saga.activities';
+import { CHECKOUT_SAGA_COLLECTOR_PROVIDERS } from './infrastructure/temporal/checkout-saga.collector';
 import { CheckoutSagaWorker } from './infrastructure/temporal/checkout-saga.worker';
 import { TemporalCheckoutSagaEngine } from './infrastructure/temporal/temporal-checkout-saga.engine';
 import { temporalProviders } from './infrastructure/temporal/temporal.providers';
 import { AdminOrderController } from './interface/admin-order.controller';
+import { CheckoutInvariantScheduler } from './interface/checkout-invariant.scheduler';
 import { CheckoutReservingReaperScheduler } from './interface/checkout-reserving-reaper.scheduler';
 import { OrderController } from './interface/order.controller';
 import { IdempotencyInterceptor } from './interface/idempotency.interceptor';
@@ -60,6 +63,7 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     CancelOrderUseCase,
     ForwardPaymentAuthorizationUseCase,
     ReapReservingOrdersUseCase,
+    RunCheckoutInvariantsUseCase,
     // These register themselves with the shared retention registry on init; nothing here drives them.
     SweepIdempotencyKeysUseCase,
     SweepRejectedOrdersUseCase,
@@ -84,10 +88,12 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     PaymentAuthorizedHandler,
     OrderPaidMailHandler,
     CheckoutReservingReaperScheduler,
+    CheckoutInvariantScheduler,
     ...temporalProviders,
     { provide: CHECKOUT_SAGA_ENGINE, useClass: TemporalCheckoutSagaEngine },
     CheckoutSagaActivities,
     CheckoutSagaWorker,
+    ...CHECKOUT_SAGA_COLLECTOR_PROVIDERS,
   ],
   // For the shared event consumer, which routes an authorization and a confirmation back here.
   exports: [PaymentAuthorizedHandler, OrderPaidMailHandler],

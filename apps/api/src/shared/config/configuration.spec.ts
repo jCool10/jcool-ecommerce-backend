@@ -50,7 +50,13 @@ describe('configuration', () => {
 });
 
 describe('configuration: checkout saga', () => {
-  isolateEnv([...Object.keys(CHECKOUT_SAGA_DEFAULTS), ...Object.keys(CROSS_RULE_FOREIGN_DEFAULTS), 'TEMPORAL_ADDRESS']);
+  isolateEnv([
+    ...Object.keys(CHECKOUT_SAGA_DEFAULTS),
+    ...Object.keys(CROSS_RULE_FOREIGN_DEFAULTS),
+    'TEMPORAL_ADDRESS',
+    'CHECKOUT_INVARIANT_ENABLED',
+    'CHECKOUT_INVARIANT_NOT_BEFORE',
+  ]);
 
   it('sizes the api pool for the saga worker by default, and lets DB_POOL_MAX win', () => {
     expect(configuration().database.poolMax).toBe(20);
@@ -71,6 +77,25 @@ describe('configuration: checkout saga', () => {
       activityConcurrency: 2,
       localActivityConcurrency: 2,
       temporal: { address: 'localhost:7233', namespace: 'jcool', taskQueue: 'checkout-saga', workerEnabled: true },
+      overdueGraceSec: 300,
+      invariant: {
+        enabled: true,
+        intervalMs: 60_000,
+        settleSec: 600,
+        windowSec: 86_400,
+        batchSize: 200,
+        notBefore: null,
+      },
+    });
+  });
+
+  it('reads the checker cut-off as an instant, and turns the checker off only on an explicit false', () => {
+    process.env.CHECKOUT_INVARIANT_NOT_BEFORE = '2026-10-24T10:00:00+07:00';
+    process.env.CHECKOUT_INVARIANT_ENABLED = 'false';
+
+    expect(configuration().checkoutSaga.invariant).toMatchObject({
+      enabled: false,
+      notBefore: new Date('2026-10-24T03:00:00.000Z'),
     });
   });
 

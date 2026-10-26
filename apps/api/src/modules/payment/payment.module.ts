@@ -23,6 +23,7 @@ import { DrizzlePaymentRepository } from './infrastructure/payment.repository';
 import { DrizzlePaymentOrderRepository } from './infrastructure/payment-order.repository';
 import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.repository';
 import { DrizzleTransactionRunner } from './infrastructure/drizzle-transaction-runner';
+import { PAYMENT_AUTHORIZATION_COLLECTOR_PROVIDERS } from './infrastructure/payment-authorization.collector';
 import { StripeGatewayAdapter } from './infrastructure/gateway/stripe-gateway.adapter';
 import { isStripeUnavailable } from './infrastructure/gateway/stripe-fault-classification';
 import {
@@ -77,6 +78,7 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     CapturePaymentUseCase,
     CancelPaymentUseCase,
     { provide: PAYMENT_PARTICIPANT, useClass: PaymentParticipantFacade },
+    ...PAYMENT_AUTHORIZATION_COLLECTOR_PROVIDERS,
     // Registers itself with the shared retention registry on init; nothing here drives it.
     SweepWebhookEventsUseCase,
   ],

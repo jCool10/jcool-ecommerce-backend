@@ -1,6 +1,7 @@
 import { ApplicationFailure } from '@temporalio/common';
 import { MockActivityEnvironment } from '@temporalio/testing';
 import type { PinoLogger } from 'nestjs-pino';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import type { OrderInventoryParticipantPort } from '../../application/ports/order-inventory-participant.port';
 import type {
   OrderPaymentParticipantPort,
@@ -35,14 +36,25 @@ describe('CheckoutSagaActivities', () => {
       statusOf: vi.fn<OrderPaymentParticipantPort['statusOf']>(),
     };
     const logger = { setContext: vi.fn(), error: vi.fn(), warn: vi.fn() };
+    const metrics = fakeMetricsPort();
     const activities = new CheckoutSagaActivities(
       orders as unknown as OrderRepositoryPort,
       inventory,
       payment,
+      metrics,
       logger as unknown as PinoLogger,
     );
     const env = new MockActivityEnvironment();
-    return { activities, orders, inventory, payment, logger, env, signal: { signal: env.context.cancellationSignal } };
+    return {
+      activities,
+      orders,
+      inventory,
+      payment,
+      metrics,
+      logger,
+      env,
+      signal: { signal: env.context.cancellationSignal },
+    };
   };
 
   it('Tries with the hold deadline as a Date and hands the outcome back untouched', async () => {
@@ -179,6 +191,134 @@ describe('CheckoutSagaActivities', () => {
       OrderStatus.PAID,
     );
     await expect(env.run(activities.loadLateAuthorizationContext, { orderId: ORDER_ID })).resolves.toBeNull();
+  });
+
+  describe('metrics', () => {
+    const TRY = { orderId: ORDER_ID, lines: [{ skuId: 'sku-1', quantity: 1 }], holdUntil: '2026-10-21T10:00:00.000Z' };
+
+    it.each([
+      ['RESERVED', 'reserved'],
+      ['OUT_OF_STOCK', 'out_of_stock'],
+      ['CONTENDED', 'contended'],
+      ['CONFLICT', 'conflict'],
+    ] as const)('counts a %s Try as try_reserve/%s', async (outcome, label) => {
+      const { activities, inventory, metrics, env } = build();
+      inventory.tryReserve.mockResolvedValue(outcome);
+
+      await env.run(activities.tryReserve, TRY);
+
+      expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith('try_reserve', label);
+    });
+
+    it('counts commit and capture by the answer they got', async () => {
+      const { activities, inventory, payment, metrics, env } = build();
+      inventory.commit.mockResolvedValue('IDEMPOTENT');
+      payment.capture.mockResolvedValue('NOT_CAPTURABLE');
+
+      await env.run(activities.commitStock, { orderId: ORDER_ID });
+      await env.run(activities.capturePayment, { orderId: ORDER_ID });
+
+      expect(metrics.recordSagaStep.mock.calls).toEqual([
+        ['commit_stock', 'idempotent'],
+        ['capture_payment', 'not_capturable'],
+      ]);
+    });
+
+    it('counts a capture CONFLICT before throwing it', async () => {
+      const { activities, payment, metrics, env } = build();
+      payment.capture.mockResolvedValue('CONFLICT');
+
+      await env.run(activities.capturePayment, { orderId: ORDER_ID }).catch(() => undefined);
+
+      expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith('capture_payment', 'conflict');
+    });
+
+    it('counts a call that threw as error and still throws it', async () => {
+      const { activities, inventory, metrics, env } = build();
+      const fault = new Error('lock timeout');
+      inventory.tryReserve.mockRejectedValue(fault);
+      inventory.commit.mockRejectedValue(fault);
+
+      await expect(env.run(activities.tryReserve, TRY)).rejects.toBe(fault);
+      await expect(env.run(activities.commitStock, { orderId: ORDER_ID })).rejects.toBe(fault);
+
+      expect(metrics.recordSagaStep.mock.calls).toEqual([
+        ['try_reserve', 'error'],
+        ['commit_stock', 'error'],
+      ]);
+      expect(metrics.recordCompensation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['releaseStock', 'release', 'release_stock'],
+      ['restock', 'restock', 'restock'],
+    ] as const)('counts %s as a compensation only when it applied', async (activity, method, kind) => {
+      const { activities, inventory, metrics, env } = build();
+      inventory[method].mockResolvedValueOnce('APPLIED').mockResolvedValueOnce('IDEMPOTENT');
+
+      await env.run(activities[activity], { orderId: ORDER_ID, reason: 'TRY_TIMEOUT' });
+      await env.run(activities[activity], { orderId: ORDER_ID, reason: 'TRY_TIMEOUT' });
+
+      expect(metrics.recordSagaStep.mock.calls).toEqual([
+        [kind, 'applied'],
+        [kind, 'idempotent'],
+      ]);
+      expect(metrics.recordCompensation).toHaveBeenCalledExactlyOnceWith(kind, 'try_timeout');
+    });
+
+    it.each(['CANCELLED', 'FENCED'] as const)('counts a %s payment cancel as a compensation', async (outcome) => {
+      const { activities, payment, metrics, env } = build();
+      payment.cancel.mockResolvedValue(outcome);
+
+      await env.run(activities.cancelPayment, { orderId: ORDER_ID, reason: 'LATE_AUTHORIZATION' });
+
+      expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith('cancel_payment', outcome.toLowerCase());
+      expect(metrics.recordCompensation).toHaveBeenCalledExactlyOnceWith('cancel_payment', 'late_authorization');
+    });
+
+    it('does not count a payment cancel that found its work done', async () => {
+      const { activities, payment, metrics, env } = build();
+      payment.cancel.mockResolvedValue('IDEMPOTENT');
+
+      await env.run(activities.cancelPayment, { orderId: ORDER_ID, reason: 'CANCELLED' });
+
+      expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith('cancel_payment', 'idempotent');
+      expect(metrics.recordCompensation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['releaseStock', 'release_stock', 'conflict'],
+      ['restock', 'restock', 'conflict'],
+      ['cancelPayment', 'cancel_payment', 'captured_conflict'],
+    ] as const)('counts a %s conflict as a step outcome, not a compensation', async (activity, step, label) => {
+      const { activities, inventory, payment, metrics, env } = build();
+      inventory.release.mockResolvedValue('CONFLICT');
+      inventory.restock.mockResolvedValue('CONFLICT');
+      payment.cancel.mockResolvedValue('CAPTURED_CONFLICT');
+
+      await env.run(activities[activity], { orderId: ORDER_ID, reason: 'EXPIRED' }).catch(() => undefined);
+
+      expect(metrics.recordSagaStep).toHaveBeenCalledExactlyOnceWith(step, label);
+      expect(metrics.recordCompensation).not.toHaveBeenCalled();
+    });
+
+    it('leaves the order writes and the authorization check uncounted', async () => {
+      const { activities, orders, payment, metrics, env } = build();
+      orders.applyTryResult.mockResolvedValue('applied');
+      orders.applyOrderChange.mockResolvedValue('applied');
+      payment.statusOf.mockResolvedValue(new Map());
+
+      await env.run(activities.applyTryResult, { orderId: ORDER_ID, outcome: 'HELD' as const, reason: null });
+      await env.run(activities.applyOrderChange, {
+        orderId: ORDER_ID,
+        from: [OrderStatus.PENDING],
+        to: OrderStatus.CONFIRMING,
+        reason: null,
+      });
+      await env.run(activities.verifyAuthorization, { orderId: ORDER_ID, paymentId: 'pay-1' });
+
+      expect(metrics.recordSagaStep).not.toHaveBeenCalled();
+    });
   });
 
   describe('verifyAuthorization', () => {

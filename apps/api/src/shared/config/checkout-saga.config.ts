@@ -19,6 +19,11 @@ export const CHECKOUT_SAGA_DEFAULTS = {
   SAGA_RETRY_CAP_MS: 300_000,
   TEMPORAL_WORKER_SHUTDOWN_GRACE_MS: 4000,
   TEMPORAL_WORKER_SHUTDOWN_FORCE_MS: 4000,
+  SAGA_OVERDUE_GRACE_SEC: 300,
+  CHECKOUT_INVARIANT_INTERVAL_MS: 60_000,
+  CHECKOUT_INVARIANT_SETTLE_SEC: 600,
+  CHECKOUT_INVARIANT_WINDOW_SEC: 86_400,
+  CHECKOUT_INVARIANT_BATCH_SIZE: 200,
 } as const;
 
 // Above the platform's 10: the saga worker's two activity pools draw on the same pool as HTTP and the
@@ -52,6 +57,19 @@ export const checkoutSagaConfig = () => ({
     localActivityConcurrency: int('SAGA_LOCAL_ACTIVITY_CONCURRENCY'),
     retryBaseMs: int('SAGA_RETRY_BASE_MS'),
     retryCapMs: int('SAGA_RETRY_CAP_MS'),
+    // A run still open this long past its deadline is stuck, not waiting out its grace.
+    overdueGraceSec: int('SAGA_OVERDUE_GRACE_SEC'),
+    invariant: {
+      enabled: process.env.CHECKOUT_INVARIANT_ENABLED !== 'false',
+      intervalMs: int('CHECKOUT_INVARIANT_INTERVAL_MS'),
+      // Orders finalized in the last settleSec are left alone: their compensation, the outbox and
+      // visibility may still be catching up.
+      settleSec: int('CHECKOUT_INVARIANT_SETTLE_SEC'),
+      windowSec: int('CHECKOUT_INVARIANT_WINDOW_SEC'),
+      batchSize: int('CHECKOUT_INVARIANT_BATCH_SIZE'),
+      // Set at a service cut-over, so orders settled under the old topology are not judged by the new one.
+      notBefore: process.env.CHECKOUT_INVARIANT_NOT_BEFORE ? new Date(process.env.CHECKOUT_INVARIANT_NOT_BEFORE) : null,
+    },
     temporal: {
       address: process.env.TEMPORAL_ADDRESS ?? 'localhost:7233',
       namespace: process.env.TEMPORAL_NAMESPACE ?? 'jcool',

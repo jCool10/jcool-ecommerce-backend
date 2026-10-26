@@ -8,14 +8,18 @@ import type {
   BreakerState,
   CacheResult,
   CartOperation,
-  CompensationTrigger,
+  CheckoutInvariantKind,
+  CompensationKind,
+  CompensationReason,
   ConsumeResult,
   DeadLetterReason,
+  InvariantCheckResult,
   MailKind,
   MetricsPort,
   PublishResult,
   RefundOwedSource,
   SagaStep,
+  SagaStepOutcome,
   SessionEpochLookupResult,
   TccBranchOutcome,
   TccOp,
@@ -26,6 +30,8 @@ import {
   CACHE_REBUILD_DURATION_SECONDS,
   CART_OPERATIONS_TOTAL,
   CATALOG_CACHE_OPERATIONS_TOTAL,
+  CHECKOUT_INVARIANT_CHECK_TOTAL,
+  CHECKOUT_INVARIANT_VIOLATIONS,
   CIRCUIT_BREAKER_CALLS_TOTAL,
   CIRCUIT_BREAKER_STATE,
   CIRCUIT_BREAKER_TRANSITIONS_TOTAL,
@@ -40,7 +46,6 @@ import {
   PAYMENT_CAPTURE_CONFLICT_TOTAL,
   PAYMENT_REFUND_OWED_TOTAL,
   RATE_LIMIT_REJECTIONS_TOTAL,
-  RESERVATION_EXPIRY_TOTAL,
   RETENTION_ROWS_DELETED_TOTAL,
   RETENTION_SWEEP_DURATION_SECONDS,
   RETENTION_SWEEP_FAILURES_TOTAL,
@@ -73,7 +78,8 @@ export class BusinessMetrics implements MetricsPort {
     @InjectMetric(MESSAGING_DLQ_TOTAL) private readonly deadLetters: Counter<string>,
     @InjectMetric(SAGA_STEP_TOTAL) private readonly sagaSteps: Counter<string>,
     @InjectMetric(SAGA_COMPENSATION_TOTAL) private readonly compensations: Counter<string>,
-    @InjectMetric(RESERVATION_EXPIRY_TOTAL) private readonly reservationExpiries: Counter<string>,
+    @InjectMetric(CHECKOUT_INVARIANT_VIOLATIONS) private readonly invariantViolations: Gauge<string>,
+    @InjectMetric(CHECKOUT_INVARIANT_CHECK_TOTAL) private readonly invariantChecks: Counter<string>,
     @InjectMetric(PAYMENT_REFUND_OWED_TOTAL) private readonly refundsOwed: Counter<string>,
     @InjectMetric(MAIL_SEND_FAILURES_TOTAL) private readonly mailSendFailures: Counter<string>,
     @InjectMetric(RETENTION_ROWS_DELETED_TOTAL) private readonly retentionRowsDeleted: Counter<string>,
@@ -129,16 +135,22 @@ export class BusinessMetrics implements MetricsPort {
     this.safely('dead_letter', () => this.deadLetters.inc({ event_type: eventType, reason }));
   }
 
-  recordSagaStep(step: SagaStep, outcome: 'success' | 'failed'): void {
+  recordSagaStep(step: SagaStep, outcome: SagaStepOutcome): void {
     this.safely('saga_step', () => this.sagaSteps.inc({ step, outcome }));
   }
 
-  recordCompensation(trigger: CompensationTrigger): void {
-    this.safely('saga_compensation', () => this.compensations.inc({ trigger }));
+  recordCompensation(kind: CompensationKind, reason: CompensationReason): void {
+    this.safely('saga_compensation', () => this.compensations.inc({ kind, reason }));
   }
 
-  recordReservationExpiry(): void {
-    this.safely('reservation_expiry', () => this.reservationExpiries.inc());
+  setCheckoutInvariantViolations(counts: Record<CheckoutInvariantKind, number>): void {
+    this.safely('checkout_invariant_violations', () => {
+      for (const [kind, violations] of Object.entries(counts)) this.invariantViolations.set({ kind }, violations);
+    });
+  }
+
+  recordInvariantCheck(result: InvariantCheckResult): void {
+    this.safely('checkout_invariant_check', () => this.invariantChecks.inc({ result }));
   }
 
   recordMailSendFailure(kind: MailKind): void {

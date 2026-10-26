@@ -1,5 +1,6 @@
 import { DomainError } from '@jcool/kernel';
 import type { ReserveOutcome } from '../../domain/checkout-saga';
+import type { TerminalSagaStatus } from '../../domain/checkout-invariants';
 import type { Order } from '../../domain/order.entity';
 import type { OrderStatus } from '../../domain/order-status';
 import { MAX_PENDING_ORDERS_PER_USER } from '../../order.constants';
@@ -39,6 +40,16 @@ export interface ReservingCreateResult {
   created: boolean;
   order: Order;
 }
+
+/** A settled checkout order as the invariant checker reads it; `finalizedAt` is cut to milliseconds. */
+export interface SettledSagaOrder {
+  id: string;
+  status: TerminalSagaStatus;
+  finalizedAt: Date;
+}
+
+/** Where a scan stopped: the last row it read. */
+export type SettledSagaOrderCursor = Pick<SettledSagaOrder, 'id' | 'finalizedAt'>;
 
 /** `already`: the order is in the target status, nothing was written. `stale`: it is somewhere else. */
 export type SagaWriteResult = 'applied' | 'already' | 'stale';
@@ -89,6 +100,16 @@ export interface OrderRepositoryPort {
 
   /** RESERVING orders placed before `cutoff`, oldest first. */
   findReservingOlderThan(cutoff: Date, limit: number): Promise<Order[]>;
+
+  /**
+   * Saga orders (a payment deadline set) that settled with `finalized_at` in [from, to], in
+   * (finalized_at, id) order, the page after `after`.
+   */
+  findTerminalSagaOrdersInWindow(
+    window: { from: Date; to: Date },
+    after: SettledSagaOrderCursor | null,
+    limit: number,
+  ): Promise<SettledSagaOrder[]>;
 
   /** Deletes up to `limit` REJECTED orders, items included, finalized before `cutoff`. Returns the count. */
   deleteRejectedBefore(cutoff: Date, limit: number): Promise<number>;

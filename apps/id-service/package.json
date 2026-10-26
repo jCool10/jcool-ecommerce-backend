@@ -10,6 +10,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "start": "node --env-file-if-exists=.env dist/main.js",
+    "dev": "node --env-file-if-exists=.env --enable-source-maps dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" --fix",
     "lint:check": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",

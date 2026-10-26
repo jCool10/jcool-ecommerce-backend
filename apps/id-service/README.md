@@ -71,6 +71,10 @@ On a rolling deploy, keep `SHUTDOWN_GRACE_PERIOD_MS` < the platform's draining w
 
 ```bash
 docker compose up -d --build id-service gateway   # id-etcd, a one-shot floor lift, 3 replicas, the gateway
+cp apps/id-service/.env.example apps/id-service/.env
+pnpm dev:gateway                                  # or on the host: stops the replicas, points the gateway's LB at 3003
+pnpm turbo watch dev --filter=@jcool/id-service   # rebuilt and restarted on change; `pnpm dev` runs it too
+curl -s -X POST http://127.0.0.1:4000/v1/ids -H 'content-type: application/json' -d '{"count":3}'
 pnpm --filter @jcool/id-service test              # unit
 pnpm --filter @jcool/id-service test:e2e          # etcd via Testcontainers, including a paused etcd
 pnpm --filter @jcool/id-service test:system       # built images, 3 replicas behind the gateway

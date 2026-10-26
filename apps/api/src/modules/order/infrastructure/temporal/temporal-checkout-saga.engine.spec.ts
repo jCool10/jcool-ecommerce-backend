@@ -96,11 +96,17 @@ describe('TemporalCheckoutSagaEngine', () => {
         return Promise.resolve(value);
       };
     const handle = { executeUpdate: vi.fn(recorded('CANCELLED')) };
+    const listed = (workflowIds: string[]) =>
+      (async function* () {
+        calledUnder.push(activeDeadline);
+        for (const workflowId of workflowIds) yield await Promise.resolve({ workflowId });
+      })();
     const workflow = {
       executeUpdateWithStart: vi.fn(recorded('HELD')),
       getHandle: vi.fn(() => handle),
       signalWithStart: vi.fn(recorded({})),
       start: vi.fn(recorded({})),
+      list: vi.fn((_options: { query: string }): AsyncIterable<{ workflowId: string }> => listed([])),
     };
     const connection = {
       withDeadline: async <R>(deadline: number | Date, fn: () => Promise<R>): Promise<R> => {
@@ -117,8 +123,54 @@ describe('TemporalCheckoutSagaEngine', () => {
       { workflow, connection } as unknown as Client,
       config as unknown as ConfigService,
     );
-    return { engine, workflow, handle, calledUnder, config };
+    return { engine, workflow, handle, calledUnder, config, listed };
   };
+
+  describe('runningOrderIds', () => {
+    const IDS = ['6577090077287424', '6577089942944768'];
+
+    it('asks visibility for the open runs of exactly these orders on its own task queue', async () => {
+      const { engine, workflow } = build();
+
+      await engine.runningOrderIds(IDS);
+
+      expect(workflow.list).toHaveBeenCalledExactlyOnceWith({
+        query:
+          "WorkflowType = 'CheckoutSaga' AND TaskQueue = 'checkout-saga-test' AND ExecutionStatus = 'Running' AND " +
+          "WorkflowId IN ('checkout-6577090077287424', 'checkout-6577089942944768')",
+      });
+    });
+
+    it('answers with order ids, read under a deadline', async () => {
+      const { engine, workflow, calledUnder, listed } = build();
+      workflow.list.mockReturnValue(listed(['checkout-6577089942944768']));
+
+      await expect(engine.runningOrderIds(IDS)).resolves.toEqual(new Set(['6577089942944768']));
+      expect(calledUnder).toEqual([NOW + 5000]);
+    });
+
+    it('asks nothing for no ids', async () => {
+      const { engine, workflow } = build();
+
+      await expect(engine.runningOrderIds([])).resolves.toEqual(new Set());
+      expect(workflow.list).not.toHaveBeenCalled();
+    });
+
+    // The ids are spliced into the query string.
+    it('refuses an id that is not a snowflake before building a query from it', async () => {
+      const { engine, workflow } = build();
+
+      await expect(engine.runningOrderIds(["1' OR WorkflowId != '"])).rejects.toThrow(/not an order id/);
+      expect(workflow.list).not.toHaveBeenCalled();
+    });
+
+    it('refuses more ids than one visibility query takes', async () => {
+      const { engine } = build();
+      const ids = Array.from({ length: 201 }, (_, index) => String(6_577_090_077_287_424n + BigInt(index)));
+
+      await expect(engine.runningOrderIds(ids)).rejects.toThrow(RangeError);
+    });
+  });
 
   it('reads its settings from the checkoutSaga config namespace', () => {
     const { config } = build();
@@ -217,6 +269,7 @@ describe('TemporalCheckoutSagaEngine', () => {
           engine.notifyAuthorized(start(), { paymentId: 'p', amountMinor: 1, currency: 'VND', authorizedAt: '' }),
       ],
       ['ensureStarted', (engine: TemporalCheckoutSagaEngine) => engine.ensureStarted(start())],
+      ['runningOrderIds', (engine: TemporalCheckoutSagaEngine) => engine.runningOrderIds(['6577090077287424'])],
     ] as const;
 
     const failWith = (error: Error) => {
@@ -225,6 +278,12 @@ describe('TemporalCheckoutSagaEngine', () => {
       built.handle.executeUpdate.mockRejectedValue(error);
       built.workflow.signalWithStart.mockRejectedValue(error);
       built.workflow.start.mockRejectedValue(error);
+      // A listing fails while it is being read, not when it is asked for.
+      built.workflow.list.mockReturnValue(
+        (async function* () {
+          yield await Promise.reject<never>(error);
+        })(),
+      );
       return built.engine;
     };
 
@@ -283,6 +342,7 @@ describe('TemporalCheckoutSagaEngine', () => {
       ['notifyAuthorized', notFound],
       ['notifyAuthorized', alreadyStarted],
       ['ensureStarted', notFound],
+      ['runningOrderIds', notFound],
     ] as const)('rethrows %s failing with %s untouched', async (name, error) => {
       await expect(invokeOf[name](failWith(error))).rejects.toBe(error);
     });

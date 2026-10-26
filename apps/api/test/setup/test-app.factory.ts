@@ -53,6 +53,7 @@ export async function createTestApp(
   process.env.INVENTORY_HOLD_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
   process.env.CHECKOUT_REAPER_ENABLED = 'false';
+  process.env.CHECKOUT_INVARIANT_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
   // is a plain sleep inside `app.close()`, so a developer's `SHUTDOWN_GRACE_PERIOD_MS=8000` charges
   // every app in every file 8 seconds of doing nothing. Nothing asserts on the window's length:

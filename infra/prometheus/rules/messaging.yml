@@ -1,0 +1,23 @@
+# Alerts for the BullMQ queues the api consumes. Consumer lag shows nowhere else: the relay keeps
+# publishing, so the outbox stays young, the DLQ stays empty and the saga timers fire as designed.
+groups:
+  - name: messaging
+    rules:
+      - alert: MessagingQueueConsumerLagging
+        expr: max by (queue) (messaging_queue_oldest_waiting_seconds) > 60
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Queue {{ $labels.queue }} is not being consumed'
+          description: 'The oldest waiting job on {{ $labels.queue }} is {{ $value | humanizeDuration }} old and has been over a minute for 5 minutes. On domain-events that holds back payment.authorized on its way to the saga, so paid checkouts run into their deadline and compensate. RUNBOOK → The checkout saga → MessagingQueueConsumerLagging.'
+
+      # Joined `on()` to the api's `up` for the reason given in checkout-saga.yml.
+      - alert: MessagingQueueMetricsAbsent
+        expr: absent(messaging_queue_oldest_waiting_seconds) and on() (count(up{job="jcool-api"} == 1) > 0)
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Queue depth metrics are missing from the api'
+          description: 'The api is being scraped but reports no messaging_queue_oldest_waiting_seconds, so MessagingQueueConsumerLagging cannot fire: the queue depth collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'

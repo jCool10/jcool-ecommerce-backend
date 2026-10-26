@@ -30,6 +30,10 @@ Conventions used below:
 - [The id-service's etcd](#the-id-services-etcd)
 - [Operate Temporal](#operate-temporal)
 - [The checkout saga](#the-checkout-saga)
+  - [Settle a payment by hand](#settle-a-payment-by-hand)
+  - [Its alerts](#its-alerts), one subsection each
+  - [Retention and the checker window](#retention-and-the-checker-window)
+  - [`CHECKOUT_INVARIANT_NOT_BEFORE`](#checkout_invariant_not_before)
 - [Temporal down](#temporal-down)
 - [Cut over checkout to the saga](#cut-over-checkout-to-the-saga)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
@@ -239,7 +243,7 @@ LIMIT 20;
 ```
 
 - **`attempts` climbing on one row while others publish** — that row is poison, and the backlog behind it is moving. The relay only charges an attempt when something else in the same tick got through, so a non-zero count is proof the queue itself is healthy. Fix the payload or the handler; the row keeps its place in line meanwhile.
-- **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not running (`QUEUE_ENABLED`, the worker process) or Redis is refusing every publish. Check `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked through, not an outage.
+- **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not running (`OUTBOX_RELAY_ENABLED`, the worker process) or Redis is refusing every publish. Check `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked through, not an outage.
 
 A row here has **not** been dead-lettered — it was never delivered at all, so [replay](#replay-the-dead-letter-queue) does not apply to it and there is nothing to re-admit.
 
@@ -372,8 +376,6 @@ The counter counts **observations, not refunds**: a redelivered webhook is dedup
 | `source` | Who saw it |
 | -------- | ---------- |
 | `webhook_direct` | The gateway's webhook reported a cleared charge for a session no checkout owns (`HandlePaymentWebhook`); the event is recorded `SKIPPED` |
-
-The metric still accepts the labels `expire_session` and `settlement_event` from the settlement path the saga replaced; nothing raises them.
 
 To act on one, find the session: the log line is at `error` with `providerEventId` and `sessionId`. The session's `order_id` metadata in the gateway dashboard names the order, if any. Then read the money and the order side back —
 
@@ -577,6 +579,14 @@ railway domain --service grafana --port 3000
 Afterwards, a config change is `railway up --ci --service <prometheus|grafana>` on its own. The api
 needs a redeploy the first time `METRICS_TOKEN` is set: `MetricsTokenGuard` reads it at boot, and
 until then `/metrics` answers 404 and the target sits DOWN.
+
+The rule files are baked into the image too, so a change anywhere under `infra/prometheus/` is live only after `railway up --ci --service prometheus`, and CD never runs it. Redeploy after every such merge, then check in the container (`railway ssh --service prometheus`) that the rules loaded and the api's series arrive:
+
+```sh
+# container (prometheus)
+wget -qO- localhost:9090/api/v1/rules | grep -o '"file":"[^"]*"' | sort -u          # the seven files under rules/
+wget -qO- 'localhost:9090/api/v1/query?query=checkout_saga_engine_up'                # one series, value 1
+```
 
 Three constraints this stack depends on:
 
@@ -990,7 +1000,182 @@ Its consumer signals the order's saga, so the job rides the long ladder (`ORDER_
 
 ### Terminate a saga
 
-Only as in [Temporal down](#temporal-down): once Temporal answers, for a run that cannot finish by itself, and only after both participant headers have been cleaned up by hand.
+Only as in [Temporal down](#temporal-down): once Temporal answers, for a run that cannot finish by itself, and only after both participant headers have been cleaned up by hand. The terminated run then holds [CheckoutSagaClosedAbnormally](#checkoutsagaclosedabnormally) firing for an hour; that one is expected.
+
+### Settle a payment by hand
+
+Only for an order with no running run ([Read a saga](#read-a-saga)). A void or capture made in the Stripe dashboard never reaches the database: the webhook handles only `checkout.session.*` events, so the payment rows keep reading `AUTHORIZED`, and the alerts and the invariant checker that read them keep firing. Settle it through the rows instead:
+
+- **Void.** Cancel the header and let the reconcile sweep call Stripe: `UPDATE payment_orders SET status = 'CANCELLED' WHERE order_id = '<order id>' AND status IN ('OPEN', 'AUTHORIZED');`. Once the attempt is `ORDER_STALE_THRESHOLD_SEC` (120) old, the next `RECONCILE_INTERVAL_MS` tick voids its PaymentIntent and records the attempt `VOIDED`. `RECONCILE_ENABLED` must not be `false`.
+- **Capture**, only for a `PAID` order. Capture the PaymentIntent in the Stripe dashboard, then record what the participant's own capture writes: `UPDATE payments SET status = 'SUCCEEDED', updated_at = now() WHERE order_id = '<order id>' AND status = 'AUTHORIZED'; UPDATE payment_orders SET status = 'CAPTURED' WHERE order_id = '<order id>' AND status = 'AUTHORIZED';`.
+
+Note down the order id and the PaymentIntent either way.
+
+### Its alerts
+
+The saga's alerts are in `infra/prometheus/rules/checkout-saga.yml`, the queue's in `messaging.yml` and `ApiScrapeDown` in `scrape-targets.yml`. Each alert's description names its subsection below. Nothing routes alerts anywhere yet, so read the firing ones in Grafana Explore with `ALERTS{alertstate="firing"}`, or with `wget -qO- localhost:9090/api/v1/alerts` in the Prometheus container.
+
+Prometheus never scrapes Temporal. The api reads every saga gauge from Temporal while it answers `/metrics`, within 2s, and reports `checkout_saga_engine_up`: 1 when every read answered, else 0, with the other saga gauges withdrawn rather than held. `payment_authorized_uncaptured_oldest_seconds` and the queue gauges come from the api's Postgres and Redis, and keep their last value when a read fails.
+
+The api's readiness leaves Temporal out ([Temporal down](#temporal-down)), so CD, Railway's healthcheck and `/health/ready` stay green while Temporal or the worker is gone. `CheckoutSagaEngineDown` and `CheckoutSagaWorkerStalled` are the only signals for it.
+
+The commands below run in the Temporal container, with `t()` from [Check it](#check-it) and these two:
+
+```sh
+# container (temporal); busybox date, so the time goes through the epoch
+ago() { date -u -d "@$(( $(date +%s) - $1 ))" +%Y-%m-%dT%H:%M:%SZ; }
+RUNS='WorkflowType="CheckoutSaga" AND TaskQueue="checkout-saga"'
+```
+
+#### CheckoutSagaStuck
+
+`checkout_saga_overdue` counts the runs still `Running` whose `CheckoutDeadlineAt` passed more than `SAGA_OVERDUE_GRACE_SEC` (300) ago. The deadline timer ends every saga on time, so each of these is held up by an activity that keeps failing (a participant, the gateway, a compensation conflict) or by a workflow task that keeps failing, as a nondeterminism error after a deploy does. Their stock stays held and their payment may stay authorized meanwhile.
+
+```sh
+t workflow list --namespace jcool --query "$RUNS AND ExecutionStatus=\"Running\" AND CheckoutDeadlineAt < \"$(ago 300)\""
+t workflow describe --namespace jcool --workflow-id checkout-<order id>   # the pending activity, its attempts and last failure
+t workflow show --namespace jcool --workflow-id checkout-<order id>       # a WorkflowTaskFailed near the end is the workflow code itself
+```
+
+An activity failing: fix what it fails on, and the run moves by itself. A conflict is [CheckoutCompensationConflict](#checkoutcompensationconflict). A workflow task failing after a deploy: roll the deploy back, or ship the change behind `patched()` ([Changing the workflow while runs are open](#changing-the-workflow-while-runs-are-open)). Terminate only as in [Terminate a saga](#terminate-a-saga).
+
+#### CheckoutSagaWorkerStalled
+
+Temporal answers, but checkout tasks are not being picked up: for 5 minutes the task queue has had no poller for workflow or for activity tasks, or a task has waited over 2 minutes. A deploy reads 0 pollers while the api restarts, which the 5 minutes cover. This alert and [CheckoutSagaEngineDown](#checkoutsagaenginedown) are the api's only Temporal signals, since its readiness leaves Temporal out.
+
+```sh
+t task-queue describe --task-queue checkout-saga --namespace jcool   # pollers per task type, and when each last polled
+```
+
+- **No poller.** The api's worker is not running. Check `TEMPORAL_WORKER_ENABLED` on the api, and its logs for `checkout saga worker unavailable; retrying with backoff` or `checkout saga worker cannot start without its bundle`.
+- **Pollers, and a backlog.** The worker runs but its slots are full: activities hung on a participant or the gateway (`describe` a few running sagas, as in [CheckoutSagaStuck](#checkoutsagastuck)), or more load than `SAGA_ACTIVITY_CONCURRENCY` allows.
+
+What it stops, and how to freeze checkout meanwhile: [Temporal down](#temporal-down).
+
+#### CheckoutSagaEngineDown
+
+`checkout_saga_engine_up` has read 0 for 2 minutes: the api's reads from Temporal have not all answered within 2s. The api logs `checkout saga scrape failed, saga gauges withdrawn` at most once a minute, with the error. Every other saga gauge is withdrawn meanwhile, the pollers included, so [CheckoutSagaStuck](#checkoutsagastuck), [CheckoutSagaWorkerStalled](#checkoutsagaworkerstalled) and the rest are blind until it clears. This alert and `CheckoutSagaWorkerStalled` are the api's only Temporal signals, since its readiness leaves Temporal out.
+
+`t operator cluster health` in the Temporal container, and the error in that log line, tell the cases apart:
+
+- **Anything but `SERVING`.** Temporal is down: checkout answers `503` and no saga moves. [Temporal down](#temporal-down) has the rest of the procedure.
+- **`SERVING`, and the error is a connection failure (`UNAVAILABLE`).** The api cannot reach a healthy server: check the api's `TEMPORAL_ADDRESS`, and that Temporal still binds its private address ([Operate Temporal](#operate-temporal)).
+- **`SERVING`, and the error is `DEADLINE_EXCEEDED` on a count.** Visibility is slow: checkout still works, only the saga alerts are blind. Time `t workflow count --namespace jcool --query "$RUNS"` in the container; a count that takes seconds is the `temporal_visibility` database on `temporal-postgres`.
+
+#### CheckoutSagaClosedAbnormally
+
+The saga only ever completes. A run of the checkout task queue closed as `Failed`, `Terminated`, `TimedOut` or `Canceled` is a bug or an operator, and it stopped where it was, with no compensation. The gauge counts the last hour, so the alert keeps firing for an hour after a single closure.
+
+```sh
+t workflow list --namespace jcool --query "$RUNS AND ExecutionStatus IN (\"Failed\",\"Terminated\",\"TimedOut\",\"Canceled\") AND CloseTime > \"$(ago 3600)\""
+t workflow show --namespace jcool --workflow-id checkout-<order id>   # how it closed: the failure, or who terminated it and why
+```
+
+For each one, read the order and both headers with the query in [Temporal down](#temporal-down):
+
+- **Order already terminal.** The invariant checker judges it once it settles ([CheckoutInvariantViolation](#checkoutinvariantviolation)).
+- **Order `PENDING` or `CONFIRMING`, stock `COMMITTED` and payment `CAPTURED`.** The buyer has paid, but `order.paid` and its consumers never ran. Do not cancel it; escalate.
+- **Order `PENDING` or `CONFIRMING` otherwise.** Nothing will move it again. Void its payment as in [Settle a payment by hand](#settle-a-payment-by-hand), or treat a captured one as [a refund owed](#a-refund-is-owed). A `HELD` stock row is released by the lapsed-hold sweep. Then close the order: `UPDATE orders SET status = 'CANCELLED', finalized_at = now(), finalize_reason = 'ops:closed_saga' WHERE id = '<order id>' AND status IN ('PENDING', 'CONFIRMING');`.
+
+A `Failed` run is a bug in the workflow: fix it before the next checkout trips over it.
+
+#### CheckoutCompensationConflict
+
+A compensation found its participant in a state it cannot undo: `release_stock` or `restock` on stock already committed, or `cancel_payment` on money already captured. The activity logs `saga participant conflict; retrying until resolved by hand` at error, with the order id, and retries without limit. The run stays `COMPENSATING` and becomes [CheckoutSagaStuck](#checkoutsagastuck) once its deadline passes.
+
+Read the order and both headers ([Temporal down](#temporal-down)) and decide which side is right. Put the participant right by hand (captured money is [a refund owed](#a-refund-is-owed); committed stock goes back on hand), note what you did, then terminate the run as in [Terminate a saga](#terminate-a-saga). Its retry would conflict forever otherwise. Neither fix changes the rows the invariant checker reads, so it keeps reporting the order until it leaves the checker's window ([CheckoutInvariantViolation](#checkoutinvariantviolation)).
+
+#### PaymentAuthorizationUncaptured
+
+The oldest `AUTHORIZED` payment header is over 15 minutes old. The saga captures within seconds of an authorization reaching it and voids the hold when it gives up, so this money is held on a card and nothing is settling it. Stripe voids an authorization on its own after 7 days.
+
+```sql
+SELECT p.order_id, p.authorized_at, o.status, o.payment_deadline_at
+FROM payment_orders p JOIN orders o ON o.id = p.order_id
+WHERE p.status = 'AUTHORIZED' ORDER BY p.authorized_at LIMIT 20;
+```
+
+Then [read each saga](#read-a-saga):
+
+- **Order `PENDING`, run in `AWAITING_AUTH`.** The authorization has not reached the saga: see [MessagingQueueConsumerLagging](#messagingqueueconsumerlagging), or its job is in the dead-letter queue ([A `payment.authorized` in the dead-letter queue](#a-paymentauthorized-in-the-dead-letter-queue)).
+- **Order `CONFIRMING`, run in `CAPTURING`.** The capture keeps failing at the gateway; `describe` shows why.
+- **No running run.** Nothing will settle it. [Settle it by hand](#settle-a-payment-by-hand): capture if the order is `PAID`, void otherwise.
+
+#### CheckoutInvariantViolation
+
+Every `CHECKOUT_INVARIANT_INTERVAL_MS`, the checker reads the saga orders that settled between `CHECKOUT_INVARIANT_WINDOW_SEC` and `CHECKOUT_INVARIANT_SETTLE_SEC` ago, never before `CHECKOUT_INVARIANT_NOT_BEFORE`. It skips any whose run is still `Running`, and asks both participants how they stand. It fixes nothing. Each broken order is logged at error as `checkout invariant violated`, with `orderId`, `kind` and `status`, on every run. The gauge is the count from the last complete run. It clears once the rows the checker reads agree again, or once the order leaves the window. A fix made outside those rows, such as a refund or a stock correction, leaves its kind firing for up to `CHECKOUT_INVARIANT_WINDOW_SEC` (24h), and a second order of the same kind goes unseen behind it meanwhile: check the error log for new order ids.
+
+| `kind` | Means | Put it right |
+| --- | --- | --- |
+| `captured_without_paid` | Money taken on an order that is not `PAID` | [A refund is owed](#a-refund-is-owed); the kind stays until the window passes |
+| `paid_without_capture` | `PAID`, but the payment header is not `CAPTURED` | If the PaymentIntent still reads `requires_capture` in Stripe, capture it as in [Settle a payment by hand](#settle-a-payment-by-hand) |
+| `paid_without_commit` | `PAID`, but the stock was never committed | The goods are sold but still counted on hand: correct the variant's stock by hand; the kind stays until the window passes |
+| `orphan_hold` | Not `PAID`, and the stock is still `HELD` | The lapsed-hold sweep releases it once `hold_until` passes; one held past that is the sweep failing |
+| `authorized_on_dead_order` | Not `PAID`, and a payment attempt still holds money | Under a `CANCELLED` or `FENCED` header the reconcile sweep voids it within a few minutes, so one seen here means that sweep is off or failing. Under any other header, void it as in [Settle a payment by hand](#settle-a-payment-by-hand) |
+
+The same kind on several orders is a defect, not bad luck. Compare with the run's history (`t workflow show`), which retention keeps for longer than the checker looks back ([Retention and the checker window](#retention-and-the-checker-window)).
+
+#### CheckoutInvariantCheckerSilent
+
+The api is being scraped, but no checker run has finished as `ok` or `violations` for 30 minutes, so a broken order would go unnoticed. The api's logs say why:
+
+- **`checkout invariant checker disabled`** at boot: `CHECKOUT_INVARIANT_ENABLED` is false.
+- **`checkout invariant check failed, gauges left as they were`** at warn, on every run, with the error: a participant or Temporal is not answering, and `checkout_invariant_check_total{result="error"}` climbs. With [CheckoutSagaEngineDown](#checkoutsagaenginedown) firing too, Temporal is the cause.
+- **`previous invariant check still running, tick skipped`**: one run outlasts `CHECKOUT_INVARIANT_INTERVAL_MS`.
+- **None of these**: the scheduler never started; look for `checkout invariant checker scheduled` at boot.
+
+#### CheckoutLateAuthorization
+
+A payment was authorized after its saga had ended, and a `lateAuthorization` run voided it. Each one is handled, and costs the buyer only the wait for the void. A steady stream means authorizations arrive later than `CHECKOUT_PAYMENT_DEADLINE_SEC` + `SAGA_AUTH_GRACE_SEC` allows, or after a cancel: the queue lags ([MessagingQueueConsumerLagging](#messagingqueueconsumerlagging)), or buyers pay on sessions that outlive their order.
+
+```sql
+SELECT p.order_id, p.status, p.authorized_at, o.status AS order_status, o.finalized_at, o.finalize_reason
+FROM payment_orders p JOIN orders o ON o.id = p.order_id
+WHERE o.status <> 'PAID' AND p.authorized_at > o.finalized_at
+ORDER BY p.authorized_at DESC LIMIT 20;
+```
+
+#### MessagingQueueConsumerLagging
+
+The oldest job waiting on a queue has waited over a minute, for 5 minutes. On `domain-events` that holds back `payment.authorized` on its way to the saga, so paid checkouts run into their deadline and compensate. Nothing else shows it: the relay keeps publishing, so the outbox stays young and the DLQ stays empty. `messaging_queue_jobs{queue,state}` tells the cases apart:
+
+- **`active` at 0.** No consumer: the api's BullMQ worker is not running (`QUEUE_WORKER_ENABLED`) or cannot reach Redis.
+- **`active` steady and `wait` growing.** The consumer is saturated or a handler is slow; the handler's logs show what it waits on.
+
+#### Saga metrics absent
+
+`CheckoutSagaMetricsAbsent`, `PaymentMetricsAbsent` and `MessagingQueueMetricsAbsent` mean the api is being scraped but `/metrics` lacks the series that alert reads, so the alerts built on it cannot fire. Each collector is a provider of its module (order, payment, messaging) and only reports from the process that owns the metrics registry. A series goes missing when that module is not in the app that serves `/metrics`, for example after it moved to another service. `observability-metrics.e2e-spec.ts` fails on a build that drops one, so first check which build is deployed, then what the api serves:
+
+```sh
+# container (prometheus)
+wget -qO- --header "Authorization: Bearer $METRICS_TOKEN" "http://$API_TARGET/metrics" \
+  | grep -E '^(checkout_saga_engine_up|payment_authorized_uncaptured_oldest_seconds|messaging_queue_oldest_waiting_seconds)'
+```
+
+#### ApiScrapeDown
+
+Prometheus has not scraped the api for 5 minutes, so every api alert, the absent-metrics ones included, is blind. Prometheus has no domain; its target page answers inside its container:
+
+```sh
+# container (prometheus)
+wget -qO- localhost:9090/api/v1/targets | grep -o '"lastError":"[^"]*"'
+```
+
+- **Connection refused, or a timeout.** The api is down or restarting (its deploy logs), or the private network cannot reach it; `API_TARGET` on `prometheus` must name the api's private domain and port.
+- **404.** `/metrics` answers 404 both when the api has no `METRICS_TOKEN` and when the token Prometheus sends is not the api's. Set the same value on both services ([Deploy the monitoring stack](#deploy-the-monitoring-stack)), then redeploy the one that changed.
+
+### Retention and the checker window
+
+`TEMPORAL_NAMESPACE_RETENTION` on `temporal` (7d) must stay above `CHECKOUT_INVARIANT_WINDOW_SEC` on the api (86400), which in turn must stay above `CHECKOUT_INVARIANT_SETTLE_SEC`. The api checks the second rule at boot. The first spans two services, so nothing checks it: keep it in mind when changing either. A shorter retention deletes a closed run's history while the checker can still flag its order, and the investigation loses its best evidence.
+
+### `CHECKOUT_INVARIANT_NOT_BEFORE`
+
+Unset, except around a cut-over that moves a participant into its own service, and that cut-over's rollback. Orders settled before the move keep their headers in the old database, where the new `statusOf` cannot see them, so each one would read as a violation. Set it to the UTC time the drain finished, and unset it once `CHECKOUT_INVARIANT_WINDOW_SEC` has passed. Each change redeploys the api.
+
+```bash
+railway variable set "CHECKOUT_INVARIANT_NOT_BEFORE=<drain end, e.g. 2026-11-02T09:30:00Z>" --service jcool-ecommerce-backend
+railway variable delete CHECKOUT_INVARIANT_NOT_BEFORE --service jcool-ecommerce-backend
+```
 
 ---
 
@@ -1001,7 +1186,7 @@ Only as in [Temporal down](#temporal-down): once Temporal answers, for a run tha
 - The api logs `checkout saga worker unavailable; retrying with backoff` at most once a minute, with the error and the address.
 - If the image lacks the workflow bundle, it logs `checkout saga worker cannot start without its bundle` instead.
 - `task-queue describe` ([Check it](#check-it)) lists no poller from the api.
-- No alert covers this yet.
+- [CheckoutSagaEngineDown](#checkoutsagaenginedown) pages after 2 minutes; [CheckoutSagaWorkerStalled](#checkoutsagaworkerstalled) pages after 5 when Temporal answers but no worker polls.
 
 - `POST /orders` and both cancel routes answer `503` with `Retry-After` after their wait (`CHECKOUT_RESERVE_WAIT_MS`, `CHECKOUT_CANCEL_WAIT_MS`), logged as `checkout saga engine unavailable` or `cancel got no answer from the checkout saga`.
 - A buyer who retries with a fresh `Idempotency-Key` each time leaves one hidden `RESERVING` order per attempt, and those count against the in-flight cap: the fourth such attempt answers `409 Too many pending orders` instead of `503`. Once Temporal is back the reaper rejects them, after `CHECKOUT_RESERVING_ORPHAN_SEC` and one `CHECKOUT_REAPER_INTERVAL_MS`. A retry under the same key adds no order.
@@ -1032,7 +1217,7 @@ LEFT JOIN payment_orders p ON p.order_id = o.id
 WHERE o.id = <order id>;
 ```
 
-A `HELD` stock row is released by the lapsed-hold sweep once `hold_until` passes. An `AUTHORIZED` payment holds the buyer's funds until Stripe voids it, after 7 days. So cancel its PaymentIntent in the Stripe dashboard first. Then:
+A `HELD` stock row is released by the lapsed-hold sweep once `hold_until` passes. An `AUTHORIZED` payment holds the buyer's funds until Stripe voids it, after 7 days. So once the run is terminated, void it as in [Settle a payment by hand](#settle-a-payment-by-hand); a void in the Stripe dashboard alone leaves the payment rows `AUTHORIZED`. Terminate with:
 
 ```sh
 # container (temporal), one run

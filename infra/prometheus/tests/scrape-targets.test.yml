@@ -1,0 +1,52 @@
+# Rule unit tests for scrape-targets.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+rule_files:
+  - ../rules/scrape-targets.yml
+
+evaluation_interval: 15s
+
+tests:
+  # The api fails its scrape past the hold, then answers again.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x5 0x10 1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ApiScrapeDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ApiScrapeDown
+        exp_alerts:
+          - exp_labels:
+              job: jcool-api
+              instance: 'app:3000'
+              severity: page
+            exp_annotations:
+              summary: 'Prometheus has not scraped the api for 5 minutes'
+              description: 'The api is down, unreachable from Prometheus, or refusing the metrics token, and every api alert, the absent-metrics ones included, is blind until it is scraped again. RUNBOOK → The checkout saga → ApiScrapeDown.'
+      - eval_time: 20m
+        alertname: ApiScrapeDown
+        exp_alerts: []
+
+  # No `up` series for the job at all, as when the job is missing from the scrape config, until
+  # the target is scraped and reports 1.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '_x10 1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ApiScrapeDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ApiScrapeDown
+        exp_alerts:
+          - exp_labels:
+              job: jcool-api
+              severity: page
+            exp_annotations:
+              summary: 'Prometheus has not scraped the api for 5 minutes'
+              description: 'The api is down, unreachable from Prometheus, or refusing the metrics token, and every api alert, the absent-metrics ones included, is blind until it is scraped again. RUNBOOK → The checkout saga → ApiScrapeDown.'
+      - eval_time: 12m
+        alertname: ApiScrapeDown
+        exp_alerts: []

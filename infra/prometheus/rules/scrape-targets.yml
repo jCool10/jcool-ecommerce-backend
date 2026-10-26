@@ -1,0 +1,15 @@
+# Alerts for Prometheus losing the api. Every absent-metrics alert goes quiet while the api is not
+# scraped, on purpose, so this one owns that case.
+groups:
+  - name: scrape-targets
+    rules:
+      # `absent()` as well as `== 0`: a job missing from the scrape config leaves no `up` series at
+      # all, and `== 0` alone would be silent.
+      - alert: ApiScrapeDown
+        expr: up{job="jcool-api"} == 0 or absent(up{job="jcool-api"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the api for 5 minutes'
+          description: 'The api is down, unreachable from Prometheus, or refusing the metrics token, and every api alert, the absent-metrics ones included, is blind until it is scraped again. RUNBOOK → The checkout saga → ApiScrapeDown.'

@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { WorkflowNotFoundError, type Client } from '@temporalio/client';
-import type { Queue } from 'bullmq';
+import type { Job, Queue } from 'bullmq';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import {
@@ -91,7 +91,7 @@ export function checkoutSagaStartOf(order: Order, mode: CheckoutSagaMode = 'chec
   };
 }
 
-// Every call parked by any holdCalls, so a reset can end them whichever test left them behind.
+// Every call parked by any helper below, so a reset can end them whichever test left them behind.
 const parked = new Set<(error: Error) => void>();
 const restorers = new Set<() => void>();
 
@@ -104,39 +104,52 @@ export interface HeldCalls {
 }
 
 type AsyncMethodKey<T> = { [K in keyof T]: T[K] extends (...args: never[]) => Promise<unknown> ? K : never }[keyof T];
+type AsyncCall = (...args: unknown[]) => Promise<unknown>;
 
 /**
- * Parks every call to `port[method]` until `release()`. Patches the instance, which the saga
- * activities read at call time. A parked call ignores its abort signal on purpose: it stands for a
- * participant that cannot be interrupted.
+ * Patches the instance, which the saga activities read at call time; `releaseHung()` or the
+ * returned function puts the method back.
  */
-export function holdCalls<T extends object>(port: T, method: AsyncMethodKey<T>): HeldCalls {
+function patch<T extends object>(port: T, method: AsyncMethodKey<T>, wrap: (real: AsyncCall) => AsyncCall): () => void {
   const target = port as Record<PropertyKey, unknown>;
   const hadOwn = Object.prototype.hasOwnProperty.call(port, method);
-  const original = target[method] as (...args: unknown[]) => Promise<unknown>;
-  const waiting: (() => void)[] = [];
-  let released = false;
-  let count = 0;
-
+  const original = target[method] as AsyncCall;
   const restore = () => {
     restorers.delete(restore);
     if (hadOwn) target[method] = original;
     else delete target[method];
   };
   restorers.add(restore);
+  target[method] = wrap((...args) => original.apply(port, args));
+  return restore;
+}
 
-  target[method] = (...args: unknown[]): Promise<unknown> => {
+/** Never settles on its own; `releaseHung()` rejects it with an AbortError. */
+function park(): Promise<never> {
+  return new Promise((_, reject) => parked.add(reject));
+}
+
+/**
+ * Parks every call to `port[method]` until `release()`. A parked call ignores its abort signal on
+ * purpose: it stands for a participant that cannot be interrupted.
+ */
+export function holdCalls<T extends object>(port: T, method: AsyncMethodKey<T>): HeldCalls {
+  const waiting: (() => void)[] = [];
+  let released = false;
+  let count = 0;
+
+  const restore = patch(port, method, (real) => (...args) => {
     count += 1;
-    if (released) return original.apply(port, args);
+    if (released) return real(...args);
     return new Promise((resolve, reject) => {
       const abort = (error: Error) => reject(error);
       parked.add(abort);
       waiting.push(() => {
         parked.delete(abort);
-        resolve(original.apply(port, args));
+        resolve(real(...args));
       });
     });
-  };
+  });
 
   return {
     get count() {
@@ -155,6 +168,88 @@ export function holdCalls<T extends object>(port: T, method: AsyncMethodKey<T>):
       for (const run of waiting.splice(0)) run();
     },
   };
+}
+
+interface CallFilter {
+  /** Only calls for this order count; read from the first argument, an id or `{ orderId }`. */
+  orderId?: string;
+}
+
+export interface InjectedCalls {
+  /** Matching calls so far, the injected ones included. */
+  readonly calls: () => number;
+}
+
+export interface HungCall extends InjectedCalls {
+  /** Resolves once the real call has returned and the hang begins. */
+  readonly reached: Promise<void>;
+}
+
+function orderIdOf([first]: unknown[]): string | undefined {
+  if (typeof first === 'string') return first;
+  if (typeof first === 'object' && first !== null && 'orderId' in first) return String(first.orderId);
+  return undefined;
+}
+
+function inject<T extends object>(
+  port: T,
+  method: AsyncMethodKey<T>,
+  { orderId }: CallFilter,
+  onMatch: (real: () => Promise<unknown>, call: number) => Promise<unknown>,
+): InjectedCalls {
+  let calls = 0;
+  patch(port, method, (real) => (...args) => {
+    if (orderId !== undefined && orderIdOf(args) !== orderId) return real(...args);
+    calls += 1;
+    return onMatch(() => real(...args), calls);
+  });
+  return { calls: () => calls };
+}
+
+/**
+ * A process that dies right after the participant applied the change: the next matching call runs
+ * for real, then never answers. Every later call goes straight through, so the retry Temporal sends
+ * after the attempt's timeout meets the change already applied.
+ */
+export function hangAfter<T extends object>(port: T, method: AsyncMethodKey<T>, filter: CallFilter = {}): HungCall {
+  let reach!: () => void;
+  let miss!: (error: unknown) => void;
+  const reached = new Promise<void>((resolve, reject) => {
+    reach = resolve;
+    miss = reject;
+  });
+  reached.catch(() => undefined);
+
+  const { calls } = inject(port, method, filter, async (real, call) => {
+    if (call > 1) return real();
+    try {
+      await real();
+    } catch (error) {
+      miss(error);
+      throw error;
+    }
+    reach();
+    return park();
+  });
+  return { reached, calls };
+}
+
+/** The next matching call throws `error` without reaching the method; later ones run for real. */
+export function failOnce<T extends object>(
+  port: T,
+  method: AsyncMethodKey<T>,
+  { error = new Error('failure injected by the test'), ...filter }: CallFilter & { error?: Error } = {},
+): InjectedCalls {
+  return inject(port, method, filter, (real, call) => (call === 1 ? Promise.reject(error) : real()));
+}
+
+/** Every matching call throws until `releaseHung()`, so the activity keeps retrying. */
+export function failAlways<T extends object>(
+  port: T,
+  method: AsyncMethodKey<T>,
+  filter: CallFilter = {},
+): InjectedCalls {
+  return inject(port, method, filter, () => Promise.reject(new Error('failure injected by the test')));
 }
 
 /** Fails every parked call with an AbortError, so a hung activity ends, and undoes every hold. */
@@ -196,15 +291,7 @@ export async function relayAuthorizationDirect(app: INestApplication, orderId: s
  * every queued `payment.authorized` job of the order to the dispatcher. Returns how many it delivered.
  */
 export async function relayAuthorization(app: INestApplication, orderId: string): Promise<number> {
-  const relayed = await app.get(OutboxRelay).runOnce(RELAY_BATCH);
-  if (relayed.failed > 0) throw new Error(`relay refused ${relayed.failed} outbox rows`);
-
-  const queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
-  const jobs = (await queue.getJobs(['waiting', 'delayed', 'prioritized'])).filter(
-    (job) => job.data.eventType === 'payment.authorized' && job.data.payload.orderId === orderId,
-  );
-  if (jobs.length === 0) throw new Error(`no payment.authorized queued for order ${orderId}`);
-
+  const jobs = await relayedAuthorizations(app, orderId);
   const processor = app.get(DomainEventProcessor);
   for (const job of jobs) {
     const result = await processor.process(job.data);
@@ -214,6 +301,19 @@ export async function relayAuthorization(app: INestApplication, orderId: string)
     await job.remove();
   }
   return jobs.length;
+}
+
+/** Relays the outbox and returns the order's queued `payment.authorized` jobs, for a test to deliver itself. */
+export async function relayedAuthorizations(app: INestApplication, orderId: string): Promise<Job<DomainEventJob>[]> {
+  const relayed = await app.get(OutboxRelay).runOnce(RELAY_BATCH);
+  if (relayed.failed > 0) throw new Error(`relay refused ${relayed.failed} outbox rows`);
+
+  const queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
+  const jobs = (await queue.getJobs(['waiting', 'delayed', 'prioritized'])).filter(
+    (job) => job.data.eventType === 'payment.authorized' && job.data.payload.orderId === orderId,
+  );
+  if (jobs.length === 0) throw new Error(`no payment.authorized queued for order ${orderId}`);
+  return jobs;
 }
 
 /**

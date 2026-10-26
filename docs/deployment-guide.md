@@ -6,7 +6,7 @@ Where each environment runs, what owns each deploy target's config, and the rati
 
 | Environment | What runs | Start |
 | --- | --- | --- |
-| Local dev | Compose infrastructure (Postgres ×2, Redis, Elasticsearch, Mailpit, MinIO, Temporal with its own Postgres) and the id-service fleet behind the gateway, plus the api and the user-service on the host under `pnpm dev` | [`README.md#quick-start`](../README.md#quick-start) |
+| Local dev | Compose infrastructure (Postgres ×2, Redis, Elasticsearch, Mailpit, MinIO, Temporal with its own Postgres, etcd) and the gateway, in front of the api, the user-service and the id-service on the host under `pnpm dev` | [`README.md#quick-start`](../README.md#quick-start) |
 | Full stack, in Compose | Every service containerized, reached through the gateway; the user-service is opt-in via a Compose profile | [`README.md#quick-start`](../README.md#quick-start) |
 | Railway (production) | The service topology below, deployed by `cd.yml` | this document |
 
