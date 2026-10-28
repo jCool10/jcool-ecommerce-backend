@@ -43,11 +43,13 @@ const contractHeaders = (res: Response) =>
 
 const echoOf = async (res: Promise<Response>) => (await (await res).json()) as Echo;
 
-// Fake upstreams stand in for the api and a future auth service; a fake edge stands in for Railway's.
+// Fake upstreams stand in for the api, the inventory-service and a future auth service; a fake edge
+// stands in for Railway's.
 describe('gateway: public site', () => {
   let network: StartedNetwork;
   let api: StartedTestContainer;
   let auth: StartedTestContainer;
+  let inventory: StartedTestContainer;
   let idService: StartedTestContainer;
   let edge: StartedTestContainer;
   let gateway: StartedTestContainer;
@@ -56,14 +58,16 @@ describe('gateway: public site', () => {
   beforeAll(async () => {
     await buildGatewayImage();
     network = await new Network().start();
-    [api, auth, idService, edge] = await Promise.all([
+    [api, auth, inventory, idService, edge] = await Promise.all([
       startFixture(network, 'fake-upstream.cjs', 'api', { NAME: 'api' }),
       startFixture(network, 'fake-upstream.cjs', 'auth', { NAME: 'auth' }),
+      startFixture(network, 'fake-upstream.cjs', 'inventory', { NAME: 'inventory' }),
       startFixture(network, 'fake-id-service.cjs', 'id-service'),
       startFixture(network, 'fake-edge.cjs', 'edge', { UPSTREAM: 'gateway:8080' }),
     ]);
     baseEnv = {
       API_UPSTREAM: 'api:3000',
+      INVENTORY_UPSTREAM: 'inventory:3000',
       ID_SERVICE_HOST: 'id-service',
       ID_SERVICE_PORT: '3000',
       TRUSTED_PROXY_CIDRS: `${edge.getIpAddress(network.getName())}/32`,
@@ -75,7 +79,7 @@ describe('gateway: public site', () => {
   });
 
   afterAll(async () => {
-    await Promise.allSettled([gateway, api, auth, idService, edge].map((container) => container?.stop()));
+    await Promise.allSettled([gateway, api, auth, inventory, idService, edge].map((container) => container?.stop()));
     await network?.stop();
   });
 
@@ -224,6 +228,27 @@ describe('gateway: public site', () => {
     });
   });
 
+  describe('inventory routes', () => {
+    it('go to the inventory-service, and nothing else does', async () => {
+      const upstreamOf = async (path: string, method = 'GET') => (await echoOf(direct(path, { method }))).upstream;
+
+      for (const path of ['/admin/inventory', '/admin/inventory/x', '/Admin/Inventory/x']) {
+        expect(await upstreamOf(path), path).toBe('inventory');
+      }
+      expect(await upstreamOf('/admin/inventory/x/adjust', 'POST')).toBe('inventory');
+      for (const path of ['/admin/orders', '/admin/inventoryx', '/inventory']) {
+        expect(await upstreamOf(path), path).toBe('api');
+      }
+    });
+
+    it("keep the service's internal reservation API off the public listener", async () => {
+      const before = await hits(inventory);
+
+      expect((await direct('/internal/v1/reservations/1/try', { method: 'POST' })).status).toBe(404);
+      expect(await hits(inventory)).toBe(before);
+    });
+  });
+
   describe('checkout frozen for the cutover', () => {
     let frozen: StartedTestContainer;
 
@@ -267,6 +292,12 @@ describe('gateway: public site', () => {
 
     it('refuses to start without API_UPSTREAM', async () => {
       const { API_UPSTREAM: _missing, ...env } = baseEnv;
+
+      await expect(exitsWith(env)).rejects.toThrow(/failed to start/);
+    });
+
+    it('refuses to start without INVENTORY_UPSTREAM', async () => {
+      const { INVENTORY_UPSTREAM: _missing, ...env } = baseEnv;
 
       await expect(exitsWith(env)).rejects.toThrow(/failed to start/);
     });

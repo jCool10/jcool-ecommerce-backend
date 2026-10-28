@@ -195,7 +195,7 @@ export function CheckoutSagaEnv<TBase extends EnvBase>(Base: TBase) {
 export const CROSS_RULE_FOREIGN_DEFAULTS = {
   PAYMENT_CAPTURE_TIMEOUT_MS: 10_000,
   BREAKER_TIMEOUT_MS: 3000,
-  INVENTORY_TRY_LOCK_TIMEOUT_MS: 2000,
+  INVENTORY_COMMAND_TIMEOUT_MS: 5000,
   QUEUE_WORKER_CONCURRENCY: 5,
   PAYMENT_SESSION_MIN_TTL_SEC: 1800,
   PAYMENT_SESSION_EXPIRY_MARGIN_SEC: 120,
@@ -242,10 +242,10 @@ export function assertCheckoutSagaEnv(env: CrossRuleEnv): void {
       v('BREAKER_TIMEOUT_MS'),
       2 * v('PAYMENT_CAPTURE_TIMEOUT_MS') + 1000,
     ), `${shown('SAGA_ACTIVITY_TIMEOUT_MS')} must exceed max(${shown('BREAKER_TIMEOUT_MS')}, 2 × ${shown('PAYMENT_CAPTURE_TIMEOUT_MS')} + 1000)`);
-  require(v('INVENTORY_TRY_LOCK_TIMEOUT_MS') <
-    v(
-      'CHECKOUT_TRY_TIMEOUT_MS',
-    ), `${shown('INVENTORY_TRY_LOCK_TIMEOUT_MS')} must be below ${shown('CHECKOUT_TRY_TIMEOUT_MS')}`);
+  // An inventory command may spend its whole deadline before the activity gets to record the answer.
+  require(v('SAGA_ACTIVITY_TIMEOUT_MS') >
+    v('INVENTORY_COMMAND_TIMEOUT_MS') +
+      5000, `${shown('SAGA_ACTIVITY_TIMEOUT_MS')} must exceed ${shown('INVENTORY_COMMAND_TIMEOUT_MS')} + 5000`);
   require(v('CHECKOUT_RESERVE_WAIT_MS') >=
     v('CHECKOUT_TRY_TIMEOUT_MS') +
       2000, `${shown('CHECKOUT_RESERVE_WAIT_MS')} must be at least ${shown('CHECKOUT_TRY_TIMEOUT_MS')} + 2000`);

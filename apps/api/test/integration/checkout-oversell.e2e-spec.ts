@@ -15,21 +15,19 @@ import { newPrincipalToken } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 
 // N distinct buyers race POST /orders for the last unit(s). Each has its own user, cart, and
-// Idempotency-Key, so only STOCK contends. Asserted on outcomes, not timing.
-//
-// > pool max (10) so the DB, not the app, decides the race. Each Try holds its stock row lock in a
-// transaction that waits on nothing else, so the race cannot deadlock.
+// Idempotency-Key, so only STOCK contends. Asserted on outcomes, not timing. The lock strategies are
+// the inventory-service's to race (its `reservations-oversell`); this is the order side of losing.
 const CONTENDERS = 16;
 
 const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
 
-describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%s]', (strategy) => {
+describe('Checkout oversell race', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithPool({ INVENTORY_LOCK_STRATEGY: strategy }));
+    ({ app, pool, db } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
@@ -92,10 +90,6 @@ describe.each(['pessimistic', 'optimistic'] as const)('Checkout oversell race [%
     await expectSoldOut(variantId, 1);
   });
 
-  // K equals the default optimistic retry budget (3) on purpose: every CAS miss implies a rival's
-  // reserving bump, so K misses exhaust the K units and the next re-read sees available=0, a
-  // terminal 409, before the budget is spent, leaving no slot unclaimed. With K above the budget a
-  // contender could 409 as a conflict with a slot still open.
   it('sells K units to exactly K of more buyers, flooring available at 0', async () => {
     const K = 3;
     const { variantId, statuses } = await race(K, CONTENDERS);

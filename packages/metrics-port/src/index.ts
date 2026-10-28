@@ -37,7 +37,8 @@ export type ConsumeResult = 'processed' | 'duplicate' | 'failed';
 export type DeadLetterReason = 'permanent' | 'attempts_exhausted';
 
 /** A checkout saga activity that calls a participant. */
-export type SagaStep = 'try_reserve' | 'commit_stock' | 'capture_payment' | 'release_stock' | 'restock' | 'cancel_payment';
+export type SagaStep =
+  'try_reserve' | 'commit_stock' | 'capture_payment' | 'release_stock' | 'restock' | 'cancel_payment';
 
 /** The participant's own outcome, lower-cased; `error` is a call that threw and will be retried. */
 export type SagaStepOutcome =
@@ -67,11 +68,7 @@ export type CompensationReason =
   | 'late_authorization';
 
 export type CheckoutInvariantKind =
-  | 'captured_without_paid'
-  | 'paid_without_capture'
-  | 'paid_without_commit'
-  | 'orphan_hold'
-  | 'authorized_on_dead_order';
+  'captured_without_paid' | 'paid_without_capture' | 'paid_without_commit' | 'orphan_hold' | 'authorized_on_dead_order';
 
 export type InvariantCheckResult = 'ok' | 'violations' | 'error';
 

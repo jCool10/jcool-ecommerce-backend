@@ -62,8 +62,8 @@ export default () => ({
     audience: process.env.JWT_AUDIENCE,
   },
   userService: {
-    internalUrl: process.env.USER_SERVICE_INTERNAL_URL,
-    internalApiToken: process.env.INTERNAL_API_TOKEN,
+    url: process.env.USER_SERVICE_INTERNAL_URL,
+    token: process.env.INTERNAL_API_TOKEN,
     // Sits on the request path whenever an epoch misses Redis.
     timeoutMs: parseIntOr(process.env.USER_SERVICE_TIMEOUT_MS, 500),
   },
@@ -71,6 +71,12 @@ export default () => ({
     url: process.env.ID_SERVICE_URL,
     // Covers the gateway's retries across replicas, not one attempt.
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
+  },
+  inventoryService: {
+    url: process.env.INVENTORY_SERVICE_URL,
+    token: process.env.INVENTORY_SERVICE_TOKEN,
+    // Commit, release, restock and status; a Try is bounded by checkoutSaga.tryTimeoutMs instead.
+    commandTimeoutMs: parseIntOr(process.env.INVENTORY_COMMAND_TIMEOUT_MS, 5_000),
   },
   userDirectory: {
     notFoundGrace: process.env.USER_DIRECTORY_NOT_FOUND_GRACE ?? '10m',
@@ -186,21 +192,5 @@ export default () => ({
     maxBytes: parseIntOr(process.env.MEDIA_MAX_BYTES, 5 * 1024 * 1024),
   },
   ...resilienceConfig(),
-  inventory: {
-    // 'pessimistic' (SELECT ... FOR UPDATE) or 'optimistic' (version CAS + retry).
-    lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',
-    // Re-CAS attempts after losing a version race before giving up with a 409 (0 = never retry).
-    // Real shortfalls never consume a retry. A NaN budget would leave the CAS loop unbounded, so
-    // this must never fall through to a bare parseInt.
-    optimisticMaxRetries: parseIntOr(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES, 3),
-    // Budget of a whole participant Try, counted from the moment it is entered: id minting, the pool
-    // wait and every lock wait spend it. Commit/release/restock and the lapsed-hold sweep reuse it per tx.
-    tryLockTimeoutMs: parseIntOr(process.env.INVENTORY_TRY_LOCK_TIMEOUT_MS, 2_000),
-    holdSweep: {
-      enabled: process.env.INVENTORY_HOLD_SWEEP_ENABLED !== 'false',
-      intervalMs: parseIntOr(process.env.INVENTORY_HOLD_SWEEP_INTERVAL_MS, 60_000),
-      batchSize: parseIntOr(process.env.INVENTORY_HOLD_SWEEP_BATCH_SIZE, 50),
-    },
-  },
   ...checkoutSagaConfig(),
 });

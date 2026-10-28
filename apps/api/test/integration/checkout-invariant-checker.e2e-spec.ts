@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import type { ReservationOrderStatus } from '@jcool/internal-contracts';
 import {
   ORDER_PAYMENT_PARTICIPANT,
   type OrderPaymentParticipantPort,
@@ -16,6 +17,7 @@ import { eventually } from '../setup/eventually';
 import { failAlways, releaseHung, sagaEngine } from '../setup/fixtures/checkout-saga.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
+import { inventoryServiceStub } from '../setup/inventory-service-stub';
 import { E2E_METRICS_TOKEN, scrapeMetrics } from '../setup/metrics.helper';
 
 const PRICE = 90_000;
@@ -28,7 +30,7 @@ const CHECKER_ENV = {
 const NONE = Object.fromEntries(CHECKOUT_INVARIANT_KINDS.map((kind) => [kind, 0])) as CheckoutInvariantCounts;
 
 type OrderStatus = (typeof schema.orderStatus.enumValues)[number];
-type StockHeader = (typeof schema.reservationOrderStatus.enumValues)[number];
+type StockHeader = ReservationOrderStatus;
 type PaymentHeader = (typeof schema.paymentOrderStatus.enumValues)[number];
 
 interface SettledSeed {
@@ -61,8 +63,8 @@ describe('Checkout invariant checker (integration, real Postgres and Temporal)',
 
   const check = () => app.get(RunCheckoutInvariantsUseCase).execute();
 
-  // Straight into the tables, with no saga behind it: the checker must read what is there, however
-  // it got there.
+  // Straight into the tables and the inventory stub, with no saga behind it: the checker must read
+  // what is there, however it got there.
   async function seedSettled(status: OrderStatus, seed: SettledSeed = {}): Promise<string> {
     const orderId = testId();
     const finalizedAt = seed.finalizedAt ?? new Date(Date.now() - 60_000);
@@ -79,7 +81,7 @@ describe('Checkout invariant checker (integration, real Postgres and Temporal)',
       paymentDeadlineAt: seed.sagaOrder === false ? null : new Date(placedAt.getTime() + 3_600_000),
     });
     if (seed.stock) {
-      await db.insert(schema.reservationOrders).values({ orderId, status: seed.stock, holdUntil: null });
+      (await inventoryServiceStub()).setHeader(orderId, seed.stock);
     }
     if (seed.payment) {
       await db.insert(schema.paymentOrders).values({

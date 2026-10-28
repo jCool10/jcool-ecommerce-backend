@@ -8,6 +8,7 @@ const ID_SERVICE_PORT = '3000';
 const ID_LB_PORT = '4000';
 const ID_ETCD_PORT = '2379';
 const USER_SERVICE_PORT = '3000';
+const INVENTORY_SERVICE_PORT = '3000';
 const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
 const LOKI_PORT = '3100';
@@ -59,6 +60,9 @@ const USER_SERVICE_VARIABLES = [
   'IDENTITY_PIN_BOOTSTRAP',
   'INTERNAL_API_TOKEN',
   'INTERNAL_API_TOKEN_PREVIOUS',
+  // The inventory-service's caller token, allowed to read session epochs only.
+  'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE',
+  'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS',
   'JWT_ACCESS_TTL',
   'JWT_AUDIENCE',
   'JWT_ES256_ACTIVE_KID',
@@ -71,6 +75,9 @@ const USER_SERVICE_VARIABLES = [
   'SMTP_URL',
   'THROTTLE_ENABLED',
 ];
+
+// The api's caller token, pair and rotation slot; the api references the first one.
+const INVENTORY_SERVICE_VARIABLES = ['INTERNAL_CALLER_TOKEN_API', 'INTERNAL_CALLER_TOKEN_API_PREVIOUS'];
 
 const preserved = (names: string[]) => Object.fromEntries(names.map((name) => [name, preserve()]));
 
@@ -119,6 +126,9 @@ export default defineRailway(() => {
       AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
       // Every row id is minted there, through the gateway's internal load balancer.
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
+      // The checkout saga holds and settles stock there. Referenced like the user-service token.
+      INVENTORY_SERVICE_URL: `http://\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
+      INVENTORY_SERVICE_TOKEN: '${{inventory-service.INTERNAL_CALLER_TOKEN_API}}',
       LOKI_URL,
       // A user limited to products* (RUNBOOK); its password lives on the elasticsearch service.
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,
@@ -182,6 +192,7 @@ export default defineRailway(() => {
     env: {
       PORT: '8080',
       API_UPSTREAM: `tcp6/\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
+      INVENTORY_UPSTREAM: `tcp6/\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
       ID_SERVICE_HOST: idService.env.RAILWAY_PRIVATE_DOMAIN,
       ID_SERVICE_PORT,
       ID_LB_PORT,
@@ -225,6 +236,49 @@ export default defineRailway(() => {
       REDIS_URL,
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
       // Only ever reached over the private network.
+      TRUST_PROXY: 'fd12::/16',
+      SHUTDOWN_GRACE_PERIOD_MS: '5000',
+      LOKI_URL,
+    },
+  });
+
+  const inventoryPostgres = database('inventory-postgres', 'postgres', {
+    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    defaultMountPath: '/var/lib/postgresql/data',
+  });
+
+  // No source, like the id-service: CD uploads it. No domain: the gateway's INVENTORY_UPSTREAM and the
+  // api's internal calls are the only ways in.
+  const inventoryService = service('inventory-service', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/inventory-service/Dockerfile' },
+    deploy: {
+      numReplicas: 1,
+      // The seed only tops up variants with no row yet, and gives up quietly while the catalog is down.
+      preDeployCommand: ['node dist/database/pre-deploy-cli.js'],
+      healthcheckPath: '/health/ready',
+      healthcheckTimeout: 60,
+      restartPolicyMaxRetries: 5,
+      overlapSeconds: 20,
+      drainingSeconds: 15,
+    },
+    env: {
+      ...preserved(INVENTORY_SERVICE_VARIABLES),
+      NODE_ENV: 'production',
+      PORT: INVENTORY_SERVICE_PORT,
+      DATABASE_URL: inventoryPostgres.env.DATABASE_URL,
+      // The api's instance, for auth:* and the throttler.
+      REDIS_URL,
+      ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
+      // The admin routes verify what the user-service signed, as the api does.
+      AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
+      JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
+      JWT_AUDIENCE: '${{user-service.JWT_AUDIENCE}}',
+      USER_SERVICE_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
+      USER_SERVICE_TOKEN: '${{user-service.INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE}}',
+      // The seed reads the public catalog through the gateway, never the api directly.
+      CATALOG_PUBLIC_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:8080`,
+      // One token for every scrape target, so Prometheus needs only the one.
+      METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
       TRUST_PROXY: 'fd12::/16',
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
       LOKI_URL,
@@ -291,6 +345,7 @@ export default defineRailway(() => {
       // like a missing endpoint.
       METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
       API_TARGET: `\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
+      INVENTORY_TARGET: `\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
       LOKI_TARGET: `\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`,
     },
   });
@@ -351,6 +406,8 @@ export default defineRailway(() => {
       gateway,
       userPostgres,
       userService,
+      inventoryPostgres,
+      inventoryService,
       temporalPostgres,
       temporal,
       elasticsearchData,

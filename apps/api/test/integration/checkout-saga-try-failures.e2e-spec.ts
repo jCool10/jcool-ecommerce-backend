@@ -17,7 +17,7 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
 import { authHeader } from '../setup/bearer.helper';
 import { orderEventTypes } from '../setup/fixtures/checkout-saga.fixture';
-import { holdRowLock, readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
+import { readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
 import {
   addToCart,
   auditLedgerInvariants,
@@ -29,16 +29,14 @@ import {
 import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
+import { type InventoryServiceStub, inventoryServiceStub } from '../setup/inventory-service-stub';
 import { sleep } from '../setup/sleep';
 
 const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_try_failures_01';
 const TRY_TIMEOUT_MS = 3000;
 const RESERVE_WAIT_MS = 6000;
 const RETRY_AFTER_SEC = '5';
-// Just under the Try budget, so a Try stuck on a row lock outlives the budget instead of giving up
-// first with CONTENDED: the budget runs from placedAt and tx A has already spent some of it.
 const SAGA_ENV = {
-  INVENTORY_TRY_LOCK_TIMEOUT_MS: String(TRY_TIMEOUT_MS - 1),
   SAGA_RETRY_BASE_MS: '100',
   SAGA_RETRY_CAP_MS: '500',
 };
@@ -47,21 +45,18 @@ describe('Checkout saga Try failures (integration, real Temporal, real HTTP)', (
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
+  let inventoryService: InventoryServiceStub;
 
   beforeAll(async () => {
     ({ app, pool, db } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV));
+    inventoryService = await inventoryServiceStub();
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
     () => [app],
     () => pool,
   );
-  // Released here too: a test that times out never reaches its own release, and the held lock would
-  // stall every reset after it.
-  let unlockRow: (() => Promise<void>) | undefined;
-  afterEach(async () => {
-    await unlockRow?.();
-    unlockRow = undefined;
+  afterEach(() => {
     vi.restoreAllMocks();
   });
 
@@ -115,21 +110,20 @@ describe('Checkout saga Try failures (integration, real Temporal, real HTTP)', (
     expect((await auditLedgerInvariants(app)).violations).toEqual([]);
   });
 
-  it('answers 503 within the reserve wait when the Try outlives its budget, and fences the late Try', async () => {
+  it('answers 503 within the reserve wait when the Try hangs, fences it, and places a new order on a retry', async () => {
     const sku = await seedSellableSku(app, { onHand: 5 });
     const { userId, post } = await buyer(sku.variantId);
-    unlockRow = await holdRowLock(pool, 'SELECT 1 FROM stock_levels WHERE variant_id = $1 FOR UPDATE', [sku.variantId]);
+    inventoryService.hang('try');
 
     const startedAt = Date.now();
     expectUnavailable(await post().timeout(RESERVE_WAIT_MS + 2000));
     expect(Date.now() - startedAt).toBeLessThan(RESERVE_WAIT_MS);
     const [{ id: orderId }] = await ordersOf(userId);
     await untilOrderStatus(app, orderId, 'REJECTED');
-    await unlockRow();
-    unlockRow = undefined;
 
     expect((await readOrder(app, orderId)).finalizeReason).toBe('saga:try_timeout');
     await expect.poll(async () => (await readReservationOrder(app, orderId))?.status).toBe('FENCED');
+    expect(inventoryService.calls('release')).toBeGreaterThan(0);
     const inventory = app.get<OrderInventoryParticipantPort>(ORDER_INVENTORY_PARTICIPANT);
     await expect(
       inventory.tryReserve({
@@ -139,6 +133,9 @@ describe('Checkout saga Try failures (integration, real Temporal, real HTTP)', (
       }),
     ).resolves.toBe('CONFLICT');
     expect((await readStock(app, sku.variantId))?.quantityReserved).toBe(0);
+
+    const placed = await post().expect(201);
+    expect(placed.body.id).not.toBe(orderId);
     expect((await auditLedgerInvariants(app)).violations).toEqual([]);
   });
 

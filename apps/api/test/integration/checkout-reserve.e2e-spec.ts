@@ -8,13 +8,13 @@ import * as schema from '../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
-import { addToCart } from '../setup/fixtures/order-flow.fixture';
+import { getStockView, readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
+import { addToCart, reservationsFor } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 
 // POST /orders holds stock through the checkout saga's Try before it answers.
-describe('Checkout holds stock (integration, real Postgres)', () => {
+describe('Checkout holds stock (integration, inventory-service stub)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
@@ -30,12 +30,9 @@ describe('Checkout holds stock (integration, real Postgres)', () => {
 
   const server = () => app.getHttpServer();
 
-  async function stockOf(variantId: string): Promise<{ onHand: number; reserved: number }> {
-    const [row] = await db
-      .select({ onHand: schema.stockLevels.quantityOnHand, reserved: schema.stockLevels.quantityReserved })
-      .from(schema.stockLevels)
-      .where(eq(schema.stockLevels.variantId, variantId));
-    return row;
+  async function stockOf(variantId: string): Promise<{ onHand: number; reserved: number } | undefined> {
+    const view = await getStockView(app, variantId);
+    return view ? { onHand: view.onHand, reserved: view.reserved } : undefined;
   }
 
   it('refuses the whole checkout with 409 when one line is short, and holds nothing', async () => {
@@ -56,7 +53,7 @@ describe('Checkout holds stock (integration, real Postgres)', () => {
     expect(list.body.items).toEqual([]);
     expect(await stockOf(a.variantId)).toEqual({ onHand: 5, reserved: 0 });
     expect(await stockOf(b.variantId)).toEqual({ onHand: 1, reserved: 0 });
-    expect(await db.select().from(schema.reservations)).toHaveLength(0);
+    expect(await reservationsFor(app, orders[0].id)).toEqual([]);
   });
 
   it('holds stock on a successful checkout under a participant header for the order', async () => {

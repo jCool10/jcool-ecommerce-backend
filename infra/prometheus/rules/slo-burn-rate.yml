@@ -10,8 +10,8 @@
 # 5xx from *inside* a guard (e.g. the jwt denylist Redis lookup failing) are NOT counted in
 # http_requests_total — the availability numerator misses that class of outage. To cover all
 # ingress, move RED to a res.on('finish') hook or add a guard-origin counter in
-# HttpExceptionFilter. Note too: the recording rules below aggregate globally (single scrape
-# job); add `by (job)` if a second job is ever scraped.
+# HttpExceptionFilter. Note too: the recording rules below read the api's job alone, and leave out
+# /internal/* service-to-service calls, so a second scraped service never mixes into the SLI.
 groups:
   - name: http-slo-recordings
     interval: 15s
@@ -19,27 +19,27 @@ groups:
       # Error = 5xx. Ratio of 5xx to all requests over several windows (job-wide).
       - record: job:http_request_error_rate:ratio5m
         expr: |
-          sum(rate(http_requests_total{status_code=~"5.."}[5m]))
-          / sum(rate(http_requests_total[5m]))
+          sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*", status_code=~"5.."}[5m]))
+          / sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*"}[5m]))
       - record: job:http_request_error_rate:ratio30m
         expr: |
-          sum(rate(http_requests_total{status_code=~"5.."}[30m]))
-          / sum(rate(http_requests_total[30m]))
+          sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*", status_code=~"5.."}[30m]))
+          / sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*"}[30m]))
       - record: job:http_request_error_rate:ratio1h
         expr: |
-          sum(rate(http_requests_total{status_code=~"5.."}[1h]))
-          / sum(rate(http_requests_total[1h]))
+          sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*", status_code=~"5.."}[1h]))
+          / sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*"}[1h]))
       - record: job:http_request_error_rate:ratio6h
         expr: |
-          sum(rate(http_requests_total{status_code=~"5.."}[6h]))
-          / sum(rate(http_requests_total[6h]))
+          sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*", status_code=~"5.."}[6h]))
+          / sum(rate(http_requests_total{job="jcool-api", route!~"/internal/.*"}[6h]))
       # p99 latency per route. histogram_quantile over the summed bucket rate BY le — the
       # only correct way (averaging a pre-computed quantile is wrong: quantiles don't average).
       - record: route:http_request_duration_seconds:p99
         expr: |
           histogram_quantile(
             0.99,
-            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)
+            sum(rate(http_request_duration_seconds_bucket{job="jcool-api", route!~"/internal/.*"}[5m])) by (le, route)
           )
 
   - name: http-latency-slo-recordings
@@ -52,27 +52,27 @@ groups:
       - record: job:http_request_latency_violation:ratio5m
         expr: |
           (
-            sum(rate(http_request_duration_seconds_count[5m]))
-            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[5m]))
-          ) / sum(rate(http_request_duration_seconds_count[5m]))
+            sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[5m]))
+            - sum(rate(http_request_duration_seconds_bucket{job="jcool-api", route!~"/internal/.*", le="0.25"}[5m]))
+          ) / sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[5m]))
       - record: job:http_request_latency_violation:ratio30m
         expr: |
           (
-            sum(rate(http_request_duration_seconds_count[30m]))
-            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[30m]))
-          ) / sum(rate(http_request_duration_seconds_count[30m]))
+            sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[30m]))
+            - sum(rate(http_request_duration_seconds_bucket{job="jcool-api", route!~"/internal/.*", le="0.25"}[30m]))
+          ) / sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[30m]))
       - record: job:http_request_latency_violation:ratio1h
         expr: |
           (
-            sum(rate(http_request_duration_seconds_count[1h]))
-            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[1h]))
-          ) / sum(rate(http_request_duration_seconds_count[1h]))
+            sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[1h]))
+            - sum(rate(http_request_duration_seconds_bucket{job="jcool-api", route!~"/internal/.*", le="0.25"}[1h]))
+          ) / sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[1h]))
       - record: job:http_request_latency_violation:ratio6h
         expr: |
           (
-            sum(rate(http_request_duration_seconds_count[6h]))
-            - sum(rate(http_request_duration_seconds_bucket{le="0.25"}[6h]))
-          ) / sum(rate(http_request_duration_seconds_count[6h]))
+            sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[6h]))
+            - sum(rate(http_request_duration_seconds_bucket{job="jcool-api", route!~"/internal/.*", le="0.25"}[6h]))
+          ) / sum(rate(http_request_duration_seconds_count{job="jcool-api", route!~"/internal/.*"}[6h]))
 
   - name: http-slo-burn-rate-alerts
     rules:

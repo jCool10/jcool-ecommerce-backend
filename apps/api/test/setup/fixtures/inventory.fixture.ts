@@ -1,10 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
-import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
-import * as schema from '../../../src/shared/infrastructure/database/schema';
-import { testId } from '../id-service-stub';
+import { type StubHeader, inventoryServiceStub } from '../inventory-service-stub';
 import { sleep } from '../sleep';
+
+// Stock is the inventory-service's, so these arrange and read it on the worker's stub. The unused app
+// argument keeps every caller unchanged.
 
 const LOCK_POLL_MS = 20;
 const LOCK_WAIT_TIMEOUT_MS = 5_000;
@@ -22,31 +22,20 @@ export interface StockView {
 }
 
 export async function seedStock(
-  app: INestApplication,
+  _app: INestApplication,
   variantId: string,
   onHand: number,
   reserved = 0,
 ): Promise<SeededStock> {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  await db
-    .insert(schema.stockLevels)
-    .values({ id: testId(), variantId, quantityOnHand: onHand, quantityReserved: reserved })
-    .onConflictDoUpdate({
-      target: schema.stockLevels.variantId,
-      set: { quantityOnHand: onHand, quantityReserved: reserved },
-    });
+  (await inventoryServiceStub()).seedStock(variantId, onHand, reserved);
   return { variantId, onHand, reserved };
 }
 
 /** `available` is the invariant a race must keep >= 0. */
-export async function getStockView(app: INestApplication, variantId: string): Promise<StockView | null> {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const [row] = await db
-    .select({ onHand: schema.stockLevels.quantityOnHand, reserved: schema.stockLevels.quantityReserved })
-    .from(schema.stockLevels)
-    .where(eq(schema.stockLevels.variantId, variantId));
-  if (!row) return null;
-  return { onHand: row.onHand, reserved: row.reserved, available: row.onHand - row.reserved };
+export async function getStockView(_app: INestApplication, variantId: string): Promise<StockView | null> {
+  const level = (await inventoryServiceStub()).stockOf(variantId);
+  if (!level) return null;
+  return { onHand: level.onHand, reserved: level.reserved, available: level.onHand - level.reserved };
 }
 
 /**
@@ -96,46 +85,11 @@ export async function releaseOnceBlocked(
 }
 
 /** The order's participant header, or undefined when no command ever reached it. */
-export async function readReservationOrder(app: INestApplication, orderId: string) {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const [row] = await db.select().from(schema.reservationOrders).where(eq(schema.reservationOrders.orderId, orderId));
-  return row;
-}
-
-/** Moves the header's `hold_until` into the past, the one thing a sweep test cannot wait for. */
-export async function lapseHoldHeader(app: INestApplication, orderId: string, minutesAgo = 30): Promise<void> {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  await db
-    .update(schema.reservationOrders)
-    .set({ holdUntil: new Date(Date.now() - minutesAgo * 60_000) })
-    .where(eq(schema.reservationOrders.orderId, orderId));
-}
-
-/**
- * Runs `lockSql` (a `SELECT ... FOR UPDATE`) in a transaction of its own and keeps it open, so a test
- * can make a command wait on that lock for as long as it likes. The returned function rolls back.
- */
-export async function holdRowLock(pool: Pool, lockSql: string, params: unknown[]): Promise<() => Promise<void>> {
-  const client = await pool.connect();
-  await client.query('BEGIN');
-  await client.query(lockSql, params);
-  return async () => {
-    await client.query('ROLLBACK');
-    client.release();
-  };
-}
-
-/** Clients handed out and not yet returned; a command that leaks one leaves this above its baseline. */
-export function checkedOutConnections(pool: Pool): number {
-  return pool.totalCount - pool.idleCount;
+export async function readReservationOrder(_app: INestApplication, orderId: string): Promise<StubHeader | undefined> {
+  return (await inventoryServiceStub()).headerOf(orderId);
 }
 
 /** Must equal the number of winning holds after a race. */
-export async function countHeldReservations(app: INestApplication, variantId: string): Promise<number> {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const rows = await db
-    .select({ id: schema.reservations.id })
-    .from(schema.reservations)
-    .where(and(eq(schema.reservations.variantId, variantId), eq(schema.reservations.status, 'HELD')));
-  return rows.length;
+export async function countHeldReservations(_app: INestApplication, variantId: string): Promise<number> {
+  return (await inventoryServiceStub()).heldCount(variantId);
 }

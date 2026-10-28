@@ -2,7 +2,7 @@
 //
 // N concurrent buyers against a single SKU under both reservation strategies at identical offered
 // load. The claim being measured is NOT "our lock prevents oversell" — the database already does
-// that (stock.schema.ts:40, check ck_stock_no_oversell), and a wrong app-layer lock would be
+// that (the inventory-service's stock.schema.ts, check ck_stock_no_oversell), and a wrong app-layer lock would be
 // REJECTED by Postgres and surface as a 500, not as an oversell. The publishable claim is:
 //
 //   Under N-way contention on one SKU, both strategies keep the DB invariant intact and surface
@@ -29,22 +29,28 @@
 // Plus, PER ARM, reset the contended SKU first — a load run never releases its holds, so a
 // carried-over quantity_reserved makes the next arm start partly sold out and look slower for no
 // reason. PENDING orders of an earlier arm keep their accounts at the cap until their payment
-// deadline, so give each arm its own EMAIL_PREFIX:
+// deadline, so give each arm its own EMAIL_PREFIX. Stock lives in the inventory-service's database
+// (compose: postgresql://inventory:inventory@localhost:5435/inventory), orders in the api's (5433):
 //
-//   DELETE FROM reservation_orders WHERE order_id IN (SELECT order_id FROM order_items WHERE sku_id = '<SKU_ID>');
+//   -- inventory-postgres
+//   DELETE FROM reservation_orders WHERE order_id IN (SELECT order_id FROM reservations WHERE variant_id = '<SKU_ID>');
 //   DELETE FROM reservations WHERE variant_id = '<SKU_ID>';
-//   DELETE FROM orders WHERE status IN ('RESERVING', 'REJECTED')
-//    AND id IN (SELECT order_id FROM order_items WHERE sku_id = '<SKU_ID>');
 //   -- MODE=c1 (abundant → every stock 409 is contention)
 //   UPDATE stock_levels SET quantity_on_hand = 1000000, quantity_reserved = 0, version = 0
 //    WHERE variant_id = '<SKU_ID>';
 //   -- MODE=c2 (finite, K=500 → the invariant assertion)
 //   UPDATE stock_levels SET quantity_on_hand = 500, quantity_reserved = 0, version = 0
 //    WHERE variant_id = '<SKU_ID>';
+//   -- the api's postgres
+//   DELETE FROM orders WHERE status IN ('RESERVING', 'REJECTED')
+//    AND id IN (SELECT order_id FROM order_items WHERE sku_id = '<SKU_ID>');
 //
-// After a c2 arm, assert in SQL (no metric exists for either):
+// After a c2 arm, assert in SQL on inventory-postgres (no metric exists for any of them); the last
+// two must both equal K, one single-line order per hold:
 //   SELECT quantity_on_hand, quantity_reserved, version FROM stock_levels WHERE variant_id = '<SKU_ID>';
 //   SELECT count(*) FROM reservations WHERE variant_id = '<SKU_ID>' AND status = 'HELD';
+//   SELECT count(*) FROM reservation_orders WHERE status = 'HELD'
+//    AND order_id IN (SELECT order_id FROM reservations WHERE variant_id = '<SKU_ID>');
 // The `version` delta across a c1 optimistic arm is a direct count of successful CAS bumps — the
 // closest thing to a retry metric available without app changes. Capture it before and after.
 //
@@ -144,7 +150,7 @@ export function setup() {
   }
   console.log(
     `strategy=${STRATEGY} mode=${MODE} sku=${skuId} rate=${RATE}/s duration=${DURATION} pool=${POOL}` +
-      ` — confirm INVENTORY_LOCK_STRATEGY from the app startup log, not from this label`,
+      ` — confirm INVENTORY_LOCK_STRATEGY from the inventory-service startup log, not from this label`,
   );
   return { skuId, tokens };
 }

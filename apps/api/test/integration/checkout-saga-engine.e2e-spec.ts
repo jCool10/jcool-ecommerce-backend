@@ -35,7 +35,7 @@ import {
   sagaEngine,
   sagaWorker,
 } from '../setup/fixtures/checkout-saga.fixture';
-import { holdRowLock, readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
+import { readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
 import {
   postWebhook,
   readOrder,
@@ -45,6 +45,7 @@ import {
 } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
+import { type InventoryServiceStub, inventoryServiceStub } from '../setup/inventory-service-stub';
 import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
 import { sleep } from '../setup/sleep';
 import { temporalTaskQueueForCurrentSpec } from '../setup/temporal-task-queue';
@@ -67,7 +68,7 @@ const SHORT_DEADLINE_ENV = {
   CHECKOUT_RESERVE_WAIT_MS: '3000',
   CHECKOUT_CANCEL_WAIT_MS: '3000',
   CHECKOUT_RESERVING_ORPHAN_SEC: '4',
-  INVENTORY_TRY_LOCK_TIMEOUT_MS: '500',
+  INVENTORY_COMMAND_TIMEOUT_MS: '2000',
   SAGA_AUTH_GRACE_SEC: '1',
   SAGA_ACTIVITY_TIMEOUT_MS: '8000',
   PAYMENT_CAPTURE_TIMEOUT_MS: '500',
@@ -98,11 +99,13 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
   let pool: Pool;
   let db: DrizzleDB;
   let gateway: FakeSignerGatewayAdapter;
+  let inventoryService: InventoryServiceStub;
   // Apps a nested describe opens next to the main one; the reset drains their workers too.
   const extraApps: INestApplication[] = [];
 
   beforeAll(async () => {
     ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV));
+    inventoryService = await inventoryServiceStub();
     await workerRunning(app);
   });
   closeAppAfterAll(() => app);
@@ -212,21 +215,18 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
     expect(await reservedOf(variantId)).toBe(0);
   });
 
-  it('answers TIMEOUT within the Try budget when stock is locked, and fences the late Try', async () => {
-    // Most of the budget already spent, so the Try times out before the participant gives up on the lock.
+  it('answers TIMEOUT within the Try budget when the inventory-service hangs, and fences the late Try', async () => {
+    // Most of the budget already spent, so the activity's deadline ends the Try before the adapter's own.
     const { orderId, variantId, start } = await placeReserving({ placedAgoMs: 1500 });
-    const unlock = await holdRowLock(pool, 'SELECT 1 FROM stock_levels WHERE variant_id = $1 FOR UPDATE', [variantId]);
+    const hung = inventoryService.hang('try');
 
-    try {
-      const startedAt = Date.now();
-      await expect(sagaEngine(app).reserve(start)).resolves.toBe('TIMEOUT');
-      expect(Date.now() - startedAt).toBeLessThan(TRY_TIMEOUT_MS + 1000);
-      expect(await orderStatus(orderId)).toBe('REJECTED');
-      // Still locked: the abandoned Try gives up on its own, so the release fences an order with no hold.
-      expect(await saga(orderId).result()).toBe('COMPENSATED');
-    } finally {
-      await unlock();
-    }
+    const startedAt = Date.now();
+    await expect(sagaEngine(app).reserve(start)).resolves.toBe('TIMEOUT');
+    await hung.reached;
+    expect(Date.now() - startedAt).toBeLessThan(TRY_TIMEOUT_MS + 1000);
+    expect(await orderStatus(orderId)).toBe('REJECTED');
+    // The hung Try never lands, so the release fences an order with no hold.
+    expect(await saga(orderId).result()).toBe('COMPENSATED');
 
     expect((await readReservationOrder(app, orderId))?.status).toBe('FENCED');
     await expect(
@@ -235,7 +235,8 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
     expect(await reservedOf(variantId)).toBe(0);
   });
 
-  it('never holds while the pool is exhausted, and rejects the order once it frees up', async () => {
+  // The hold is the inventory-service's, so a starved pool here only delays writing the result down.
+  it('keeps the hold while the pool is exhausted, and places the order once it frees up', async () => {
     const { orderId, variantId, start } = await placeReserving();
     const clients: PoolClient[] = await Promise.all(Array.from({ length: DB_POOL_MAX }, () => pool.connect()));
 
@@ -250,10 +251,9 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
     }
 
     expect(Date.now() - startedAt).toBeLessThan(RESERVE_WAIT_MS + 1000);
-    if (answer !== 'TIMEOUT') expect(answer).toBeInstanceOf(CheckoutEngineUnavailableError);
-    await untilOrderIs(orderId, 'REJECTED');
-    expect(await saga(orderId).result()).toBe('COMPENSATED');
-    expect(await reservedOf(variantId)).toBe(0);
+    if (answer !== 'HELD') expect(answer).toBeInstanceOf(CheckoutEngineUnavailableError);
+    await untilOrderIs(orderId, 'PENDING');
+    expect(await reservedOf(variantId)).toBe(1);
   });
 
   it('keeps reserving while slow captures fill every regular activity slot', async () => {

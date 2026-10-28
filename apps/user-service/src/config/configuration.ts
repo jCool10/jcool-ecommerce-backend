@@ -10,6 +10,7 @@ import {
   retentionConfig,
   throttleConfig,
 } from '@jcool/platform/config';
+import { acceptedTokens, callerTokensFromEnv } from '@jcool/platform/internal-api';
 
 export default () => ({
   ...appConfig(),
@@ -37,9 +38,11 @@ export default () => ({
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
   },
   internalApi: {
-    tokens: [process.env.INTERNAL_API_TOKEN, process.env.INTERNAL_API_TOKEN_PREVIOUS].filter((token): token is string =>
-      Boolean(token),
-    ),
+    callers: {
+      // The api keeps the name it had before tokens were per caller.
+      api: acceptedTokens(process.env.INTERNAL_API_TOKEN, process.env.INTERNAL_API_TOKEN_PREVIOUS),
+      ...callerTokensFromEnv(['inventory-service']),
+    },
   },
   sessionEpoch: {
     // Off only where a test drives the pass itself.

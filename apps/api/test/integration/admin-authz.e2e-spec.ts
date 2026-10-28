@@ -41,9 +41,6 @@ const ADMIN_ROUTES: Route[] = [
   ['post', `/admin/products/${ID}/images`],
   ['patch', `/admin/products/${ID}/images`],
   ['delete', `/admin/products/${ID}/images/${ID}`],
-  ['get', `/admin/inventory/${ID}`],
-  ['put', `/admin/inventory/${ID}`],
-  ['post', `/admin/inventory/${ID}/adjust`],
   ['post', '/admin/media/uploads'],
   ['post', `/admin/media/uploads/${ID}/complete`],
 ];

@@ -5,6 +5,9 @@
 //   - stack up:  docker compose --profile observability up -d
 //   - perf user seeded, then catalog at perf scale:  pnpm db:seed:perf-user && pnpm db:seed:perf
 //     (the api seed resolves the user by logging in to user-service)
+//   - then the catalog cache bump and the stock seed its last log line prints, in that order: the stock
+//     seed lists the public catalog, which serves the pre-seed generation until the bump. Without stock
+//     every perf SKU answers 409 OUT_OF_STOCK.
 //   - THROTTLE_ENABLED=false — every measured route is throttled otherwise:
 //     /auth/* at 20 req/60s per IP with a FIVE-MINUTE block once tripped, and POST /orders
 //     at 10 req/60s PER USER (apps/api/src/shared/infrastructure/throttler/throttler.constants.ts:24-45).

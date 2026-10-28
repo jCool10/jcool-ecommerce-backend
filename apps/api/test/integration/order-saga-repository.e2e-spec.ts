@@ -15,6 +15,7 @@ import { OrderItem } from '../../src/modules/order/domain/order-item.entity';
 import { OrderStatus } from '../../src/modules/order/domain/order-status';
 import { Order } from '../../src/modules/order/domain/order.entity';
 import { MAX_PENDING_ORDERS_PER_USER } from '../../src/modules/order/order.constants';
+import { reservationsFor } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 
@@ -104,8 +105,7 @@ describe('Order repository: saga writes (integration, real Postgres)', () => {
       });
       expect((await repo.findById(orderId))?.items).toHaveLength(1);
       expect(await outboxFor(orderId)).toEqual([]);
-      const { rows } = await pool.query('SELECT 1 FROM reservations WHERE order_id = $1', [orderId]);
-      expect(rows).toEqual([]);
+      expect(await reservationsFor(app, orderId)).toEqual([]);
     });
 
     it('counts RESERVING, PENDING and CONFIRMING orders against the cap, and no settled one', async () => {

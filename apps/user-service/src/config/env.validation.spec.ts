@@ -62,6 +62,14 @@ describe('validate', () => {
     expect(answers).toEqual([true, true, 'accepted', 'accepted']);
   });
 
+  // A caller's token is set before that caller first deploys, so its absence must still boot.
+  it('takes the inventory-service caller tokens as optional, but never short', () => {
+    const names = ['INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE', 'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS'];
+
+    expect(names.map((name) => refusal({ ...BASE, [name]: 'i'.repeat(32) }))).toEqual([null, null]);
+    expect(names.filter((name) => refusal({ ...BASE, [name]: 'i'.repeat(31) })?.includes(name))).toEqual(names);
+  });
+
   it('requires TRUST_PROXY and APP_PUBLIC_URL in production', () => {
     expect(refusal({ ...BASE, NODE_ENV: 'production' })).toContain('TRUST_PROXY, APP_PUBLIC_URL');
     expect(

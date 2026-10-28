@@ -1,6 +1,6 @@
 import { useFakeClock } from '@jcool/testing/fake-clock';
 import { PermanentError } from '@shared/messaging/errors';
-import type { UserServiceClient } from '@shared/user-service/user-service.client';
+import type { UserServiceClient } from '@jcool/auth-verifier/session-state';
 import { RemoteUserContactAdapter, UserNotYetInDirectoryError } from './user-contact.adapters';
 
 const USER_ID = '0199a3b2-7c4d-8e5f-9a0b-1c2d3e4f5a6b';

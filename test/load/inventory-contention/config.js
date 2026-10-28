@@ -4,8 +4,8 @@ import { LOAD_EMAIL_DOMAIN, discoverSkus, discoverSlugs } from '../shared/config
 
 export { BASE, JSON_HDR, authHeaders, mintToken, toSeconds, uuidv4 } from '../shared/config.js';
 
-// Labels the artifact directory only. The strategy is selected by the APP's env
-// (INVENTORY_LOCK_STRATEGY=pessimistic|optimistic) and must be confirmed from the startup config
+// Labels the artifact directory only. The strategy is selected by the inventory-service's env
+// (INVENTORY_LOCK_STRATEGY=pessimistic|optimistic) and must be confirmed from its startup config
 // log — both strategies bump stock_levels.version, so the counter alone cannot tell them apart.
 export const STRATEGY = __ENV.STRATEGY || 'pessimistic';
 

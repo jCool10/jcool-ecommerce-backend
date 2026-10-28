@@ -1,5 +1,5 @@
-# Alerts for Prometheus losing the api. Every absent-metrics alert goes quiet while the api is not
-# scraped, on purpose, so this one owns that case.
+# Alerts for Prometheus losing a service. Every absent-metrics alert goes quiet while its service is
+# not scraped, on purpose, so these own that case.
 groups:
   - name: scrape-targets
     rules:
@@ -13,3 +13,12 @@ groups:
         annotations:
           summary: 'Prometheus has not scraped the api for 5 minutes'
           description: 'The api is down, unreachable from Prometheus, or refusing the metrics token, and every api alert, the absent-metrics ones included, is blind until it is scraped again. RUNBOOK → The checkout saga → ApiScrapeDown.'
+
+      - alert: InventoryScrapeDown
+        expr: up{job="jcool-inventory"} == 0 or absent(up{job="jcool-inventory"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the inventory-service for 5 minutes'
+          description: 'The inventory-service is down, unreachable from Prometheus, or refusing the metrics token. Down, it stops every checkout from holding stock; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → InventoryScrapeDown.'

@@ -4,7 +4,7 @@ export * from '../../../../modules/product/infrastructure/catalog/schema/catalog
 export * from '../../../../modules/cart/infrastructure/schema/cart.schema';
 export * from '../../../../modules/order/infrastructure/schema/order.schema';
 export * from '../../../../modules/order/infrastructure/schema/idempotency-key.schema';
-export * from '../../../../modules/product/infrastructure/stock/schema/stock.schema';
+export * from './retired/stock.schema';
 export * from '../../../../modules/payment/infrastructure/schema/payment.schema';
 export * from '../../../../modules/media/infrastructure/schema/media.schema';
 // Not module tables: the outbox carries events from every context, the inbox records what a

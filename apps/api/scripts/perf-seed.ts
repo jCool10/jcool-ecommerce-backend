@@ -12,6 +12,9 @@
  *
  * The perf account itself lives in user-service (`db:seed:perf-user` there); its id is read back
  * over HTTP, the way any client learns it, so user-service must be running.
+ *
+ * Stock lives in the inventory-service: its `db:seed` gives every variant the public catalog lists a
+ * level, so it runs after this seed and the cache bump the final log line asks for.
  */
 import 'dotenv/config';
 import { and, eq, inArray, like, notInArray, sql } from 'drizzle-orm';
@@ -26,7 +29,6 @@ import {
 } from '../src/modules/product/infrastructure/catalog/schema/catalog.schema';
 import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/product/infrastructure/catalog/catalog-cache.keys';
 import { cartItems, carts } from '../src/modules/cart/infrastructure/schema/cart.schema';
-import { stockLevels } from '../src/modules/product/infrastructure/stock/schema/stock.schema';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';
@@ -64,9 +66,6 @@ const ARCHIVED_CATEGORIES = 2;
 // Postgres' 65535-parameter cap while keeping the statement count low.
 const CHUNK = 1000;
 const CURRENCY = 'VND';
-// Effectively unlimited on-hand: placement reserves stock and a load run never releases its holds,
-// so a realistic count would deplete mid-run and turn the write path into 409s.
-const STOCK_ON_HAND = 1_000_000_000;
 
 type Db = NodePgDatabase<Record<string, never>>;
 
@@ -194,7 +193,7 @@ async function seedVariants(
   return stored.map((v) => v.id);
 }
 
-async function seedPricesAndStock(db: Db, mint: ScriptsMint, variantIds: readonly string[]): Promise<void> {
+async function seedPrices(db: Db, mint: ScriptsMint, variantIds: readonly string[]): Promise<void> {
   const priceRows = variantIds.map((variantId, i) => ({
     id: mint(),
     variantId,
@@ -203,15 +202,6 @@ async function seedPricesAndStock(db: Db, mint: ScriptsMint, variantIds: readonl
   }));
   for (const chunk of chunks(priceRows, CHUNK)) {
     await db.insert(prices).values(chunk).onConflictDoNothing();
-  }
-
-  const stockRows = variantIds.map((variantId) => ({
-    id: mint(),
-    variantId,
-    quantityOnHand: STOCK_ON_HAND,
-  }));
-  for (const chunk of chunks(stockRows, CHUNK)) {
-    await db.insert(stockLevels).values(chunk).onConflictDoNothing();
   }
 }
 
@@ -275,11 +265,10 @@ async function clean(db: Db): Promise<void> {
   });
   if (userId) await db.delete(carts).where(eq(carts.userId, userId));
 
-  // Children before parents: prices and stock levels reference the variants being removed, and
-  // stock_levels has no FK to enforce that order for us.
+  // Children before parents. Their stock levels stay in the inventory-service, where nothing reads a
+  // level whose variant is gone.
   for (const chunk of chunks(variantIds, CHUNK)) {
     await db.delete(prices).where(inArray(prices.variantId, chunk));
-    await db.delete(stockLevels).where(inArray(stockLevels.variantId, chunk));
   }
   await db.delete(productVariants).where(like(productVariants.sku, `${SKU_PREFIX}%`));
   await db.delete(products).where(like(products.slug, `${PRODUCT_SLUG_PREFIX}%`));
@@ -321,15 +310,15 @@ async function main(): Promise<void> {
       console.log(`  products:   ${productIds.size}`);
       const variantIds = await seedVariants(db, mint, scale, productIds);
       console.log(`  variants:   ${variantIds.length}`);
-      await seedPricesAndStock(db, mint, variantIds);
-      console.log(`  prices + stock levels: ${variantIds.length} each`);
+      await seedPrices(db, mint, variantIds);
+      console.log(`  prices:     ${variantIds.length}`);
       return seedPerfUserCart(db, mint, cartLines);
     });
     console.log(`  cart:       ${cart.lines} lines for ${PERF_USER_EMAIL} (user ${cart.userId})`);
 
     // Autovacuum has not run yet, so without this the planner still describes the pre-seed table
     // and every EXPLAIN taken afterwards is read off stats for data that is no longer there.
-    await db.execute(sql`analyze categories, products, product_variants, prices, stock_levels, carts, cart_items`);
+    await db.execute(sql`analyze categories, products, product_variants, prices, carts, cart_items`);
     console.log('  analyzed:   planner stats refreshed');
 
     const secs = (Date.now() - startedAt) / 1000;
@@ -339,6 +328,7 @@ async function main(): Promise<void> {
         `Bump the catalog cache generation before measuring — a direct write does not invalidate it,\n` +
         `so reads keep being served from the generation cached before this seed:\n` +
         `  docker compose exec redis redis-cli INCR ${CATALOG_CACHE_VERSION_KEY}\n` +
+        `then give the new SKUs stock: pnpm --filter @jcool/inventory-service db:seed\n` +
         `Remove the synthetic rows with: npm run db:seed:perf -- --clean`,
     );
   } finally {

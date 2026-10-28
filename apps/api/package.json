@@ -45,6 +45,7 @@
     "@jcool/auth-verifier": "workspace:*",
     "@jcool/id-codec": "workspace:*",
     "@jcool/id-generator": "workspace:*",
+    "@jcool/internal-contracts": "workspace:*",
     "@jcool/kernel": "workspace:*",
     "@jcool/metrics-port": "workspace:*",
     "@jcool/platform": "workspace:*",

@@ -1,74 +1,17 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { referencedMetricNames } from '@jcool/testing/referenced-metric-names';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { createTestApp } from '../setup/test-app.factory';
 
 const INFRA = resolve(__dirname, '../../../../infra');
-const PROMQL_OPERATORS = new Set(['and', 'or', 'unless', 'offset', 'bool']);
 // Scraped from Prometheus itself, Loki and the id-service, not from the api.
 const NOT_THE_API = /^(up|loki_\w+|id_clock_\w+)$/;
-
-function filesIn(dir: string, extension: string): string[] {
-  return readdirSync(dir)
-    .filter((file) => file.endsWith(extension))
-    .map((file) => readFileSync(join(dir, file), 'utf8'));
-}
-
-function ruleExpressions(): string[] {
-  const exprs: string[] = [];
-  for (const text of filesIn(join(INFRA, 'prometheus/rules'), '.yml')) {
-    const lines = text.split('\n');
-    lines.forEach((line, i) => {
-      const match = /^(\s*)expr:\s*(.*)$/.exec(line);
-      if (!match) return;
-      if (!/^[|>]/.test(match[2])) {
-        exprs.push(match[2]);
-        return;
-      }
-      const indent = match[1].length;
-      for (let j = i + 1; j < lines.length && (lines[j].trim() === '' || lines[j].search(/\S/) > indent); j += 1) {
-        exprs.push(lines[j]);
-      }
-    });
-  }
-  return exprs;
-}
-
-function dashboardExpressions(): string[] {
-  const exprs: string[] = [];
-  const walk = (node: unknown): void => {
-    if (Array.isArray(node)) {
-      node.forEach(walk);
-    } else if (node !== null && typeof node === 'object') {
-      for (const [key, value] of Object.entries(node)) {
-        if (key === 'expr' && typeof value === 'string') exprs.push(value);
-        else walk(value);
-      }
-    }
-  };
-  for (const text of filesIn(join(INFRA, 'grafana/provisioning/dashboards'), '.json')) walk(JSON.parse(text));
-  return exprs;
-}
-
-// Skips functions (followed by a parenthesis) and recording rules (named with a colon).
-function metricNames(exprs: string[]): string[] {
-  const names = new Set<string>();
-  for (const expr of exprs) {
-    const bare = expr
-      .replace(/"[^"]*"/g, '')
-      .replace(/\{[^}]*\}/g, '')
-      .replace(/\[[^\]]*\]/g, '')
-      .replace(/\b(by|without|on|ignoring)\s*\([^)]*\)/g, '');
-    for (const token of bare.match(/(?<![\w.])[a-zA-Z_:][\w:]*(?![\w:]|\s*\()/g) ?? []) {
-      if (PROMQL_OPERATORS.has(token) || token.includes(':') || NOT_THE_API.test(token)) continue;
-      names.add(token.replace(/_(bucket|count|sum)$/, ''));
-    }
-  }
-  return [...names].sort();
-}
+// Recorded only by the inventory-service, which checks them on its own /metrics. Empty while no rule or
+// dashboard queries one.
+const OWNED_ELSEWHERE = new Set<string>();
 
 describe('Metrics endpoint (integration)', () => {
   let app: INestApplication;
@@ -90,7 +33,9 @@ describe('Metrics endpoint (integration)', () => {
   });
 
   it('describes every api metric the alert rules and dashboards query', async () => {
-    const referenced = metricNames([...ruleExpressions(), ...dashboardExpressions()]);
+    const referenced = referencedMetricNames(INFRA).filter(
+      (name) => !NOT_THE_API.test(name) && !OWNED_ELSEWHERE.has(name),
+    );
 
     const res = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 

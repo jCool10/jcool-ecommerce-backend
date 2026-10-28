@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./session-state": {
+      "types": "./dist/session-state/index.d.ts",
+      "default": "./dist/session-state/index.js"
     }
   },
   "scripts": {
@@ -24,16 +28,23 @@
   },
   "dependencies": {
     "@jcool/id-codec": "workspace:*",
+    "@jcool/kernel": "workspace:*",
+    "@jcool/metrics-port": "workspace:*",
     "@jcool/platform": "workspace:*",
     "jose": "^6.2.12"
   },
   "peerDependencies": {
     "@nestjs/common": "^11.0.1",
-    "@nestjs/core": "^11.0.1"
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.0.1",
+    "nestjs-cls": "^6.2.2",
+    "nestjs-pino": "^4.6.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@jcool/testing": "workspace:*",
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/testing": "^11.0.1",
@@ -47,6 +58,9 @@
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
     "globals": "^17.13.0",
+    "nestjs-cls": "^6.2.2",
+    "nestjs-pino": "^4.6.1",
+    "pino": "^10.3.1",
     "prettier": "^3.9.9",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",

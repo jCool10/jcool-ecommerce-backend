@@ -10,6 +10,8 @@ import { publishedEpoch } from '../setup/session-epoch.helper';
 import { inProcessIdGenerator } from '../setup/test-app.factory';
 
 const PREVIOUS_INTERNAL_API_TOKEN = 'e2e-internal-api-token-previous-not-a-secret-0';
+const INVENTORY_SERVICE_TOKEN = 'e2e-inventory-service-caller-token-not-a-secret';
+const PREVIOUS_INVENTORY_SERVICE_TOKEN = 'e2e-inventory-service-previous-token-not-a-secret';
 // Past the default tier's 100 per minute.
 const BURST = 150;
 
@@ -20,7 +22,11 @@ describe('Internal service-to-service API (integration)', () => {
   beforeAll(async () => {
     // On, so "never throttled" is a claim about the routes rather than about the harness.
     process.env.THROTTLE_ENABLED = 'true';
-    ({ app, pool } = await createTestAppWithPool({ INTERNAL_API_TOKEN_PREVIOUS: PREVIOUS_INTERNAL_API_TOKEN }));
+    ({ app, pool } = await createTestAppWithPool({
+      INTERNAL_API_TOKEN_PREVIOUS: PREVIOUS_INTERNAL_API_TOKEN,
+      INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE: INVENTORY_SERVICE_TOKEN,
+      INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS: PREVIOUS_INVENTORY_SERVICE_TOKEN,
+    }));
     await redisOf(app).flushdb();
   });
 
@@ -64,6 +70,25 @@ describe('Internal service-to-service API (integration)', () => {
 
       await internal(`/users/${user.id}/summary`, PREVIOUS_INTERNAL_API_TOKEN).expect(200);
       await internal(`/sessions/${user.id}/epoch`, PREVIOUS_INTERNAL_API_TOKEN).expect(200);
+    });
+  });
+
+  describe('caller allowlists', () => {
+    it('lets the api call every route', async () => {
+      const { user } = await createTestUser(app);
+
+      await internal(`/users/${user.id}/summary`).expect(200);
+      await internal(`/sessions/${user.id}/epoch`).expect(200);
+      await internal('/cutover/digest').expect(200);
+    });
+
+    it('lets the inventory-service read an epoch and nothing else', async () => {
+      const { user } = await createTestUser(app);
+
+      await internal(`/sessions/${user.id}/epoch`, INVENTORY_SERVICE_TOKEN).expect(200);
+      await internal(`/sessions/${user.id}/epoch`, PREVIOUS_INVENTORY_SERVICE_TOKEN).expect(200);
+      await internal(`/users/${user.id}/summary`, INVENTORY_SERVICE_TOKEN).expect(403);
+      await internal('/cutover/digest', INVENTORY_SERVICE_TOKEN).expect(403);
     });
   });
 

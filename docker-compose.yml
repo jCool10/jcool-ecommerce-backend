@@ -176,6 +176,9 @@ services:
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
+      # Stock lives there; the token is the inventory-service's INTERNAL_CALLER_TOKEN_API below.
+      INVENTORY_SERVICE_URL: http://inventory-service:3000
+      INVENTORY_SERVICE_TOKEN: local-api-to-inventory-token-not-a-secret-00
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: jcool
       TEMPORAL_TASK_QUEUE: checkout-saga
@@ -196,6 +199,9 @@ services:
       # The app boots without it, but its saga worker would only retry until it came up.
       temporal:
         condition: service_healthy
+      # Same: a checkout only answers 503 until it is up.
+      inventory-service:
+        condition: service_started
     # Probes with node (present in the image) because node:24-slim has no curl/wget.
     healthcheck:
       test:
@@ -411,8 +417,97 @@ services:
       REDIS_URL: redis://redis:6379
       SMTP_URL: smtp://mailpit:1025
       ID_SERVICE_URL: http://gateway:4000
+      # The inventory-service's USER_SERVICE_TOKEN below; it may read session epochs only.
+      INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE: local-inventory-caller-token-not-a-secret-00
     depends_on:
       user-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+  # Stock's own database. Published on loopback, like the user-service's, for scripts run from the host.
+  inventory-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-inventory-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${INVENTORY_POSTGRES_HOST_PORT:-5435}:5432"
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${INVENTORY_POSTGRES_PASSWORD:-inventory}
+      POSTGRES_DB: inventory
+    volumes:
+      - inventorypgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory -d inventory"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # Schema only. Stock comes from `pnpm db:seed`, which needs the catalog up behind the gateway.
+  inventory-migrate:
+    build:
+      context: .
+      dockerfile: apps/inventory-service/Dockerfile
+    image: jcool-inventory-service:local
+    container_name: jcool-inventory-migrate
+    command: ['node', 'dist/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://inventory:${INVENTORY_POSTGRES_PASSWORD:-inventory}@inventory-postgres:5432/inventory
+    depends_on:
+      inventory-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  # The gateway routes /admin/inventory here; the app's checkout saga calls its internal API.
+  # Also published on loopback, for checks that bypass the edge.
+  inventory-service:
+    image: jcool-inventory-service:local
+    pull_policy: never
+    container_name: jcool-inventory-service
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${INVENTORY_SERVICE_HOST_PORT:-3004}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # The gateway, and only the gateway, names the client.
+      TRUST_PROXY: 1
+      DATABASE_URL: postgresql://inventory:${INVENTORY_POSTGRES_PASSWORD:-inventory}@inventory-postgres:5432/inventory
+      # The app's Redis, where the user-service publishes session epochs and the denylist.
+      REDIS_URL: redis://redis:6379
+      ID_SERVICE_URL: http://gateway:4000
+      AUTH_JWKS_URL: http://user-service:3000/.well-known/jwks.json
+      JWT_ISSUER: http://localhost:8080
+      JWT_AUDIENCE: jcool-api
+      USER_SERVICE_URL: http://user-service:3000
+      USER_SERVICE_TOKEN: local-inventory-caller-token-not-a-secret-00
+      INTERNAL_CALLER_TOKEN_API: local-api-to-inventory-token-not-a-secret-00
+      CATALOG_PUBLIC_URL: http://gateway:8080
+      # Taken from .env, like the app's, so infra/prometheus/secrets/metrics-token matches both.
+      METRICS_TOKEN:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    depends_on:
+      inventory-migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -455,6 +550,7 @@ services:
       # Nothing sits in front of it here, so the socket address is the client.
       TRUSTED_PROXY_CIDRS: ""
       AUTH_UPSTREAM: ${AUTH_UPSTREAM:-user-service:3000}
+      INVENTORY_UPSTREAM: ${INVENTORY_UPSTREAM:-inventory-service:3000}
       # Answers every write under /auth with 503, reads untouched. See RUNBOOK.md.
       AUTH_WRITE_FREEZE: ${AUTH_WRITE_FREEZE:-false}
     # Not on app: the id-service smoke brings up only this and id-service, and Caddy dials per request.
@@ -543,6 +639,7 @@ volumes:
   idetcddata:
   temporalpgdata:
   userpgdata:
+  inventorypgdata:
   redisdata:
   esdata:
   miniodata:

@@ -25,7 +25,14 @@ function isolateEnv(keys: readonly string[]): void {
 }
 
 describe('configuration', () => {
-  isolateEnv(['INVENTORY_OPTIMISTIC_MAX_RETRIES', 'STRIPE_SUCCESS_URL', 'ID_SERVICE_URL', 'ID_SERVICE_TIMEOUT_MS']);
+  isolateEnv([
+    'STRIPE_SUCCESS_URL',
+    'ID_SERVICE_URL',
+    'ID_SERVICE_TIMEOUT_MS',
+    'INVENTORY_SERVICE_URL',
+    'INVENTORY_SERVICE_TOKEN',
+    'INVENTORY_COMMAND_TIMEOUT_MS',
+  ]);
 
   it('reads the id-service address and gives the call the gateway retries 2s by default', () => {
     process.env.ID_SERVICE_URL = 'http://gateway:4000';
@@ -33,14 +40,15 @@ describe('configuration', () => {
     expect(configuration().idService).toEqual({ url: 'http://gateway:4000', timeoutMs: 2_000 });
   });
 
-  // `attempt >= NaN` is always false, so a NaN budget would leave the CAS loop unbounded.
-  it('falls back to the default reserve retry budget for a blank env value', () => {
-    const budgets = ['', '   '].map((blank) => {
-      process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES = blank;
-      return configuration().inventory.optimisticMaxRetries;
-    });
+  it('reads the inventory-service address and token, and gives a command 5s by default', () => {
+    process.env.INVENTORY_SERVICE_URL = 'http://inventory-service:3000';
+    process.env.INVENTORY_SERVICE_TOKEN = 'a-token';
 
-    expect(budgets).toEqual([3, 3]);
+    expect(configuration().inventoryService).toEqual({
+      url: 'http://inventory-service:3000',
+      token: 'a-token',
+      commandTimeoutMs: 5_000,
+    });
   });
 
   // A localhost default would pass the adapter's live-key guard and send charged buyers nowhere.
@@ -107,7 +115,7 @@ describe('configuration: checkout saga', () => {
     expect({
       PAYMENT_CAPTURE_TIMEOUT_MS: config.payment.captureTimeoutMs,
       BREAKER_TIMEOUT_MS: config.resilience.breaker.timeoutMs,
-      INVENTORY_TRY_LOCK_TIMEOUT_MS: config.inventory.tryLockTimeoutMs,
+      INVENTORY_COMMAND_TIMEOUT_MS: config.inventoryService.commandTimeoutMs,
       QUEUE_WORKER_CONCURRENCY: config.queue.workerConcurrency,
       PAYMENT_SESSION_MIN_TTL_SEC: config.payment.sessionMinTtlSec,
       PAYMENT_SESSION_EXPIRY_MARGIN_SEC: config.payment.sessionExpiryMarginSec,

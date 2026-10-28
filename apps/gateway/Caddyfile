@@ -68,6 +68,13 @@
 			}
 		}
 	}
+	# Stock is the inventory-service's; the api only keeps its retired tables.
+	@inventory path /admin/inventory /admin/inventory/*
+	handle @inventory {
+		reverse_proxy {$INVENTORY_UPSTREAM} {
+			import upstream
+		}
+	}
 	handle {
 		# Stops order writes while checkout is being cut over; reads and the payment webhook pass.
 		# Substituted at parse time like the auth flag, so it needs a redeploy.

@@ -27,6 +27,8 @@ const API_ENV = {
   INTERNAL_API_TOKEN: randomBytes(32).toString('hex'),
   // Nothing listens there either: no case here reaches a write.
   ID_SERVICE_URL: 'http://id-service.invalid',
+  INVENTORY_SERVICE_URL: 'http://inventory-service.invalid',
+  INVENTORY_SERVICE_TOKEN: randomBytes(32).toString('hex'),
   // Required in production; the api serves without Temporal while its saga worker retries.
   TEMPORAL_ADDRESS: 'temporal.invalid:7233',
   TEMPORAL_NAMESPACE: 'jcool',
@@ -147,6 +149,8 @@ describe('gateway: the api behind it', () => {
     gateway = await gatewayContainer(network, {
       // Railway's value: without tcp6/ the gateway dials IPv4 and the api believes none of it.
       API_UPSTREAM: `tcp6/api:${API_PORT}`,
+      // Required to boot; no case here reaches stock.
+      INVENTORY_UPSTREAM: 'inventory-service.invalid:3000',
       TRUSTED_PROXY_CIDRS: `${edge.getIpAddress(network.getName())}/32`,
     })
       .withNetworkAliases('gateway')

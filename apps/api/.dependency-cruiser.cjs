@@ -16,17 +16,11 @@ module.exports = {
       },
     },
     {
-      name: 'product-aggregate-isolation',
+      name: 'runtime-never-loads-contract-cases',
       severity: 'error',
-      comment:
-        'Catalog and stock share the product module, not an aggregate: in no layer may one subdomain import the other, so stock can leave as its own service without splitting an aggregate. They meet only through product.module.ts and application/public.',
-      from: { path: '^src/modules/product/[^/]+/(catalog|stock)/' },
-      to: {
-        // A file at a layer's root (say a barrel re-exporting both subdomains) is a target too, or it
-        // would launder the crossing.
-        path: '^src/modules/product/([^/]+/(catalog|stock)/|(domain|application|infrastructure|interface)/[^/]+$)',
-        pathNot: '^src/modules/product/[^/]+/$1/',
-      },
+      comment: 'The shared case table and its HTTP driver are test code.',
+      from: { path: '^src/', pathNot: '\\.spec\\.ts$' },
+      to: { path: '^node_modules/@jcool/internal-contracts/dist/testing' },
     },
     {
       name: 'domain-is-pure',

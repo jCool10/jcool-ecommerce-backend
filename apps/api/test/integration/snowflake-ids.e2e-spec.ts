@@ -41,13 +41,12 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
     await expectMintedIds('SELECT id FROM carts');
     await expectMintedIds('SELECT id FROM cart_items');
     await expectMintedIds('SELECT id FROM order_items WHERE order_id = $1', [orderId]);
-    await expectMintedIds('SELECT id FROM reservations WHERE order_id = $1', [orderId]);
     await expectMintedIds('SELECT id FROM payments WHERE order_id = $1', [orderId]);
     await expectMintedIds('SELECT id FROM idempotency_keys');
     await expectMintedIds('SELECT id FROM outbox');
   });
 
-  it('mints catalog and stock ids through the id-service', async () => {
+  it('mints catalog ids through the id-service', async () => {
     const admin = await createTestAdminPrincipal(app);
     const http = () => request(app.getHttpServer());
     const auth = authHeader(admin.accessToken);
@@ -64,9 +63,8 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
       .send({ sku: 'ID-SKU-1', name: 'Default' })
       .expect(201);
     await http().put(`/admin/skus/${sku.body.id}/price`).set(auth).send({ amountMinor: 10_000 }).expect(200);
-    await http().put(`/admin/inventory/${sku.body.id}`).set(auth).send({ quantityOnHand: 3 }).expect(200);
 
-    for (const table of ['categories', 'products', 'product_variants', 'prices', 'stock_levels', 'outbox']) {
+    for (const table of ['categories', 'products', 'product_variants', 'prices', 'outbox']) {
       await expectMintedIds(`SELECT id FROM ${table}`);
     }
   });

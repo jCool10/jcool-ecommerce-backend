@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, desc, eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import request from 'supertest';
 import { PAYMENT_GATEWAY } from '../../../src/modules/payment/application/ports/payment-gateway.port';
 import { FakeSignerGatewayAdapter } from '../../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
@@ -9,6 +9,7 @@ import * as schema from '../../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../bearer.helper';
 import { eventually } from '../eventually';
 import { idempotencyKeyHeader } from '../idempotency.helper';
+import { inventoryServiceStub } from '../inventory-service-stub';
 import { checkoutSessionCompleted, signWebhook, type SessionCharge, type SignedWebhook } from '../sign-webhook.helper';
 import { createTestProduct } from './catalog.fixture';
 import { relayAuthorization } from './checkout-saga.fixture';
@@ -147,19 +148,24 @@ export async function readPaymentOrder(app: INestApplication, orderId: string) {
   return row;
 }
 
-export async function readStock(app: INestApplication, variantId: string) {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const [row] = await db.select().from(schema.stockLevels).where(eq(schema.stockLevels.variantId, variantId));
+export interface StockRow {
+  variantId: string;
+  quantityOnHand: number;
+  quantityReserved: number;
+}
+
+/** Off the inventory-service stub, under the column names the stock row had when it lived here. */
+export async function readStock(_app: INestApplication, variantId: string) {
+  const [row]: StockRow[] = (await inventoryServiceStub())
+    .stockLevels()
+    .filter((level) => level.variantId === variantId)
+    .map((level) => ({ variantId, quantityOnHand: level.onHand, quantityReserved: level.reserved }));
   return row;
 }
 
-export async function reservationsFor(app: INestApplication, orderId: string, variantId?: string) {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const byOrder = eq(schema.reservations.orderId, orderId);
-  return db
-    .select()
-    .from(schema.reservations)
-    .where(variantId === undefined ? byOrder : and(byOrder, eq(schema.reservations.variantId, variantId)));
+export async function reservationsFor(_app: INestApplication, orderId: string, variantId?: string) {
+  const holds = (await inventoryServiceStub()).holdsOf(orderId);
+  return variantId === undefined ? holds : holds.filter((hold) => hold.variantId === variantId);
 }
 
 export interface LedgerAuditReport {
@@ -181,14 +187,14 @@ export async function auditLedgerInvariants(
   seededOnHand: Record<string, number> = {},
 ): Promise<LedgerAuditReport> {
   const db = app.get<DrizzleDB>(DRIZZLE);
-  const [orders, reservations, payments, stock, stockHeaders, paymentHeaders] = await Promise.all([
+  const inventory = await inventoryServiceStub();
+  const [orders, payments, paymentHeaders] = await Promise.all([
     db.select().from(schema.orders),
-    db.select().from(schema.reservations),
     db.select().from(schema.payments),
-    db.select().from(schema.stockLevels),
-    db.select().from(schema.reservationOrders),
     db.select().from(schema.paymentOrders),
   ]);
+  const reservations = inventory.holdsOf();
+  const stockHeaders = inventory.headersList();
 
   const violations: string[] = [];
   const pending: string[] = [];
@@ -267,26 +273,23 @@ export async function auditLedgerInvariants(
     }
   }
 
-  for (const row of stock) {
+  for (const row of inventory.stockLevels()) {
     const forVariant = reservations.filter((r) => r.variantId === row.variantId);
     const held = sumQuantity(forVariant.filter((r) => r.status === 'HELD'));
     const committed = sumQuantity(forVariant.filter((r) => r.status === 'COMMITTED'));
 
-    if (row.quantityOnHand < 0) violations.push(`sku ${row.variantId}: on-hand ${row.quantityOnHand} is negative`);
-    // `ck_stock_no_oversell` enforces this in Postgres; re-asserting it here means dropping that
-    // constraint fails the suite instead of silently widening what can commit.
-    if (row.quantityReserved > row.quantityOnHand) {
-      violations.push(
-        `sku ${row.variantId}: oversold, reserved ${row.quantityReserved} > on-hand ${row.quantityOnHand}`,
-      );
+    if (row.onHand < 0) violations.push(`sku ${row.variantId}: on-hand ${row.onHand} is negative`);
+    // The service's `ck_stock_no_oversell` enforces this; the stub has no such check, so this is it.
+    if (row.reserved > row.onHand) {
+      violations.push(`sku ${row.variantId}: oversold, reserved ${row.reserved} > on-hand ${row.onHand}`);
     }
-    if (row.quantityReserved !== held) {
-      violations.push(`sku ${row.variantId}: reserved ${row.quantityReserved} but ${held} units are HELD`);
+    if (row.reserved !== held) {
+      violations.push(`sku ${row.variantId}: reserved ${row.reserved} but ${held} units are HELD`);
     }
     const seeded = seededOnHand[row.variantId];
-    if (seeded !== undefined && row.quantityOnHand !== seeded - committed) {
+    if (seeded !== undefined && row.onHand !== seeded - committed) {
       violations.push(
-        `sku ${row.variantId}: on-hand ${row.quantityOnHand}, expected ${seeded - committed} (seeded ${seeded} − committed ${committed})`,
+        `sku ${row.variantId}: on-hand ${row.onHand}, expected ${seeded - committed} (seeded ${seeded} − committed ${committed})`,
       );
     }
   }

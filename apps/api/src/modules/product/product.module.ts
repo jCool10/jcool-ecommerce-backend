@@ -14,13 +14,7 @@ import { CatalogAdminService } from './application/catalog/services/catalog-admi
 import { CatalogSkuQueryService } from './application/catalog/services/catalog-sku-query.service';
 import { ProductSearchSyncService } from './application/catalog/services/product-search-sync.service';
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from './application/catalog/use-cases';
-import { INVENTORY_PARTICIPANT } from './application/public/inventory-participant.port';
 import { PRODUCT_SKU_QUERY } from './application/public/product-sku-query.port';
-import { InventoryParticipantService } from './application/stock/inventory-participant.service';
-import { ReleaseLapsedHoldsUseCase } from './application/stock/release-lapsed-holds.use-case';
-import { StockAdminService } from './application/stock/stock-admin.service';
-import { STOCK_ADMIN } from './application/stock/ports/stock-admin.port';
-import { STOCK_REPOSITORY } from './application/stock/ports/stock-repository.port';
 import {
   CachingCatalogAdminRepository,
   CachingProductRepository,
@@ -35,26 +29,16 @@ import {
   isSearchEngineFault,
   type SearchEngineCalls,
 } from './infrastructure/catalog';
-import { StockAdminRepository } from './infrastructure/stock/stock-admin.repository';
-import { StockRepository } from './infrastructure/stock/stock.repository';
 import { AdminCatalogController } from './interface/catalog/admin-catalog.controller';
 import { CatalogController } from './interface/catalog/catalog.controller';
 import { CategoryRenamedHandler } from './interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from './interface/catalog/queue/product-changed.handler';
-import { AdminInventoryController } from './interface/stock/admin-inventory.controller';
-import { LapsedHoldSweepScheduler } from './interface/stock/lapsed-hold-sweep.scheduler';
 
-/**
- * One module, two aggregate groups: catalog and stock reference each other only by `variantId`, and
- * no use case writes both in one transaction. Catalog's read and write ports resolve to cache-aside
- * decorators over the Drizzle adapters; a stock write must never bump the catalog cache generation.
- * STOCK_ADMIN stays unexported: setting stock outright is not something another context may do on a
- * buyer's behalf.
- */
+/** Catalog's read and write ports resolve to cache-aside decorators over the Drizzle adapters. */
 @Module({
   // MediaModule for `MEDIA_FACADE` only — image bytes and their lifecycle stay entirely over there.
   imports: [CacheModule, MediaModule, ResilienceModule],
-  controllers: [CatalogController, AdminCatalogController, AdminInventoryController],
+  controllers: [CatalogController, AdminCatalogController],
   providers: [
     ListProductsUseCase,
     GetProductDetailUseCase,
@@ -86,14 +70,7 @@ import { LapsedHoldSweepScheduler } from './interface/stock/lapsed-hold-sweep.sc
     ProductSearchSyncService,
     ProductChangedHandler,
     CategoryRenamedHandler,
-    StockAdminService,
-    { provide: STOCK_REPOSITORY, useClass: StockRepository },
-    { provide: STOCK_ADMIN, useClass: StockAdminRepository },
-    InventoryParticipantService,
-    { provide: INVENTORY_PARTICIPANT, useExisting: InventoryParticipantService },
-    ReleaseLapsedHoldsUseCase,
-    LapsedHoldSweepScheduler,
   ],
-  exports: [PRODUCT_SKU_QUERY, INVENTORY_PARTICIPANT, STOCK_REPOSITORY, ProductChangedHandler, CategoryRenamedHandler],
+  exports: [PRODUCT_SKU_QUERY, ProductChangedHandler, CategoryRenamedHandler],
 })
 export class ProductModule {}

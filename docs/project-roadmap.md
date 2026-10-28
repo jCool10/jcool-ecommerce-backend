@@ -4,7 +4,7 @@ Intended direction that has not shipped, not a description of current behavior. 
 
 ## Cut the public domain over to the gateway
 
-The api, user-service and id-service already run split and the Caddy gateway is deployed, but the public domain still points at the api directly rather than through the gateway — see the architecture note in [`README.md#architecture`](../README.md#architecture) ("once the public domain moves onto the gateway") and the cutover procedure at [`RUNBOOK.md#put-the-gateway-in-front-of-the-api`](../RUNBOOK.md#put-the-gateway-in-front-of-the-api). Until that flip, the IP-keyed throttle tiers count connections rather than clients, a gap [`README.md#known-limits`](../README.md#known-limits) already states.
+The api, user-service, inventory-service and id-service already run split and the Caddy gateway is deployed, but the public domain still points at the api directly rather than through the gateway — see the architecture note in [`README.md#architecture`](../README.md#architecture) ("once the public domain moves onto the gateway") and the cutover procedure at [`RUNBOOK.md#put-the-gateway-in-front-of-the-api`](../RUNBOOK.md#put-the-gateway-in-front-of-the-api). Until that flip, the IP-keyed throttle tiers count connections rather than clients, a gap [`README.md#known-limits`](../README.md#known-limits) already states, and stock cannot be cut over: only the gateway routes `/admin/inventory*` to the inventory-service ([`RUNBOOK.md#cut-stock-over-to-the-inventory-service`](../RUNBOOK.md#cut-stock-over-to-the-inventory-service)).
 
 ## Shard the user database
 

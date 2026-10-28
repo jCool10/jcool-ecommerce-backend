@@ -15,8 +15,9 @@
 // Tunables (env):  BASE_URL, READ_PEAK_VUS, WRITE_VUS
 //
 // Preconditions: stack up (docker compose --profile observability up -d), DB seeded
-// (npm run db:seed — also seeds generous inventory stock so placement, which now reserves
-// stock, stays on the success path), THROTTLE_ENABLED=false (single-host load would otherwise
+// (pnpm db:seed — the api's catalog, then the inventory-service's stock top-up, which gives every
+// listed variant 1e9 on hand so placement stays on the success path; it reads the catalog through
+// the gateway, so the stack must be up first), THROTTLE_ENABLED=false (single-host load would otherwise
 // hit the 100 req/60s limiter), and auth.requireVerifiedEmail=false (the default) so login
 // returns a token with no email step.
 

@@ -10,6 +10,7 @@ Navigation only — "where to look for X". For what each context owns, the layer
 | `api` telemetry preload | [`apps/api/src/instrumentation.ts`](../apps/api/src/instrumentation.ts) |
 | `id-service` | [`apps/id-service/src/main.ts`](../apps/id-service/src/main.ts) |
 | `user-service` | [`apps/user-service/src/main.ts`](../apps/user-service/src/main.ts) |
+| `inventory-service` | [`apps/inventory-service/src/main.ts`](../apps/inventory-service/src/main.ts) |
 | `gateway` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) (not a Node process) |
 
 CLIs (the api's migrate, DLQ replay, search reindex and storage verify also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`README.md#scripts`](../README.md#scripts) for the `pnpm` names):
@@ -24,10 +25,13 @@ CLIs (the api's migrate, DLQ replay, search reindex and storage verify also have
 | checkout saga workflow bundle (the second half of `pnpm build`) | [`apps/api/src/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.ts`](../apps/api/src/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.ts) |
 | id-service floor lift (pre-deploy form: `--if-uninitialized`) | [`apps/id-service/src/lease/lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts) |
 | user-service migrate | [`apps/user-service/src/database/migrate-cli.ts`](../apps/user-service/src/database/migrate-cli.ts) |
+| inventory-service migrate | [`apps/inventory-service/src/database/migrate-cli.ts`](../apps/inventory-service/src/database/migrate-cli.ts) |
+| inventory-service stock seed | [`apps/inventory-service/src/database/seed-stock.ts`](../apps/inventory-service/src/database/seed-stock.ts) |
+| inventory-service pre-deploy (migrate, then the seed best effort) | [`apps/inventory-service/src/database/pre-deploy-cli.ts`](../apps/inventory-service/src/database/pre-deploy-cli.ts) |
 
 ## Bounded contexts
 
-Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `media`, `order`, `payment`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer is split again into `catalog/` and `stock/`, with the published ports in `application/public/`. What each context owns and publishes is the README's [bounded-context table](../README.md#bounded-contexts); this is only the path to open.
+Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `media`, `order`, `payment`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer keeps its code under `catalog/`, with the published port in `application/public/`. Stock is [`apps/inventory-service/src/modules/inventory`](../apps/inventory-service/src/modules/inventory), the same four layers in one module; the api reaches it through Order's [`order-inventory-participant.http-adapter.ts`](../apps/api/src/modules/order/infrastructure/order-inventory-participant.http-adapter.ts). What each context owns and publishes is the README's [bounded-context table](../README.md#bounded-contexts); this is only the path to open.
 
 ## Checkout saga
 
@@ -54,8 +58,9 @@ Each Postgres-backed service owns its own schema and migration set against its o
 | --- | --- | --- |
 | api | [`apps/api/src/shared/infrastructure/database/schema/index.ts`](../apps/api/src/shared/infrastructure/database/schema/index.ts) | [`apps/api/src/shared/infrastructure/database/migrations/`](../apps/api/src/shared/infrastructure/database/migrations/) |
 | user-service | [`apps/user-service/src/database/schema.ts`](../apps/user-service/src/database/schema.ts) | [`apps/user-service/src/database/migrations/`](../apps/user-service/src/database/migrations/) |
+| inventory-service | [`apps/inventory-service/src/database/schema.ts`](../apps/inventory-service/src/database/schema.ts) | [`apps/inventory-service/src/database/migrations/`](../apps/inventory-service/src/database/migrations/) |
 
-Migrations are Drizzle-generated (`pnpm db:generate`); the current set is whatever is committed under each `migrations/` directory — list it directly rather than trusting a count here.
+The api's barrel still exports the stock tables from `schema/retired/`, so its migrations keep matching its database until a migration drops them; nothing in the api reads or writes them. Migrations are Drizzle-generated (`pnpm db:generate`); the current set is whatever is committed under each `migrations/` directory — list it directly rather than trusting a count here.
 
 ## Env schema and config
 
@@ -64,15 +69,17 @@ Migrations are Drizzle-generated (`pnpm db:generate`); the current set is whatev
 | api | [`apps/api/src/shared/config/env.validation.ts`](../apps/api/src/shared/config/env.validation.ts), [`configuration.ts`](../apps/api/src/shared/config/configuration.ts) |
 | id-service | [`apps/id-service/src/config/env.validation.ts`](../apps/id-service/src/config/env.validation.ts), [`configuration.ts`](../apps/id-service/src/config/configuration.ts) |
 | user-service | [`apps/user-service/src/config/env.validation.ts`](../apps/user-service/src/config/env.validation.ts), [`configuration.ts`](../apps/user-service/src/config/configuration.ts) |
+| inventory-service | [`apps/inventory-service/src/config/env.validation.ts`](../apps/inventory-service/src/config/env.validation.ts), [`configuration.ts`](../apps/inventory-service/src/config/configuration.ts) |
 
-Every service composes its env schema from shared fragments in [`packages/platform/src/config`](../packages/platform/src/config) (parsers and strict decorators every app's validator builds on). The commented variable references are [`.env.example`](../.env.example) for the api and [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service; see [`README.md#configuration`](../README.md#configuration) for which ones have no default.
+Every service composes its env schema from shared fragments in [`packages/platform/src/config`](../packages/platform/src/config) (parsers and strict decorators every app's validator builds on). The commented variable references are [`.env.example`](../.env.example) for the api, [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service and [`apps/inventory-service/.env.example`](../apps/inventory-service/.env.example) for the inventory-service; see [`README.md#configuration`](../README.md#configuration) for which ones have no default.
 
 ## Test tiers
 
 | Tier | Location |
 | --- | --- |
 | Unit | co-located `*.spec.ts` next to the code it tests, in every app and package |
-| Integration (e2e) | `apps/*/test/integration/*.e2e-spec.ts`; setup/harness in `apps/*/test/setup` (e.g. [`apps/api/test/setup/global-setup.ts`](../apps/api/test/setup/global-setup.ts), [`apps/api/test/setup/test-app.factory.ts`](../apps/api/test/setup/test-app.factory.ts)) |
+| Integration (e2e) | `apps/*/test/integration/*.e2e-spec.ts`; setup/harness in `apps/*/test/setup` (e.g. [`apps/api/test/setup/global-setup.ts`](../apps/api/test/setup/global-setup.ts), [`apps/api/test/setup/test-app.factory.ts`](../apps/api/test/setup/test-app.factory.ts), and the inventory-service stub the api's suites run against, [`apps/api/test/setup/inventory-service-stub.ts`](../apps/api/test/setup/inventory-service-stub.ts)) |
+| Contract cases | [`packages/internal-contracts/src/testing.ts`](../packages/internal-contracts/src/testing.ts): the inventory API's case table and HTTP driver, run against the real service and the api's stub alike |
 | System | `*.system-spec.ts` under `apps/gateway/test/` and `apps/id-service/test/system/` — real images on a Docker network, run by `pnpm turbo run test:system --concurrency=1` |
 | Load/performance | [`test/load/`](../test/load) (k6 mixes with Prometheus as the authority) and [`k6/`](../k6) |
 
@@ -107,7 +114,7 @@ CI/CD workflows: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`.g
 
 ## Gateway
 
-[`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) is the routing config (public site + private id-service load balancer); [`apps/gateway/entrypoint.sh`](../apps/gateway/entrypoint.sh) is its container entrypoint.
+[`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) is the routing config (public site, which sends `/auth` to the user-service and `/admin/inventory*` to the inventory-service, plus the private id-service load balancer); [`apps/gateway/entrypoint.sh`](../apps/gateway/entrypoint.sh) is its container entrypoint.
 
 ## Packages
 
@@ -116,12 +123,14 @@ CI/CD workflows: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`.g
 | `@jcool/kernel` | Framework-free DDD building blocks | [`packages/kernel/package.json`](../packages/kernel/package.json) |
 | `@jcool/id-codec` | Snowflake id layout | [`packages/id-codec/package.json`](../packages/id-codec/package.json) |
 | `@jcool/id-generator` | Monotonic id generator, node lease | [`packages/id-generator/package.json`](../packages/id-generator/package.json) |
-| `@jcool/auth-verifier` | Access-token verification (every service) | [`packages/auth-verifier/package.json`](../packages/auth-verifier/package.json) |
+| `@jcool/auth-verifier` | Access-token verification (every service); `/session-state`: the Redis readers and the user-service client behind an epoch miss | [`packages/auth-verifier/package.json`](../packages/auth-verifier/package.json) |
+| `@jcool/internal-contracts` | Paths, bodies and outcome tables of the internal APIs, shared by both ends; `/testing`: the contract cases | [`packages/internal-contracts/package.json`](../packages/internal-contracts/package.json) |
 | `@jcool/metrics-port` | Metrics seam for domain/application code | [`packages/metrics-port/package.json`](../packages/metrics-port/package.json) |
-| `@jcool/platform` | Nest infrastructure glue, one subpath export per concern (config, db, redis, observability, metrics, error tracking, health, throttler, rbac, mail, resilience, retention, identity, interface) | [`packages/platform/package.json`](../packages/platform/package.json) |
+| `@jcool/platform` | Nest infrastructure glue, one subpath export per concern (config, db, redis, observability, metrics, error tracking, health, throttler, rbac, mail, resilience, retention, identity, interface, internal-api) | [`packages/platform/package.json`](../packages/platform/package.json) |
 | `@jcool/testing` | Test doubles, dev-only | [`packages/testing/package.json`](../packages/testing/package.json) |
 | `apps/id-service` | 63-bit id minting service, under a leased node id | [`apps/id-service/README.md`](../apps/id-service/README.md) |
 | `apps/user-service` | Auth/user service | [`apps/user-service/README.md`](../apps/user-service/README.md) |
+| `apps/inventory-service` | Stock levels and the checkout's TCC holds | [`apps/inventory-service/README.md`](../apps/inventory-service/README.md) |
 
 ## Discovery commands
 

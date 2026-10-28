@@ -4,7 +4,7 @@ import { ClsService } from 'nestjs-cls';
 import { CartModule } from '@modules/cart/cart.module';
 import { PaymentModule } from '@modules/payment/payment.module';
 import { ProductModule } from '@modules/product/product.module';
-import { createUserServiceClient } from '@shared/user-service/user-service.client';
+import { createUserServiceClient } from '@jcool/auth-verifier/session-state';
 import { durationToMs } from '@jcool/kernel';
 import { MailModule } from '@jcool/platform/mail';
 import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
@@ -31,7 +31,7 @@ import { DrizzleOrderRepository } from './infrastructure/drizzle-order.repositor
 import { RemoteUserContactAdapter } from './infrastructure/user-contact.adapters';
 import { CartSnapshotAdapter } from './infrastructure/cart-snapshot.adapter';
 import { CatalogQueryAdapter } from './infrastructure/catalog-query.adapter';
-import { OrderInventoryParticipantAdapter } from './infrastructure/order-inventory-participant.adapter';
+import { createInventoryServiceAdapter } from './infrastructure/order-inventory-participant.http-adapter';
 import { OrderPaymentParticipantAdapter } from './infrastructure/order-payment-participant.adapter';
 import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempotency-key.repository';
 import { CheckoutSagaActivities } from './infrastructure/temporal/checkout-saga.activities';
@@ -49,10 +49,10 @@ import { PaymentAuthorizedHandler } from './interface/queue/payment-authorized.h
 import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.guard';
 
 /**
- * Every cross-context read or write — Cart's CART_SNAPSHOT, Product's PRODUCT_SKU_QUERY and
- * INVENTORY_PARTICIPANT, Payment's PAYMENT_PARTICIPANT — goes through
- * an Order-owned anti-corruption adapter bound to an Order port, so nothing in this module imports
- * another context's domain or infrastructure.
+ * Every cross-context read or write — Cart's CART_SNAPSHOT, Product's PRODUCT_SKU_QUERY, Payment's
+ * PAYMENT_PARTICIPANT, the inventory-service over HTTP — goes through an Order-owned anti-corruption
+ * adapter bound to an Order port, so nothing in this module imports another context's domain or
+ * infrastructure.
  */
 @Module({
   imports: [CartModule, ProductModule, PaymentModule, MailModule, ResilienceModule],
@@ -71,7 +71,11 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     { provide: ORDER_REPOSITORY, useClass: DrizzleOrderRepository },
     { provide: CART_SNAPSHOT_READER, useClass: CartSnapshotAdapter },
     { provide: CATALOG_QUERY, useClass: CatalogQueryAdapter },
-    { provide: ORDER_INVENTORY_PARTICIPANT, useClass: OrderInventoryParticipantAdapter },
+    {
+      provide: ORDER_INVENTORY_PARTICIPANT,
+      inject: [ConfigService, CircuitBreakerFactory, ClsService],
+      useFactory: createInventoryServiceAdapter,
+    },
     { provide: ORDER_PAYMENT_PARTICIPANT, useClass: OrderPaymentParticipantAdapter },
     { provide: IDEMPOTENCY_STORE, useClass: DrizzleIdempotencyKeyRepository },
     {

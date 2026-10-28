@@ -10,6 +10,7 @@ import { AppModule } from '../../src/app.module';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
 import { idServiceStub } from './id-service-stub';
+import { inventoryServiceStub } from './inventory-service-stub';
 import { waitForRedisReady } from './redis-ready';
 import { TEMPORAL_TEST_NAMESPACE } from './temporal-server';
 import { temporalTaskQueueForCurrentSpec } from './temporal-task-queue';
@@ -50,7 +51,6 @@ export async function createTestApp(
   process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
-  process.env.INVENTORY_HOLD_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
   process.env.CHECKOUT_REAPER_ENABLED = 'false';
   process.env.CHECKOUT_INVARIANT_ENABLED = 'false';
@@ -59,11 +59,12 @@ export async function createTestApp(
   // every app in every file 8 seconds of doing nothing. Nothing asserts on the window's length:
   // `health-shutdown.e2e-spec.ts` reads the readiness flag, which flips before the wait.
   process.env.SHUTDOWN_GRACE_PERIOD_MS = '0';
-  // Both URLs are placeholders in vitest-e2e.config.mts; only the stub's port is known this late.
+  // These URLs are placeholders in vitest-e2e.config.mts; only the stubs' ports are known this late.
   const userService = await userServiceStub();
   process.env.AUTH_JWKS_URL = userService.jwksUrl;
   process.env.USER_SERVICE_INTERNAL_URL = userService.url;
   process.env.ID_SERVICE_URL = (await idServiceStub()).url;
+  process.env.INVENTORY_SERVICE_URL = (await inventoryServiceStub()).url;
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
   // a file that leaves jobs waiting hands them to the next file that boots a worker, which then
   // applies events its own test never published. Same value for every app in a file, because a

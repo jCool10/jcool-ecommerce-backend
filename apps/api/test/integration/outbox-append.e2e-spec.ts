@@ -20,6 +20,7 @@ import {
   placeAndOpenSession,
   postWebhook,
   readPayment,
+  readStock,
   seedSellableSku,
   untilOrderStatus,
 } from '../setup/fixtures/order-flow.fixture';
@@ -197,7 +198,6 @@ describe('Outbox append failure strands the checkout in RESERVING (integration, 
     expect(order.status).toBe('RESERVING');
     expect((await readReservationOrder(app, order.id))?.status).toBe('HELD');
     expect(await db.select().from(schema.outbox)).toHaveLength(0);
-    const [stock] = await db.select().from(schema.stockLevels).where(eq(schema.stockLevels.variantId, sku.variantId));
-    expect(stock).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 2 });
+    expect(await readStock(app, sku.variantId)).toMatchObject({ quantityOnHand: STOCK, quantityReserved: 2 });
   });
 });

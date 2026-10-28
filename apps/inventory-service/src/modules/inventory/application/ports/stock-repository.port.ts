@@ -1,0 +1,83 @@
+import type { DrizzleTx } from '../../../../database';
+import type { ReservationOrderStatus } from '../../domain/reservation-order-status';
+import type { ReservationLine } from '../public/inventory-participant.port';
+
+export type { ReservationLine };
+
+export const STOCK_REPOSITORY = Symbol('STOCK_REPOSITORY');
+
+/** Both false = the order had no lines in the source status at all. */
+export interface StockResolveResult {
+  applied: boolean;
+  alreadyResolved: boolean;
+  count: number;
+}
+
+/** `available` is derived, never stored. */
+export interface StockView {
+  onHand: number;
+  reserved: number;
+  available: number;
+}
+
+export interface StockTransactionOptions {
+  /**
+   * Epoch ms for the whole transaction. Every statement that can wait on a lock is limited to what is
+   * left of it, and running out throws `ReservationTimeoutError`.
+   */
+  deadline?: number;
+}
+
+export interface HoldOptions {
+  expiresAt: Date;
+  /** One per line, minted by the caller before its transaction opened. */
+  reservationIds: string[];
+}
+
+export interface ReservationOrderHeader {
+  status: ReservationOrderStatus;
+  holdUntil: Date | null;
+}
+
+export interface StockRepositoryPort {
+  transaction<T>(work: (tx: DrizzleTx) => Promise<T>, options?: StockTransactionOptions): Promise<T>;
+
+  /** Locks the stock rows; throws `InsufficientStockError` on a shortfall, rolling back `tx`. */
+  reservePessimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[], options: HoldOptions): Promise<void>;
+
+  /**
+   * Version-CAS with a bounded retry budget; throws `InsufficientStockError` on a real shortfall and
+   * `ReservationConflictError` once the budget is spent. Idempotent per (order, SKU) like the
+   * pessimistic path, concurrent duplicates of one order included. On the participant path the order's
+   * header lock already serializes duplicates before they reach this.
+   */
+  reserveOptimistic(tx: DrizzleTx, orderId: string, lines: ReservationLine[], options: HoldOptions): Promise<void>;
+
+  /** HELD → COMMITTED, dropping both `onHand` and `reserved`. Guarded on HELD, so a re-run is a no-op. */
+  commitReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
+
+  /** HELD → RELEASED, dropping only `reserved`. Guarded on HELD, so a re-run is a no-op. */
+  releaseReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
+
+  /** COMMITTED → RESTOCKED, raising `onHand` back. Guarded on COMMITTED, so a re-run is a no-op. */
+  restockReservations(tx: DrizzleTx, orderId: string): Promise<StockResolveResult>;
+
+  /** Inserts a HELD header; false when the order already has one. */
+  insertHeader(tx: DrizzleTx, input: { orderId: string; holdUntil: Date }): Promise<boolean>;
+
+  /** Inserts a FENCED header; false when the order already has one. */
+  insertFencedHeader(tx: DrizzleTx, orderId: string): Promise<boolean>;
+
+  findHeaderForUpdate(tx: DrizzleTx, orderId: string): Promise<ReservationOrderHeader | null>;
+
+  /** Locks the header only if it is still HELD past `hold_until`, skipping one another tx holds. */
+  lockLapsedHeader(tx: DrizzleTx, orderId: string): Promise<boolean>;
+
+  setHeaderStatus(tx: DrizzleTx, orderId: string, status: ReservationOrderStatus): Promise<void>;
+
+  /** HELD headers past `hold_until`, oldest first. Unlocked read; the caller re-checks under the lock. */
+  findLapsedHeaderIds(query: { limit: number }): Promise<string[]>;
+
+  /** Outside any transaction and lock-free. Orders without a header are simply absent from the map. */
+  findHeaderStatuses(orderIds: string[]): Promise<Map<string, ReservationOrderStatus>>;
+}

@@ -50,3 +50,69 @@ tests:
       - eval_time: 12m
         alertname: ApiScrapeDown
         exp_alerts: []
+
+  # The same three cases for the inventory-service: down past the hold, back up, and never scraped.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-inventory", instance="inventory-service:3000"}'
+        values: '1x5 0x10 1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: InventoryScrapeDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: InventoryScrapeDown
+        exp_alerts:
+          - exp_labels:
+              job: jcool-inventory
+              instance: 'inventory-service:3000'
+              severity: page
+            exp_annotations:
+              summary: 'Prometheus has not scraped the inventory-service for 5 minutes'
+              description: 'The inventory-service is down, unreachable from Prometheus, or refusing the metrics token. Down, it stops every checkout from holding stock; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → InventoryScrapeDown.'
+      - eval_time: 20m
+        alertname: InventoryScrapeDown
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-inventory", instance="inventory-service:3000"}'
+        values: '_x10 1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: InventoryScrapeDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: InventoryScrapeDown
+        exp_alerts:
+          - exp_labels:
+              job: jcool-inventory
+              severity: page
+            exp_annotations:
+              summary: 'Prometheus has not scraped the inventory-service for 5 minutes'
+              description: 'The inventory-service is down, unreachable from Prometheus, or refusing the metrics token. Down, it stops every checkout from holding stock; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → InventoryScrapeDown.'
+      - eval_time: 12m
+        alertname: InventoryScrapeDown
+        exp_alerts: []
+
+  # A scraped api says nothing about the inventory-service, and the reverse.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x20'
+      - series: 'up{job="jcool-inventory", instance="inventory-service:3000"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ApiScrapeDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: InventoryScrapeDown
+        exp_alerts:
+          - exp_labels:
+              job: jcool-inventory
+              instance: 'inventory-service:3000'
+              severity: page
+            exp_annotations:
+              summary: 'Prometheus has not scraped the inventory-service for 5 minutes'
+              description: 'The inventory-service is down, unreachable from Prometheus, or refusing the metrics token. Down, it stops every checkout from holding stock; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → InventoryScrapeDown.'

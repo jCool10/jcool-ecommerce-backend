@@ -205,7 +205,8 @@ describe('Checkout saga metrics (integration, real Temporal, fake Stripe)', () =
 
     const metrics = await scrapeMetrics(app);
 
-    expect(metrics.value('payment_authorized_uncaptured_oldest_seconds')).toBeGreaterThanOrEqual(1_200);
+    // The gauge reads the database clock, which can sit a few milliseconds off this process's.
+    expect(metrics.value('payment_authorized_uncaptured_oldest_seconds')).toBeCloseTo(1_200, -1);
   });
 
   it('reports the depth of the queue that carries authorizations to the saga', async () => {

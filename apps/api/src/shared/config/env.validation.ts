@@ -17,11 +17,6 @@ import {
   validateEnv,
 } from '@jcool/platform/config';
 
-export enum InventoryLockStrategy {
-  Pessimistic = 'pessimistic',
-  Optimistic = 'optimistic',
-}
-
 // One member today: the enum earns its place by rejecting any other value at startup instead of
 // letting a typo pick a gateway that does not exist.
 export enum PaymentProvider {
@@ -292,43 +287,6 @@ export class EnvironmentVariables extends ApiEnv {
   MEDIA_MAX_BYTES?: number;
 
   @IsOptional()
-  @IsEnum(InventoryLockStrategy)
-  INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
-
-  // Capped so a misconfig can't spin the CAS loop while it pins the stock row's write-lock.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  @Max(10)
-  INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(100)
-  @Max(30_000)
-  INVENTORY_TRY_LOCK_TIMEOUT_MS?: number;
-
-  @IsOptional()
-  @IsStrictBoolean()
-  INVENTORY_HOLD_SWEEP_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1000)
-  INVENTORY_HOLD_SWEEP_INTERVAL_MS?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  @Max(500)
-  INVENTORY_HOLD_SWEEP_BATCH_SIZE?: number;
-
-  @IsOptional()
   @IsEnum(PaymentProvider)
   PAYMENT_PROVIDER?: PaymentProvider;
 
@@ -413,6 +371,20 @@ export class EnvironmentVariables extends ApiEnv {
   @IsInt()
   @Min(100)
   ID_SERVICE_TIMEOUT_MS?: number;
+
+  @IsUrl(HTTP_URL)
+  INVENTORY_SERVICE_URL!: string;
+
+  // The inventory-service's INTERNAL_CALLER_TOKEN_API.
+  @IsString()
+  @MinLength(32)
+  INVENTORY_SERVICE_TOKEN!: string;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(100)
+  INVENTORY_COMMAND_TIMEOUT_MS?: number;
 
   // Duration form. How long after an order is paid a user the directory does not know is still
   // worth waiting for.

@@ -1,4 +1,4 @@
-import type { UserServiceClient } from '@shared/user-service/user-service.client';
+import type { UserServiceClient } from '@jcool/auth-verifier/session-state';
 import type { UserContact, UserContactPort } from '../application/ports/user-contact.port';
 
 /** Retryable on purpose: the user may still be on the way to the directory. */

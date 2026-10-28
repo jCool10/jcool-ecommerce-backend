@@ -14,6 +14,8 @@ const BASE_ENV = {
   USER_SERVICE_INTERNAL_URL: 'http://user-service.railway.internal:3000',
   INTERNAL_API_TOKEN: 'internal-api-token-not-a-real-secret-0000',
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
+  INVENTORY_SERVICE_URL: 'http://inventory-service.railway.internal:3000',
+  INVENTORY_SERVICE_TOKEN: 'inventory-service-token-not-a-real-secret-00',
 };
 
 const STRIPE_ENV = {
@@ -109,31 +111,25 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, AUTH_JWKS_URL: 'jwks.json' })).toThrow(/AUTH_JWKS_URL/);
   });
 
-  it('bounds the inventory Try budget and the lapsed-hold sweep', () => {
-    const cases: Array<[string, string, boolean]> = [
-      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '99', false],
-      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '100', true],
-      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '30000', true],
-      ['INVENTORY_TRY_LOCK_TIMEOUT_MS', '30001', false],
-      ['INVENTORY_HOLD_SWEEP_INTERVAL_MS', '999', false],
-      ['INVENTORY_HOLD_SWEEP_INTERVAL_MS', '1000', true],
-      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '0', false],
-      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '500', true],
-      ['INVENTORY_HOLD_SWEEP_BATCH_SIZE', '501', false],
-      ['INVENTORY_HOLD_SWEEP_ENABLED', '0', false],
-      ['INVENTORY_HOLD_SWEEP_ENABLED', 'false', true],
-    ];
-    // A saga Try budget long enough for the largest participant budget, so only the range is tested here.
-    const longTry = {
-      CHECKOUT_TRY_TIMEOUT_MS: '30001',
-      CHECKOUT_RESERVE_WAIT_MS: '32001',
-      CHECKOUT_RESERVING_ORPHAN_SEC: '33',
-    };
-    for (const [key, value, valid] of cases) {
-      const run = () => validate({ ...BASE_ENV, ...longTry, [key]: value });
-      if (valid) expect(run, `${key}=${value}`).not.toThrow();
-      else expect(run, `${key}=${value}`).toThrow(new RegExp(key));
+  it('refuses to boot without the inventory-service address or its token', () => {
+    for (const key of ['INVENTORY_SERVICE_URL', 'INVENTORY_SERVICE_TOKEN']) {
+      const without: Record<string, unknown> = { ...BASE_ENV };
+      delete without[key];
+
+      expect(() => validate(without), key).toThrow(new RegExp(key));
     }
+    expect(() => validate({ ...BASE_ENV, INVENTORY_SERVICE_URL: 'inventory-service:3000' })).toThrow(
+      /INVENTORY_SERVICE_URL/,
+    );
+    expect(() => validate({ ...BASE_ENV, INVENTORY_SERVICE_TOKEN: 'a'.repeat(31) })).toThrow(/INVENTORY_SERVICE_TOKEN/);
+  });
+
+  it('bounds the inventory command timeout', () => {
+    expect(() => validate({ ...BASE_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '99' })).toThrow(/INVENTORY_COMMAND_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '5e3' })).toThrow(
+      /INVENTORY_COMMAND_TIMEOUT_MS/,
+    );
+    expect(() => validate({ ...BASE_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '5000' })).not.toThrow();
   });
 
   it('caps the order.paid retry budget', () => {

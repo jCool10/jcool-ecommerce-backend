@@ -2,7 +2,7 @@ import type { CommitOutcome, ParticipantTryOutcome } from '../../domain/checkout
 
 export const ORDER_INVENTORY_PARTICIPANT = Symbol('ORDER_INVENTORY_PARTICIPANT');
 
-/** Mirrors Inventory's `reservation_orders` header. Declared here so Order never imports Product. */
+/** Mirrors the inventory-service's per-order header, declared on Order's side of the wire. */
 export type StockHoldStatus = 'HELD' | 'COMMITTED' | 'RELEASED' | 'FENCED' | 'RESTOCKED';
 
 export type StockCommandOutcome = CommitOutcome;

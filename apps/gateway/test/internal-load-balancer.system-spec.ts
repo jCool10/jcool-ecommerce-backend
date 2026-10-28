@@ -30,6 +30,7 @@ describe('gateway: internal load balancer over id-service', () => {
     gateway = await startGateway(network, {
       // Never called here: the public site is covered by its own suite.
       API_UPSTREAM: 'api:3000',
+      INVENTORY_UPSTREAM: 'inventory:3000',
       ID_SERVICE_HOST: ID_SERVICE_ALIAS,
       ID_SERVICE_PORT: String(ID_SERVICE_PORT),
       // Outlasts every run of requests below, so a replica seen once was seen once because it sat out.

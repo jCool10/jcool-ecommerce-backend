@@ -95,19 +95,11 @@ async function seedCatalog(db: NodePgDatabase<typeof schema>, id: () => string):
     ])
     .onConflictDoNothing();
 
-  // Checkout reserves stock, so every variant needs an on-hand row or `POST /orders` 409s. On-hand
-  // is effectively unlimited so load tests never deplete it (held stock isn't released within a
-  // run); real inventory is managed elsewhere, and this never clobbers a live count or its holds.
-  await db
-    .insert(schema.stockLevels)
-    .values(variants.map((v) => ({ id: id(), variantId: v.id, quantityOnHand: 1_000_000_000 })))
-    .onConflictDoNothing();
-
+  // Stock is the inventory-service's: its own `db:seed` gives each of these variants a level.
   console.log('Seed complete:', {
     categories: categories.length,
     products: products.length,
     variants: variants.length,
-    stockLevels: variants.length,
   });
 }
 

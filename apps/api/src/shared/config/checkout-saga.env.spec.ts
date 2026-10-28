@@ -13,6 +13,8 @@ const BASE_ENV = {
   USER_SERVICE_INTERNAL_URL: 'http://user-service.railway.internal:3000',
   INTERNAL_API_TOKEN: 'internal-api-token-not-a-real-secret-0000',
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
+  INVENTORY_SERVICE_URL: 'http://inventory-service.railway.internal:3000',
+  INVENTORY_SERVICE_TOKEN: 'inventory-service-token-not-a-real-secret-00',
 };
 
 const PRODUCTION_ENV = {
@@ -36,7 +38,7 @@ const SHORT_ENV = {
   CHECKOUT_RESERVE_WAIT_MS: '3000',
   CHECKOUT_CANCEL_WAIT_MS: '3000',
   CHECKOUT_RESERVING_ORPHAN_SEC: '4',
-  INVENTORY_TRY_LOCK_TIMEOUT_MS: '500',
+  INVENTORY_COMMAND_TIMEOUT_MS: '2000',
   SAGA_AUTH_GRACE_SEC: '1',
   SAGA_ACTIVITY_TIMEOUT_MS: '8000',
   SAGA_RETRY_BASE_MS: '100',
@@ -157,11 +159,12 @@ describe('checkout saga env', () => {
       expectValid({ ...BASE_ENV, ...SHORT_ENV, BREAKER_TIMEOUT_MS: '7999' });
     });
 
-    it('lets the participant give up before the saga stops waiting for the Try', () => {
+    it('keeps a saga activity alive past an inventory command and five seconds', () => {
       expectInvalid(
-        { ...BASE_ENV, INVENTORY_TRY_LOCK_TIMEOUT_MS: '3000' },
-        /INVENTORY_TRY_LOCK_TIMEOUT_MS \(3000\) must be below CHECKOUT_TRY_TIMEOUT_MS \(3000\)/,
+        { ...BASE_ENV, ...SHORT_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '3000' },
+        /SAGA_ACTIVITY_TIMEOUT_MS \(8000\) must exceed INVENTORY_COMMAND_TIMEOUT_MS \(3000\) \+ 5000/,
       );
+      expectValid({ ...BASE_ENV, ...SHORT_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '2999' });
     });
 
     it('waits on reserve for the whole Try plus two seconds', () => {
