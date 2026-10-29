@@ -12,7 +12,7 @@ tests:
   # consumer drains the queue.
   - interval: 1m
     input_series:
-      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="domain-events"}'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="order-events"}'
         values: '0x4 30+60x20 0x10'
     alert_rule_test:
       - eval_time: 10m
@@ -22,21 +22,24 @@ tests:
         alertname: MessagingQueueConsumerLagging
         exp_alerts:
           - exp_labels:
-              queue: domain-events
+              queue: order-events
               severity: page
             exp_annotations:
-              summary: 'Queue domain-events is not being consumed'
-              description: 'The oldest waiting job on domain-events is 7m 30s old and has been over a minute for 5 minutes. On domain-events that holds back payment.authorized on its way to the saga, so paid checkouts run into their deadline and compensate. RUNBOOK → The checkout saga → MessagingQueueConsumerLagging.'
+              summary: 'Queue order-events is not being consumed'
+              description: 'The oldest waiting job on order-events is 7m 30s old and has been over a minute for 5 minutes. On order-events that holds back payment.authorized on its way to the saga, so paid checkouts run into their deadline and compensate. RUNBOOK → The checkout saga → MessagingQueueConsumerLagging.'
       - eval_time: 28m
         alertname: MessagingQueueConsumerLagging
         exp_alerts: []
 
-  # The wiring regression: the api is still scraped but the queue gauge went absent.
+  # The wiring regression: the api is still scraped but one queue's gauge went absent while the
+  # other's kept reporting.
   - interval: 1m
     input_series:
       - series: 'up{job="jcool-api", instance="app:3000"}'
         values: '1x40'
-      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="domain-events"}'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="order-events"}'
+        values: '0x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
         values: '0x10 _x30'
     alert_rule_test:
       - eval_time: 20m
@@ -46,17 +49,39 @@ tests:
         alertname: MessagingQueueMetricsAbsent
         exp_alerts:
           - exp_labels:
+              queue: api-events
               severity: ticket
             exp_annotations:
-              summary: 'Queue depth metrics are missing from the api'
-              description: 'The api is being scraped but reports no messaging_queue_oldest_waiting_seconds, so MessagingQueueConsumerLagging cannot fire: the queue depth collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+              summary: 'Queue depth metrics for api-events are missing from the api'
+              description: 'The api is being scraped but reports no messaging_queue_oldest_waiting_seconds for api-events, so MessagingQueueConsumerLagging cannot fire on it: the queue depth collector does not cover that queue in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
 
-  # The api is down: `up` reads 0 and the gauge is gone with it. ApiScrapeDown owns that.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="order-events"}'
+        values: '0x10 _x30'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 26m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              queue: order-events
+              severity: ticket
+            exp_annotations:
+              summary: 'Queue depth metrics for order-events are missing from the api'
+              description: 'The api is being scraped but reports no messaging_queue_oldest_waiting_seconds for order-events, so MessagingQueueConsumerLagging cannot fire on it: the queue depth collector does not cover that queue in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+
+  # The api is down: `up` reads 0 and the gauges are gone with it. ApiScrapeDown owns that.
   - interval: 1m
     input_series:
       - series: 'up{job="jcool-api", instance="app:3000"}'
         values: '1x10 0x40'
-      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="domain-events"}'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="order-events"}'
+        values: '0x10 _x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
         values: '0x10 _x40'
     alert_rule_test:
       - eval_time: 30m
@@ -71,7 +96,9 @@ tests:
     input_series:
       - series: 'up{job="jcool-api", instance="app:3000"}'
         values: '1x40'
-      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="domain-events"}'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="order-events"}'
+        values: '0x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
         values: '0x40'
     alert_rule_test:
       - eval_time: 30m

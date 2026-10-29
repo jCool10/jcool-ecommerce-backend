@@ -5,9 +5,9 @@ import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { decode } from '@jcool/id-codec';
 import { authHeader } from '../setup/bearer.helper';
-import { addToCart, checkout, openSession, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
+import { addToCart, checkout, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { createTestAppWithFakeGateway, closeAppAfterAll, resetDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { STUB_NODE_ID, idServiceStub, testId } from '../setup/id-service-stub';
 
 describe('Snowflake ids (integration, real Postgres + Redis)', () => {
@@ -15,7 +15,7 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithFakeGateway('whsec_snowflake_ids_e2e_000000'));
+    ({ app, pool } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
@@ -35,13 +35,11 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
     await addToCart(app, accessToken, sku.variantId, 2);
     const order = await checkout(app, accessToken).expect(201);
     const orderId = order.body.id as string;
-    await openSession(app, accessToken, orderId).expect(201);
 
     expect(decode(orderId).nodeId, orderId).toBe(STUB_NODE_ID);
     await expectMintedIds('SELECT id FROM carts');
     await expectMintedIds('SELECT id FROM cart_items');
     await expectMintedIds('SELECT id FROM order_items WHERE order_id = $1', [orderId]);
-    await expectMintedIds('SELECT id FROM payments WHERE order_id = $1', [orderId]);
     await expectMintedIds('SELECT id FROM idempotency_keys');
     await expectMintedIds('SELECT id FROM outbox');
   });

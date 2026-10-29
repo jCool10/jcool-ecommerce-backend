@@ -1,5 +1,5 @@
 import { useFakeClock } from '@jcool/testing/fake-clock';
-import { PermanentError } from '@shared/messaging/errors';
+import { PermanentError } from '@jcool/messaging';
 import type { UserServiceClient } from '@jcool/auth-verifier/session-state';
 import { RemoteUserContactAdapter, UserNotYetInDirectoryError } from './user-contact.adapters';
 

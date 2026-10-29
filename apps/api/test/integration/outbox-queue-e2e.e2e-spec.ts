@@ -8,13 +8,11 @@ import { eq, isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { type DomainEventJob, DomainEventProcessor, OutboxRelay, queueToken } from '@jcool/messaging';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@jcool/messaging/outbox-port';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
 import { withSpan } from '@jcool/platform/observability';
 import { authHeader } from '../setup/bearer.helper';
 import { buyerWithCart, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
@@ -85,7 +83,7 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
     relay = app.get(OutboxRelay);
     processor = app.get(DomainEventProcessor);
     writer = app.get<OutboxWriterPort>(OUTBOX_WRITER);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
+    queue = app.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
@@ -146,7 +144,7 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
   describe('publish counter', () => {
     const PUBLISHED = 'messaging_publish_total{event_type="order.placed",result="published"}';
     const REFUSED = 'messaging_publish_total{event_type="order.placed",result="refused"}';
-    const UNREGISTERED = 'messaging_publish_total{event_type="unregistered",result="published"}';
+    const UNREGISTERED = 'messaging_publish_total{event_type="unregistered",result="refused"}';
 
     it('counts a row the moment the queue accepts it', async () => {
       await seed(1);
@@ -176,13 +174,15 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
       await seed(1, { eventType: 'payment.refunded' });
       const before = counter(await scrape(), UNREGISTERED);
 
-      await relay.runOnce(10);
+      // No route either, so the row is refused rather than published to a queue nothing reads.
+      await expect(relay.runOnce(10)).resolves.toEqual({ published: 0, failed: 1 });
 
       const text = await scrape();
       // Cardinality iron rule: `outbox.event_type` is free text a producer wrote, so only the
-      // dispatch table bounds it. The raw name must not appear as a label anywhere.
+      // route table bounds it. The raw name must not appear as a label anywhere.
       expect(counter(text, UNREGISTERED)).toBe(before + 1);
       expect(text).not.toContain('event_type="payment.refunded"');
+      expect(await unpublished()).toHaveLength(1);
     });
   });
 
@@ -273,7 +273,7 @@ describe('Outbox to queue to consumer, end to end (integration, real Postgres + 
 
       // Driven through the processor rather than a Worker so the assertion lands on a finished
       // span: a Worker would consume this on its own timeline. The envelope still came out of Redis.
-      await expect(processor.process(delivered)).resolves.toBe('processed');
+      await expect(processor.process(delivered, ORDER_EVENTS_QUEUE)).resolves.toBe('processed');
 
       const spans = exporter.getFinishedSpans();
       const names = spans.map((span) => span.name);

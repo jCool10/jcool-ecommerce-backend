@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import { inventoryServiceStub } from './inventory-service-stub';
+import { paymentServiceStub } from './payment-service-stub';
 
 // Drizzle's migration ledger lives in the `drizzle` schema, so truncating `public` keeps the
 // migrated structure. Postgres only: Redis is not flushed here, so a Redis-backed feature needing
@@ -20,6 +21,7 @@ export async function resetDatabase(pool: Pool): Promise<void> {
     const tables = rows.map((r) => `"${r.tablename}"`).join(', ');
     await pool.query(`TRUNCATE ${tables} RESTART IDENTITY CASCADE`);
   }
-  // Stock lives in the stub now; it goes with the orders that point at it.
+  // Stock and payments live in the stubs now; they go with the orders that point at them.
   (await inventoryServiceStub()).reset();
+  (await paymentServiceStub()).reset();
 }

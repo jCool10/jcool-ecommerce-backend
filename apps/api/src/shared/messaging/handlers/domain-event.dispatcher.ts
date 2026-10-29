@@ -1,11 +1,15 @@
 import { Injectable } from '@nestjs/common';
+import {
+  type DomainEventDispatcherPort,
+  type DomainEventJob,
+  type PostCommitEffect,
+  UnhandledEventError,
+} from '@jcool/messaging';
 import { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
 import { PaymentAuthorizedHandler } from '@modules/order/interface/queue/payment-authorized.handler';
 import { CategoryRenamedHandler } from '@modules/product/interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from '@modules/product/interface/catalog/queue/product-changed.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { UnhandledEventError } from '../errors';
-import type { DomainEventJob, PostCommitEffect } from '../queue/domain-event.job';
 import { OrderEventsHandler } from './order-events.handler';
 
 /**
@@ -39,10 +43,9 @@ const beforeClaim =
     return () => Promise.resolve();
   };
 
-const UNREGISTERED_EVENT_LABEL = 'unregistered';
-
+/** One table for both queues the api consumes: each only ever delivers the events routed to it. */
 @Injectable()
-export class DomainEventDispatcher {
+export class DomainEventDispatcher implements DomainEventDispatcherPort {
   private readonly handlers: ReadonlyMap<string, PreparedHandler>;
 
   constructor(
@@ -79,10 +82,10 @@ export class DomainEventDispatcher {
 
   /**
    * The dispatch table is the only bounded set of event names there is — a name off the wire is not
-   * — so anything unrecognised folds into one constant rather than minting a time series per value.
+   * — so anything unrecognised folds into one label rather than minting a time series per value.
    */
-  label(eventType: string): string {
-    return this.handlers.has(eventType) ? eventType : UNREGISTERED_EVENT_LABEL;
+  handles(eventType: string): boolean {
+    return this.handlers.has(eventType);
   }
 
   async prepare(job: DomainEventJob): Promise<TransactionalStep> {

@@ -1,12 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ORDER_EVENTS_CONSUMER, ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { type DomainEventJob, DomainEventProcessor } from '@jcool/messaging';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
+import { API_EVENTS_CONSUMER, API_EVENTS_QUEUE } from '../../src/shared/messaging/event-routes';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_CONSUMER } from '../../src/shared/messaging/queue/queue.constants';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
@@ -34,6 +34,8 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     ...overrides,
   });
 
+  const deliver = (event: DomainEventJob, queue = ORDER_EVENTS_QUEUE) => processor.process(event, queue);
+
   const inboxRows = () => db.select().from(schema.inbox);
 
   beforeAll(async () => {
@@ -51,13 +53,13 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('applies an event once and records the claim under its consumer group', async () => {
     const effect = spyOnEffect(dispatcher);
 
-    await expect(processor.process(job())).resolves.toBe('processed');
+    await expect(deliver(job())).resolves.toBe('processed');
 
     expect(effect).toHaveBeenCalledTimes(1);
     const rows = await inboxRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      consumer: DOMAIN_EVENTS_CONSUMER,
+      consumer: ORDER_EVENTS_CONSUMER,
       messageId: MESSAGE_ID,
       eventType: 'order.placed',
     });
@@ -66,8 +68,8 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('collapses a redelivery of the same message into a single effect', async () => {
     const effect = spyOnEffect(dispatcher);
 
-    await expect(processor.process(job())).resolves.toBe('processed');
-    await expect(processor.process(job())).resolves.toBe('duplicate');
+    await expect(deliver(job())).resolves.toBe('processed');
+    await expect(deliver(job())).resolves.toBe('duplicate');
 
     expect(effect).toHaveBeenCalledTimes(1);
     expect(await inboxRows()).toHaveLength(1);
@@ -77,23 +79,33 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   it('dedups on the outbox id, not on anything per delivery', async () => {
     const effect = spyOnEffect(dispatcher);
 
-    await processor.process(job());
-    await expect(
-      processor.process(job({ traceparent: '00-' + '1'.repeat(32) + '-' + '2'.repeat(16) + '-01' })),
-    ).resolves.toBe('duplicate');
+    await deliver(job());
+    await expect(deliver(job({ traceparent: '00-' + '1'.repeat(32) + '-' + '2'.repeat(16) + '-01' }))).resolves.toBe(
+      'duplicate',
+    );
 
     expect(effect).toHaveBeenCalledTimes(1);
+  });
+
+  // Each queue claims under its own group, so a claim on one can never swallow a delivery on the other.
+  it('keeps the claims of order-events and api-events apart', async () => {
+    await expect(deliver(job())).resolves.toBe('processed');
+    await expect(deliver(job(), API_EVENTS_QUEUE)).resolves.toBe('processed');
+
+    expect((await inboxRows()).map((row) => row.consumer).sort()).toEqual(
+      [API_EVENTS_CONSUMER, ORDER_EVENTS_CONSUMER].sort(),
+    );
   });
 
   it('rolls the claim back when the effect fails, so the redelivery does the work', async () => {
     const effect = spyOnEffect(dispatcher).mockRejectedValueOnce(new Error('handler exploded'));
 
-    await expect(processor.process(job())).rejects.toThrow('handler exploded');
+    await expect(deliver(job())).rejects.toThrow('handler exploded');
 
     expect(await inboxRows()).toHaveLength(0);
 
     effect.mockRestore();
-    await expect(processor.process(job())).resolves.toBe('processed');
+    await expect(deliver(job())).resolves.toBe('processed');
     expect(await inboxRows()).toHaveLength(1);
   });
 
@@ -102,7 +114,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
     const { user } = await createTestPrincipal(app);
     const payload = { orderId: ORDER_ID, userId: user.id, totalAmountMinor: 150_000 };
     for (const eventType of ['order.placed', 'order.paid', 'order.failed', 'order.expired']) {
-      await expect(processor.process(job({ outboxId: testId(), eventType, payload }))).resolves.toBe('processed');
+      await expect(deliver(job({ outboxId: testId(), eventType, payload }))).resolves.toBe('processed');
     }
 
     expect((await inboxRows()).map((row) => row.eventType).sort()).toEqual([
@@ -114,7 +126,7 @@ describe('Idempotent consumer (integration, real Postgres + Redis)', () => {
   });
 
   it('fails an event with no handler and leaves it unclaimed', async () => {
-    await expect(processor.process(job({ eventType: 'payment.refunded' }))).rejects.toThrow(/No handler registered/);
+    await expect(deliver(job({ eventType: 'payment.refunded' }))).rejects.toThrow(/No handler registered/);
 
     expect(await inboxRows()).toHaveLength(0);
   });

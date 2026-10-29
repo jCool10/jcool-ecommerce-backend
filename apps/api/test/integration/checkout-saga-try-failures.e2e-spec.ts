@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@jcool/messaging/outbox-port';
 import {
   CHECKOUT_SAGA_ENGINE,
   CheckoutEngineUnavailableError,
@@ -14,7 +15,6 @@ import {
 } from '../../src/modules/order/application/ports/order-inventory-participant.port';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { OUTBOX_WRITER, type OutboxWriterPort } from '../../src/shared/messaging/outbox/outbox-writer.port';
 import { authHeader } from '../setup/bearer.helper';
 import { orderEventTypes } from '../setup/fixtures/checkout-saga.fixture';
 import { readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
@@ -27,12 +27,11 @@ import {
   untilOrderStatus,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { type InventoryServiceStub, inventoryServiceStub } from '../setup/inventory-service-stub';
 import { sleep } from '../setup/sleep';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_try_failures_01';
 const TRY_TIMEOUT_MS = 3000;
 const RESERVE_WAIT_MS = 6000;
 const RETRY_AFTER_SEC = '5';
@@ -48,7 +47,7 @@ describe('Checkout saga Try failures (integration, real Temporal, real HTTP)', (
   let inventoryService: InventoryServiceStub;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV));
+    ({ app, pool, db } = await createTestAppWithPool(SAGA_ENV));
     inventoryService = await inventoryServiceStub();
   });
   closeAppAfterAll(() => app);

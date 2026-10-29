@@ -23,25 +23,19 @@ import {
   sagaHandle,
 } from '../setup/fixtures/checkout-saga.fixture';
 import {
-  authorizeSession,
+  authorizePayment,
   buyerWithCart,
   checkout,
   openSession,
   seedSellableSku,
   untilOrderStatus,
 } from '../setup/fixtures/order-flow.fixture';
-import {
-  closeAppAfterAll,
-  createTestAppWithFakeGateway,
-  createTestAppWithPool,
-  resetSagasAndDatabaseBeforeEach,
-} from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { E2E_METRICS_TOKEN, scrapeMetrics, type MetricsScrape } from '../setup/metrics.helper';
 import { UNREACHABLE_TEMPORAL_ADDRESS } from '../setup/temporal-server';
 import { temporalTaskQueueForCurrentSpec } from '../setup/temporal-task-queue';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_metrics_00001';
 const PRICE = 80_000;
 const CURRENCY = 'VND';
 const OPEN_STEPS = ['RESERVING', 'AWAITING_AUTH', 'COMMITTING_STOCK', 'CAPTURING', 'COMPENSATING'];
@@ -64,7 +58,7 @@ describe('Checkout saga metrics (integration, real Temporal, fake Stripe)', () =
   let db: DrizzleDB;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, METRICS_ENV));
+    ({ app, pool, db } = await createTestAppWithPool(METRICS_ENV));
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
@@ -119,8 +113,8 @@ describe('Checkout saga metrics (integration, real Temporal, fake Stripe)', () =
   it('counts the commit and the capture of a paid checkout', async () => {
     const { token, orderId } = await placed();
     const before = await scrapeMetrics(app);
-    const pay = await openSession(app, token, orderId).expect(201);
-    await authorizeSession(app, pay.body.providerSessionId as string, orderId);
+    await openSession(app, token, orderId).expect(201);
+    await authorizePayment(orderId);
 
     await relayAuthorization(app, orderId);
     await untilOrderStatus(app, orderId, 'PAID');
@@ -193,30 +187,17 @@ describe('Checkout saga metrics (integration, real Temporal, fake Stripe)', () =
     expect(metrics.value('checkout_saga_closed_abnormally', { status: 'Failed' })).toBe(0);
   });
 
-  it('reports how long the oldest authorization has waited for its capture', async () => {
-    const orderId = await seedOrder('PENDING', new Date(Date.now() + 600_000));
-    await db.insert(schema.paymentOrders).values({
-      orderId,
-      status: 'AUTHORIZED',
-      amountMinor: PRICE,
-      currency: CURRENCY,
-      authorizedAt: new Date(Date.now() - 1_200_000),
-    });
-
-    const metrics = await scrapeMetrics(app);
-
-    // The gauge reads the database clock, which can sit a few milliseconds off this process's.
-    expect(metrics.value('payment_authorized_uncaptured_oldest_seconds')).toBeCloseTo(1_200, -1);
-  });
-
   it('reports the depth of the queue that carries authorizations to the saga', async () => {
     const metrics = await scrapeMetrics(app);
 
-    for (const state of ['wait', 'prioritized', 'active', 'delayed']) {
-      expect(metrics.value('messaging_queue_jobs', { queue: 'domain-events', state }), state).toBeDefined();
+    // api-events rides along: both are consumed here, and neither dead-letter queue is.
+    for (const queue of ['order-events', 'api-events']) {
+      for (const state of ['wait', 'prioritized', 'active', 'delayed']) {
+        expect(metrics.value('messaging_queue_jobs', { queue, state }), `${queue} ${state}`).toBeDefined();
+      }
+      expect(metrics.value('messaging_queue_oldest_waiting_seconds', { queue }), queue).toBeDefined();
+      expect(metrics.value('messaging_queue_jobs', { queue: `${queue}-dlq` }), queue).toBeUndefined();
     }
-    expect(metrics.value('messaging_queue_oldest_waiting_seconds', { queue: 'domain-events' })).toBeDefined();
-    expect(metrics.value('messaging_queue_jobs', { queue: 'domain-events-dlq' })).toBeUndefined();
   });
 });
 

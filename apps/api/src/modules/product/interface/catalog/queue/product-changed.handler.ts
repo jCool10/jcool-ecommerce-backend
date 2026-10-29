@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { isRoutableId } from '@jcool/id-codec';
-import { PermanentError } from '@shared/messaging/errors';
-import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, PermanentError } from '@jcool/messaging';
 import { ProductSearchSyncService } from '../../../application/catalog/services/product-search-sync.service';
 
 @Injectable()

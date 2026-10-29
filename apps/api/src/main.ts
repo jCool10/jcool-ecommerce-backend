@@ -28,10 +28,7 @@ function readApiVersion(): string {
 }
 
 async function bootstrap(): Promise<void> {
-  // `rawBody: true` captures the exact request bytes on `req.rawBody` so the payment webhook can
-  // verify its HMAC signature over what the gateway actually signed — the global JSON parser would
-  // re-serialize and break it.
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true, rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
   const logger = app.get(Logger);
   app.useLogger(logger);
   logProcessCrashes(await app.resolve(PinoLogger));
@@ -69,13 +66,11 @@ async function bootstrap(): Promise<void> {
       .setTitle('JCool E-commerce API')
       .setDescription(
         [
-          'Single-store e-commerce backend — five bounded contexts in one deployable process.',
+          'Single-store e-commerce backend — three bounded contexts in one deployable process.',
           '',
           '- **Catalog** — public product/SKU reads and search; admin CRUD behind `ADMIN`.',
           '- **Cart** — per-user cart lines, priced from the catalog at read time.',
-          '- **Order** — checkout: the order, not the cart, is the source of truth for a transaction.',
-          '- **Payment** — gateway sessions and the webhook sink; one purchase intent, one charge.',
-          '- **Inventory** — stock reservations that hold the "never oversell" invariant under contention.',
+          '- **Order** — checkout: the order, not the cart, is the source of truth for a transaction. Stock is held by the inventory-service, payments by the payment-service.',
         ].join('\n'),
       )
       .setVersion(readApiVersion())

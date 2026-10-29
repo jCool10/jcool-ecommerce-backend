@@ -2,10 +2,10 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { type DomainEventJob, DomainEventProcessor } from '@jcool/messaging';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
@@ -68,9 +68,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   it('confirms a paid order once, however often the message is redelivered', async () => {
     const { user } = await createTestPrincipal(app);
 
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('processed');
+    await expect(processor.process(paidJob(user.id), ORDER_EVENTS_QUEUE)).resolves.toBe('processed');
     const [delivered] = await mail.waitForMail(user.email);
-    await expect(processor.process(paidJob(user.id))).resolves.toBe('duplicate');
+    await expect(processor.process(paidJob(user.id), ORDER_EVENTS_QUEUE)).resolves.toBe('duplicate');
 
     expect(delivered.Subject).toBe('Your order is confirmed');
     expect(await mail.body(delivered.ID)).toContain(ORDER_ID);
@@ -80,9 +80,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
   });
 
   it('refuses permanently when the event names a user that no longer exists', async () => {
-    await expect(processor.process(paidJob(mintTestUserId(), { occurredAt: LONG_AGO }))).rejects.toThrow(
-      /no longer exists/,
-    );
+    await expect(
+      processor.process(paidJob(mintTestUserId(), { occurredAt: LONG_AGO }), ORDER_EVENTS_QUEUE),
+    ).rejects.toThrow(/no longer exists/);
 
     expect(await inboxRows()).toHaveLength(0);
   });
@@ -96,7 +96,9 @@ describe('Order confirmation mail (integration, real Mailpit + Postgres + Redis)
       METRICS_TOKEN: E2E_METRICS_TOKEN,
     });
     try {
-      await expect(broken.get(DomainEventProcessor).process(paidJob(user.id))).resolves.toBe('processed');
+      await expect(broken.get(DomainEventProcessor).process(paidJob(user.id), ORDER_EVENTS_QUEUE)).resolves.toBe(
+        'processed',
+      );
 
       expect(await inboxRows()).toHaveLength(1);
       expect(await mail.messages()).toHaveLength(0);

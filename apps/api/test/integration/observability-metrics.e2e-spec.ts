@@ -9,9 +9,8 @@ import { createTestApp } from '../setup/test-app.factory';
 const INFRA = resolve(__dirname, '../../../../infra');
 // Scraped from Prometheus itself, Loki and the id-service, not from the api.
 const NOT_THE_API = /^(up|loki_\w+|id_clock_\w+)$/;
-// Recorded only by the inventory-service, which checks them on its own /metrics. Empty while no rule or
-// dashboard queries one.
-const OWNED_ELSEWHERE = new Set<string>();
+// Recorded only by the inventory-service or the payment-service, each checking them on its own /metrics.
+const OWNED_ELSEWHERE = new Set<string>(['payment_authorized_uncaptured_oldest_seconds']);
 
 describe('Metrics endpoint (integration)', () => {
   let app: INestApplication;

@@ -165,4 +165,4 @@ groups:
           severity: page
         annotations:
           summary: 'Message moved to the dead-letter queue'
-          description: 'Parked after exhausting retries or a permanent failure. Inspect with `npm run queue:replay-dlq`, deploy the fix, then replay.'
+          description: 'Parked after exhausting retries or a permanent failure. Inspect with `pnpm queue:replay-dlq --queue <queue>` (order-events or api-events, by the event type), deploy the fix, then replay.'

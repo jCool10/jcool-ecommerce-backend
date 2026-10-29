@@ -1,9 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Job, Queue } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ORDER_PAID_BACKOFF } from '@jcool/internal-contracts/queues/order-events';
+import { type DomainEventJob, DomainEventProcessor, OutboxRelay, queueToken } from '@jcool/messaging';
 import {
   CATALOG_SEARCH,
   type CatalogSearchPort,
@@ -12,10 +15,7 @@ import {
 import { PRODUCTS_ALIAS } from '../../src/modules/product/infrastructure/catalog/search/index-settings';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import { CATALOG_EVENT_PRIORITY, DOMAIN_EVENTS_QUEUE } from '../../src/shared/messaging/queue/queue.constants';
+import { API_EVENTS_QUEUE } from '../../src/shared/messaging/event-routes';
 import { authHeader } from '../setup/bearer.helper';
 import { drainDomainEvents } from '../setup/domain-events';
 import { createTestCategory, type TestCategory } from '../setup/fixtures/catalog.fixture';
@@ -50,16 +50,18 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
   let db: DrizzleDB;
   let queue: Queue<DomainEventJob>;
   let relay: OutboxRelay;
-  let processor: DomainEventProcessor;
+  let processor: { process: (job: DomainEventJob) => ReturnType<DomainEventProcessor['process']> };
   let admin: TestPrincipal;
   let category: TestCategory;
 
   beforeAll(async () => {
     engine = await startSearchEngine();
     ({ app, pool, db } = await createTestAppWithPool(searchEnv(engine)));
-    queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
+    queue = app.get<Queue<DomainEventJob>>(queueToken(API_EVENTS_QUEUE));
     relay = app.get(OutboxRelay);
-    processor = app.get(DomainEventProcessor);
+    // Catalog events only ever arrive on api-events.
+    const consumer = app.get(DomainEventProcessor);
+    processor = { process: (job) => consumer.process(job, API_EVENTS_QUEUE) };
   }, 180_000);
 
   afterAll(async () => {
@@ -317,14 +319,20 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     ]);
   });
 
-  // BullMQ serves every unprioritized job first; that ordering is its contract, not re-tested here.
-  it('queues a catalog event behind order and payment work', async () => {
+  // Its own queue keeps a catalog burst from holding up order and payment work, without a priority.
+  const expectOnTheCatalogLadder = async (job: Job<DomainEventJob>) => {
+    expect(await job.getState()).toBe('waiting');
+    expect(job.opts.priority).toBeUndefined();
+    expect(job.opts).toMatchObject({
+      attempts: app.get(ConfigService).getOrThrow<number>('queue.orderPaidAttempts'),
+      backoff: { type: ORDER_PAID_BACKOFF },
+    });
+  };
+
+  it('queues a catalog event on api-events, apart from order and payment work', async () => {
     const productId = await createProduct('Patient Kettle');
 
-    const job = await relayJobFor(productId);
-
-    expect(await job.getState()).toBe('prioritized');
-    expect(job.opts.priority).toBe(CATALOG_EVENT_PRIORITY);
+    await expectOnTheCatalogLadder(await relayJobFor(productId));
   });
 
   describe('category rename', () => {
@@ -435,14 +443,13 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
       await expectIndexedAtRowVersions(seeded.all);
     });
 
-    it('queues a rename behind order and payment work like any catalog event', async () => {
+    it('queues a rename on api-events like any catalog event', async () => {
       await renameCategory(category.id, { name: 'Patient Pantry' });
 
       const job = await relayJobFor(category.id);
 
       expect(job.data.eventType).toBe('catalog.category.renamed');
-      expect(await job.getState()).toBe('prioritized');
-      expect(job.opts.priority).toBe(CATALOG_EVENT_PRIORITY);
+      await expectOnTheCatalogLadder(job);
     });
   });
 });

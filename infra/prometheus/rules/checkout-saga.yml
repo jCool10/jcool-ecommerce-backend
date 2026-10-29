@@ -112,11 +112,12 @@ groups:
           summary: 'Checkout saga metrics are missing from the api'
           description: 'The api is being scraped but reports no checkout_saga_engine_up, so every saga alert is blind: the saga collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
 
+      # Joined to the payment-service's `up`, which owns the gauge; PaymentScrapeDown covers it down.
       - alert: PaymentMetricsAbsent
-        expr: absent(payment_authorized_uncaptured_oldest_seconds) and on() (count(up{job="jcool-api"} == 1) > 0)
+        expr: absent(payment_authorized_uncaptured_oldest_seconds) and on() (count(up{job="jcool-payment"} == 1) > 0)
         for: 10m
         labels:
           severity: ticket
         annotations:
-          summary: 'Payment authorization metrics are missing from the api'
-          description: 'The api is being scraped but reports no payment_authorized_uncaptured_oldest_seconds, so PaymentAuthorizationUncaptured cannot fire: the payment collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+          summary: 'Payment authorization metrics are missing from the payment-service'
+          description: 'The payment-service is being scraped but reports no payment_authorized_uncaptured_oldest_seconds, so PaymentAuthorizationUncaptured cannot fire: the payment collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'

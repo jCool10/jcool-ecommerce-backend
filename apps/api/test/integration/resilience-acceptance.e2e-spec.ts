@@ -2,31 +2,22 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PAYMENT_GATEWAY_BREAKER } from '../../src/modules/payment/infrastructure/gateway/breaker-payment-gateway.adapter';
 import { RedisService } from '@jcool/platform/redis';
 import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '@jcool/platform/throttler';
 import { CircuitBreakerFactory } from '@jcool/platform/resilience';
 import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import {
-  buyerWithCart,
-  checkout,
-  openSession,
-  readPayment,
-  seedSellableSku,
-} from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { createTestAppWithPool } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { resetDatabase } from '../setup/reset-database';
-import { sleep } from '../setup/sleep';
 
-// The open window has to outlast a checkout attempt plus a `/metrics` scrape, and a scrape queries
-// Postgres for the outbox backlog, so a loaded runner cannot slip the trial call in early.
+// The open window has to outlast a `/metrics` scrape, and a scrape queries Postgres for the outbox
+// backlog, so a loaded runner cannot close the circuit before it is read.
 const BREAKER_RESET_MS = 5_000;
-// Its own breaker, so tripping it leaves the payment circuit to the test that owns it.
+// Its own breaker, so tripping it leaves every real dependency's circuit alone.
 const PROBE_BREAKER = 'resilience-acceptance-probe';
 
 const IP_LIMIT = ORDER_THROTTLE[DEFAULT_THROTTLER].limit;
@@ -93,42 +84,6 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
   function postOrder(token: string): request.Test {
     return request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).send();
   }
-
-  it('fails a checkout fast while the payment circuit is open, then recovers', async () => {
-    const sku = await seedSellableSku(app, { onHand: 3 });
-    const token = await buyerWithCart(app, sku.variantId);
-    const orderId = (await checkout(app, token).expect(201)).body.id as string;
-
-    // Read before the circuit opens: everything up to the state assertions has to fit inside the
-    // open window, and the two failures below count as `failure`, not `rejected`.
-    const rejectionsBefore = baselineOf(await scrape(), 'circuit_breaker_calls_total', {
-      breaker: PAYMENT_GATEWAY_BREAKER,
-      result: 'rejected',
-    });
-
-    // The same name returns the breaker the payment module already built, so this trips the circuit
-    // the buyer's own checkout runs through.
-    const gateway = app.get(CircuitBreakerFactory).create(PAYMENT_GATEWAY_BREAKER);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await expect(gateway.run(() => Promise.reject(new Error('gateway boom')))).rejects.toThrow('gateway boom');
-    }
-
-    await openSession(app, token, orderId).expect(502);
-
-    const whileOpen = await scrape();
-    expect(sampleOf(whileOpen, 'circuit_breaker_state', { breaker: PAYMENT_GATEWAY_BREAKER })).toBe(2);
-    expect(
-      sampleOf(whileOpen, 'circuit_breaker_calls_total', { breaker: PAYMENT_GATEWAY_BREAKER, result: 'rejected' }),
-    ).toBe(rejectionsBefore + 1);
-    // A refused session must not strand the buyer with a PENDING payment no webhook will settle.
-    expect(await readPayment(app, orderId)).toBeUndefined();
-
-    await sleep(BREAKER_RESET_MS + 200);
-    const recovered = await openSession(app, token, orderId).expect(201);
-
-    expect(recovered.body.providerSessionId).toMatch(/^cs_test_/);
-    expect(sampleOf(await scrape(), 'circuit_breaker_state', { breaker: PAYMENT_GATEWAY_BREAKER })).toBe(0);
-  });
 
   it('turns an account away at the IP tier while its own budget is untouched', async () => {
     // The per-user tier is pinned in rate-limit-sensitive-endpoints; this spends the shared address

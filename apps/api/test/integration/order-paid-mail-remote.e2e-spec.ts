@@ -3,17 +3,17 @@ import type { Job, Queue } from 'bullmq';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ORDER_EVENTS_DLQ, ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import {
+  type DeadLetterJob,
+  OutboxRelay,
+  cappedBackoffMs,
+  jobIdFor,
+  queueToken,
+  retryHorizonMs,
+} from '@jcool/messaging';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
-import {
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-  cappedBackoffMs,
-  retryHorizonMs,
-} from '../../src/shared/messaging/queue/queue.constants';
 import { createTestPrincipal, mintTestUserId } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { startMailServer, type StartedMailServer } from '../setup/mail-server';
@@ -94,8 +94,8 @@ describe('Order confirmation mail against the user directory (integration, real 
       BREAKER_RESET_TIMEOUT_MS: '100',
     }));
     relay = app.get(OutboxRelay);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
+    queue = app.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
+    dlq = app.get<Queue>(queueToken(ORDER_EVENTS_DLQ));
   }, 180_000);
 
   afterAll(async () => {

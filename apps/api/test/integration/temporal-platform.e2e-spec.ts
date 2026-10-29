@@ -1,9 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Client } from '@temporalio/client';
+import { type Queue, Worker } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { type DomainEventJob, DomainEventProcessor, queueToken } from '@jcool/messaging';
+import type { ConsumeResult } from '@jcool/metrics-port';
 import {
   CheckoutEngineUnavailableError,
   type CheckoutSagaStart,
@@ -21,6 +25,7 @@ import { Order } from '../../src/modules/order/domain/order.entity';
 import { checkoutWorkflowId } from '../../src/modules/order/infrastructure/temporal/checkout-saga.contract';
 import { TEMPORAL_CLIENT } from '../../src/modules/order/infrastructure/temporal/temporal.providers';
 import { PG_POOL } from '../../src/shared/infrastructure/database/drizzle.tokens';
+import { API_EVENTS_QUEUE } from '../../src/shared/messaging/event-routes';
 import {
   checkoutSagaStartOf,
   holdCalls,
@@ -215,14 +220,42 @@ describe('Temporal platform wiring (integration, real Temporal dev server)', () 
     };
     // Readiness hold, worker grace and force, its slack, two queue-worker waits, and some room.
     const CLOSE_BUDGET_MS = 500 + 500 + 500 + 1000 + 2 * 5000 + 2000;
+    const STEP_SEQUENCE = ['readiness down', 'grace elapsed', 'step temporal-worker', 'step queue-workers', 'pool end'];
+    const CONSUMED_QUEUES = [ORDER_EVENTS_QUEUE, API_EVENTS_QUEUE];
+
+    async function shutdownAppWithWorkersRunning(): Promise<INestApplication> {
+      const shutdownApp = (await createTestAppWithPool(SHUTDOWN_ENV)).app;
+      await eventually(
+        () => sagaWorker(shutdownApp).status().state,
+        (state) => state === 'RUNNING',
+      );
+      return shutdownApp;
+    }
+
+    async function closeTraced(shutdownApp: INestApplication): Promise<{ sequence: string[]; tookMs: number }> {
+      // Call-through spies; invocationCallOrder is global across spies, so it orders logs and pool end.
+      const info = vi.spyOn(PinoLogger.prototype, 'info');
+      const error = vi.spyOn(PinoLogger.prototype, 'error');
+      const end = vi.spyOn(shutdownApp.get<Pool>(PG_POOL), 'end');
+
+      const startedAt = Date.now();
+      await expect(shutdownApp.close()).resolves.toBeUndefined();
+      const tookMs = Date.now() - startedAt;
+
+      const logged = [info, error].flatMap(({ mock }) =>
+        mock.calls.map((args, index) => ({ order: mock.invocationCallOrder[index], label: shutdownLabel(args) })),
+      );
+      const ended = end.mock.invocationCallOrder.map((order) => ({ order, label: 'pool end' }));
+      const sequence = [...logged, ...ended]
+        .filter((entry): entry is { order: number; label: string } => entry.label !== null)
+        .sort((a, b) => a.order - b.order)
+        .map(({ label }) => label);
+      return { sequence, tookMs };
+    }
 
     it('drains the workflow worker before the queue worker, and the pool only after both', async () => {
-      const shutdownApp = (await createTestAppWithPool(SHUTDOWN_ENV)).app;
+      const shutdownApp = await shutdownAppWithWorkersRunning();
       try {
-        await eventually(
-          () => sagaWorker(shutdownApp).status().state,
-          (state) => state === 'RUNNING',
-        );
         const release = holdCalls(
           shutdownApp.get<OrderInventoryParticipantPort>(ORDER_INVENTORY_PARTICIPANT),
           'release',
@@ -231,31 +264,64 @@ describe('Temporal platform wiring (integration, real Temporal dev server)', () 
         await expect(sagaEngine(shutdownApp).reserve(start)).resolves.toBe('OUT_OF_STOCK');
         await release.waitForCalls(1);
 
-        // Call-through spies; invocationCallOrder is global across spies, so it orders logs and pool end.
-        const info = vi.spyOn(PinoLogger.prototype, 'info');
-        const error = vi.spyOn(PinoLogger.prototype, 'error');
-        const end = vi.spyOn(shutdownApp.get<Pool>(PG_POOL), 'end');
-
-        const startedAt = Date.now();
-        await expect(shutdownApp.close()).resolves.toBeUndefined();
-        const tookMs = Date.now() - startedAt;
-
-        const logged = [info, error].flatMap(({ mock }) =>
-          mock.calls.map((args, index) => ({ order: mock.invocationCallOrder[index], label: shutdownLabel(args) })),
-        );
-        const ended = end.mock.invocationCallOrder.map((order) => ({ order, label: 'pool end' }));
-        const sequence = [...logged, ...ended]
-          .filter(({ label }) => label !== null)
-          .sort((a, b) => a.order - b.order)
-          .map(({ label }) => label);
-        expect(sequence).toEqual([
-          'readiness down',
-          'grace elapsed',
-          'step temporal-worker',
-          'step domain-events-worker',
-          'pool end',
-        ]);
+        const { sequence, tookMs } = await closeTraced(shutdownApp);
+        expect(sequence).toEqual(STEP_SEQUENCE);
         expect(tookMs).toBeGreaterThanOrEqual(500);
+        expect(tookMs).toBeLessThanOrEqual(CLOSE_BUDGET_MS);
+      } finally {
+        vi.restoreAllMocks();
+        releaseHung();
+      }
+    });
+
+    it('closes the order-events and api-events workers side by side while each holds a job', async () => {
+      const shutdownApp = await shutdownAppWithWorkersRunning();
+      try {
+        let finishJobs!: () => void;
+        const jobsFinished = new Promise<ConsumeResult>((resolve) => {
+          finishJobs = () => resolve('processed');
+        });
+        const holding = new Set<string>();
+        vi.spyOn(shutdownApp.get(DomainEventProcessor), 'process').mockImplementation((_job, queue) => {
+          holding.add(queue);
+          return jobsFinished;
+        });
+        for (const queue of CONSUMED_QUEUES) {
+          const job: DomainEventJob = {
+            outboxId: testId(),
+            aggregateType: 'test',
+            aggregateId: testId(),
+            eventType: `test.${queue}`,
+            payload: {},
+            occurredAt: new Date().toISOString(),
+            traceparent: null,
+          };
+          await shutdownApp.get<Queue<DomainEventJob>>(queueToken(queue)).add(job.eventType, job);
+        }
+        await eventually(
+          () => holding.size,
+          (size) => size === CONSUMED_QUEUES.length,
+        );
+
+        // The jobs end only once both closes have begun: closed one after the other, the first
+        // would sit out its whole bounded wait before the second even started.
+        const closes: { queue: string; edge: 'start' | 'end'; at: number }[] = [];
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- called back with the worker as `this`
+        const realClose = Worker.prototype.close;
+        vi.spyOn(Worker.prototype, 'close').mockImplementation(async function (this: Worker, force?: boolean) {
+          closes.push({ queue: this.name, edge: 'start', at: Date.now() });
+          if (closes.filter(({ edge }) => edge === 'start').length === CONSUMED_QUEUES.length) finishJobs();
+          await realClose.call(this, force);
+          closes.push({ queue: this.name, edge: 'end', at: Date.now() });
+        });
+
+        const { sequence, tookMs } = await closeTraced(shutdownApp);
+        expect(sequence).toEqual(STEP_SEQUENCE);
+        expect(closes.map(({ edge }) => edge)).toEqual(['start', 'start', 'end', 'end']);
+        expect(new Set(closes.map(({ queue }) => queue))).toEqual(new Set(CONSUMED_QUEUES));
+        const [first, second] = closes;
+        expect(second.at - first.at).toBeLessThan(1000);
+        // Well inside the api's Railway drainingSeconds (30) less a second.
         expect(tookMs).toBeLessThanOrEqual(CLOSE_BUDGET_MS);
       } finally {
         vi.restoreAllMocks();

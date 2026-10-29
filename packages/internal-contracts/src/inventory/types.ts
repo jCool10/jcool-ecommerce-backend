@@ -15,9 +15,6 @@ export type LockBudgetExhausted = typeof LOCK_BUDGET_EXHAUSTED;
 export const RESERVATION_COMMANDS = ['commit', 'release', 'restock'] as const;
 export type ReservationCommand = (typeof RESERVATION_COMMANDS)[number];
 
-/** The checker's batch; also what `WorkflowId IN (...)` allows on the Temporal side. */
-export const MAX_STATUS_BATCH = 200;
-
 export interface ReservationLineBody {
   variantId: string;
   quantity: number;

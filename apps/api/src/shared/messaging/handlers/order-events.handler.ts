@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
-import type { DomainEventJob } from '../queue/domain-event.job';
+import type { DomainEventJob } from '@jcool/messaging';
 
 const LOG_CONTEXT = 'OrderEventsHandler';
 

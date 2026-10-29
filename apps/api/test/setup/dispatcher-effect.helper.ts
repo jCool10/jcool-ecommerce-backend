@@ -1,10 +1,10 @@
 import { vi } from 'vitest';
+import type { DomainEventJob } from '@jcool/messaging';
 import type { DrizzleTx } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import type {
   DomainEventDispatcher,
   DomainEventHandler,
 } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
 
 /**
  * The part of a delivery that runs inside the consumer transaction, as one spy. It calls through to

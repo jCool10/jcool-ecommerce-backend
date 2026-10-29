@@ -15,14 +15,14 @@ const BASE_ENV = {
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
   INVENTORY_SERVICE_URL: 'http://inventory-service.railway.internal:3000',
   INVENTORY_SERVICE_TOKEN: 'inventory-service-token-not-a-real-secret-00',
+  PAYMENT_SERVICE_URL: 'http://payment-service.railway.internal:3000',
+  PAYMENT_SERVICE_TOKEN: 'payment-service-token-not-a-real-secret-000',
 };
 
 const PRODUCTION_ENV = {
   ...BASE_ENV,
   NODE_ENV: NodeEnv.Production,
   TRUST_PROXY: 'false',
-  STRIPE_SECRET_KEY: 'sk_test_not_a_real_key_0000',
-  STRIPE_SUCCESS_URL: 'https://shop.example.test/payments/success?session_id={CHECKOUT_SESSION_ID}',
   TEMPORAL_ADDRESS: 'temporal.railway.internal:7233',
   TEMPORAL_NAMESPACE: 'jcool',
   TEMPORAL_TASK_QUEUE: 'checkout-saga',
@@ -43,9 +43,7 @@ const SHORT_ENV = {
   SAGA_ACTIVITY_TIMEOUT_MS: '8000',
   SAGA_RETRY_BASE_MS: '100',
   SAGA_RETRY_CAP_MS: '1000',
-  PAYMENT_CAPTURE_TIMEOUT_MS: '500',
-  PAYMENT_SESSION_MIN_TTL_SEC: '0',
-  PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '0',
+  PAYMENT_COMMAND_TIMEOUT_MS: '2000',
 };
 
 const expectValid = (env: Record<string, unknown>, label?: string) => expect(() => validate(env), label).not.toThrow();
@@ -143,18 +141,18 @@ describe('checkout saga env', () => {
   });
 
   describe('cross rules', () => {
-    it('keeps a saga activity alive past every capture attempt the participant may make', () => {
+    it('keeps a saga activity alive past a payment command and five seconds', () => {
       expectInvalid(
-        { ...BASE_ENV, SAGA_ACTIVITY_TIMEOUT_MS: '45000' },
-        /SAGA_ACTIVITY_TIMEOUT_MS \(45000\) must exceed 4 × PAYMENT_CAPTURE_TIMEOUT_MS \(10000\) \+ 5000/,
+        { ...BASE_ENV, SAGA_ACTIVITY_TIMEOUT_MS: '50000' },
+        /SAGA_ACTIVITY_TIMEOUT_MS \(50000\) must exceed PAYMENT_COMMAND_TIMEOUT_MS \(45000\) \+ 5000/,
       );
-      expectValid({ ...BASE_ENV, SAGA_ACTIVITY_TIMEOUT_MS: '45001' });
+      expectValid({ ...BASE_ENV, SAGA_ACTIVITY_TIMEOUT_MS: '50001' });
     });
 
-    it('keeps a saga activity alive past the breaker and the breaker-guarded capture', () => {
+    it('keeps a saga activity alive past the shared breaker timeout', () => {
       expectInvalid(
         { ...BASE_ENV, ...SHORT_ENV, BREAKER_TIMEOUT_MS: '8000' },
-        /SAGA_ACTIVITY_TIMEOUT_MS \(8000\) must exceed max\(BREAKER_TIMEOUT_MS \(8000\), 2 × PAYMENT_CAPTURE_TIMEOUT_MS \(500\) \+ 1000\)/,
+        /SAGA_ACTIVITY_TIMEOUT_MS \(8000\) must exceed BREAKER_TIMEOUT_MS \(8000\)/,
       );
       expectValid({ ...BASE_ENV, ...SHORT_ENV, BREAKER_TIMEOUT_MS: '7999' });
     });
@@ -220,24 +218,15 @@ describe('checkout saga env', () => {
       );
     });
 
-    // The extra minute is the buyer's time to act on the session; suites with a 6s deadline go without it.
-    it('leaves room for the shortest payment session, with a minute more in production', () => {
+    // order-events and api-events each run a worker at QUEUE_WORKER_CONCURRENCY.
+    it('keeps five pool connections spare beyond both queue workers and both saga pools', () => {
+      expectValid({ ...BASE_ENV, DB_POOL_MAX: '19' });
       expectInvalid(
-        { ...PRODUCTION_ENV, CHECKOUT_PAY_CUTOFF_SEC: '1979' },
-        /CHECKOUT_PAY_CUTOFF_SEC \(1979\) must be at least PAYMENT_SESSION_MIN_TTL_SEC \(1800\) \+ PAYMENT_SESSION_EXPIRY_MARGIN_SEC \(120\) \+ 60/,
+        { ...BASE_ENV, DB_POOL_MAX: '18' },
+        /2 × QUEUE_WORKER_CONCURRENCY \(5\) \+ SAGA_ACTIVITY_CONCURRENCY \(2\) \+ SAGA_LOCAL_ACTIVITY_CONCURRENCY \(2\) \+ 5 must not exceed DB_POOL_MAX \(18\)/,
       );
-      expectValid({ ...PRODUCTION_ENV, CHECKOUT_PAY_CUTOFF_SEC: '1980' });
-      expectValid({ ...BASE_ENV, CHECKOUT_PAY_CUTOFF_SEC: '1920' });
-      expectInvalid({ ...BASE_ENV, CHECKOUT_PAY_CUTOFF_SEC: '1919' }, /CHECKOUT_PAY_CUTOFF_SEC \(1919\)/);
-    });
-
-    it('keeps five pool connections spare beyond the queue worker and both saga pools', () => {
-      expectValid({ ...BASE_ENV, DB_POOL_MAX: '14' });
-      expectInvalid(
-        { ...BASE_ENV, DB_POOL_MAX: '13' },
-        /QUEUE_WORKER_CONCURRENCY \(5\) \+ SAGA_ACTIVITY_CONCURRENCY \(2\) \+ SAGA_LOCAL_ACTIVITY_CONCURRENCY \(2\) \+ 5 must not exceed DB_POOL_MAX \(13\)/,
-      );
-      expectInvalid({ ...BASE_ENV, SAGA_ACTIVITY_CONCURRENCY: '9' }, /DB_POOL_MAX \(20\)/);
+      expectValid({ ...BASE_ENV, SAGA_ACTIVITY_CONCURRENCY: '3' });
+      expectInvalid({ ...BASE_ENV, SAGA_ACTIVITY_CONCURRENCY: '4' }, /DB_POOL_MAX \(20\)/);
     });
   });
 });

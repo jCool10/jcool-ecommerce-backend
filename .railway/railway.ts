@@ -9,6 +9,7 @@ const ID_LB_PORT = '4000';
 const ID_ETCD_PORT = '2379';
 const USER_SERVICE_PORT = '3000';
 const INVENTORY_SERVICE_PORT = '3000';
+const PAYMENT_SERVICE_PORT = '3000';
 const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
 const LOKI_PORT = '3100';
@@ -79,6 +80,16 @@ const USER_SERVICE_VARIABLES = [
 // The api's caller token, pair and rotation slot; the api references the first one.
 const INVENTORY_SERVICE_VARIABLES = ['INTERNAL_CALLER_TOKEN_API', 'INTERNAL_CALLER_TOKEN_API_PREVIOUS'];
 
+// The same pair, plus the webhook secret and the provider's keys.
+const PAYMENT_SERVICE_VARIABLES = [
+  'INTERNAL_CALLER_TOKEN_API',
+  'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
+  'PAYMENT_WEBHOOK_SECRET',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_SUCCESS_URL',
+  'STRIPE_CANCEL_URL',
+];
+
 const preserved = (names: string[]) => Object.fromEntries(names.map((name) => [name, preserve()]));
 
 // The api's Postgres and Redis predate the IaC and stay outside it. Referencing them by name keeps
@@ -129,6 +140,9 @@ export default defineRailway(() => {
       // The checkout saga holds and settles stock there. Referenced like the user-service token.
       INVENTORY_SERVICE_URL: `http://\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
       INVENTORY_SERVICE_TOKEN: '${{inventory-service.INTERNAL_CALLER_TOKEN_API}}',
+      // And opens, captures and voids payments there.
+      PAYMENT_SERVICE_URL: `http://\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
+      PAYMENT_SERVICE_TOKEN: '${{payment-service.INTERNAL_CALLER_TOKEN_API}}',
       LOKI_URL,
       // A user limited to products* (RUNBOOK); its password lives on the elasticsearch service.
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,
@@ -193,6 +207,7 @@ export default defineRailway(() => {
       PORT: '8080',
       API_UPSTREAM: `tcp6/\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
       INVENTORY_UPSTREAM: `tcp6/\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
+      PAYMENT_UPSTREAM: `tcp6/\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
       ID_SERVICE_HOST: idService.env.RAILWAY_PRIVATE_DOMAIN,
       ID_SERVICE_PORT,
       ID_LB_PORT,
@@ -285,6 +300,42 @@ export default defineRailway(() => {
     },
   });
 
+  const paymentPostgres = database('payment-postgres', 'postgres', {
+    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    defaultMountPath: '/var/lib/postgresql/data',
+  });
+
+  // No source, like the inventory-service. No domain: the gateway's PAYMENT_UPSTREAM (the webhook) and
+  // the api's internal calls are the only ways in.
+  const paymentService = service('payment-service', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/payment-service/Dockerfile' },
+    deploy: {
+      numReplicas: 1,
+      preDeployCommand: ['node dist/database/migrate-cli.js'],
+      healthcheckPath: '/health/ready',
+      healthcheckTimeout: 60,
+      restartPolicyMaxRetries: 5,
+      overlapSeconds: 20,
+      drainingSeconds: 15,
+    },
+    env: {
+      ...preserved(PAYMENT_SERVICE_VARIABLES),
+      NODE_ENV: 'production',
+      PORT: PAYMENT_SERVICE_PORT,
+      DATABASE_URL: paymentPostgres.env.DATABASE_URL,
+      // The api's instance and its default QUEUE_PREFIX: payment.authorized lands on its order-events.
+      REDIS_URL,
+      ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
+      METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
+      TRUST_PROXY: 'fd12::/16',
+      SHUTDOWN_GRACE_PERIOD_MS: '5000',
+      // Stamped on every payment.authorized job. The api runs on its code default, so nothing here
+      // can reference it: change one, change both (RUNBOOK cross rules).
+      ORDER_PAID_CONSUMER_ATTEMPTS: '15',
+      LOKI_URL,
+    },
+  });
+
   // Workflow histories and visibility. Losing it loses every open saga (RUNBOOK: Operate Temporal).
   const temporalPostgres = database('temporal-postgres', 'postgres', {
     image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
@@ -346,6 +397,7 @@ export default defineRailway(() => {
       METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
       API_TARGET: `\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
       INVENTORY_TARGET: `\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
+      PAYMENT_TARGET: `\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
       LOKI_TARGET: `\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`,
     },
   });
@@ -408,6 +460,8 @@ export default defineRailway(() => {
       userService,
       inventoryPostgres,
       inventoryService,
+      paymentPostgres,
+      paymentService,
       temporalPostgres,
       temporal,
       elasticsearchData,

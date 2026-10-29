@@ -1,8 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
 import { WorkflowNotFoundError, type Client } from '@temporalio/client';
 import type { Job, Queue } from 'bullmq';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
+import { beforeEach } from 'vitest';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { type DomainEventJob, DomainEventProcessor, jobIdFor, queueToken } from '@jcool/messaging';
 import {
   CHECKOUT_SAGA_ENGINE,
   type CheckoutSagaEnginePort,
@@ -19,17 +22,13 @@ import { CheckoutSagaWorker } from '../../../src/modules/order/infrastructure/te
 import { TEMPORAL_CLIENT } from '../../../src/modules/order/infrastructure/temporal/temporal.providers';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
-import { OutboxRelay } from '../../../src/shared/messaging/outbox/outbox-relay';
-import { jobIdFor, type DomainEventJob } from '../../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../../src/shared/messaging/queue/domain-event.processor';
-import { DOMAIN_EVENTS_QUEUE } from '../../../src/shared/messaging/queue/queue.constants';
 import { testId } from '../id-service-stub';
+import { paymentServiceStub } from '../payment-service-stub';
 import { sleep } from '../sleep';
 
 const POLL_MS = 20;
 const HELD_WAIT_TIMEOUT_MS = 5_000;
 const IDLE_WAIT_TIMEOUT_MS = 10_000;
-const RELAY_BATCH = 100;
 
 /**
  * A payment window of seconds instead of an hour, inside every cross rule, for the suites that wait
@@ -40,12 +39,20 @@ export const SHORT_DEADLINE_CHECKOUT_ENV = {
   CHECKOUT_PAYMENT_DEADLINE_SEC: '12',
   CHECKOUT_PAY_CUTOFF_SEC: '6',
   CHECKOUT_HOLD_SAFETY_SEC: '30',
-  PAYMENT_SESSION_MIN_TTL_SEC: '2',
-  PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '1',
   SAGA_AUTH_GRACE_SEC: '3',
   SAGA_RETRY_BASE_MS: '100',
   SAGA_RETRY_CAP_MS: '1000',
 } as const;
+
+/** The payment-service's session floor that fits under the short cutoff, as the RUNBOOK rule asks. */
+export const SHORT_DEADLINE_SESSION_FLOOR_MS = 3_000;
+
+/** Registered after the database reset, which puts the stub back on the production floor. */
+export function shortSessionFloorBeforeEach(): void {
+  beforeEach(async () => {
+    (await paymentServiceStub()).configure({ sessionFloorMs: SHORT_DEADLINE_SESSION_FLOOR_MS });
+  });
+}
 
 export const sagaEngine = (app: INestApplication): CheckoutSagaEnginePort =>
   app.get<CheckoutSagaEnginePort>(CHECKOUT_SAGA_ENGINE, { strict: false });
@@ -264,20 +271,12 @@ export function releaseHung(): void {
 }
 
 /**
- * Stands in for the payment.authorized consumer: forwards the outbox row straight to the engine,
- * with the late-authorization start it would build.
+ * Stands in for the payment.authorized consumer: forwards what payment published straight to the
+ * engine, with the late-authorization start it would build.
  */
 export async function relayAuthorizationDirect(app: INestApplication, orderId: string): Promise<PaymentAuthorization> {
-  const rows = await app
-    .get<DrizzleDB>(DRIZZLE)
-    .select({ payload: schema.outbox.payload })
-    .from(schema.outbox)
-    .where(
-      and(eq(schema.outbox.eventType, 'payment.authorized'), sql`${schema.outbox.payload}->>'orderId' = ${orderId}`),
-    );
-  if (rows.length !== 1) throw new Error(`expected one payment.authorized row for ${orderId}, found ${rows.length}`);
-
-  const { paymentId, amountMinor, currency, authorizedAt } = rows[0].payload as unknown as PaymentAuthorization;
+  const { payload } = (await paymentServiceStub()).authorizedJob(orderId);
+  const { paymentId, amountMinor, currency, authorizedAt } = payload as unknown as PaymentAuthorization;
   const authorization = { paymentId, amountMinor, currency, authorizedAt };
   const order = await app.get<OrderRepositoryPort>(ORDER_REPOSITORY, { strict: false }).findById(orderId);
   if (!order) throw new Error(`order ${orderId} not found`);
@@ -287,14 +286,14 @@ export async function relayAuthorizationDirect(app: INestApplication, orderId: s
 }
 
 /**
- * The real path for an order's authorization, run in the foreground: relay the outbox, then hand
- * every queued `payment.authorized` job of the order to the dispatcher. Returns how many it delivered.
+ * The real path for an order's authorization, run in the foreground: hand every queued
+ * `payment.authorized` job of the order to the dispatcher. Returns how many it delivered.
  */
 export async function relayAuthorization(app: INestApplication, orderId: string): Promise<number> {
   const jobs = await relayedAuthorizations(app, orderId);
   const processor = app.get(DomainEventProcessor);
   for (const job of jobs) {
-    const result = await processor.process(job.data);
+    const result = await processor.process(job.data, ORDER_EVENTS_QUEUE);
     if (result !== 'processed' && result !== 'duplicate') {
       throw new Error(`payment.authorized ${job.data.outboxId} ended ${result}`);
     }
@@ -303,12 +302,9 @@ export async function relayAuthorization(app: INestApplication, orderId: string)
   return jobs.length;
 }
 
-/** Relays the outbox and returns the order's queued `payment.authorized` jobs, for a test to deliver itself. */
+/** The order's queued `payment.authorized` jobs, for a test to deliver itself. */
 export async function relayedAuthorizations(app: INestApplication, orderId: string): Promise<Job<DomainEventJob>[]> {
-  const relayed = await app.get(OutboxRelay).runOnce(RELAY_BATCH);
-  if (relayed.failed > 0) throw new Error(`relay refused ${relayed.failed} outbox rows`);
-
-  const queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
+  const queue = app.get<Queue<DomainEventJob>>(queueToken(ORDER_EVENTS_QUEUE));
   const jobs = (await queue.getJobs(['waiting', 'delayed', 'prioritized'])).filter(
     (job) => job.data.eventType === 'payment.authorized' && job.data.payload.orderId === orderId,
   );
@@ -334,7 +330,9 @@ export async function queueForgedAuthorization(
     occurredAt: new Date().toISOString(),
     traceparent: null,
   };
-  await app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE).add(job.eventType, job, { jobId: jobIdFor(outboxId) });
+  await app
+    .get<Queue<DomainEventJob>>(queueToken(ORDER_EVENTS_QUEUE))
+    .add(job.eventType, job, { jobId: jobIdFor(outboxId) });
 }
 
 /**

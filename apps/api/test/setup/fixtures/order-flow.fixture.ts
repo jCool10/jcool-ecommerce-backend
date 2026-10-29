@@ -1,16 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { desc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import request from 'supertest';
-import { PAYMENT_GATEWAY } from '../../../src/modules/payment/application/ports/payment-gateway.port';
-import { FakeSignerGatewayAdapter } from '../../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import { DRIZZLE, type DrizzleDB } from '../../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../../src/shared/infrastructure/database/schema';
 import { authHeader } from '../bearer.helper';
 import { eventually } from '../eventually';
 import { idempotencyKeyHeader } from '../idempotency.helper';
 import { inventoryServiceStub } from '../inventory-service-stub';
-import { checkoutSessionCompleted, signWebhook, type SessionCharge, type SignedWebhook } from '../sign-webhook.helper';
+import { paymentServiceStub } from '../payment-service-stub';
 import { createTestProduct } from './catalog.fixture';
 import { relayAuthorization } from './checkout-saga.fixture';
 import { seedStock } from './inventory.fixture';
@@ -25,11 +22,11 @@ export interface SellableSku {
 export interface OpenOrder {
   token: string;
   orderId: string;
+  /** The attempt `/pay` opened, the one a later authorization names. */
+  paymentId: string;
   sessionId: string;
   variantId: string;
   quantity: number;
-  /** The charge recorded on the payment, which a settling webhook must report exactly. */
-  charge: SessionCharge;
 }
 
 export async function seedSellableSku(
@@ -72,43 +69,30 @@ export async function placeAndOpenSession(app: INestApplication, sku: SellableSk
   const order = await checkout(app, token).expect(201);
   const orderId = order.body.id as string;
   const pay = await openSession(app, token, orderId).expect(201);
-  const recorded = await readPayment(app, orderId);
   return {
     token,
     orderId,
+    paymentId: pay.body.paymentId as string,
     sessionId: pay.body.providerSessionId as string,
     variantId: sku.variantId,
     quantity,
-    charge: { amountMinor: recorded.amountMinor, currency: recorded.currency },
   };
 }
 
-/** A PENDING order taken to PAID: `/pay`, the buyer's card hold, its signed webhook, then the saga. */
+/** A PENDING order taken to PAID: `/pay`, the buyer's card hold and its `payment.authorized`, then the saga. */
 export async function driveToPaid(app: INestApplication, token: string, orderId: string): Promise<void> {
-  const pay = await openSession(app, token, orderId).expect(201);
-  await authorizeSession(app, pay.body.providerSessionId as string, orderId);
+  await openSession(app, token, orderId).expect(201);
+  await authorizePayment(orderId);
   await relayAuthorization(app, orderId);
   await untilOrderStatus(app, orderId, 'PAID');
 }
 
 /**
- * The buyer completes the manual-capture session: the fake gateway now holds the charge and the
- * provider reports it with a signed `checkout.session.completed`. Returns the intent id.
+ * The buyer completes the manual-capture session: payment holds the charge and queues
+ * `payment.authorized` on order-events. Returns the attempt's payment id.
  */
-export async function authorizeSession(
-  app: INestApplication,
-  sessionId: string,
-  orderId: string,
-  eventId = `evt_auth_${orderId}`,
-): Promise<string> {
-  const gateway = app.get(PAYMENT_GATEWAY);
-  if (!(gateway instanceof FakeSignerGatewayAdapter)) throw new Error('authorizeSession needs the fake gateway');
-  const intentId = gateway.authorize(sessionId);
-  const { amountMinor, currency } = await readPayment(app, orderId);
-  const secret = app.get(ConfigService).getOrThrow<string>('payment.webhookSecret');
-  const event = checkoutSessionCompleted(sessionId, { amountMinor, currency, paymentStatus: 'unpaid' }, { eventId });
-  await postWebhook(app, signWebhook({ secret, event })).expect(200);
-  return intentId;
+export async function authorizePayment(orderId: string): Promise<string> {
+  return (await paymentServiceStub()).authorize(orderId);
 }
 
 export function untilOrderStatus(app: INestApplication, orderId: string, status: string, timeoutMs?: number) {
@@ -119,33 +103,20 @@ export function untilOrderStatus(app: INestApplication, orderId: string, status:
   );
 }
 
-export function postWebhook(app: INestApplication, signed: SignedWebhook): request.Test {
-  return request(app.getHttpServer()).post('/webhooks/payment').set(signed.headers).send(signed.rawBody);
-}
-
 export async function readOrder(app: INestApplication, orderId: string) {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const [row] = await db.select().from(schema.orders).where(eq(schema.orders.id, orderId));
   return row;
 }
 
-/** Newest first, so a retried session wins over its dead predecessor. */
-export async function readPayment(app: INestApplication, orderId: string) {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const [row] = await db
-    .select()
-    .from(schema.payments)
-    .where(eq(schema.payments.orderId, orderId))
-    .orderBy(desc(schema.payments.createdAt))
-    .limit(1);
-  return row;
+/** The order's newest attempt off the payment-service stub, so a retried session wins over its dead predecessor. */
+export async function readPayment(_app: INestApplication, orderId: string) {
+  return (await paymentServiceStub()).sessionFor(orderId);
 }
 
-/** The order's `payment_orders` header, undefined when the participant never saw the order. */
-export async function readPaymentOrder(app: INestApplication, orderId: string) {
-  const db = app.get<DrizzleDB>(DRIZZLE);
-  const [row] = await db.select().from(schema.paymentOrders).where(eq(schema.paymentOrders.orderId, orderId));
-  return row;
+/** The order's payment header off the stub, undefined when the participant never saw the order. */
+export async function readPaymentOrder(_app: INestApplication, orderId: string) {
+  return (await paymentServiceStub()).headerOf(orderId);
 }
 
 export interface StockRow {
@@ -188,11 +159,10 @@ export async function auditLedgerInvariants(
 ): Promise<LedgerAuditReport> {
   const db = app.get<DrizzleDB>(DRIZZLE);
   const inventory = await inventoryServiceStub();
-  const [orders, payments, paymentHeaders] = await Promise.all([
-    db.select().from(schema.orders),
-    db.select().from(schema.payments),
-    db.select().from(schema.paymentOrders),
-  ]);
+  const payment = await paymentServiceStub();
+  const orders = await db.select().from(schema.orders);
+  const payments = payment.attemptsOf();
+  const paymentHeaders = payment.headersList();
   const reservations = inventory.holdsOf();
   const stockHeaders = inventory.headersList();
 
@@ -200,7 +170,7 @@ export async function auditLedgerInvariants(
   const pending: string[] = [];
 
   for (const header of paymentHeaders) {
-    // `ck_payment_orders_amount_when_not_fenced` enforces it; re-asserted so dropping it fails here too.
+    // The service's `ck_payment_orders_amount_when_not_fenced` enforces it; the stub has no such check.
     if (header.status !== 'FENCED' && header.amountMinor === null) {
       violations.push(`payment header ${header.orderId} is ${header.status} without a charge`);
     }

@@ -3,17 +3,15 @@ import { Job, type JobsOptions, type Queue } from 'bullmq';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  ORDER_EVENTS_CONSUMER,
+  ORDER_EVENTS_DLQ,
+  ORDER_EVENTS_QUEUE,
+} from '@jcool/internal-contracts/queues/order-events';
+import { type DeadLetterJob, type DomainEventJob, OutboxRelay, jobIdFor, queueToken } from '@jcool/messaging';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
-import {
-  DOMAIN_EVENTS_CONSUMER,
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-} from '../../src/shared/messaging/queue/queue.constants';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -49,8 +47,8 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     });
     relay = app.get(OutboxRelay);
     dispatcher = app.get(DomainEventDispatcher);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
+    queue = app.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
+    dlq = app.get<Queue>(queueToken(ORDER_EVENTS_DLQ));
     db = app.get<DrizzleDB>(DRIZZLE);
     pool = app.get<Pool>(PG_POOL);
   });
@@ -81,7 +79,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     db
       .select()
       .from(schema.inbox)
-      .where(and(eq(schema.inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(schema.inbox.messageId, messageId)));
+      .where(and(eq(schema.inbox.consumer, ORDER_EVENTS_CONSUMER), eq(schema.inbox.messageId, messageId)));
 
   const stateOf = async (id: string): Promise<string> => {
     const job = await Job.fromId<DomainEventJob>(queue, jobIdFor(id));

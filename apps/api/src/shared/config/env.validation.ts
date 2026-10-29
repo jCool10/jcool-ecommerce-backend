@@ -1,5 +1,5 @@
-import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
-import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
+import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
+import { MIN_INBOX_RETENTION_DAYS } from '@jcool/messaging';
 import { CheckoutSagaEnv, assertCheckoutSagaEnv } from './checkout-saga.env';
 import {
   AppEnv,
@@ -16,12 +16,6 @@ import {
   ThrottleEnv,
   validateEnv,
 } from '@jcool/platform/config';
-
-// One member today: the enum earns its place by rejecting any other value at startup instead of
-// letting a typo pick a gateway that does not exist.
-export enum PaymentProvider {
-  Stripe = 'stripe',
-}
 
 const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
@@ -92,32 +86,6 @@ export class EnvironmentVariables extends ApiEnv {
   @Max(1000)
   OUTBOX_BATCH_SIZE?: number;
 
-  @IsOptional()
-  @IsStrictBoolean()
-  RECONCILE_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn the sweep into a busy loop hammering the payment gateway.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1000)
-  RECONCILE_INTERVAL_MS?: number;
-
-  // Capped so one tick can't fan out an unbounded number of gateway round-trips.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  @Max(500)
-  RECONCILE_BATCH_SIZE?: number;
-
-  // 0 is legal — e2e drives the sweep deterministically.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  ORDER_STALE_THRESHOLD_SEC?: number;
-
   // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
   @IsOptional()
   @StrictInt()
@@ -145,13 +113,6 @@ export class EnvironmentVariables extends ApiEnv {
   @IsInt()
   @Min(MIN_INBOX_RETENTION_DAYS)
   RETENTION_INBOX_DAYS?: number;
-
-  // The floor tracks the GATEWAY's redelivery window (Stripe retries for ~72h), not the queue's.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(14)
-  RETENTION_WEBHOOK_EVENT_DAYS?: number;
 
   // Min 1 — a 0 would make every entry stale the instant it is written, turning every read into a
   // stale serve plus a background rebuild.
@@ -286,57 +247,6 @@ export class EnvironmentVariables extends ApiEnv {
   @Min(1024)
   MEDIA_MAX_BYTES?: number;
 
-  @IsOptional()
-  @IsEnum(PaymentProvider)
-  PAYMENT_PROVIDER?: PaymentProvider;
-
-  // Optional here so a boot that doesn't touch payments isn't blocked; the Stripe adapter
-  // fail-fasts at construction when it's absent.
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  PAYMENT_WEBHOOK_SECRET?: string;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  PAYMENT_WEBHOOK_TOLERANCE_SEC?: number;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(8)
-  STRIPE_SECRET_KEY?: string;
-
-  // String, not @IsUrl: the operator's value carries Stripe's {CHECKOUT_SESSION_ID} brace
-  // template, which strict URL validation would reject.
-  @IsOptional()
-  @IsString()
-  STRIPE_SUCCESS_URL?: string;
-
-  @IsOptional()
-  @IsString()
-  STRIPE_CANCEL_URL?: string;
-
-  // Zero is legal: the production-mode system stack runs against a fake Stripe with no floor.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  PAYMENT_SESSION_MIN_TTL_SEC?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  PAYMENT_SESSION_EXPIRY_MARGIN_SEC?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(500)
-  PAYMENT_CAPTURE_TIMEOUT_MS?: number;
-
   // The only way in: without it every token is refused, so it is required rather than optional.
   @IsUrl(HTTP_URL)
   AUTH_JWKS_URL!: string;
@@ -386,6 +296,20 @@ export class EnvironmentVariables extends ApiEnv {
   @Min(100)
   INVENTORY_COMMAND_TIMEOUT_MS?: number;
 
+  @IsUrl(HTTP_URL)
+  PAYMENT_SERVICE_URL!: string;
+
+  // The payment-service's INTERNAL_CALLER_TOKEN_API.
+  @IsString()
+  @MinLength(32)
+  PAYMENT_SERVICE_TOKEN!: string;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1000)
+  PAYMENT_COMMAND_TIMEOUT_MS?: number;
+
   // Duration form. How long after an order is paid a user the directory does not know is still
   // worth waiting for.
   @IsOptional()
@@ -417,10 +341,6 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
     throw new Error(
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
     );
-  }
-  // Without a key the adapter fabricates sessions no buyer can pay, which only test and dev may run on.
-  if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
-    throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
   }
   assertCheckoutSagaEnv(env);
   return env;

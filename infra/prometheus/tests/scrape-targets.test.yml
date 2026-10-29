@@ -95,16 +95,65 @@ tests:
         alertname: InventoryScrapeDown
         exp_alerts: []
 
-  # A scraped api says nothing about the inventory-service, and the reverse.
+  # And for the payment-service.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x5 0x10 1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PaymentScrapeDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: PaymentScrapeDown
+        exp_alerts:
+          - exp_labels:
+              job: jcool-payment
+              instance: 'payment-service:3000'
+              severity: page
+            exp_annotations:
+              summary: 'Prometheus has not scraped the payment-service for 5 minutes'
+              description: 'The payment-service is down, unreachable from Prometheus, or refusing the metrics token. Down, no checkout can open a payment session and no saga can capture or void one; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → PaymentScrapeDown.'
+      - eval_time: 20m
+        alertname: PaymentScrapeDown
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '_x10 1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PaymentScrapeDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PaymentScrapeDown
+        exp_alerts:
+          - exp_labels:
+              job: jcool-payment
+              severity: page
+            exp_annotations:
+              summary: 'Prometheus has not scraped the payment-service for 5 minutes'
+              description: 'The payment-service is down, unreachable from Prometheus, or refusing the metrics token. Down, no checkout can open a payment session and no saga can capture or void one; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → PaymentScrapeDown.'
+      - eval_time: 12m
+        alertname: PaymentScrapeDown
+        exp_alerts: []
+
+  # A scraped service says nothing about another.
   - interval: 1m
     input_series:
       - series: 'up{job="jcool-api", instance="app:3000"}'
         values: '1x20'
       - series: 'up{job="jcool-inventory", instance="inventory-service:3000"}'
         values: '0x20'
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x20'
     alert_rule_test:
       - eval_time: 10m
         alertname: ApiScrapeDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PaymentScrapeDown
         exp_alerts: []
       - eval_time: 10m
         alertname: InventoryScrapeDown

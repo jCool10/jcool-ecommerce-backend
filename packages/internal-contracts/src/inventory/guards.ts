@@ -1,3 +1,4 @@
+import { isOneOf, isRecord } from '../common/body-guards';
 import { COMMAND_OUTCOME_STATUS, LOCK_BUDGET_EXHAUSTED_STATUS, TRY_OUTCOME_STATUS } from './routes';
 import {
   COMMAND_OUTCOMES,
@@ -12,17 +13,9 @@ import {
   type TryReservationResponse,
 } from './types';
 
-const isOneOf =
-  <T extends string>(values: readonly T[]) =>
-  (value: unknown): value is T =>
-    typeof value === 'string' && (values as readonly string[]).includes(value);
-
 const isTryOutcome = isOneOf(TRY_OUTCOMES);
 const isCommandOutcome = isOneOf(COMMAND_OUTCOMES);
 const isReservationOrderStatus = isOneOf(RESERVATION_ORDER_STATUSES);
-
-const isRecord = (body: unknown): body is Record<string, unknown> =>
-  typeof body === 'object' && body !== null && !Array.isArray(body);
 
 export function isTryReservationResponse(body: unknown): body is TryReservationResponse {
   return isRecord(body) && isTryOutcome(body.outcome);

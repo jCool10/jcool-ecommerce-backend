@@ -10,7 +10,7 @@ import {
   driveToPaid,
   seedSellableSku,
 } from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import {
   type InventoryServiceStub,
   type InventoryStubRoute,
@@ -18,7 +18,6 @@ import {
 } from '../setup/inventory-service-stub';
 import { E2E_METRICS_TOKEN, scrapeMetrics } from '../setup/metrics.helper';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_inventory_faults_01';
 const ON_HAND = 5;
 // The production default; nothing here may wait it out.
 const TRY_TIMEOUT_MS = 3000;
@@ -48,7 +47,7 @@ describe('Checkout saga over a faulty inventory-service (integration, real Tempo
     let pool: Pool;
 
     beforeAll(async () => {
-      ({ app, pool } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV));
+      ({ app, pool } = await createTestAppWithPool(SAGA_ENV));
     });
     closeAppAfterAll(() => app);
     resetSagasAndDatabaseBeforeEach(
@@ -96,7 +95,7 @@ describe('Checkout saga over a faulty inventory-service (integration, real Tempo
     let pool: Pool;
 
     beforeAll(async () => {
-      ({ app, pool } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV));
+      ({ app, pool } = await createTestAppWithPool(SAGA_ENV));
     });
     closeAppAfterAll(() => app);
     resetSagasAndDatabaseBeforeEach(
@@ -125,7 +124,7 @@ describe('Checkout saga over a faulty inventory-service (integration, real Tempo
 
     beforeAll(async () => {
       // Long enough that the circuit cannot half-open while the case runs.
-      ({ app, pool } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+      ({ app, pool } = await createTestAppWithPool({
         ...SAGA_ENV,
         BREAKER_RESET_TIMEOUT_MS: '60000',
       }));

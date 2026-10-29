@@ -1,8 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@jcool/platform/mail';
-import { PermanentError } from '@shared/messaging/errors';
-import type { DomainEventJob, PostCommitEffect } from '@shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, PermanentError, type PostCommitEffect } from '@jcool/messaging';
 import { toError } from '@jcool/kernel';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { USER_CONTACT, type UserContactPort } from '../../application/ports/user-contact.port';

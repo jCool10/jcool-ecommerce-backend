@@ -57,8 +57,8 @@ module.exports = {
         'domain/application may reach messaging only through its pure port. The package barrel pulls the Drizzle adapter and, transitively, @opentelemetry/api — which app-domain-telemetry-free cannot catch, because it matches direct edges only.',
       from: { path: '^src/modules/[^/]+/(domain|application)/' },
       to: {
-        path: '^src/shared/messaging/',
-        pathNot: '^src/shared/messaging/outbox/outbox-writer\\.port',
+        path: '^src/shared/messaging/|^node_modules/@jcool/messaging/',
+        pathNot: '^node_modules/@jcool/messaging/dist/outbox-port\\.',
       },
     },
     {

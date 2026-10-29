@@ -22,3 +22,12 @@ groups:
         annotations:
           summary: 'Prometheus has not scraped the inventory-service for 5 minutes'
           description: 'The inventory-service is down, unreachable from Prometheus, or refusing the metrics token. Down, it stops every checkout from holding stock; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → InventoryScrapeDown.'
+
+      - alert: PaymentScrapeDown
+        expr: up{job="jcool-payment"} == 0 or absent(up{job="jcool-payment"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the payment-service for 5 minutes'
+          description: 'The payment-service is down, unreachable from Prometheus, or refusing the metrics token. Down, no checkout can open a payment session and no saga can capture or void one; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → PaymentScrapeDown.'

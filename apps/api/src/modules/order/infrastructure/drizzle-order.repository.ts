@@ -2,7 +2,7 @@ import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, lt, lte, notInArray, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort } from '@shared/identity/id-generator.port';
-import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@jcool/messaging/outbox-port';
 import { Order } from '../domain/order.entity';
 import { OrderStatus } from '../domain/order-status';
 import { OrderItem } from '../domain/order-item.entity';

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MailMessage } from '@jcool/platform/mail';
-import { PermanentError } from '@shared/messaging/errors';
-import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, PermanentError } from '@jcool/messaging';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { UserContactPort } from '../../application/ports/user-contact.port';

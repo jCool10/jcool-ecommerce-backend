@@ -16,7 +16,7 @@ export interface DispatcherHandlerDoubles {
 }
 
 /**
- * The real dispatch table over handler doubles. Specs that assert on `label()` need the actual
+ * The real dispatch table over handler doubles. Specs that assert on `handles()` need the actual
  * registry, not a stub that folds names by the same rule the assertion expects.
  */
 export function dispatcherWith(doubles: DispatcherHandlerDoubles = {}): DomainEventDispatcher {

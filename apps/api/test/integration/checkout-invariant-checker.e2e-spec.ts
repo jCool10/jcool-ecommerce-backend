@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { ReservationOrderStatus } from '@jcool/internal-contracts';
+import type { PaymentOrderStatus, ReservationOrderStatus } from '@jcool/internal-contracts';
 import {
   ORDER_PAYMENT_PARTICIPANT,
   type OrderPaymentParticipantPort,
@@ -19,6 +19,7 @@ import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEac
 import { testId } from '../setup/id-service-stub';
 import { inventoryServiceStub } from '../setup/inventory-service-stub';
 import { E2E_METRICS_TOKEN, scrapeMetrics } from '../setup/metrics.helper';
+import { paymentServiceStub } from '../setup/payment-service-stub';
 
 const PRICE = 90_000;
 const CURRENCY = 'VND';
@@ -31,12 +32,11 @@ const NONE = Object.fromEntries(CHECKOUT_INVARIANT_KINDS.map((kind) => [kind, 0]
 
 type OrderStatus = (typeof schema.orderStatus.enumValues)[number];
 type StockHeader = ReservationOrderStatus;
-type PaymentHeader = (typeof schema.paymentOrderStatus.enumValues)[number];
 
 interface SettledSeed {
   stock?: StockHeader;
-  payment?: PaymentHeader;
-  /** A payments row: AUTHORIZED still holds money, SUCCEEDED took it. */
+  payment?: PaymentOrderStatus;
+  /** A payment attempt: AUTHORIZED still holds money, SUCCEEDED took it. */
   attempt?: 'AUTHORIZED' | 'SUCCEEDED';
   finalizedAt?: Date;
   /** The saga's marker; an order without one predates it. */
@@ -63,8 +63,8 @@ describe('Checkout invariant checker (integration, real Postgres and Temporal)',
 
   const check = () => app.get(RunCheckoutInvariantsUseCase).execute();
 
-  // Straight into the tables and the inventory stub, with no saga behind it: the checker must read
-  // what is there, however it got there.
+  // Straight into the orders table and the participant stubs, with no saga behind it: the checker
+  // must read what is there, however it got there.
   async function seedSettled(status: OrderStatus, seed: SettledSeed = {}): Promise<string> {
     const orderId = testId();
     const finalizedAt = seed.finalizedAt ?? new Date(Date.now() - 60_000);
@@ -83,24 +83,12 @@ describe('Checkout invariant checker (integration, real Postgres and Temporal)',
     if (seed.stock) {
       (await inventoryServiceStub()).setHeader(orderId, seed.stock);
     }
-    if (seed.payment) {
-      await db.insert(schema.paymentOrders).values({
-        orderId,
-        status: seed.payment,
-        amountMinor: PRICE,
-        currency: CURRENCY,
-        authorizedAt: seed.payment === 'OPEN' ? null : placedAt,
-      });
-    }
-    if (seed.attempt) {
-      await db.insert(schema.payments).values({
-        id: testId(),
-        orderId,
-        provider: 'fake',
-        providerSessionId: `cs_${orderId}`,
-        amountMinor: PRICE,
-        currency: CURRENCY,
-        status: seed.attempt,
+    if (seed.payment || seed.attempt) {
+      (await paymentServiceStub()).setStatus(orderId, {
+        header: seed.payment ?? null,
+        authorizedPaymentId: seed.attempt ? testId() : null,
+        hasAuthorizedAttempt: seed.attempt === 'AUTHORIZED',
+        hasSucceededAttempt: seed.attempt === 'SUCCEEDED',
       });
     }
     return orderId;

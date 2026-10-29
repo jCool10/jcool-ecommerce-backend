@@ -29,13 +29,12 @@ const API_ENV = {
   ID_SERVICE_URL: 'http://id-service.invalid',
   INVENTORY_SERVICE_URL: 'http://inventory-service.invalid',
   INVENTORY_SERVICE_TOKEN: randomBytes(32).toString('hex'),
+  PAYMENT_SERVICE_URL: 'http://payment-service.invalid',
+  PAYMENT_SERVICE_TOKEN: randomBytes(32).toString('hex'),
   // Required in production; the api serves without Temporal while its saga worker retries.
   TEMPORAL_ADDRESS: 'temporal.invalid:7233',
   TEMPORAL_NAMESPACE: 'jcool',
   TEMPORAL_TASK_QUEUE: 'checkout-saga',
-  PAYMENT_WEBHOOK_SECRET: randomBytes(16).toString('hex'),
-  STRIPE_SECRET_KEY: `sk_test_${randomBytes(12).toString('hex')}`,
-  STRIPE_SUCCESS_URL: 'https://shop.system-test.invalid/payments/success?session_id={CHECKOUT_SESSION_ID}',
   SMTP_URL: 'smtp://smtp.invalid:587',
   MAIL_FROM: 'system-test@example.invalid',
   STORAGE_ENDPOINT: 'http://storage.invalid:9000',
@@ -45,12 +44,6 @@ const API_ENV = {
   LOG_LEVEL: 'warn',
 };
 
-const json = (body: unknown): RequestInit => ({
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify(body),
-});
-
 // The api's contract through the gateway, request by request, against the same api called directly.
 const SAMPLES: { name: string; path: string; init?: RequestInit }[] = [
   { name: 'readiness', path: '/health/ready' },
@@ -59,11 +52,6 @@ const SAMPLES: { name: string; path: string; init?: RequestInit }[] = [
   { name: 'an unknown route', path: '/nope' },
   { name: 'a route auth has moved away from', path: '/auth/me' },
   { name: 'an admin route without a token', path: '/admin/orders' },
-  {
-    name: 'a webhook with a bad signature',
-    path: '/webhooks/payment',
-    init: { ...json({ id: 'evt_1' }), headers: { 'content-type': 'application/json', 'stripe-signature': 't=1,v1=0' } },
-  },
   {
     name: 'a CORS preflight from the allowed origin',
     path: '/orders',
@@ -149,8 +137,9 @@ describe('gateway: the api behind it', () => {
     gateway = await gatewayContainer(network, {
       // Railway's value: without tcp6/ the gateway dials IPv4 and the api believes none of it.
       API_UPSTREAM: `tcp6/api:${API_PORT}`,
-      // Required to boot; no case here reaches stock.
+      // Required to boot; no case here reaches stock or payments.
       INVENTORY_UPSTREAM: 'inventory-service.invalid:3000',
+      PAYMENT_UPSTREAM: 'payment-service.invalid:3000',
       TRUSTED_PROXY_CIDRS: `${edge.getIpAddress(network.getName())}/32`,
     })
       .withNetworkAliases('gateway')

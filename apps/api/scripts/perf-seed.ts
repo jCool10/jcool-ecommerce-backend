@@ -4,7 +4,7 @@
  * Prefixed natural keys + ON CONFLICT DO NOTHING mean a re-run tops up and `--clean` can never take
  * a real product with it.
  *
- * `--clean` does NOT remove what a load run produces — orders, reservations, outbox rows, the
+ * `--clean` does NOT remove what a load run produces — orders, outbox rows, the
  * accounts k6 registers. For a true reset: `docker compose down -v` then `npm run db:migrate`.
  *
  * Leaves Redis alone: the public read path is cached behind a generation counter only an admin write

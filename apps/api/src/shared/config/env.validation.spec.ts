@@ -16,11 +16,8 @@ const BASE_ENV = {
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
   INVENTORY_SERVICE_URL: 'http://inventory-service.railway.internal:3000',
   INVENTORY_SERVICE_TOKEN: 'inventory-service-token-not-a-real-secret-00',
-};
-
-const STRIPE_ENV = {
-  STRIPE_SECRET_KEY: 'sk_test_not_a_real_key_0000',
-  STRIPE_SUCCESS_URL: 'https://shop.example.test/payments/success?session_id={CHECKOUT_SESSION_ID}',
+  PAYMENT_SERVICE_URL: 'http://payment-service.railway.internal:3000',
+  PAYMENT_SERVICE_TOKEN: 'payment-service-token-not-a-real-secret-000',
 };
 
 // Also required in production; covered on their own in checkout-saga.env.spec.ts.
@@ -32,7 +29,7 @@ const TEMPORAL_ENV = {
 
 describe('env validation', () => {
   it('refuses to boot in production until TRUST_PROXY is set to anything', () => {
-    const production = { ...BASE_ENV, ...STRIPE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production };
+    const production = { ...BASE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production };
 
     expect(() => validate(production)).toThrow(/TRUST_PROXY/);
     for (const value of ['fd12::/16', '1', 'false']) {
@@ -44,36 +41,11 @@ describe('env validation', () => {
     expect(() => validate(BASE_ENV)).not.toThrow();
   });
 
-  it('refuses to boot in production without a Stripe key and success URL', () => {
+  // Stripe lives in the payment-service now, along with its boot guard.
+  it('boots in production with no Stripe setting at all', () => {
     const production = { ...BASE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
 
-    expect(() => validate(production)).toThrow(/STRIPE_SECRET_KEY/);
-    expect(() => validate({ ...production, STRIPE_SECRET_KEY: STRIPE_ENV.STRIPE_SECRET_KEY })).toThrow(
-      /STRIPE_SUCCESS_URL/,
-    );
-    expect(() => validate({ ...production, ...STRIPE_ENV })).not.toThrow();
-  });
-
-  it('lets test and development run offline without Stripe', () => {
-    expect(() => validate(BASE_ENV)).not.toThrow();
-    expect(() => validate({ ...BASE_ENV, NODE_ENV: NodeEnv.Development })).not.toThrow();
-  });
-
-  it('bounds the payment session floor and the capture timeout', () => {
-    const cases: Array<[string, string, boolean]> = [
-      ['PAYMENT_SESSION_MIN_TTL_SEC', '-1', false],
-      ['PAYMENT_SESSION_MIN_TTL_SEC', '0', true],
-      ['PAYMENT_SESSION_EXPIRY_MARGIN_SEC', '-1', false],
-      ['PAYMENT_SESSION_EXPIRY_MARGIN_SEC', '0', true],
-      ['PAYMENT_CAPTURE_TIMEOUT_MS', '499', false],
-      ['PAYMENT_CAPTURE_TIMEOUT_MS', '500', true],
-      ['PAYMENT_CAPTURE_TIMEOUT_MS', '1e4', false],
-    ];
-    for (const [key, value, valid] of cases) {
-      const run = () => validate({ ...BASE_ENV, [key]: value });
-      if (valid) expect(run, `${key}=${value}`).not.toThrow();
-      else expect(run, `${key}=${value}`).toThrow(new RegExp(key));
-    }
+    expect(() => validate(production)).not.toThrow();
   });
 
   // Without any one of these the api boots and then refuses every caller.
@@ -132,6 +104,23 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '5000' })).not.toThrow();
   });
 
+  it('refuses to boot without the payment-service address or its token', () => {
+    for (const key of ['PAYMENT_SERVICE_URL', 'PAYMENT_SERVICE_TOKEN']) {
+      const without: Record<string, unknown> = { ...BASE_ENV };
+      delete without[key];
+
+      expect(() => validate(without), key).toThrow(new RegExp(key));
+    }
+    expect(() => validate({ ...BASE_ENV, PAYMENT_SERVICE_URL: 'payment-service:3000' })).toThrow(/PAYMENT_SERVICE_URL/);
+    expect(() => validate({ ...BASE_ENV, PAYMENT_SERVICE_TOKEN: 'a'.repeat(31) })).toThrow(/PAYMENT_SERVICE_TOKEN/);
+  });
+
+  it('bounds the payment command timeout', () => {
+    expect(() => validate({ ...BASE_ENV, PAYMENT_COMMAND_TIMEOUT_MS: '999' })).toThrow(/PAYMENT_COMMAND_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, PAYMENT_COMMAND_TIMEOUT_MS: '45e3' })).toThrow(/PAYMENT_COMMAND_TIMEOUT_MS/);
+    expect(() => validate({ ...BASE_ENV, PAYMENT_COMMAND_TIMEOUT_MS: '1000' })).not.toThrow();
+  });
+
   it('caps the order.paid retry budget', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '31' })).toThrow(/ORDER_PAID_CONSUMER_ATTEMPTS/);
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
@@ -153,9 +142,9 @@ describe('env validation', () => {
   // '6e4' would load as 6ms, not 60000ms. Validation must refuse the value a loader would misread
   // rather than accept it and drift.
   it('refuses scientific-notation and hex integers that a loader would parse differently', () => {
-    expect(() => validate({ ...BASE_ENV, RECONCILE_INTERVAL_MS: '6e4' })).toThrow(/RECONCILE_INTERVAL_MS/);
+    expect(() => validate({ ...BASE_ENV, OUTBOX_POLL_MS: '1e3' })).toThrow(/OUTBOX_POLL_MS/);
     expect(() => validate({ ...BASE_ENV, QUEUE_CONSUMER_BACKOFF_MS: '1e3' })).toThrow(/QUEUE_CONSUMER_BACKOFF_MS/);
-    expect(() => validate({ ...BASE_ENV, RECONCILE_INTERVAL_MS: '60000' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, OUTBOX_POLL_MS: '1000' })).not.toThrow();
   });
 
   // configuration.ts reads these with `!== 'false'` or `=== 'true'`, so '0'/'1' must be refused

@@ -1,51 +1,19 @@
-import { Global, Module } from '@nestjs/common';
+import type { DynamicModule } from '@nestjs/common';
+import { MessagingModule } from '@jcool/messaging';
 import { OrderModule } from '@modules/order/order.module';
-import { PaymentModule } from '@modules/payment/payment.module';
 import { ProductModule } from '@modules/product/product.module';
+import { ID_GENERATOR } from '@shared/identity/id-generator.port';
+import { API_CONSUMED_QUEUES, API_EVENT_ROUTES } from './event-routes';
 import { DomainEventDispatcher } from './handlers/domain-event.dispatcher';
 import { OrderEventsHandler } from './handlers/order-events.handler';
-import { InboxStore } from './inbox/inbox.store';
-import { SweepInbox } from './inbox/sweep-inbox';
-import { DrizzleOutboxWriter } from './outbox/drizzle-outbox.writer';
-import { OUTBOX_BACKLOG_PROVIDERS } from './outbox/outbox-backlog.collector';
-import { SweepPublishedOutbox } from './outbox/sweep-published-outbox';
-import { OutboxRelay } from './outbox/outbox-relay';
-import { OutboxRelayScheduler } from './outbox/outbox-relay.scheduler';
-import { OUTBOX_WRITER } from './outbox/outbox-writer.port';
-import { DeadLetterRouter } from './queue/dead-letter';
-import { DomainEventProcessor } from './queue/domain-event.processor';
-import { DomainEventsWorker } from './queue/domain-events.worker';
-import { QUEUE_DEPTH_COLLECTOR_PROVIDERS } from './queue/queue-depth.collector';
-import { QueueLifecycle } from './queue/queue.lifecycle';
-import { QUEUE_PROVIDERS } from './queue/queue.providers';
 
-// Global because any context may need to emit an event and the writer holds no per-module state.
-@Global()
-@Module({
-  // Reaches into Order, Payment and Product for their handlers rather than reimplementing their
-  // effects. One-way: none imports this module — each reads the outbox port off the global export —
-  // so the graph stays acyclic.
-  imports: [OrderModule, PaymentModule, ProductModule],
-  // The queue token stays unexported on purpose: exporting the raw Queue from a @Global module would
-  // let any context publish straight to it — the dual-write the outbox exists to prevent, and one
-  // the architecture rules would not catch.
-  providers: [
-    { provide: OUTBOX_WRITER, useClass: DrizzleOutboxWriter },
-    ...OUTBOX_BACKLOG_PROVIDERS,
-    ...QUEUE_PROVIDERS,
-    ...QUEUE_DEPTH_COLLECTOR_PROVIDERS,
-    QueueLifecycle,
-    OutboxRelay,
-    OutboxRelayScheduler,
-    InboxStore,
-    SweepPublishedOutbox,
-    SweepInbox,
-    OrderEventsHandler,
-    DomainEventDispatcher,
-    DomainEventProcessor,
-    DeadLetterRouter,
-    DomainEventsWorker,
-  ],
-  exports: [OUTBOX_WRITER],
-})
-export class MessagingModule {}
+export const ApiMessagingModule: DynamicModule = MessagingModule.forRoot({
+  routes: API_EVENT_ROUTES,
+  queues: API_CONSUMED_QUEUES.map((queue) => ({ ...queue, dispatcher: DomainEventDispatcher })),
+  idGenerator: ID_GENERATOR,
+  // Reaches into Order and Product for their handlers rather than reimplementing their effects.
+  // One-way: neither imports this module — each reads the outbox port off the global export — so the
+  // graph stays acyclic.
+  imports: [OrderModule, ProductModule],
+  providers: [OrderEventsHandler, DomainEventDispatcher],
+});

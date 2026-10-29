@@ -232,6 +232,13 @@
       "when": 1792745429664,
       "tag": "0032_drop_pending_orders_placed_at_index",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1793155857334,
+      "tag": "0033_drop_retired_stock_tables",
+      "breakpoints": true
     }
   ]
 }

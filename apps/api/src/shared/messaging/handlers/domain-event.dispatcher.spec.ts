@@ -1,9 +1,8 @@
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { describe, expect, it, vi } from 'vitest';
+import { type DomainEventJob, UnhandledEventError, eventLabel } from '@jcool/messaging';
 import type { OrderFinalizedEvent } from '@modules/order/domain/order.entity';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { UnhandledEventError } from '../errors';
-import type { DomainEventJob } from '../queue/domain-event.job';
 import { dispatcherWith } from '../testing/domain-event-dispatcher.double';
 import { OrderEventsHandler } from './order-events.handler';
 
@@ -48,7 +47,7 @@ describe('DomainEventDispatcher', () => {
   it('registers every event type a producer emits', () => {
     const dispatcher = dispatcherWith();
 
-    expect(PRODUCED_EVENT_TYPES.filter((type) => dispatcher.label(type) === 'unregistered')).toEqual([]);
+    expect(PRODUCED_EVENT_TYPES.filter((type) => !dispatcher.handles(type))).toEqual([]);
   });
 
   // A signal to Temporal cannot roll back with the claim; it must land before the claim commits.
@@ -154,7 +153,7 @@ describe('DomainEventDispatcher', () => {
   it('folds an unregistered event type into one label', () => {
     const dispatcher = dispatcherWith();
 
-    expect(['order.paid', 'order.paid; DROP TABLE'].map((type) => dispatcher.label(type))).toEqual([
+    expect(['order.paid', 'order.paid; DROP TABLE'].map((type) => eventLabel(dispatcher, type))).toEqual([
       'order.paid',
       'unregistered',
     ]);

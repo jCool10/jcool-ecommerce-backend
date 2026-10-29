@@ -321,7 +321,7 @@ tests:
               severity: page
             exp_annotations:
               summary: 'Message moved to the dead-letter queue'
-              description: 'Parked after exhausting retries or a permanent failure. Inspect with `npm run queue:replay-dlq`, deploy the fix, then replay.'
+              description: 'Parked after exhausting retries or a permanent failure. Inspect with `pnpm queue:replay-dlq --queue <queue>` (order-events or api-events, by the event type), deploy the fix, then replay.'
       # No `for` means no latch either: once the step leaves the 5m window the alert resolves on its
       # own while the message is still parked. It announces an arrival, it does not track a
       # condition — the queue depth is what says whether anything was replayed.

@@ -1,10 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { type DomainEventJob, queueToken } from '@jcool/messaging';
 import {
   CHECKOUT_SAGA_ENGINE,
   CheckoutEngineUnavailableError,
@@ -21,12 +22,8 @@ import {
 import { OrderItem } from '../../src/modules/order/domain/order-item.entity';
 import { Order } from '../../src/modules/order/domain/order.entity';
 import { CheckoutReservingReaperScheduler } from '../../src/modules/order/interface/checkout-reserving-reaper.scheduler';
-import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DomainEventJob } from '../../src/shared/messaging/queue/domain-event.job';
-import { DOMAIN_EVENTS_QUEUE, ORDER_PAID_BACKOFF } from '../../src/shared/messaging/queue/queue.constants';
 import { authHeader } from '../setup/bearer.helper';
 import { eventually } from '../setup/eventually';
 import {
@@ -40,7 +37,7 @@ import { readReservationOrder } from '../setup/fixtures/inventory.fixture';
 import {
   addToCart,
   auditLedgerInvariants,
-  authorizeSession,
+  authorizePayment,
   buyerWithCart,
   checkout,
   openSession,
@@ -51,14 +48,14 @@ import {
   untilOrderStatus,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { testId } from '../setup/id-service-stub';
+import { type PaymentServiceStub, paymentServiceStub } from '../setup/payment-service-stub';
 import { sleep } from '../setup/sleep';
 import { UNREACHABLE_TEMPORAL_ADDRESS } from '../setup/temporal-server';
 import { temporalTaskQueueForCurrentSpec } from '../setup/temporal-task-queue';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_temporal_0001';
 const RESERVE_WAIT_MS = 4000;
 const CANCEL_WAIT_MS = 3000;
 const ORPHAN_SEC = 5;
@@ -76,11 +73,12 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
-  let gateway: FakeSignerGatewayAdapter;
+  let payment: PaymentServiceStub;
   const extraApps: INestApplication[] = [];
 
   beforeAll(async () => {
-    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV));
+    ({ app, pool, db } = await createTestAppWithPool(SAGA_ENV));
+    payment = await paymentServiceStub();
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
@@ -102,9 +100,9 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
 
   async function paid(on: INestApplication = app) {
     const order = await placed(on);
-    const pay = await openSession(on, order.token, order.orderId).expect(201);
-    const intentId = await authorizeSession(on, pay.body.providerSessionId as string, order.orderId);
-    return { ...order, intentId };
+    await openSession(on, order.token, order.orderId).expect(201);
+    await authorizePayment(order.orderId);
+    return order;
   }
 
   /** An order tx A wrote whose saga never started, as a crash between the two would leave it. */
@@ -149,7 +147,7 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
   });
 
   it('keeps an authorization through engine outages, delivering it once Temporal answers', async () => {
-    const { sku, orderId, intentId } = await paid();
+    const { sku, orderId } = await paid();
     vi.spyOn(engine(), 'notifyAuthorized')
       .mockRejectedValueOnce(new CheckoutEngineUnavailableError())
       .mockRejectedValueOnce(new CheckoutEngineUnavailableError());
@@ -160,27 +158,13 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
     await relayAuthorization(app, orderId);
 
     await untilOrderStatus(app, orderId, 'PAID');
-    expect(gateway.captureCalls(intentId)).toBe(1);
+    expect(payment.providerCaptures(orderId)).toBe(1);
     expect((await auditLedgerInvariants(app, { [sku.variantId]: 5 })).violations).toEqual([]);
   });
 
-  it('queues payment.authorized on the long ladder', async () => {
-    const { orderId } = await paid();
-
-    await app.get(OutboxRelay).runOnce(100);
-
-    const jobs = await app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE).getJobs(['waiting', 'prioritized']);
-    const job = jobs.find((j) => j.data.eventType === 'payment.authorized' && j.data.payload.orderId === orderId);
-    expect(job?.opts).toMatchObject({
-      attempts: app.get(ConfigService).getOrThrow<number>('queue.orderPaidAttempts'),
-      backoff: { type: ORDER_PAID_BACKOFF },
-    });
-  });
-
   it('captures once for an authorization delivered twice', async () => {
-    const { sku, orderId, intentId } = await paid();
-    const queue = app.get<Queue<DomainEventJob>>(DOMAIN_EVENTS_QUEUE);
-    await app.get(OutboxRelay).runOnce(100);
+    const { sku, orderId } = await paid();
+    const queue = app.get<Queue<DomainEventJob>>(queueToken(ORDER_EVENTS_QUEUE));
     const [job] = (await queue.getJobs(['waiting', 'prioritized'])).filter(
       (j) => j.data.eventType === 'payment.authorized',
     );
@@ -190,26 +174,26 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
     expect(await relayAuthorization(app, orderId)).toBe(2);
 
     await untilOrderStatus(app, orderId, 'PAID');
-    expect(gateway.captureCalls(intentId)).toBe(1);
+    expect(payment.providerCaptures(orderId)).toBe(1);
     expect(await orderEventTypes(app, orderId)).toEqual(['order.placed', 'order.paid']);
     expect((await auditLedgerInvariants(app, { [sku.variantId]: 5 })).violations).toEqual([]);
   });
 
   it('voids an authorization that lands while the saga is compensating a cancel', async () => {
     const { sku, token, orderId } = await placed();
-    const pay = await openSession(app, token, orderId).expect(201);
+    await openSession(app, token, orderId).expect(201);
     const paymentCancel = holdCalls(app.get<OrderPaymentParticipantPort>(ORDER_PAYMENT_PARTICIPANT), 'cancel');
     await request(app.getHttpServer()).post(`/orders/${orderId}/cancel`).set(authHeader(token)).expect(200);
 
-    const intentId = await authorizeSession(app, pay.body.providerSessionId as string, orderId);
+    await authorizePayment(orderId);
     await relayAuthorization(app, orderId);
     paymentCancel.release();
 
     await eventually(
-      () => gateway.wasVoided(intentId),
-      (voided) => voided,
+      () => payment.sessionFor(orderId)?.status,
+      (attempt) => attempt === 'VOIDED',
     );
-    expect(gateway.captureCalls(intentId)).toBe(0);
+    expect(payment.providerCaptures(orderId)).toBe(0);
     expect((await readOrder(app, orderId)).status).toBe('CANCELLED');
     expect((await auditLedgerInvariants(app, { [sku.variantId]: 5 })).violations).toEqual([]);
   });
@@ -218,7 +202,7 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
     let deadApp: INestApplication;
 
     beforeAll(async () => {
-      ({ app: deadApp } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+      ({ app: deadApp } = await createTestAppWithPool({
         ...SAGA_ENV,
         TEMPORAL_ADDRESS: UNREACHABLE_TEMPORAL_ADDRESS,
         TEMPORAL_TASK_QUEUE: temporalTaskQueueForCurrentSpec('unreachable'),
@@ -271,8 +255,7 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
     let second: INestApplication;
 
     beforeAll(async () => {
-      // The same fake gateway, so an activity sees one provider whichever app runs it.
-      ({ app: second } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV, [], { gateway }));
+      ({ app: second } = await createTestAppWithPool(SAGA_ENV));
       extraApps.push(second);
     });
     afterAll(async () => {
@@ -287,9 +270,9 @@ describe('Checkout saga and Temporal (integration, real Temporal dev server, fak
         await relayAuthorization(index % 2 === 0 ? second : app, orderId);
       }
 
-      for (const { orderId, intentId } of orders) {
+      for (const { orderId } of orders) {
         await untilOrderStatus(app, orderId, 'PAID');
-        expect(gateway.captureCalls(intentId)).toBe(1);
+        expect(payment.providerCaptures(orderId)).toBe(1);
         expect(await orderEventTypes(app, orderId)).toEqual(['order.placed', 'order.paid']);
       }
       expect((await auditLedgerInvariants(app)).violations).toEqual([]);

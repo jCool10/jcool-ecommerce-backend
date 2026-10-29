@@ -15,13 +15,12 @@ import {
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal, newPrincipalToken } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 
 // The public checkout contract, pinned while the implementation behind it changes. Only status codes
 // and the fields a client relies on are asserted, so an added field never breaks it.
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_contract_secret_01';
 const PRICE = 125_000;
 const ABSENT_ID = testId();
 
@@ -31,7 +30,7 @@ describe('Checkout contract (integration, real Postgres)', () => {
   let sku: SellableSku;
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
+    ({ app, pool } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(

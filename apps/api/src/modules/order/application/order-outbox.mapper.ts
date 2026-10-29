@@ -1,4 +1,4 @@
-import type { OutboxRecord } from '@shared/messaging/outbox/outbox-writer.port';
+import type { OutboxRecord } from '@jcool/messaging/outbox-port';
 import type { OrderFinalizedEvent } from '../domain/order.entity';
 import type { OrderPlacedEvent } from '../domain/events/order-placed.event';
 
@@ -7,12 +7,20 @@ import type { OrderPlacedEvent } from '../domain/events/order-placed.event';
 
 const AGGREGATE_TYPE = 'Order';
 
+type FinalizedEventName = OrderFinalizedEvent['eventName'];
+
+export const ORDER_PLACED_EVENT = 'order.placed';
+export const ORDER_PAID_EVENT = 'order.paid' satisfies FinalizedEventName;
+export const ORDER_FAILED_EVENT = 'order.failed' satisfies FinalizedEventName;
+export const ORDER_EXPIRED_EVENT = 'order.expired' satisfies FinalizedEventName;
+export const ORDER_CANCELLED_EVENT = 'order.cancelled' satisfies FinalizedEventName;
+
 /** OrderPlacedEvent predates the DomainEvent interface, so its name is spelled out here. */
 export function toPlacedOutboxRecord(event: OrderPlacedEvent): OutboxRecord {
   return {
     aggregateType: AGGREGATE_TYPE,
     aggregateId: event.orderId,
-    eventType: 'order.placed',
+    eventType: ORDER_PLACED_EVENT,
     payload: {
       orderId: event.orderId,
       userId: event.userId,

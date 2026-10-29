@@ -4,19 +4,24 @@ import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  ORDER_EVENTS_CONSUMER,
+  ORDER_EVENTS_DLQ,
+  ORDER_EVENTS_QUEUE,
+} from '@jcool/internal-contracts/queues/order-events';
+import {
+  type DeadLetterJob,
+  type DomainEventJob,
+  DomainEventProcessor,
+  PermanentError,
+  jobIdFor,
+  queueToken,
+  replayDeadLetters,
+} from '@jcool/messaging';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { PermanentError } from '../../src/shared/messaging/errors';
+import { API_EVENTS_DLQ, API_EVENTS_QUEUE } from '../../src/shared/messaging/event-routes';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { replayDeadLetters } from '../../src/shared/messaging/queue/dead-letter.replay';
-import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
-import {
-  DOMAIN_EVENTS_CONSUMER,
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-} from '../../src/shared/messaging/queue/queue.constants';
 import {
   closeAppAfterAll,
   createTestAppWithPool,
@@ -34,6 +39,7 @@ const BACKOFF_MS = '100';
 const MESSAGE_IDS = [testId(), testId(), testId()];
 const messageId = (n: number) => MESSAGE_IDS[n];
 const ORDER_ID = testId();
+const PRODUCT_ID = testId();
 
 // A real BullMQ worker; assertions read where the message ended up.
 describe('Retry, backoff and dead-letter queue (integration, real Postgres + Redis)', () => {
@@ -42,6 +48,8 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   let dispatcher: DomainEventDispatcher;
   let queue: Queue;
   let dlq: Queue;
+  let apiQueue: Queue;
+  let apiDlq: Queue;
   let db: DrizzleDB;
   let pool: Pool;
 
@@ -57,14 +65,23 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     ...overrides,
   });
 
+  const catalogJob = (): DomainEventJob =>
+    job({
+      outboxId: messageId(2),
+      aggregateType: 'Product',
+      aggregateId: PRODUCT_ID,
+      eventType: 'catalog.product.changed',
+      payload: {},
+    });
+
   const inboxRows = () => db.select().from(schema.inbox);
-  const deadLetters = () => dlq.getJobs(['waiting', 'prioritized']) as Promise<Job<DeadLetterJob>[]>;
+  const deadLetters = (from = dlq) => from.getJobs(['waiting', 'prioritized']) as Promise<Job<DeadLetterJob>[]>;
 
   const inboxLookup = async (id: string): Promise<Date | null> => {
     const [row] = await db
       .select({ processedAt: schema.inbox.processedAt })
       .from(schema.inbox)
-      .where(and(eq(schema.inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(schema.inbox.messageId, id)))
+      .where(and(eq(schema.inbox.consumer, ORDER_EVENTS_CONSUMER), eq(schema.inbox.messageId, id)))
       .limit(1);
     return row?.processedAt ?? null;
   };
@@ -72,13 +89,14 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
   // None of these events retries on a ladder of its own.
   const replayGuards = { inboxLookup, inboxRetentionMs: 30 * 86_400_000, jobOptionsFor: () => ({}) };
 
-  const publish = (data: DomainEventJob) => queue.add(data.eventType, data, { jobId: jobIdFor(data.outboxId) });
+  const publish = (data: DomainEventJob, to = queue) =>
+    to.add(data.eventType, data, { jobId: jobIdFor(data.outboxId) });
 
-  const waitForDeadLetter = async (count = 1): Promise<Job<DeadLetterJob>[]> => {
+  const waitForDeadLetter = async (count = 1, from = dlq): Promise<Job<DeadLetterJob>[]> => {
     let jobs: Job<DeadLetterJob>[] = [];
     await vi.waitFor(
       async () => {
-        jobs = await deadLetters();
+        jobs = await deadLetters(from);
         expect(jobs).toHaveLength(count);
       },
       { timeout: 15_000, interval: 50 },
@@ -95,12 +113,14 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     }));
     processor = app.get(DomainEventProcessor);
     dispatcher = app.get(DomainEventDispatcher);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
+    queue = app.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
+    dlq = app.get<Queue>(queueToken(ORDER_EVENTS_DLQ));
+    apiQueue = app.get<Queue>(queueToken(API_EVENTS_QUEUE));
+    apiDlq = app.get<Queue>(queueToken(API_EVENTS_DLQ));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-  obliterateQueueBeforeEach(() => [queue, dlq]);
+  obliterateQueueBeforeEach(() => [queue, dlq, apiQueue, apiDlq]);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -162,6 +182,25 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(dead.data.attemptsMade).toBe(1);
   });
 
+  // Another service writes it now; a payload off its contract is identical on every redelivery.
+  it('dead-letters a payment.authorized whose payload is off the contract on the first attempt', async () => {
+    await publish(job({ aggregateType: 'Payment', eventType: 'payment.authorized', payload: { orderId: ORDER_ID } }));
+
+    const [dead] = await waitForDeadLetter();
+    expect(dead.data.failedReason).toMatch(/Unusable payment.authorized/);
+    expect(dead.data.attemptsMade).toBe(1);
+  });
+
+  it('parks a poisoned catalog event in the api-events dead-letter queue, not the order-events one', async () => {
+    spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
+
+    await publish(catalogJob(), apiQueue);
+
+    const [dead] = await waitForDeadLetter(1, apiDlq);
+    expect(dead.data.eventType).toBe('catalog.product.changed');
+    expect(await deadLetters()).toHaveLength(0);
+  });
+
   it('replays a message once the handler is fixed and clears the dead letter', async () => {
     const effect = spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
@@ -175,13 +214,28 @@ describe('Retry, backoff and dead-letter queue (integration, real Postgres + Red
     expect(await deadLetters()).toHaveLength(0);
   });
 
+  it('replays order-events-dlq without touching what api-events-dlq holds', async () => {
+    const effect = spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
+    await publish(job());
+    await publish(catalogJob(), apiQueue);
+    await waitForDeadLetter();
+    await waitForDeadLetter(1, apiDlq);
+
+    effect.mockRestore();
+    const summary = await replayDeadLetters(queue, dlq, { ...replayGuards, dryRun: false });
+
+    expect(summary.outcomes.map(({ messageId: id }) => id)).toEqual([messageId(1)]);
+    await vi.waitFor(async () => expect(await inboxRows()).toHaveLength(1), { timeout: 15_000, interval: 50 });
+    expect((await deadLetters(apiDlq)).map(({ data }) => data.outboxId)).toEqual([messageId(2)]);
+  });
+
   // Dead-lettered and claimed: what a crash between the effect's commit and the ack leaves.
   it('refuses to replay a message the inbox says was already applied, even forced', async () => {
     spyOnEffect(dispatcher).mockRejectedValue(new PermanentError('bug in the handler'));
     await publish(job());
     await waitForDeadLetter();
     vi.restoreAllMocks();
-    await expect(processor.process(job())).resolves.toBe('processed');
+    await expect(processor.process(job(), ORDER_EVENTS_QUEUE)).resolves.toBe('processed');
 
     const effect = spyOnEffect(dispatcher);
     const summary = await replayDeadLetters(queue, dlq, { ...replayGuards, dryRun: false, force: true });

@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClsService } from 'nestjs-cls';
 import { CartModule } from '@modules/cart/cart.module';
-import { PaymentModule } from '@modules/payment/payment.module';
 import { ProductModule } from '@modules/product/product.module';
 import { createUserServiceClient } from '@jcool/auth-verifier/session-state';
 import { durationToMs } from '@jcool/kernel';
@@ -32,7 +31,7 @@ import { RemoteUserContactAdapter } from './infrastructure/user-contact.adapters
 import { CartSnapshotAdapter } from './infrastructure/cart-snapshot.adapter';
 import { CatalogQueryAdapter } from './infrastructure/catalog-query.adapter';
 import { createInventoryServiceAdapter } from './infrastructure/order-inventory-participant.http-adapter';
-import { OrderPaymentParticipantAdapter } from './infrastructure/order-payment-participant.adapter';
+import { createPaymentServiceAdapter } from './infrastructure/order-payment-participant.http-adapter';
 import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempotency-key.repository';
 import { CheckoutSagaActivities } from './infrastructure/temporal/checkout-saga.activities';
 import { CHECKOUT_SAGA_COLLECTOR_PROVIDERS } from './infrastructure/temporal/checkout-saga.collector';
@@ -49,13 +48,12 @@ import { PaymentAuthorizedHandler } from './interface/queue/payment-authorized.h
 import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.guard';
 
 /**
- * Every cross-context read or write — Cart's CART_SNAPSHOT, Product's PRODUCT_SKU_QUERY, Payment's
- * PAYMENT_PARTICIPANT, the inventory-service over HTTP — goes through an Order-owned anti-corruption
- * adapter bound to an Order port, so nothing in this module imports another context's domain or
- * infrastructure.
+ * Every cross-context read or write — Cart's CART_SNAPSHOT, Product's PRODUCT_SKU_QUERY, the inventory-
+ * and payment-service over HTTP — goes through an Order-owned anti-corruption adapter bound to an
+ * Order port, so nothing in this module imports another context's domain or infrastructure.
  */
 @Module({
-  imports: [CartModule, ProductModule, PaymentModule, MailModule, ResilienceModule],
+  imports: [CartModule, ProductModule, MailModule, ResilienceModule],
   controllers: [OrderController, AdminOrderController],
   providers: [
     CheckoutOrderUseCase,
@@ -76,7 +74,11 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
       inject: [ConfigService, CircuitBreakerFactory, ClsService],
       useFactory: createInventoryServiceAdapter,
     },
-    { provide: ORDER_PAYMENT_PARTICIPANT, useClass: OrderPaymentParticipantAdapter },
+    {
+      provide: ORDER_PAYMENT_PARTICIPANT,
+      inject: [ConfigService, CircuitBreakerFactory, ClsService],
+      useFactory: createPaymentServiceAdapter,
+    },
     { provide: IDEMPOTENCY_STORE, useClass: DrizzleIdempotencyKeyRepository },
     {
       provide: USER_CONTACT,

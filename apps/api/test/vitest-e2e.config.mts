@@ -18,16 +18,18 @@ export default defineConfig({
       DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
       REDIS_URL: 'redis://127.0.0.1:6379',
       // Placeholders for the import-time validation; createTestApp points them at the user-service,
-      // id-service and inventory-service stubs once their ports are known.
+      // id-service, inventory-service and payment-service stubs once their ports are known.
       AUTH_JWKS_URL: 'http://127.0.0.1:1/.well-known/jwks.json',
       USER_SERVICE_INTERNAL_URL: 'http://127.0.0.1:1',
       ID_SERVICE_URL: 'http://127.0.0.1:1',
       INVENTORY_SERVICE_URL: 'http://127.0.0.1:1',
+      PAYMENT_SERVICE_URL: 'http://127.0.0.1:1',
       INTERNAL_API_TOKEN: 'e2e-internal-api-token-not-a-real-secret-0',
       INVENTORY_SERVICE_TOKEN: 'e2e-inventory-service-token-not-a-secret-0',
+      PAYMENT_SERVICE_TOKEN: 'e2e-payment-service-token-not-a-secret-00',
       JWT_ISSUER: 'https://users.jcool.test',
       JWT_AUDIENCE: 'jcool-api',
-      // Left at the production default, which the pool rule in env validation needs (5 + 2 + 2 + 5 ≤ 20).
+      // Left at the production default, which the pool rule in env validation needs (2 × 5 + 2 + 2 + 5 ≤ 20).
       // No spec holds more than two apps open at once (`queue-connection.e2e-spec.ts`, the two-app saga
       // cases), so the real peak is 2 × 20 × 4 workers = 160 plus a handful of raw pools, inside the
       // container's max_connections=300. Capping it lower starves the 12-16 contender races, which

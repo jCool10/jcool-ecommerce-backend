@@ -12,11 +12,9 @@ import {
 } from '../../src/modules/order/application/ports/order-repository.port';
 import { OrderItem } from '../../src/modules/order/domain/order-item.entity';
 import { Order } from '../../src/modules/order/domain/order.entity';
-import { PaymentGatewayError } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import { SHORT_DEADLINE_CHECKOUT_ENV } from '../setup/fixtures/checkout-saga.fixture';
+import { SHORT_DEADLINE_CHECKOUT_ENV, shortSessionFloorBeforeEach } from '../setup/fixtures/checkout-saga.fixture';
 import {
   addToCart,
   auditLedgerInvariants,
@@ -30,28 +28,34 @@ import {
   seedSellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal, newPrincipalToken } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
+import { type PaymentServiceStub, paymentServiceStub } from '../setup/payment-service-stub';
 import { sleep } from '../setup/sleep';
 
-const WEBHOOK_SECRET = 'whsec_e2e_order_pay_secret_0001';
 const PRICE = 120_000;
 const PAY_CUTOFF_MS = Number(SHORT_DEADLINE_CHECKOUT_ENV.CHECKOUT_PAY_CUTOFF_SEC) * 1000;
+const COMMAND_TIMEOUT_MS = 1_000;
 
 describe('POST /orders/:id/pay (integration, real Temporal, fake Stripe)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
-  let gateway: FakeSignerGatewayAdapter;
+  let payment: PaymentServiceStub;
 
   beforeAll(async () => {
-    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SHORT_DEADLINE_CHECKOUT_ENV));
+    payment = await paymentServiceStub();
+    ({ app, pool, db } = await createTestAppWithPool({
+      ...SHORT_DEADLINE_CHECKOUT_ENV,
+      PAYMENT_COMMAND_TIMEOUT_MS: String(COMMAND_TIMEOUT_MS),
+    }));
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
     () => [app],
     () => pool,
   );
+  shortSessionFloorBeforeEach();
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -70,16 +74,21 @@ describe('POST /orders/:id/pay (integration, real Temporal, fake Stripe)', () =>
 
     const res = await openSession(app, token, orderId).expect(201);
 
-    expect(res.body).toMatchObject({ paymentId: expect.any(String), providerSessionId: expect.any(String) });
+    const session = await readPayment(app, orderId);
+    expect(res.body).toEqual({
+      paymentId: session?.paymentId,
+      providerSessionId: session?.providerSessionId,
+      redirectUrl: expect.any(String),
+      clientSecret: expect.any(String),
+    });
     const order = await readOrder(app, orderId);
-    expect(gateway.lastCreateSessionInput()).toMatchObject({
-      orderId,
+    expect(session).toMatchObject({
       amountMinor: totalMinor,
       currency: 'VND',
       expiresAt: order.paymentDeadlineAt,
+      status: 'PENDING',
     });
     expect(await readPaymentOrder(app, orderId)).toMatchObject({ status: 'OPEN', amountMinor: totalMinor });
-    expect(await readPayment(app, orderId)).toMatchObject({ id: res.body.paymentId, status: 'PENDING' });
   });
 
   it("answers 404 for another buyer's order and for an unknown id", async () => {
@@ -134,6 +143,7 @@ describe('POST /orders/:id/pay (integration, real Temporal, fake Stripe)', () =>
     await openSession(app, token, orderId).expect(409);
 
     expect(await readPaymentOrder(app, orderId)).toBeUndefined();
+    expect(payment.calls('session')).toBe(0);
   });
 
   it('answers 409 when payment has already closed the order to new sessions', async () => {
@@ -147,12 +157,24 @@ describe('POST /orders/:id/pay (integration, real Temporal, fake Stripe)', () =>
 
   it('answers 502 when the provider refuses, leaving no payment attempt behind', async () => {
     const { token, orderId } = await placed();
-    vi.spyOn(gateway, 'createSession').mockRejectedValueOnce(new PaymentGatewayError('circuit open'));
+    payment.fail('session', 503);
 
     await openSession(app, token, orderId).expect(502);
 
     expect(await readPayment(app, orderId)).toBeUndefined();
     await openSession(app, token, orderId).expect(201);
+  });
+
+  it('answers 502 once the payment-service outlasts the command timeout', async () => {
+    const { token, orderId } = await placed();
+    const { reached } = payment.hang('session');
+
+    const started = Date.now();
+    await openSession(app, token, orderId).expect(502);
+
+    await reached;
+    expect(Date.now() - started).toBeLessThan(COMMAND_TIMEOUT_MS + 2_000);
+    expect(await readPayment(app, orderId)).toBeUndefined();
   });
 
   it('opens a session for a total above the int4 ceiling', async () => {
@@ -161,7 +183,6 @@ describe('POST /orders/:id/pay (integration, real Temporal, fake Stripe)', () =>
 
     await openSession(app, token, orderId).expect(201);
 
-    expect(gateway.lastCreateSessionInput()?.amountMinor).toBe(totalMinor);
     expect(await readPayment(app, orderId)).toMatchObject({ amountMinor: totalMinor });
   });
 });

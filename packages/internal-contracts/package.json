@@ -15,6 +15,14 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
+    },
+    "./events/payment-authorized": {
+      "types": "./dist/events/payment-authorized.d.ts",
+      "default": "./dist/events/payment-authorized.js"
+    },
+    "./queues/order-events": {
+      "types": "./dist/queues/order-events.d.ts",
+      "default": "./dist/queues/order-events.js"
     }
   },
   "scripts": {

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { ContractMismatch } from '../common/contract-mismatch';
 import {
   type CommandOutcome,
   LOCK_BUDGET_EXHAUSTED,
@@ -241,13 +242,6 @@ export const INVENTORY_CONTRACT_CASES: InventoryContractCase[] = [
     ],
   },
 ];
-
-export class ContractMismatch extends Error {
-  constructor(step: number, op: string, expected: unknown, actual: unknown) {
-    super(`step ${step} (${op}): expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-    this.name = 'ContractMismatch';
-  }
-}
 
 export async function runContractCase(driver: InventoryContractDriver, testCase: InventoryContractCase): Promise<void> {
   const orders = new Map<string, string>();

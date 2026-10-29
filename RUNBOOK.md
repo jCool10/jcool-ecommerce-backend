@@ -4,7 +4,7 @@ Procedures an operator needs that the code cannot express on its own. Everything
 
 Conventions used below:
 
-- **local** — a developer machine with the repo, `pnpm install` and `pnpm dev:link-env` done, and `.env` pointing at the target. Arguments go without `--` (`pnpm queue:replay-dlq --apply`): pnpm forwards a literal `--` to the command.
+- **local** — a developer machine with the repo, `pnpm install` and `pnpm dev:link-env` done, and `.env` pointing at the target. Arguments go without `--` (`pnpm queue:replay-dlq --queue order-events --apply`): pnpm forwards a literal `--` to the command.
 - **container** — a shell inside the deployed image (`railway ssh --service "$RAILWAY_SERVICE"`), where `dist/` exists and `devDependencies` (including `tsx`) do **not**.
 
 ---
@@ -40,9 +40,11 @@ Conventions used below:
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [The inventory-service](#the-inventory-service)
-  - [Cross-service settings](#cross-service-settings)
+- [The payment-service](#the-payment-service)
+- [Cross-service settings](#cross-service-settings)
 - [Per-caller internal tokens](#per-caller-internal-tokens)
 - [Cut stock over to the inventory-service](#cut-stock-over-to-the-inventory-service)
+- [Cut payments over to the payment-service](#cut-payments-over-to-the-payment-service)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -85,9 +87,9 @@ A layout change bumps `LAYOUT_VERSION` and rewrites the meaning of every stored 
 CD deploys one service at a time (id-service → api → gateway → user-service) and runs each one's migrations in its pre-deploy step, so everything below up to the merge happens while the services are stopped. The layout-2 rollout, in order:
 
 1. **Stop** the api, the user-service and the id-service, and keep them stopped for longer than the user-service's `JWT_ACCESS_TTL`, so no access token naming a layout-1 user id is still live when they return.
-2. **Close open checkouts.** Every `PENDING` payment (`SELECT id, order_id, provider_session_id FROM payments WHERE status = 'PENDING'`) has a hosted checkout page that can still take money for an order the reset deletes. Expire each session in the payment gateway's dashboard and refund any that already read `paid`, as in [A refund is owed](#a-refund-is-owed).
+2. **Close open checkouts.** Every `PENDING` payment (on `payment-postgres`: `SELECT id, order_id, provider_session_id FROM payments WHERE status = 'PENDING'`) has a hosted checkout page that can still take money for an order the reset deletes. Expire each session in the payment gateway's dashboard and refund any that already read `paid`, as in [A refund is owed](#a-refund-is-owed).
 3. **Back up, then reset** the api's and the user-service's databases to empty ([Backup and restore](#backup-and-restore)); a layout-2 build cannot serve the dumps. The api's `0028_snowflake_layout_v2_id_floor.sql` and the user-service's `0003_snowflake_layout_v2_pin_and_id_floor.sql` refuse to run while any of their tables holds a row (`id layout 2 needs a reset database: table … is not empty`), so a database that was missed stops the deploy at its pre-deploy step.
-4. **Flush the shared Redis** (`railway connect <redis service>`, then `FLUSHALL`). Its queued and dead-lettered jobs, its `auth:epoch:*` and `auth:denylist:*` keys and its cached catalog pages all name layout-1 ids, and a `queue:replay-dlq --apply` would put those jobs back on the queues.
+4. **Flush the shared Redis** (`railway connect <redis service>`, then `FLUSHALL`). Its queued and dead-lettered jobs, its `auth:epoch:*` and `auth:denylist:*` keys and its cached catalog pages all name layout-1 ids, and a `queue:replay-dlq --queue <queue> --apply` would put those jobs back on the queues.
 5. **Remove `IDENTITY_BUCKET_KEY`** now: `.railway/railway.ts` no longer lists it, so CD would otherwise hold the deploy for a [destructive review](#review-a-destructive-change). From this change's checkout, run `railway config plan` (the only destroy must be that variable), then `railway config apply --confirm-destructive` ([Change Railway service config](#change-railway-service-config)). Keep its value with the step-3 dumps: a rollback needs it back.
 6. **Set `IDENTITY_PIN_BOOTSTRAP=true`** on the user-service, so its first boot pins the empty database at layout 2.
 7. **Merge.** The id-service's `0004_widen_node_pool.sql` widens the leasable node pool to `1..254`; `0028` and `0003` move every `ck_<table>_<column>_routable` floor to `>= 262144` (2^18), and `0003` drops the old pin fingerprint.
@@ -109,7 +111,7 @@ ALTER TABLE node_leases ADD CONSTRAINT node_leases_node_id_range CHECK (node_id 
 
 ## Backup and restore
 
-Each service owns one database and is backed up on its own: the api's (catalog, cart, orders, payments, media, messaging, and the retired stock tables nothing writes), the user-service's (accounts, tokens, the layout pin) and the inventory-service's `inventory-postgres` (stock levels, holds and their per-order headers). They share no foreign keys, so a restore cannot break a constraint; but the api's orders and the inventory-service's headers describe the same checkouts, so restoring one to another point in time than the other shows up as [CheckoutInvariantViolation](#checkoutinvariantviolation) on the orders in between. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
+Each service owns one database and is backed up on its own: the api's (catalog, cart, orders, media, messaging, and the retired payment tables nothing writes), the user-service's (accounts, tokens, the layout pin), the inventory-service's `inventory-postgres` (stock levels, holds and their per-order headers) and the payment-service's `payment-postgres` (payment headers, attempts, the webhook ledger and its outbox). They share no foreign keys, so a restore cannot break a constraint; but the api's orders and the two services' headers describe the same checkouts, so restoring one to another point in time than the others shows up as [CheckoutInvariantViolation](#checkoutinvariantviolation) on the orders in between. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
 
 ### Back up
 
@@ -249,13 +251,24 @@ LIMIT 20;
 - **`attempts` climbing on one row while others publish** — that row is poison, and the backlog behind it is moving. The relay only charges an attempt when something else in the same tick got through, so a non-zero count is proof the queue itself is healthy. Fix the payload or the handler; the row keeps its place in line meanwhile.
 - **`attempts` flat at 0 across the whole backlog** — nothing is publishing. Either the relay is not running (`OUTBOX_RELAY_ENABLED`, the worker process) or Redis is refusing every publish. Check `outbox_backlog_pending` alongside it: a deep backlog with a flat age is a burst being worked through, not an outage.
 
+Both the api and the payment-service run a relay over an `outbox` of their own, and the alert carries the `job` label of the one that is stale (`jcool-api` or `jcool-payment`): run the query against that service's database, the payment-service's being `payment-postgres`. A stale payment-service row is a `payment.authorized` that has not reached the saga yet.
+
 A row here has **not** been dead-lettered — it was never delivered at all, so [replay](#replay-the-dead-letter-queue) does not apply to it and there is nothing to re-admit.
 
 ---
 
 ## Replay the dead-letter queue
 
-A message reaches the DLQ after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service), and for `catalog.*` events, which wait out a search engine outage on the same ladder. A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
+Every queue the api consumes has a dead-letter queue of its own. A message reaches it after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for the events on the long ladder: `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service), `payment.authorized`, which waits out a Temporal outage, and `catalog.*`, which wait out a search engine outage. A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
+
+The `DeadLetterQueued` page names the event type (`messaging_dlq_total{event_type}`), which says which queue to replay:
+
+| Event type | Queue | Dead-letter queue | Replay with |
+| ---------- | ----- | ----------------- | ----------- |
+| `order.placed`, `order.paid`, `order.failed`, `order.expired`, `order.cancelled`, `payment.authorized` | `order-events` | `order-events-dlq` | `pnpm queue:replay-dlq --queue order-events` |
+| `catalog.product.changed`, `catalog.category.renamed` | `api-events` | `api-events-dlq` | `pnpm queue:replay-dlq --queue api-events` |
+
+`--queue` is required: with one DLQ per queue, a default would be a guess at which one is on fire. The payment-service publishes `payment.authorized` but never consumes it, so it has no DLQ: that job fails in the api's worker and lands in `order-events-dlq`, and the replay runs in the api.
 
 **Replay used to be unconditionally safe. It is not any more, and the tool now says so.** The old guarantee was that a message goes back under its outbox row id, the inbox dedups on that id, and a needless replay collapses into nothing. [Inbox retention](#retention-sweeps) ends it: once a claim has been swept, "no claim" no longer means "never applied", and replaying such a message applies its effect a second time.
 
@@ -279,38 +292,38 @@ What replay **cannot** fix in any case is the reason the message failed. Each li
 
 ```bash
 # local — dry run is the default, because this puts real traffic back on a live queue
-pnpm queue:replay-dlq
-pnpm queue:replay-dlq --apply
-pnpm queue:replay-dlq --apply --limit 20
-pnpm queue:replay-dlq --apply --force   # past the retention horizon; read above first
+pnpm queue:replay-dlq --queue order-events
+pnpm queue:replay-dlq --queue order-events --apply
+pnpm queue:replay-dlq --queue api-events --apply --limit 20
+pnpm queue:replay-dlq --queue order-events --apply --force   # past the retention horizon; read above first
 ```
 
 ```bash
 # container — same tool, compiled. `tsx` is a devDependency and is not installed here.
-npm run queue:replay-dlq:prod
-npm run queue:replay-dlq:prod -- --apply
+npm run queue:replay-dlq:prod -- --queue order-events
+npm run queue:replay-dlq:prod -- --queue order-events --apply
 ```
 
 The guard runs on a dry run too, so the listing is what `--apply` would actually do rather than a promise it would then refuse.
 
 **A `catalog.*` message is always safe to replay, `--force` included.** Its handler re-reads the product from Postgres and writes it as it is now, and the engine ignores any version it already holds, so a second application changes nothing. A `catalog.category.renamed` can also land here as permanent without any engine fault: a deploy that outlasts the worker's 10 s close window interrupts its fan-out, and a second such interruption exceeds BullMQ's stall limit. Replaying it restarts the fan-out from the first page. Dropping catalog messages instead of replaying them is fine too, provided a [rebuild](#rebuild-the-search-index) follows.
 
-The CLI reads its Redis URL, queue prefix **and inbox window** through the app's own config factory rather than re-reading the environment, so it cannot report a reassuringly empty queue by looking under a different prefix than the app writes to, nor draw the horizon in a different place than the sweep does. It boots no Nest context at all — a replay is something you want to be able to run while the app itself is the thing that is broken. It now needs **Postgres as well as Redis**: the inbox check is not optional, so a replay cannot be performed while the database is down.
+The CLI reads its Redis URL, queue prefix **and inbox window** through the app's own config factory rather than re-reading the environment, so it cannot report a reassuringly empty queue by looking under a different prefix than the app writes to, nor draw the horizon in a different place than the sweep does. It boots no Nest context at all — a replay is something you want to be able to run while the app itself is the thing that is broken. It now needs **Postgres as well as Redis**, the api's, since the inbox lives there: the inbox check is not optional, so a replay cannot be performed while the database is down.
 
 ---
 
 ## Retention sweeps
 
-Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — six sweeps in the api, the three `auth-tokens:*` ones in the user-service. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
+Each service runs its own timer (`RETENTION_INTERVAL_MS`, hourly by default) over its own tables — five sweeps in the api, the three `auth-tokens:*` ones in the user-service, and in the payment-service the outbox one and `payment:webhook-events`. Failures, timeouts and the "still running" guard are **per sweep**: one broken table cannot cost the others their tick.
 
 Every window is sized by **what still has to be able to retry against the row**, never by disk. Shortening one does not lose history; it loses a guarantee, and only under retry — which is to say only during an incident.
 
 | Sweep | Table | Collected when | Never collected | Env var |
 | ----- | ----- | -------------- | --------------- | ------- |
-| `messaging:outbox` | `outbox` | `published_at` older than the window | **Any row with `published_at IS NULL`, at any age** — that is an unsent event, not a stale record | `RETENTION_OUTBOX_DAYS` (30) |
-| `messaging:inbox` | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
+| `messaging:outbox` *(api, payment-service)* | `outbox` | `published_at` older than the window | **Any row with `published_at IS NULL`, at any age** — that is an unsent event, not a stale record | `RETENTION_OUTBOX_DAYS` (30) |
+| `messaging:inbox` *(api)* | `inbox` | `processed_at` older than the window | — | `RETENTION_INBOX_DAYS` (30, floor 7) |
 | `order:idempotency-keys` | `idempotency_keys` | `expires_at` past, plus a grace | Anything still inside its TTL, **`COMPLETED` included** — that row is the response a retry replays | `RETENTION_IDEMPOTENCY_GRACE_SEC` (3600) |
-| `payment:webhook-events` | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
+| `payment:webhook-events` *(payment-service)* | `webhook_events` | `received_at` older than the window | — | `RETENTION_WEBHOOK_EVENT_DAYS` (30, floor 14) |
 | `order:rejected-orders` | `orders` (and their `order_items`) | `REJECTED` with `finalized_at` older than the window | Every other status — those are the buyer's record | `RETENTION_REJECTED_ORDER_DAYS` (30, floor 1) |
 | `auth-tokens:email-verification` *(user-service)* | `email_verification_tokens` | expired, or consumed, longer ago than the grace | A token that can still be spent | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
 | `auth-tokens:password-reset` *(user-service)* | `password_reset_tokens` | same | same | `RETENTION_AUTH_TOKEN_GRACE_DAYS` (7) |
@@ -373,37 +386,38 @@ When a sweep is actively working off a backlog the planner correctly prefers a s
 
 `payment_refund_owed_total` rising means money reached a buyer's payment for an order that will not be fulfilled. **This service does not refund anything automatically** — automatic refunds are out of scope — so every increment is a person's job, and nothing retries it away.
 
-How it happens: checkout sessions are manual capture, so a buyer who authorizes after a cancel or the payment deadline is voided, never charged, and owes nothing. What is left is a webhook reporting cleared money on a session no `payment_orders` header owns: a session opened outside this service, or one whose header a restore or a manual cleanup lost. Nothing will ever capture or void it.
+How it happens: checkout sessions are manual capture, so a buyer who authorizes after a cancel or the payment deadline is voided, never charged, and owes nothing. What is left is a webhook reporting cleared money on a session no `payment_orders` header owns: a session opened outside the payment-service, or one whose header a restore or a manual cleanup lost. Nothing will ever capture or void it.
 
 The counter counts **observations, not refunds**: a redelivered webhook is deduplicated before it counts, but the same session reported under two event ids counts twice.
 
 | `source` | Who saw it |
 | -------- | ---------- |
-| `webhook_direct` | The gateway's webhook reported a cleared charge for a session no checkout owns (`HandlePaymentWebhook`); the event is recorded `SKIPPED` |
+| `webhook_direct` | The payment-service's webhook handler (`HandlePaymentWebhook`) saw a cleared charge for a session no checkout owns; the event is recorded `SKIPPED` |
 
-To act on one, find the session: the log line is at `error` with `providerEventId` and `sessionId`. The session's `order_id` metadata in the gateway dashboard names the order, if any. Then read the money and the order side back —
+To act on one, find the session: the payment-service's log line is at `error` with `providerEventId` and `sessionId`. The session's `order_id` metadata in the gateway dashboard names the order, if any. Then read the money and the order side back, from the two databases they live in —
 
 ```sql
-SELECT o.id, o.status, o.finalize_reason, o.total_amount,
-       p.id AS payment_id, p.status AS payment_status, p.provider_session_id, p.provider_intent_id
-FROM orders o JOIN payments p ON p.order_id = o.id
-WHERE o.id = '<orderId>';
+-- payment-postgres
+SELECT id AS payment_id, order_id, status AS payment_status, provider_session_id, provider_intent_id
+FROM payments WHERE order_id = '<orderId>';
+-- the api's database
+SELECT id, status, finalize_reason, total_amount FROM orders WHERE id = '<orderId>';
 ```
 
 An order in `CANCELLED` / `EXPIRED` / `FAILED` carrying a `SUCCEEDED` payment is owed a refund. Refund `provider_intent_id` in the gateway's own dashboard; the order and the stock are already correct and must not be edited to match. If the order reads `PAID`, nothing is owed: the saga captured that charge itself. When no local payment matches the session at all, the gateway dashboard is the only record, and the refund is owed from the session's payment intent once its `payment_status` reads `paid`.
 
-To find every candidate rather than chase one log line — orders that died holding money that was never resolved:
+To find every candidate rather than chase one log line — orders that died holding money that was never resolved — list the attempts that hold or took money, then keep the ones whose order died:
 
 ```sql
-SELECT o.id, o.status, o.finalize_reason, p.status AS payment_status,
-       p.provider_session_id, p.provider_intent_id, o.updated_at
-FROM payments p JOIN orders o ON o.id = p.order_id
-WHERE o.status IN ('CANCELLED', 'EXPIRED', 'FAILED')
-  AND p.status IN ('PENDING', 'SUCCEEDED')
-ORDER BY o.updated_at DESC;
+-- payment-postgres
+SELECT order_id, status AS payment_status, provider_session_id, provider_intent_id, updated_at
+FROM payments WHERE status IN ('PENDING', 'SUCCEEDED') ORDER BY updated_at DESC;
+-- the api's database, with those order ids
+SELECT id, status, finalize_reason, updated_at
+FROM orders WHERE id IN ('<order id>', …) AND status IN ('CANCELLED', 'EXPIRED', 'FAILED');
 ```
 
-`SUCCEEDED` rows there are owed refunds outright. `PENDING` rows are almost always a buyer who simply never paid, and their sessions read `expired`; check the session in the dashboard when in doubt.
+`SUCCEEDED` rows on a dead order are owed refunds outright. `PENDING` rows are almost always a buyer who simply never paid, and their sessions read `expired`; check the session in the dashboard when in doubt.
 
 ---
 
@@ -466,7 +480,7 @@ The user-service's database comes back the same way — its container runs its o
 `.railway/railway.ts` owns every service's build and deploy settings and the **names** of their variables. Values set by hand stay in Railway (`preserve()`); the rest are literals or references in the file. Before every deploy, CD plans that file, writes the plan to the run summary, and applies exactly the change set it showed, so:
 
 - **Settings** (healthcheck, pre-deploy command, overlap, replicas) change only in that file. A dashboard edit is reverted by the next deploy.
-- **Deploys** go id-service → user-service → inventory-service → api → gateway, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`), so a callee's allowlist and routes are out before the caller that needs them. Only the api has a repo source, so only CD's `railway up` deploys the others; a dashboard redeploy rebuilds their last upload.
+- **Deploys** go id-service → user-service → inventory-service → payment-service → api → gateway, each waiting for the previous one to go live (`scripts/railway-wait-for-rollout.sh`), so a callee's allowlist and routes are out before the caller that needs them. Only the api has a repo source, so only CD's `railway up` deploys the others; a dashboard redeploy rebuilds their last upload.
 - **New variable**: add its name to the service's `env` (for the api, `API_VARIABLES`) in the same PR, or before, that needs it, then set the value in the dashboard. A variable that exists in Railway but not in the file turns the plan into a delete, and the deploy waits for review (below). This includes one set by hand during an incident: reject that run, add the name to the file, and merge.
 - **Removing a variable**, a service, a volume or a database is the destructive path. Drop it from the file and merge.
 
@@ -506,24 +520,24 @@ Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, a
 
 ## Enable Stripe test mode on Railway
 
-The api creates a Stripe Checkout Session on `/pay` and marks the order paid from the webhook. Production refuses to boot without `STRIPE_SECRET_KEY` and `STRIPE_SUCCESS_URL`, so set all four variables before the deploy that needs them. All of them are declared `preserve()`d in `.railway/railway.ts`, so an apply never reverts them.
+The payment-service creates a Stripe Checkout Session when the api asks for one on `/pay`, and records the authorization from the webhook. Production refuses to boot without `STRIPE_SECRET_KEY` and `STRIPE_SUCCESS_URL`, so set all four variables on the `payment-service` before the deploy that needs them. All of them are declared `preserve()`d in `.railway/railway.ts`, so an apply never reverts them. The api no longer reads any of them; its copies stay only so that a rollback of the [payment cut-over](#cut-payments-over-to-the-payment-service) can boot on them.
 
-1. **Create the webhook endpoint** in the Stripe dashboard, in test mode: URL `https://<public domain>/webhooks/payment`, events `checkout.session.completed` and `checkout.session.expired`. Copy its signing secret (`whsec_…`).
-2. **Set the api variables**, the secret key last, each without a deploy of its own:
+1. **Create the webhook endpoint** in the Stripe dashboard, in test mode: URL `https://<public domain>/webhooks/payment`, events `checkout.session.completed` and `checkout.session.expired`. The gateway routes that path to the payment-service. Copy its signing secret (`whsec_…`).
+2. **Set the payment-service variables**, the secret key last, each without a deploy of its own:
 
    ```bash
    # local, after `railway link`; paste the value, then press Enter (it is not echoed or kept in history)
-   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_SUCCESS_URL --stdin --service jcool-ecommerce-backend --skip-deploys
-   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_CANCEL_URL --stdin --service jcool-ecommerce-backend --skip-deploys
-   read -rs VALUE; printf '%s' "$VALUE" | railway variable set PAYMENT_WEBHOOK_SECRET --stdin --service jcool-ecommerce-backend --skip-deploys
-   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_SECRET_KEY --stdin --service jcool-ecommerce-backend --skip-deploys
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_SUCCESS_URL --stdin --service payment-service --skip-deploys
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_CANCEL_URL --stdin --service payment-service --skip-deploys
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set PAYMENT_WEBHOOK_SECRET --stdin --service payment-service --skip-deploys
+   read -rs VALUE; printf '%s' "$VALUE" | railway variable set STRIPE_SECRET_KEY --stdin --service payment-service --skip-deploys
    ```
 
    `STRIPE_SUCCESS_URL` must contain `{CHECKOUT_SESSION_ID}`, for example `https://<storefront>/payments/success?session_id={CHECKOUT_SESSION_ID}`. `PAYMENT_WEBHOOK_SECRET` is the `whsec_…` from step 1 and `STRIPE_SECRET_KEY` is the `sk_test_…` key.
-3. **Deploy**, then check:
+3. **Deploy** the payment-service, then check:
    - `POST /orders/<id>/pay` returns a `checkout.stripe.com` URL.
    - Pay it with card `4242 4242 4242 4242`, any future expiry and any CVC.
-   - The order becomes `PAID` once the saga captures the authorization the webhook reported, not through the redirect.
+   - The order becomes `PAID` once the saga captures the authorization the webhook reported, not through the redirect, and the Stripe dashboard shows a `2xx` delivery for the endpoint.
 
 ---
 
@@ -590,14 +604,14 @@ The rule files are baked into the image too, so a change anywhere under `infra/p
 # container (prometheus)
 wget -qO- localhost:9090/api/v1/rules | grep -o '"file":"[^"]*"' | sort -u          # the seven files under rules/
 wget -qO- 'localhost:9090/api/v1/query?query=checkout_saga_engine_up'                # one series, value 1
-wget -qO- 'localhost:9090/api/v1/query?query=up'                                     # jcool-api and jcool-inventory both 1
+wget -qO- 'localhost:9090/api/v1/query?query=up'                                     # jcool-api, jcool-inventory and jcool-payment all 1
 ```
 
-The image refuses to start without `API_TARGET`, `INVENTORY_TARGET` and `LOKI_TARGET`, so a `railway up` from a `main` that scrapes a new target comes after the `railway config apply` that declares its variable.
+The image refuses to start without `API_TARGET`, `INVENTORY_TARGET`, `PAYMENT_TARGET` and `LOKI_TARGET`, so a `railway up` from a `main` that scrapes a new target comes after the `railway config apply` that declares its variable.
 
 Three constraints this stack depends on:
 
-- **The SLIs select the api's job.** The SLO recording rules in `infra/prometheus/rules/slo-burn-rate.yml` aggregate without `by (job)`, so each selects `job="jcool-api"` and leaves out `/internal/*` routes; a job added later stays out of the api's SLIs only if every new rule keeps that selector. `jcool-inventory` is the second app job. The `loki` job is safe only because its `metric_relabel_configs` keep nothing but the `loki_*` series `rules/loki.yml` reads.
+- **The SLIs select the api's job.** The SLO recording rules in `infra/prometheus/rules/slo-burn-rate.yml` aggregate without `by (job)`, so each selects `job="jcool-api"` and leaves out `/internal/*` routes; a job added later stays out of the api's SLIs only if every new rule keeps that selector. `jcool-inventory` and `jcool-payment` are the other app jobs. The `loki` job is safe only because its `metric_relabel_configs` keep nothing but the `loki_*` series `rules/loki.yml` reads.
 - **Prometheus binds `[::]`** (`infra/prometheus/railway-entrypoint.sh`). Railway's private network
   is IPv6-only, and on the default `0.0.0.0` Grafana cannot reach it.
 - **Grafana is the only public surface**, and the only one with a login. Prometheus has no domain.
@@ -789,8 +803,8 @@ Railway changes" before it deploys anything. Finish from an up-to-date `main`, i
 10. **Rebuild**, once step 7's rollout has finished: `npm run search:reindex:prod` in the api's shell.
     Documents must equal the searchable products and tombstones the rest.
 11. **Drain the overlap.** During the rolling deploy an old replica's worker can take a `catalog.*` job,
-    find no handler for it and dead-letter it. List the DLQ with `npm run queue:replay-dlq:prod`. If
-    it holds only `catalog.*` entries, replay them with `npm run queue:replay-dlq:prod -- --apply`;
+    find no handler for it and dead-letter it. List the catalog queue's DLQ with `npm run queue:replay-dlq:prod -- --queue api-events`. If
+    it holds only `catalog.*` entries, replay them with `npm run queue:replay-dlq:prod -- --queue api-events --apply`;
     anything else is judged as in [Replay the dead-letter queue](#replay-the-dead-letter-queue) first,
     since `--apply` replays the whole queue.
 12. **Verify.** Edit a product in `/admin`, then search for it: it shows within 2 s. Watch this
@@ -982,7 +996,7 @@ done
 | `COMMITTING_STOCK`, `CAPTURING` | `CONFIRMING` | Authorization verified; stock commit, then the capture |
 | `COMPENSATING` | terminal | Releasing stock or voiding the hold. An activity failing here retries without limit; `describe` shows the last failure |
 
-A run that stays in one step is almost always an activity retrying against a participant, the inventory-service or the gateway. Fix what it is failing on; the run then moves by itself.
+A run that stays in one step is almost always an activity retrying against a participant, the inventory-service or the payment-service. Fix what it is failing on; the run then moves by itself.
 
 ### Checkout answers 503 and the order stays `RESERVING`
 
@@ -1003,7 +1017,7 @@ The reaper cannot hand back an order whose run has already closed, which only a 
 
 ### A `payment.authorized` in the dead-letter queue
 
-Its consumer signals the order's saga, so the job rides the long ladder (`ORDER_PAID_CONSUMER_*`, about 33 minutes) to outlast a Temporal outage. Past that it dead-letters. Once Temporal answers, replay it ([Replay the dead-letter queue](#replay-the-dead-letter-queue)): the saga takes one authorization per order and captures once, and an authorization arriving after the order closed is voided, not captured.
+Its consumer signals the order's saga, so the job rides the long ladder (`ORDER_PAID_CONSUMER_*`, about 33 minutes) to outlast a Temporal outage. The payment-service stamps the attempts when it publishes the job, so its `ORDER_PAID_CONSUMER_ATTEMPTS` must equal the api's ([Cross-service settings](#cross-service-settings)). Past the ladder it dead-letters into `order-events-dlq`. Once Temporal answers, replay it with `--queue order-events` ([Replay the dead-letter queue](#replay-the-dead-letter-queue)): the saga takes one authorization per order and captures once, and an authorization arriving after the order closed is voided, not captured.
 
 ### Terminate a saga
 
@@ -1011,18 +1025,18 @@ Only as in [Temporal down](#temporal-down): once Temporal answers, for a run tha
 
 ### Settle a payment by hand
 
-Only for an order with no running run ([Read a saga](#read-a-saga)). A void or capture made in the Stripe dashboard never reaches the database: the webhook handles only `checkout.session.*` events, so the payment rows keep reading `AUTHORIZED`, and the alerts and the invariant checker that read them keep firing. Settle it through the rows instead:
+Only for an order with no running run ([Read a saga](#read-a-saga)). A void or capture made in the Stripe dashboard never reaches the database: the webhook handles only `checkout.session.*` events, so the payment rows keep reading `AUTHORIZED`, and the alerts and the invariant checker that read them keep firing. Settle it through the rows instead, which are the payment-service's, in `payment-postgres`:
 
-- **Void.** Cancel the header and let the reconcile sweep call Stripe: `UPDATE payment_orders SET status = 'CANCELLED' WHERE order_id = '<order id>' AND status IN ('OPEN', 'AUTHORIZED');`. Once the attempt is `ORDER_STALE_THRESHOLD_SEC` (120) old, the next `RECONCILE_INTERVAL_MS` tick voids its PaymentIntent and records the attempt `VOIDED`. `RECONCILE_ENABLED` must not be `false`.
+- **Void.** Cancel the header and let the reconcile sweep call Stripe: `UPDATE payment_orders SET status = 'CANCELLED' WHERE order_id = '<order id>' AND status IN ('OPEN', 'AUTHORIZED');`. Once the attempt is `ORDER_STALE_THRESHOLD_SEC` (120) old, the next `RECONCILE_INTERVAL_MS` tick voids its PaymentIntent and records the attempt `VOIDED`. `RECONCILE_ENABLED` must not be `false` on the payment-service.
 - **Capture**, only for a `PAID` order. Capture the PaymentIntent in the Stripe dashboard, then record what the participant's own capture writes: `UPDATE payments SET status = 'SUCCEEDED', updated_at = now() WHERE order_id = '<order id>' AND status = 'AUTHORIZED'; UPDATE payment_orders SET status = 'CAPTURED' WHERE order_id = '<order id>' AND status = 'AUTHORIZED';`.
 
 Note down the order id and the PaymentIntent either way.
 
 ### Its alerts
 
-The saga's alerts are in `infra/prometheus/rules/checkout-saga.yml`, the queue's in `messaging.yml`, and `ApiScrapeDown` and `InventoryScrapeDown` in `scrape-targets.yml`. Each alert's description names its subsection below. Nothing routes alerts anywhere yet, so read the firing ones in Grafana Explore with `ALERTS{alertstate="firing"}`, or with `wget -qO- localhost:9090/api/v1/alerts` in the Prometheus container.
+The saga's alerts are in `infra/prometheus/rules/checkout-saga.yml`, the queue's in `messaging.yml`, and `ApiScrapeDown`, `InventoryScrapeDown` and `PaymentScrapeDown` in `scrape-targets.yml`. Each alert's description names its subsection below. Nothing routes alerts anywhere yet, so read the firing ones in Grafana Explore with `ALERTS{alertstate="firing"}`, or with `wget -qO- localhost:9090/api/v1/alerts` in the Prometheus container.
 
-Prometheus never scrapes Temporal. The api reads every saga gauge from Temporal while it answers `/metrics`, within 2s, and reports `checkout_saga_engine_up`: 1 when every read answered, else 0, with the other saga gauges withdrawn rather than held. `payment_authorized_uncaptured_oldest_seconds` and the queue gauges come from the api's Postgres and Redis, and keep their last value when a read fails.
+Prometheus never scrapes Temporal. The api reads every saga gauge from Temporal while it answers `/metrics`, within 2s, and reports `checkout_saga_engine_up`: 1 when every read answered, else 0, with the other saga gauges withdrawn rather than held. The queue gauges come from the api's Redis and `payment_authorized_uncaptured_oldest_seconds` from the payment-service's Postgres; each keeps its last value when a read fails.
 
 The api's readiness leaves Temporal out ([Temporal down](#temporal-down)), so CD, Railway's healthcheck and `/health/ready` stay green while Temporal or the worker is gone. `CheckoutSagaEngineDown` and `CheckoutSagaWorkerStalled` are the only signals for it.
 
@@ -1036,7 +1050,7 @@ RUNS='WorkflowType="CheckoutSaga" AND TaskQueue="checkout-saga"'
 
 #### CheckoutSagaStuck
 
-`checkout_saga_overdue` counts the runs still `Running` whose `CheckoutDeadlineAt` passed more than `SAGA_OVERDUE_GRACE_SEC` (300) ago. The deadline timer ends every saga on time, so each of these is held up by an activity that keeps failing (a participant, the gateway, a compensation conflict) or by a workflow task that keeps failing, as a nondeterminism error after a deploy does. Their stock stays held and their payment may stay authorized meanwhile.
+`checkout_saga_overdue` counts the runs still `Running` whose `CheckoutDeadlineAt` passed more than `SAGA_OVERDUE_GRACE_SEC` (300) ago. The deadline timer ends every saga on time, so each of these is held up by an activity that keeps failing (a participant, a compensation conflict) or by a workflow task that keeps failing, as a nondeterminism error after a deploy does. Their stock stays held and their payment may stay authorized meanwhile.
 
 ```sh
 t workflow list --namespace jcool --query "$RUNS AND ExecutionStatus=\"Running\" AND CheckoutDeadlineAt < \"$(ago 300)\""
@@ -1055,7 +1069,7 @@ t task-queue describe --task-queue checkout-saga --namespace jcool   # pollers p
 ```
 
 - **No poller.** The api's worker is not running. Check `TEMPORAL_WORKER_ENABLED` on the api, and its logs for `checkout saga worker unavailable; retrying with backoff` or `checkout saga worker cannot start without its bundle`.
-- **Pollers, and a backlog.** The worker runs but its slots are full: activities hung on a participant or the gateway (`describe` a few running sagas, as in [CheckoutSagaStuck](#checkoutsagastuck)), or more load than `SAGA_ACTIVITY_CONCURRENCY` allows.
+- **Pollers, and a backlog.** The worker runs but its slots are full: activities hung on a participant (`describe` a few running sagas, as in [CheckoutSagaStuck](#checkoutsagastuck)), or more load than `SAGA_ACTIVITY_CONCURRENCY` allows.
 
 What it stops, and how to freeze checkout meanwhile: [Temporal down](#temporal-down).
 
@@ -1096,10 +1110,13 @@ Read the order and both headers ([Temporal down](#temporal-down)) and decide whi
 
 The oldest `AUTHORIZED` payment header is over 15 minutes old. The saga captures within seconds of an authorization reaching it and voids the hold when it gives up, so this money is held on a card and nothing is settling it. Stripe voids an authorization on its own after 7 days.
 
+The gauge is recorded by the payment-service, so the rows are in `payment-postgres`; the orders are in the api's database:
+
 ```sql
-SELECT p.order_id, p.authorized_at, o.status, o.payment_deadline_at
-FROM payment_orders p JOIN orders o ON o.id = p.order_id
-WHERE p.status = 'AUTHORIZED' ORDER BY p.authorized_at LIMIT 20;
+-- payment-postgres
+SELECT order_id, authorized_at FROM payment_orders WHERE status = 'AUTHORIZED' ORDER BY authorized_at LIMIT 20;
+-- the api's database, with those ids
+SELECT id, status, payment_deadline_at FROM orders WHERE id IN ('<order id>', …);
 ```
 
 Then [read each saga](#read-a-saga):
@@ -1118,7 +1135,7 @@ Every `CHECKOUT_INVARIANT_INTERVAL_MS`, the checker reads the saga orders that s
 | `paid_without_capture` | `PAID`, but the payment header is not `CAPTURED` | If the PaymentIntent still reads `requires_capture` in Stripe, capture it as in [Settle a payment by hand](#settle-a-payment-by-hand) |
 | `paid_without_commit` | `PAID`, but the stock was never committed | The goods are sold but still counted on hand: correct the variant's stock by hand (`POST /admin/inventory/:variantId/adjust`, served by the inventory-service); the kind stays until the window passes |
 | `orphan_hold` | Not `PAID`, and the stock is still `HELD` | The lapsed-hold sweep releases it once `hold_until` passes; one held past that is the sweep failing |
-| `authorized_on_dead_order` | Not `PAID`, and a payment attempt still holds money | Under a `CANCELLED` or `FENCED` header the reconcile sweep voids it within a few minutes, so one seen here means that sweep is off or failing. Under any other header, void it as in [Settle a payment by hand](#settle-a-payment-by-hand) |
+| `authorized_on_dead_order` | Not `PAID`, and a payment attempt still holds money | Under a `CANCELLED` or `FENCED` header the payment-service's reconcile sweep voids it within a few minutes, so one seen here means that sweep is off or failing. Under any other header, void it as in [Settle a payment by hand](#settle-a-payment-by-hand) |
 
 The same kind on several orders is a defect, not bad luck. Compare with the run's history (`t workflow show`), which retention keeps for longer than the checker looks back ([Retention and the checker window](#retention-and-the-checker-window)).
 
@@ -1127,7 +1144,7 @@ The same kind on several orders is a defect, not bad luck. Compare with the run'
 The api is being scraped, but no checker run has finished as `ok` or `violations` for 30 minutes, so a broken order would go unnoticed. The api's logs say why:
 
 - **`checkout invariant checker disabled`** at boot: `CHECKOUT_INVARIANT_ENABLED` is false.
-- **`checkout invariant check failed, gauges left as they were`** at warn, on every run, with the error: a participant or Temporal is not answering, and `checkout_invariant_check_total{result="error"}` climbs. With [CheckoutSagaEngineDown](#checkoutsagaenginedown) firing too, Temporal is the cause; with [InventoryScrapeDown](#inventoryscrapedown) or an open `inventory-service` breaker, the stock side's `POST /internal/v1/reservations/status` is.
+- **`checkout invariant check failed, gauges left as they were`** at warn, on every run, with the error: a participant or Temporal is not answering, and `checkout_invariant_check_total{result="error"}` climbs. With [CheckoutSagaEngineDown](#checkoutsagaenginedown) firing too, Temporal is the cause; with [InventoryScrapeDown](#inventoryscrapedown) or an open `inventory-service` breaker, the stock side's `POST /internal/v1/reservations/status` is; with [PaymentScrapeDown](#paymentscrapedown) or an open `payment-service` breaker, the payment side's `POST /internal/v1/payments/status` is.
 - **`previous invariant check still running, tick skipped`**: one run outlasts `CHECKOUT_INVARIANT_INTERVAL_MS`.
 - **None of these**: the scheduler never started; look for `checkout invariant checker scheduled` at boot.
 
@@ -1136,27 +1153,30 @@ The api is being scraped, but no checker run has finished as `ok` or `violations
 A payment was authorized after its saga had ended, and a `lateAuthorization` run voided it. Each one is handled, and costs the buyer only the wait for the void. A steady stream means authorizations arrive later than `CHECKOUT_PAYMENT_DEADLINE_SEC` + `SAGA_AUTH_GRACE_SEC` allows, or after a cancel: the queue lags ([MessagingQueueConsumerLagging](#messagingqueueconsumerlagging)), or buyers pay on sessions that outlive their order.
 
 ```sql
-SELECT p.order_id, p.status, p.authorized_at, o.status AS order_status, o.finalized_at, o.finalize_reason
-FROM payment_orders p JOIN orders o ON o.id = p.order_id
-WHERE o.status <> 'PAID' AND p.authorized_at > o.finalized_at
-ORDER BY p.authorized_at DESC LIMIT 20;
+-- payment-postgres
+SELECT order_id, status, authorized_at FROM payment_orders
+WHERE authorized_at IS NOT NULL ORDER BY authorized_at DESC LIMIT 20;
+-- the api's database, with those ids: an order not PAID, finalized before its authorization, is a late one
+SELECT id, status, finalized_at, finalize_reason FROM orders WHERE id IN ('<order id>', …) AND status <> 'PAID';
 ```
 
 #### MessagingQueueConsumerLagging
 
-The oldest job waiting on a queue has waited over a minute, for 5 minutes. On `domain-events` that holds back `payment.authorized` on its way to the saga, so paid checkouts run into their deadline and compensate. Nothing else shows it: the relay keeps publishing, so the outbox stays young and the DLQ stays empty. `messaging_queue_jobs{queue,state}` tells the cases apart:
+The oldest job waiting on a queue (the alert's `queue` label) has waited over a minute, for 5 minutes. On `order-events` that holds back `payment.authorized` on its way to the saga, so paid checkouts run into their deadline and compensate; on `api-events` it is search that lags behind catalog writes. Nothing else shows it: the relays keep publishing, so the outboxes stay young and the DLQs stay empty. `messaging_queue_jobs{queue,state}` tells the cases apart:
 
-- **`active` at 0.** No consumer: the api's BullMQ worker is not running (`QUEUE_WORKER_ENABLED`) or cannot reach Redis.
+- **`active` at 0.** No consumer: that queue's BullMQ worker in the api is not running (`QUEUE_WORKER_ENABLED` turns off both) or cannot reach Redis.
 - **`active` steady and `wait` growing.** The consumer is saturated or a handler is slow; the handler's logs show what it waits on.
 
 #### Saga metrics absent
 
-`CheckoutSagaMetricsAbsent`, `PaymentMetricsAbsent` and `MessagingQueueMetricsAbsent` mean the api is being scraped but `/metrics` lacks the series that alert reads, so the alerts built on it cannot fire. Each collector is a provider of its module (order, payment, messaging) and only reports from the process that owns the metrics registry. A series goes missing when that module is not in the app that serves `/metrics`, for example after it moved to another service. `observability-metrics.e2e-spec.ts` fails on a build that drops one, so first check which build is deployed, then what the api serves:
+`CheckoutSagaMetricsAbsent`, `PaymentMetricsAbsent` and `MessagingQueueMetricsAbsent` mean the service that owns a series is being scraped but its `/metrics` lacks it, so the alerts built on it cannot fire. The saga and queue series come from the api (`MessagingQueueMetricsAbsent` has one branch per queue, `order-events` and `api-events`, told apart by the `queue` label); `payment_authorized_uncaptured_oldest_seconds` comes from the payment-service, and `PaymentMetricsAbsent` joins that service's `up`. Each collector is a provider of its module and only reports from the process that owns the metrics registry. A series goes missing when that module is not in the app that serves `/metrics`, for example after it moved to another service. `observability-metrics.e2e-spec.ts` fails, in the api and in the payment-service, on a build that drops one, so first check which build is deployed, then what the service serves:
 
 ```sh
 # container (prometheus)
 wget -qO- --header "Authorization: Bearer $METRICS_TOKEN" "http://$API_TARGET/metrics" \
-  | grep -E '^(checkout_saga_engine_up|payment_authorized_uncaptured_oldest_seconds|messaging_queue_oldest_waiting_seconds)'
+  | grep -E '^(checkout_saga_engine_up|messaging_queue_oldest_waiting_seconds)'
+wget -qO- --header "Authorization: Bearer $METRICS_TOKEN" "http://$PAYMENT_TARGET/metrics" \
+  | grep -E '^payment_authorized_uncaptured_oldest_seconds'
 ```
 
 #### ApiScrapeDown
@@ -1183,6 +1203,21 @@ wget -qO- localhost:9090/api/v1/targets | grep -o '"scrapeUrl":"[^"]*inventory[^
 - **Connection refused, or a timeout.** Check the inventory-service's deploy logs and `/health/ready` from inside it (`railway ssh --service inventory-service`, then `node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"`): `503` names Postgres, Redis or a drain. A crash at boot logs why, typically a missing `INTERNAL_CALLER_TOKEN_API` or an unreachable `inventory-postgres`. `INVENTORY_TARGET` on `prometheus` must name its private domain and port.
 - **404.** The inventory-service has no `METRICS_TOKEN`, or another one than the api's: it references the api's in `.railway/railway.ts`, so a redeploy of it picks the current value up.
 - **The api's checkouts fail while the target is up.** Not this alert: the api's calls are refused. A `401` or `403` in the api's logs for `/internal/v1/reservations` is a token out of step ([Per-caller internal tokens](#per-caller-internal-tokens)).
+
+While it is down, [freeze checkout](#freeze-checkout) if buyers should get the gateway's `503` instead of a wait.
+
+#### PaymentScrapeDown
+
+Prometheus has not scraped the payment-service (`job="jcool-payment"`) for 5 minutes. Its own metrics are blind, `payment_authorized_uncaptured_oldest_seconds` included, so `PaymentAuthorizationUncaptured` cannot fire; and if it is down rather than unreachable from Prometheus, payments are stopped too. `/pay` answers `502`, and once `BREAKER_ERROR_THRESHOLD_PCT` of the calls in the breaker's window have failed (with at least `BREAKER_VOLUME_THRESHOLD` made), the `payment-service` breaker opens, `CircuitBreakerOpen{breaker="payment-service"}` fires, and the api stops calling it until `BREAKER_RESET_TIMEOUT_MS` lets one through. Sagas past their authorization wait in `CAPTURING` or `COMPENSATING`, retrying, and move by themselves once it answers. Stripe's webhook cannot reach it either, so Stripe redelivers on its own schedule, and the reconcile sweep records any authorization the webhook missed once the service is back. Read the target the same way as for [ApiScrapeDown](#apiscrapedown):
+
+```sh
+# container (prometheus)
+wget -qO- localhost:9090/api/v1/targets | grep -o '"scrapeUrl":"[^"]*payment[^"]*"\|"lastError":"[^"]*"'
+```
+
+- **Connection refused, or a timeout.** Check the payment-service's deploy logs and `/health/ready` from inside it (`railway ssh --service payment-service`, then `node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"`): `503` names Postgres, Redis or a drain. A crash at boot logs why, typically a missing `INTERNAL_CALLER_TOKEN_API`, a missing `STRIPE_SECRET_KEY` or `STRIPE_SUCCESS_URL` (production refuses to boot without them), or an unreachable `payment-postgres`. `PAYMENT_TARGET` on `prometheus` must name its private domain and port.
+- **404.** The payment-service has no `METRICS_TOKEN`, or another one than the api's: it references the api's in `.railway/railway.ts`, so a redeploy of it picks the current value up.
+- **The api's payment calls fail while the target is up.** Not this alert: the api's calls are refused. A `401` or `403` in the api's logs for `/internal/v1/payments` is a token out of step ([Per-caller internal tokens](#per-caller-internal-tokens)).
 
 While it is down, [freeze checkout](#freeze-checkout) if buyers should get the gateway's `503` instead of a wait.
 
@@ -1224,6 +1259,7 @@ While the CLI cannot reach the server, read the in-flight sagas from the databas
 ```sql
 -- the api's database
 SELECT status, count(*) FROM orders WHERE status IN ('RESERVING', 'PENDING', 'CONFIRMING') GROUP BY status;
+-- payment-postgres
 SELECT status, count(*) FROM payment_orders WHERE status IN ('OPEN', 'AUTHORIZED') GROUP BY status;
 -- inventory-postgres
 SELECT status, count(*) FROM reservation_orders WHERE status = 'HELD' GROUP BY status;
@@ -1231,13 +1267,13 @@ SELECT status, count(*) FROM reservation_orders WHERE status = 'HELD' GROUP BY s
 
 **Rollback** to the checkout before the saga is in [Roll back to the checkout before the saga](#roll-back-to-the-checkout-before-the-saga). Its deploy needs no Temporal, but closing the sagas still open does.
 
-**Terminate only once Temporal answers again, and only a run that cannot finish on its own**, such as a compensation that keeps failing or a nondeterminism error after a bad deploy. Every other open run resumes and compensates or completes by itself. A terminated run stops where it is, with no compensation, so first read its order and payment header on the api's database, and its stock header on `inventory-postgres`:
+**Terminate only once Temporal answers again, and only a run that cannot finish on its own**, such as a compensation that keeps failing or a nondeterminism error after a bad deploy. Every other open run resumes and compensates or completes by itself. A terminated run stops where it is, with no compensation, so first read its order in the api's database, its payment header in `payment-postgres` and its stock header in `inventory-postgres`:
 
 ```sql
 -- the api's database
-SELECT o.id, o.status, p.status AS payment, p.authorized_at
-FROM orders o LEFT JOIN payment_orders p ON p.order_id = o.id
-WHERE o.id = <order id>;
+SELECT id, status FROM orders WHERE id = <order id>;
+-- payment-postgres
+SELECT order_id, status AS payment, authorized_at FROM payment_orders WHERE order_id = <order id>;
 -- inventory-postgres
 SELECT order_id, status AS stock, hold_until FROM reservation_orders WHERE order_id = <order id>;
 ```
@@ -1283,9 +1319,9 @@ A forward commit that restores the old checkout's wiring. Keep `.railway/railway
 2. **Close every saga.** Admin-cancel each `CheckoutSaga` running in `AWAITING_AUTH` (`POST /admin/orders/<id>/cancel`), then wait for `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` to reach 0. With Temporal down, admin cancel answers `503` and the CLI cannot connect:
    - **Temporal is paused** (server or worker gone, `temporal-postgres` intact): take no shortcut. Keep the freeze, bring Temporal back ([Temporal down](#temporal-down)), then run this step as written. A buyer who pays on an open session meanwhile keeps the authorization, since its `payment.authorized` job waits on the long ladder. Track progress with the three queries in [Temporal down](#temporal-down), and do not merge the rollback while any saga order is not terminal.
    - **Temporal lost its state** (`temporal-postgres` broken beyond restore): no run will ever continue, so cleaning up in SQL is safe. Void every `requires_capture` PaymentIntent of those orders in the Stripe dashboard; a `CONFIRMING` order whose charge was already captured is a refund owed ([A refund is owed](#a-refund-is-owed)). After a `pg_dump`, reset the `RESERVING`, `PENDING` and `CONFIRMING` orders the way demo data is reset. Their holds in `inventory-postgres` stay `HELD` until the inventory-service's sweep releases them past `hold_until`; nothing reads them once step 5 brings stock back to the api. The three queries must come back empty before the merge.
-3. **Settle the leftover authorizations**: for each `SELECT order_id FROM payment_orders WHERE status = 'AUTHORIZED';`, capture if the order is `PAID`, otherwise void it in the Stripe dashboard, and note it down.
+3. **Settle the leftover authorizations**: for each `SELECT order_id FROM payment_orders WHERE status = 'AUTHORIZED';` (on `payment-postgres`), capture if the order is `PAID`, otherwise void it in the Stripe dashboard, and note it down.
 4. **Delete the `REJECTED` orders**, which the old code would show to their buyers: `DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status = 'REJECTED'); DELETE FROM orders WHERE status = 'REJECTED';`.
-5. **Commit** the old routes, use cases, consumers and config back (everything this cut-over removed, migrations and the kept files aside). The old checkout reserves stock in the api, so the same commit also brings stock back from the inventory-service: steps 1–3 of "Roll back" under [Cut stock over to the inventory-service](#cut-stock-over-to-the-inventory-service), `CHECKOUT_INVARIANT_NOT_BEFORE` included. Then pass typecheck, `test:cov` and the old checkout's e2e suites, merge, and let CD deploy. Its `/health/ready` smoke passes with Temporal down; the old saga worker only logs connection errors.
+5. **Commit** the old routes, use cases, consumers and config back (everything this cut-over removed, migrations and the kept files aside). The old checkout reserves stock in the api, so the same commit also brings stock back from the inventory-service: steps 1–3 of "Roll back" under [Cut stock over to the inventory-service](#cut-stock-over-to-the-inventory-service), `CHECKOUT_INVARIANT_NOT_BEFORE` included, and brings payments back from the payment-service in the same way ("Roll back" under [Cut payments over to the payment-service](#cut-payments-over-to-the-payment-service)). Then pass typecheck, `test:cov` and the old checkout's e2e suites, merge, and let CD deploy. Its `/health/ready` smoke passes with Temporal down; the old saga worker only logs connection errors.
 6. **Unfreeze**, and check out once through the old path, which needs no Temporal.
 
 ---
@@ -1514,7 +1550,7 @@ Either way `DeadLetterQueued` pages. Once the user-service answers again,
 
 It depends on the id-service for every row it writes (`ID_SERVICE_URL`, `x-caller: inventory-service`), on the shared Redis for the admin routes' denylist and session epochs, and on the user-service for an epoch missing from Redis (`USER_SERVICE_TOKEN`). Its readiness covers its Postgres and Redis only.
 
-The api's database still has the stock tables it had before the cut-over, under `schema/retired/`. Nothing reads or writes them; their numbers are from before the cut-over.
+The api's stock tables were retired at the cut-over and have since been dropped by a migration (`0033_drop_retired_stock_tables.sql`).
 
 ### Seed stock
 
@@ -1532,7 +1568,23 @@ node dist/database/seed-stock.js        # without --best-effort: exit 1 on a cat
 
 A new variant gets no stock until the next seed: run it after adding products, or set the level through `PUT /admin/inventory/:variantId`.
 
-### Cross-service settings
+---
+
+## The payment-service
+
+`apps/payment-service` owns payments: `payment_orders` (the per-order fence), `payments`, `webhook_events` and an `outbox`, on its own Postgres (`payment-postgres`). The api's `/pay` and checkout saga call `/internal/v1/payments` with `PAYMENT_SERVICE_TOKEN`, Stripe's webhook reaches `POST /webhooks/payment` through the gateway (`PAYMENT_UPSTREAM`, which the gateway refuses to start without), and it has no public domain. CD deploys it after the inventory-service and before the api. Its routes and variables are in its [README](./apps/payment-service/README.md).
+
+It depends on the id-service for every row it writes (`ID_SERVICE_URL`, `x-caller: payment-service`), on Stripe, and on the shared Redis only to publish: its relay puts `payment.authorized` on the api's `order-events` queue under the same `QUEUE_PREFIX`. It consumes no queue, so it has no inbox and no worker. Its readiness covers Postgres and Redis only, so a Temporal outage never takes it out of rotation. Its reconcile sweep (`RECONCILE_*`) runs here, not in the api: it asks Stripe about sessions whose webhook never came, records a hold the webhook missed, retires a session Stripe expired and voids a hold left under a cancelled order. It never moves an order; the saga does that.
+
+While it is down, `/pay` answers `502`, sagas wait in `CAPTURING` or `COMPENSATING` and move by themselves once it answers, and Stripe redelivers the webhooks it could not deliver ([PaymentScrapeDown](#paymentscrapedown)). A saga verifying an authorization waits too, but only until its payment deadline plus `SAGA_AUTH_GRACE_SEC` (180s): past that it expires the order and voids the hold once the service answers, so an outage that long costs a paying buyer the order, never the money.
+
+While only Stripe is away, the service still answers: session, capture and cancel return a `503` coded `PROVIDER_UNAVAILABLE`, which the api's `payment-service` breaker does not count, so `/pay` answers `502` per attempt, captures and cancels retry, and status reads, which need no Stripe, keep verifying authorizations.
+
+The api's database still has the payment tables it had before the cut-over, under `schema/retired/`. Nothing reads or writes them; their numbers are from before the cut-over.
+
+---
+
+## Cross-service settings
 
 No process sees both values, so nothing checks these at boot. Keep them when changing either side:
 
@@ -1540,7 +1592,12 @@ No process sees both values, so nothing checks these at boot. Keep them when cha
 | --- | --- |
 | inventory-service `INVENTORY_TRY_LOCK_TIMEOUT_MS` (2000) < api `CHECKOUT_TRY_TIMEOUT_MS` (3000) | The api gives a Try that long over HTTP, then aborts it and fences the hold with a release. A lock budget at or above it turns contended Tries into `503`s the service would have answered |
 | api `SAGA_ACTIVITY_TIMEOUT_MS` > `INVENTORY_COMMAND_TIMEOUT_MS` + 5000 | Checked by the api itself: a commit, release or restock gets its full timeout inside the activity's |
-| `METRICS_TOKEN` equal on the api and the inventory-service | Prometheus sends one token to every target; the inventory-service references the api's |
+| api `SAGA_ACTIVITY_TIMEOUT_MS` > `PAYMENT_COMMAND_TIMEOUT_MS` + 5000, and > `BREAKER_TIMEOUT_MS` | Checked by the api itself: a payment command gets its full timeout inside the activity's |
+| 4 × payment-service `PAYMENT_CAPTURE_TIMEOUT_MS` (10000) + 1000 ≤ api `PAYMENT_COMMAND_TIMEOUT_MS` (45000) | A cancel there chains up to four Stripe calls, each bounded by `PAYMENT_CAPTURE_TIMEOUT_MS`. A command timeout under that sum aborts a cancel on the api's side while the payment-service is still carrying it out |
+| api `CHECKOUT_PAY_CUTOFF_SEC` (1980) ≥ payment-service `PAYMENT_SESSION_MIN_TTL_SEC` (1800) + `PAYMENT_SESSION_EXPIRY_MARGIN_SEC` (120) + 60 | `/pay` opens a session only while the cutoff of the payment window remains. A smaller cutoff lets `/pay` ask for a session that expires sooner than Stripe allows, which the payment-service refuses as `CLOSED` |
+| payment-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) = api `ORDER_PAID_CONSUMER_ATTEMPTS` (15) | BullMQ stamps the attempts on a job when it is added, so the payment-service's value is how many deliveries `payment.authorized` gets, while only the api's worker reads `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS`. The api runs on its code default and `.railway/railway.ts` sets the payment-service's as a literal, so change one and you change the other |
+| payment-service `QUEUE_PREFIX` = api `QUEUE_PREFIX` (`bull`) | A different prefix makes the relay write jobs under keys the api's worker never reads |
+| `METRICS_TOKEN` equal on the api, the inventory-service and the payment-service | Prometheus sends one token to every target; the two services reference the api's |
 
 ---
 
@@ -1553,6 +1610,7 @@ Every internal API admits each caller by a token of its own, and each route list
 | user-service | api | `INTERNAL_API_TOKEN` (+ `_PREVIOUS`) | `INTERNAL_API_TOKEN` (reference) | `sessions/:userId/epoch`, `users/:id/summary`, `cutover/digest` |
 | user-service | inventory-service | `INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE` (+ `_PREVIOUS`) | `USER_SERVICE_TOKEN` (reference) | `sessions/:userId/epoch` |
 | inventory-service | api | `INTERNAL_CALLER_TOKEN_API` (+ `_PREVIOUS`) | `INVENTORY_SERVICE_TOKEN` (reference) | `/internal/v1/reservations/*` |
+| payment-service | api | `INTERNAL_CALLER_TOKEN_API` (+ `_PREVIOUS`) | `PAYMENT_SERVICE_TOKEN` (reference) | `/internal/v1/payments/*` |
 
 The caller's variable is a reference to the callee's in `.railway/railway.ts`, so only the callee's is ever set by hand. A callee refuses to boot with no caller token at all, or with two callers sharing one.
 
@@ -1563,6 +1621,7 @@ Each value is generated on its own and goes in through stdin, so it is never on 
 ```bash
 # local, after `railway link`
 openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_API --stdin --service inventory-service --skip-deploys
+openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_API --stdin --service payment-service --skip-deploys
 openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE --stdin --service user-service --skip-deploys
 ```
 
@@ -1582,7 +1641,7 @@ The callee logs each refusal at warn as `request rejected`, with the reason in `
 - **`401`, `missing internal caller bearer token`.** The caller sends none; its `*_SERVICE_TOKEN` is empty.
 - **`403`, `internal caller <name> is not allowed on this route`.** The token is valid, but that caller is not on the route's list. That is a code change, not a variable: the route's `@InternalCallers(...)` decides.
 
-On the api's side a refused Try is a checkout `503`, and refused commands keep retrying in their saga until the token is put right.
+On the api's side a refused Try is a checkout `503`, a refused `/pay` is a `502`, and refused commands keep retrying in their saga until the token is put right.
 
 ### Check that no two tokens match
 
@@ -1592,6 +1651,7 @@ Run on a local machine, never in CI: `--kv` prints raw values. Each line prints 
 # local, after `railway link`
 fp() { railway variable list --service "$1" --kv | grep "^$2=" | cut -d= -f2- | tr -d '\n' | shasum -a 256 | cut -c1-12; }
 for v in INTERNAL_CALLER_TOKEN_API INTERNAL_CALLER_TOKEN_API_PREVIOUS; do echo "inventory-service $v $(fp inventory-service $v)"; done
+for v in INTERNAL_CALLER_TOKEN_API INTERNAL_CALLER_TOKEN_API_PREVIOUS; do echo "payment-service $v $(fp payment-service $v)"; done
 for v in INTERNAL_API_TOKEN INTERNAL_API_TOKEN_PREVIOUS INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS; do echo "user-service $v $(fp user-service $v)"; done
 ```
 
@@ -1632,9 +1692,60 @@ Frozen, and only once `sum(checkout_sagas_open) == 0`: a hold in `inventory-post
 1. **Restore the api's old wiring**: its in-process stock code and tests, the in-process binding of Order's inventory port, the stock schema back in its module with `schema/index.ts` pointing at it, and the api's stock config. Remove the `@inventory` route from `apps/gateway/Caddyfile` (the entrypoint still requires `INVENTORY_UPSTREAM`, which stays in the IaC) and the "Deploy inventory-service" step from `cd.yml`.
 2. **Keep as merged**: `.railway/railway.ts`, `scripts/check-railway-flip-vars.mjs`, every migration and `_journal.json`, `infra/prometheus`, the freeze matcher, `packages/internal-contracts`, `@jcool/auth-verifier/session-state`, `@jcool/platform/internal-api` and the user-service's guard. CD's plan is then empty, and the api ignores the variables it no longer reads. A plan with a destroy means the rollback commit is wrong; never approve a destroy for a rollback.
 3. **Before merging it**, set `CHECKOUT_INVARIANT_NOT_BEFORE` to the current UTC time, as in step 4: orders settled since the cut-over have their headers in `inventory-postgres`, and the restored checker would report each one.
-4. **Merge**, then unfreeze as in step 7. The inventory-service and `inventory-postgres` keep running their last deploy with no caller, and `jcool-inventory` stays up. The api's stock tables hold their numbers from before the cut-over, which is enough for demo data.
+4. **Merge**, then unfreeze as in step 7. The inventory-service and `inventory-postgres` keep running their last deploy with no caller, and `jcool-inventory` stays up. Once the migration that drops the api's stock tables has run, the restored schema needs a migration that recreates them (`pnpm db:generate`); their old numbers are gone, which is enough for demo data.
 
 The rollback deploys without Temporal (the api's and the gateway's healthchecks leave it out), but its drain needs it: with Temporal down, keep the freeze, bring it back as in [Temporal down](#temporal-down), wait for `sum(checkout_sagas_open) == 0`, and only then merge. A saga still open would carry on in the in-process wiring and commit or release in the api's tables, where it has no hold.
+
+---
+
+## Cut payments over to the payment-service
+
+The one-time move of payments from the api to the payment-service, together with the split of the api's one shared queue into `order-events` and `api-events`. It needs the public domain on the gateway first ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)): after the merge only the gateway routes `/webhooks/payment` to the payment-service. Railway's data is demo data and may be reset, but take the backup anyway. Tell the shop's admins not to edit the catalog during the window: a catalog event written to the old queue after its drain would have no consumer. If one slips through, [rebuild the search index](#rebuild-the-search-index) afterwards. The merge deletes no Railway variable (the api keeps its four Stripe and webhook variables), so its additions are applied before it, from the head of the branch rebased onto `main`.
+
+1. **Back up** the api's `Postgres`: a snapshot, or a quick `pg_dump` ([Back up](#back-up)).
+2. **Freeze** ([Freeze checkout](#freeze-checkout)), then probe `POST /orders` and `POST /orders/1/pay` on the public domain: both must answer `503` with `Retry-After`. If not, unfreeze and stop.
+3. **Drain**, and wait for all of these:
+   - `sum(checkout_sagas_open) == 0` in Prometheus. With the gauge absent, count with `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` ([Read a saga](#read-a-saga)).
+   - `max(payment_authorized_uncaptured_oldest_seconds) == 0`, and in the api's database (`railway connect Postgres`) `SELECT count(*) FROM payments WHERE status = 'AUTHORIZED'` returns 0. One that remains is settled by the next reconcile tick (`RECONCILE_INTERVAL_MS`), or by a void in the Stripe dashboard as in [PaymentAuthorizationUncaptured](#paymentauthorizationuncaptured).
+   - The queue the running api still uses is empty: `sum(messaging_queue_jobs{queue="domain-events",state=~"wait|prioritized|active|delayed"}) == 0`. Then, in the api's container (`railway ssh --service jcool-ecommerce-backend`), `npm run queue:replay-dlq:prod` without `--apply` lists its dead-letter queue, `domain-events-dlq`. Replay what is there with this CLI before the merge, or note it and drop it (demo data): after the merge nothing reads either old queue, and the new CLI does not know them.
+4. **Apply the additions**, from the rebased branch:
+   - `railway config plan` must only create `payment-postgres` and `payment-service`, and add `PAYMENT_SERVICE_URL` and `PAYMENT_SERVICE_TOKEN` (api), `PAYMENT_UPSTREAM` (gateway) and `PAYMENT_TARGET` (prometheus), with no destroy. Then `railway config apply --yes`: the new service is created without a source, so it does not boot yet, and every service whose config changed redeploys on the code it runs, which ignores the new names. If the plan shows a destroy, do not apply from the branch; merge, and follow [Review a destructive change](#review-a-destructive-change) from a checkout of `main`, keeping the freeze on and merging nothing else while the run waits.
+   - Copy the four Stripe and webhook variables from the api to the payment-service. The values are never printed:
+
+     ```bash
+     # local, after `railway link`
+     for n in STRIPE_SECRET_KEY STRIPE_SUCCESS_URL STRIPE_CANCEL_URL PAYMENT_WEBHOOK_SECRET; do
+       v=$(railway variable list --service jcool-ecommerce-backend --kv | sed -n "s/^$n=//p")
+       [ -n "$v" ] && printf %s "$v" | railway variable set "$n" --stdin --service payment-service --skip-deploys
+     done
+     ```
+
+     A variable the api never set (usually `STRIPE_CANCEL_URL`) is skipped, and the payment-service uses its default.
+   - Set `INTERNAL_CALLER_TOKEN_API` on the payment-service, as in [Set one](#set-one), with a value of its own. Leave `_PREVIOUS` unset, not empty, until the first rotation.
+   - `railway variable set "CHECKOUT_INVARIANT_NOT_BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --service jcool-ecommerce-backend --skip-deploys`: every order settled before it has its header in the api's retired payment tables, where the checker no longer looks ([`CHECKOUT_INVARIANT_NOT_BEFORE`](#checkout_invariant_not_before)).
+   - [Check that no two tokens match](#check-that-no-two-tokens-match).
+   - `railway config plan --detailed-exit-code` exits 0.
+5. **Merge**, after probing the freeze once more. CD's plan is empty, so it only deploys: id-service → user-service → inventory-service → payment-service (migrate) → api → gateway → smoke. Between the new api going live and the new gateway going live, a webhook that still reaches the api answers `404`; Stripe redelivers on its schedule and the next attempt reaches the payment-service. After the drain no session is open, so those webhooks carry no new authorization.
+6. **Check the deploy.**
+   - The payment-service's readiness from inside it: `railway ssh --service payment-service`, then `node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"`. Its boot log has no Stripe guard error.
+   - From the latest `main`, `railway up --ci --service prometheus` and `scripts/railway-wait-for-rollout.sh prometheus`; then in its container `up{job="jcool-payment"}` is 1, `payment_authorized_uncaptured_oldest_seconds{job="jcool-payment"}` is present, and `/api/v1/rules` lists `PaymentScrapeDown` and the `MessagingQueueMetricsAbsent` branch of each queue ([Deploy the monitoring stack](#deploy-the-monitoring-stack)).
+7. **Unfreeze**, then check out at once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID`. In the Stripe dashboard the PaymentIntent reads `succeeded` (captured) and the webhook endpoint's latest delivery is `2xx`, which proves the gateway route and the copied secret. If anything fails, freeze again, wait for `sum(checkout_sagas_open) == 0`, and fix forward or roll back (below).
+8. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations` reads 0 for every `kind`.
+
+A merge postponed after step 4 breaks nothing: the applied config only adds names the running code ignores, and the payment-service has no source yet. To run the cut-over again, set `CHECKOUT_INVARIANT_NOT_BEFORE` again once the drain is done.
+
+**If Temporal stops during the window** (`CheckoutSagaEngineDown`, [Temporal down](#temporal-down)): the freeze still deploys, because the gateway's healthcheck goes through the api's readiness and that leaves Temporal out; the payment-service's readiness leaves it out too. The drain can no longer be measured, though (`checkout_sagas_open` is withdrawn and the CLI cannot connect), so do not merge and do not unfreeze. Bring Temporal back, wait for the conditions of step 3, and continue from there. A `payment.authorized` job produced meanwhile retries on the long ladder and reaches its saga if Temporal is back within about 33 minutes; past that it lands in `order-events-dlq`, and is replayed with `--queue order-events` once Temporal answers ([A `payment.authorized` in the dead-letter queue](#a-paymentauthorized-in-the-dead-letter-queue)).
+
+### Roll back
+
+Frozen, and only once `sum(checkout_sagas_open) == 0` and `payment-postgres` (`railway connect payment-postgres`) holds no `AUTHORIZED` header or attempt (`SELECT count(*) FROM payment_orders WHERE status = 'AUTHORIZED'`, and the same on `payments`). Wait for the payment-service's reconcile, or void it in the Stripe dashboard ([Settle a payment by hand](#settle-a-payment-by-hand)). The rollback is a forward commit, never a `git revert` of the squash:
+
+1. **Restore the api's payment wiring**: its payment module and tests, the in-process binding of Order's payment port, the line in the schema barrel that points back at the module, the Stripe config and boot guard, `rawBody: true` in `apps/api/src/main.ts` and `apps/api/test/setup/test-app.factory.ts` (the webhook signature is checked over the raw body), and the `stripe` and `uuid` dependencies in `apps/api/package.json`. Remove the `@payment` route from `apps/gateway/Caddyfile` (the entrypoint still requires `PAYMENT_UPSTREAM`, which stays in the IaC) and the "Deploy payment-service" step from `cd.yml`. The api's four Stripe and webhook variables are still set, so it boots at once.
+2. **Keep as merged**: `.railway/railway.ts`, every migration and `_journal.json`, `infra/prometheus`, `packages/messaging` and the queue split (the api's route table still sends `payment.authorized` to `order-events`), `packages/internal-contracts`. CD's plan is then empty, and the api ignores the variables it no longer reads. A plan with a destroy means the rollback commit is wrong; never approve a destroy for a rollback.
+3. **Before merging it**, set `CHECKOUT_INVARIANT_NOT_BEFORE` to the current UTC time, as in step 4: orders settled since the cut-over have their headers in `payment-postgres`, and the restored checker would report each one.
+4. **Merge**, then unfreeze as in step 7. The payment-service and `payment-postgres` keep running their last deploy, though no webhook reaches them any more, and `jcool-payment` stays up. Its reconcile sweep goes on voiding late authorizations of the orders it holds a header for.
+
+The rollback deploys without Temporal (the readiness of the api, the payment-service and the gateway leaves it out), but its drain needs it: with Temporal down, keep the freeze, bring it back as in [Temporal down](#temporal-down), wait for `sum(checkout_sagas_open) == 0` and for no `AUTHORIZED` on `payment-postgres`, and only then merge. A saga still open would carry on in the in-process wiring and capture or void in the api's payment tables, where it has no header.
 
 ---
 

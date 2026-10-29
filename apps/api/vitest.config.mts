@@ -27,9 +27,6 @@ export default defineConfig({
     // second copy of a token such as METRICS next to the one natively loaded packages hold.
     server: { deps: { external: [/\/packages\/[^/]+\/dist\//] } },
     alias: {
-      // Real uuid v7 is timestamp+random; the deterministic double keeps unit runs reproducible
-      // (exact values are never asserted). e2e uses the real one.
-      uuid: fileURLToPath(new URL('./test/mocks/uuid.js', import.meta.url)),
       // Duplicated from tsconfig paths because SWC/Vite do not read tsconfig.
       '@modules': fileURLToPath(new URL('./src/modules', import.meta.url)),
       '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)),
@@ -51,10 +48,10 @@ export default defineConfig({
       // controllers are covered by the e2e tier. Measured minus two.
       thresholds: {
         'src/**/{domain,application}/**': {
-          statements: 87,
-          branches: 85,
-          functions: 87,
-          lines: 88,
+          statements: 85,
+          branches: 84,
+          functions: 84,
+          lines: 85,
         },
       },
     },

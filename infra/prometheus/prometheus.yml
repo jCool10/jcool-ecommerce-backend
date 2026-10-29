@@ -23,7 +23,7 @@ scrape_configs:
     static_configs:
       - targets: ['app:3000']
 
-  # Same token: compose passes the api's METRICS_TOKEN to both.
+  # Same token: compose passes the api's METRICS_TOKEN to every service.
   - job_name: jcool-inventory
     metrics_path: /metrics
     authorization:
@@ -31,3 +31,11 @@ scrape_configs:
       credentials_file: /etc/prometheus/secrets/metrics-token
     static_configs:
       - targets: ['inventory-service:3000']
+
+  - job_name: jcool-payment
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics-token
+    static_configs:
+      - targets: ['payment-service:3000']

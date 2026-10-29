@@ -24,7 +24,6 @@ const WINDOWS = {
   METRICS_TOKEN: E2E_METRICS_TOKEN,
   RETENTION_OUTBOX_DAYS: '30',
   RETENTION_INBOX_DAYS: '7',
-  RETENTION_WEBHOOK_EVENT_DAYS: '14',
   RETENTION_IDEMPOTENCY_GRACE_SEC: '0',
   RETENTION_REJECTED_ORDER_DAYS: '30',
 };
@@ -51,15 +50,6 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     eventType: 'order.placed',
     payload: { orderId: ORDER_ID },
     ...overrides,
-  });
-
-  const webhookRow = (providerEventId: string, receivedAt: Date) => ({
-    id: testId(),
-    provider: 'stripe',
-    providerEventId,
-    type: 'payment_intent.succeeded',
-    payload: { id: providerEventId },
-    receivedAt,
   });
 
   const idempotencyRow = (key: string, expiresAt: Date, status: 'IN_PROGRESS' | 'COMPLETED' = 'IN_PROGRESS') => ({
@@ -103,7 +93,6 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       'messaging:outbox',
       'order:idempotency-keys',
       'order:rejected-orders',
-      'payment:webhook-events',
     ]);
   });
 
@@ -133,14 +122,14 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       await db.insert(schema.inbox).values([
         {
           id: testId(),
-          consumer: 'domain-events',
+          consumer: 'order-events',
           messageId: STALE_MESSAGE_ID,
           eventType: 'order.placed',
           processedAt: daysAgo(8),
         },
         {
           id: testId(),
-          consumer: 'domain-events',
+          consumer: 'order-events',
           messageId: YOUNG_MESSAGE_ID,
           eventType: 'order.placed',
           processedAt: daysAgo(6),
@@ -214,24 +203,6 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
       expect(await sweepNamed('order:rejected-orders').sweep(2)).toBe(2);
       expect(await db.select().from(schema.orders)).toHaveLength(1);
-    });
-  });
-
-  describe('payment:webhook-events', () => {
-    // The window is the gateway's redelivery window, not the queue's: the unique
-    // (provider, provider_event_id) turns a repeat into a no-op at ingress.
-    it('keeps an event the gateway could still redeliver', async () => {
-      await db
-        .insert(schema.webhookEvents)
-        .values([webhookRow('evt_old', daysAgo(15)), webhookRow('evt_recent', daysAgo(13))]);
-
-      const deleted = await sweepNamed('payment:webhook-events').sweep(500);
-
-      expect(deleted).toBe(1);
-      const left = await db
-        .select({ providerEventId: schema.webhookEvents.providerEventId })
-        .from(schema.webhookEvents);
-      expect(left).toEqual([{ providerEventId: 'evt_recent' }]);
     });
   });
 

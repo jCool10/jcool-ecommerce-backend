@@ -12,7 +12,7 @@ import { IdentityModule } from '@shared/identity/identity.module';
 import { DrizzleModule } from '@shared/infrastructure/database';
 import * as schema from '@shared/infrastructure/database/schema';
 import { RedisDurabilityCheck, RedisModule } from '@jcool/platform/redis';
-import { MessagingModule } from '@shared/messaging';
+import { ApiMessagingModule } from '@shared/messaging';
 import { RetentionModule } from '@jcool/platform/retention';
 import { ThrottlerSecurityModule } from '@jcool/platform/throttler';
 import { HealthModule } from '@jcool/platform/health';
@@ -23,7 +23,6 @@ import { DebugController } from '@shared/interface/controllers/debug.controller'
 import { CartModule } from '@modules/cart/cart.module';
 import { MediaModule } from '@modules/media/media.module';
 import { OrderModule } from '@modules/order/order.module';
-import { PaymentModule } from '@modules/payment/payment.module';
 import { ProductModule } from '@modules/product/product.module';
 
 // ClsModule precedes ObservabilityLoggerModule so its correlation middleware mounts before pino;
@@ -42,7 +41,7 @@ import { ProductModule } from '@modules/product/product.module';
     // @Global, so position is readability only: a complete sweep roster is guaranteed by
     // registration happening in onModuleInit while the scheduler waits for onApplicationBootstrap.
     RetentionModule,
-    MessagingModule,
+    ApiMessagingModule,
     ThrottlerSecurityModule,
     AuthVerifierModule.forRootAsync({
       imports: [SessionStateModule],
@@ -56,7 +55,6 @@ import { ProductModule } from '@modules/product/product.module';
     // Position carries no meaning here: Product reaches Media through MEDIA_FACADE in the DI graph.
     MediaModule,
     OrderModule,
-    PaymentModule,
   ],
   controllers: [DebugController],
   providers: [

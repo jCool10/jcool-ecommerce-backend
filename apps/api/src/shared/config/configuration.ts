@@ -27,9 +27,10 @@ export default () => ({
     // Off leaves jobs waiting in Redis (no TTL) rather than losing them, which is what e2e suites
     // want while they drive the processor by hand.
     workerEnabled: process.env.QUEUE_WORKER_ENABLED !== 'false',
-    // Each job holds a pg connection for the length of its transaction, so this competes DIRECTLY
-    // with the HTTP path and both saga activity pools for DB_POOL_MAX (default 20); env validation
-    // refuses a sum that leaves fewer than five connections spare.
+    // Per queue worker, and the api runs two (`order-events`, `api-events`). Each job holds a pg
+    // connection for the length of its transaction, so both workers compete DIRECTLY with the HTTP
+    // path and both saga activity pools for DB_POOL_MAX (default 20); env validation refuses a sum
+    // that leaves fewer than five connections spare.
     workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, 5),
     // Deliveries before a message is dead-lettered, the first included. Capped at 10 in the env
     // schema: the backoff below doubles, so the tail grows faster than the count suggests. Eight
@@ -78,43 +79,17 @@ export default () => ({
     // Commit, release, restock and status; a Try is bounded by checkoutSaga.tryTimeoutMs instead.
     commandTimeoutMs: parseIntOr(process.env.INVENTORY_COMMAND_TIMEOUT_MS, 5_000),
   },
+  paymentService: {
+    url: process.env.PAYMENT_SERVICE_URL,
+    token: process.env.PAYMENT_SERVICE_TOKEN,
+    // A cancel there chains up to four Stripe calls, each bounded by its PAYMENT_CAPTURE_TIMEOUT_MS.
+    commandTimeoutMs: parseIntOr(process.env.PAYMENT_COMMAND_TIMEOUT_MS, 45_000),
+  },
   userDirectory: {
     notFoundGrace: process.env.USER_DIRECTORY_NOT_FOUND_GRACE ?? '10m',
   },
   ...mailConfig(),
   ...throttleConfig(),
-  payment: {
-    // Declared but never dispatched on: payment.module.ts constructs Stripe unconditionally. This
-    // survives as a boot-time assertion — env.validation rejects anything but 'stripe', so a deploy
-    // that thinks it configured another gateway fails loudly instead of silently getting Stripe.
-    provider: process.env.PAYMENT_PROVIDER ?? 'stripe',
-    // Undefined → the Stripe adapter refuses to construct (fail-fast).
-    webhookSecret: process.env.PAYMENT_WEBHOOK_SECRET,
-    // Timestamp tolerance (s) for webhook replay defence; 300s matches Stripe's default.
-    webhookToleranceSec: parseIntOr(process.env.PAYMENT_WEBHOOK_TOLERANCE_SEC, 300),
-    // Unset → the adapter stays on its network-free coded path (fabricated cs_...). Set to
-    // sk_test_.../sk_live_... to create real Checkout Sessions a webhook can settle.
-    secretKey: process.env.STRIPE_SECRET_KEY,
-    // No default: an unset var stays undefined and trips the adapter's live-key fail-fast, so a
-    // missing success URL is caught at boot instead of on a real buyer's post-charge redirect. The
-    // cancel default below is not guarded that way, but it is reached before any money moves.
-    successUrl: process.env.STRIPE_SUCCESS_URL,
-    cancelUrl: process.env.STRIPE_CANCEL_URL ?? 'http://localhost:3000/payments/cancel',
-    // Stripe refuses a Checkout Session living under 30 minutes, measured on its clock at receipt, so
-    // the margin absorbs the network hop and any skew. Every session-opening path reads the floor here.
-    sessionMinTtlSec: parseIntOr(process.env.PAYMENT_SESSION_MIN_TTL_SEC, 1_800),
-    sessionExpiryMarginSec: parseIntOr(process.env.PAYMENT_SESSION_EXPIRY_MARGIN_SEC, 120),
-    // The only bound on one capture/void/expire/retrieve call: the Stripe SDK takes no AbortSignal.
-    captureTimeoutMs: parseIntOr(process.env.PAYMENT_CAPTURE_TIMEOUT_MS, 10_000),
-  },
-  reconcile: {
-    // Off for e2e suites, which drive the use case directly, and for one-off job containers.
-    enabled: process.env.RECONCILE_ENABLED !== 'false',
-    intervalMs: parseIntOr(process.env.RECONCILE_INTERVAL_MS, 60_000),
-    batchSize: parseIntOr(process.env.RECONCILE_BATCH_SIZE, 50),
-    // Below this age a payment is still waiting on a webhook probably in flight; polling burns a call.
-    staleAfterSec: parseIntOr(process.env.ORDER_STALE_THRESHOLD_SEC, 120),
-  },
   retention: {
     ...retentionConfig().retention,
     // Extra age past an idempotency key's own `expires_at`. Its TTL is already the retry window, so
@@ -125,9 +100,6 @@ export default () => ({
     // How long an inbox claim is kept — the one retention number that is a correctness bound.
     // Guarded at boot against the main queue's failed-job horizon (see sweep-inbox.ts).
     inboxDays: parseIntOr(process.env.RETENTION_INBOX_DAYS, 30),
-    // Must outlast the GATEWAY's redelivery window, not the queue's — this table is the replay
-    // defence at ingress. Stripe retries for ~72h; floored at 14 days in env.validation.
-    webhookEventDays: parseIntOr(process.env.RETENTION_WEBHOOK_EVENT_DAYS, 30),
     // Days a REJECTED order is kept after the saga rejected it; buyers never see one.
     rejectedOrderDays: parseIntOr(process.env.RETENTION_REJECTED_ORDER_DAYS, 30),
   },

@@ -75,8 +75,15 @@
 			import upstream
 		}
 	}
+	# The provider's webhook; the payment-service checks its signature over the raw body.
+	@payment path /webhooks/payment
+	handle @payment {
+		reverse_proxy {$PAYMENT_UPSTREAM} {
+			import upstream
+		}
+	}
 	handle {
-		# Stops order writes while checkout is being cut over; reads and the payment webhook pass.
+		# Stops order writes while checkout is being cut over; reads pass.
 		# Substituted at parse time like the auth flag, so it needs a redeploy.
 		@checkoutFrozen {
 			method POST

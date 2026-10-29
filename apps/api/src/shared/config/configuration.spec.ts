@@ -26,12 +26,14 @@ function isolateEnv(keys: readonly string[]): void {
 
 describe('configuration', () => {
   isolateEnv([
-    'STRIPE_SUCCESS_URL',
     'ID_SERVICE_URL',
     'ID_SERVICE_TIMEOUT_MS',
     'INVENTORY_SERVICE_URL',
     'INVENTORY_SERVICE_TOKEN',
     'INVENTORY_COMMAND_TIMEOUT_MS',
+    'PAYMENT_SERVICE_URL',
+    'PAYMENT_SERVICE_TOKEN',
+    'PAYMENT_COMMAND_TIMEOUT_MS',
   ]);
 
   it('reads the id-service address and gives the call the gateway retries 2s by default', () => {
@@ -51,9 +53,15 @@ describe('configuration', () => {
     });
   });
 
-  // A localhost default would pass the adapter's live-key guard and send charged buyers nowhere.
-  it('leaves the Stripe success URL undefined when unset', () => {
-    expect(configuration().payment.successUrl).toBeUndefined();
+  it('reads the payment-service address and token, and gives a command 45s by default', () => {
+    process.env.PAYMENT_SERVICE_URL = 'http://payment-service:3000';
+    process.env.PAYMENT_SERVICE_TOKEN = 'a-token';
+
+    expect(configuration().paymentService).toEqual({
+      url: 'http://payment-service:3000',
+      token: 'a-token',
+      commandTimeoutMs: 45_000,
+    });
   });
 });
 
@@ -113,12 +121,10 @@ describe('configuration: checkout saga', () => {
     const config = configuration();
 
     expect({
-      PAYMENT_CAPTURE_TIMEOUT_MS: config.payment.captureTimeoutMs,
+      PAYMENT_COMMAND_TIMEOUT_MS: config.paymentService.commandTimeoutMs,
       BREAKER_TIMEOUT_MS: config.resilience.breaker.timeoutMs,
       INVENTORY_COMMAND_TIMEOUT_MS: config.inventoryService.commandTimeoutMs,
       QUEUE_WORKER_CONCURRENCY: config.queue.workerConcurrency,
-      PAYMENT_SESSION_MIN_TTL_SEC: config.payment.sessionMinTtlSec,
-      PAYMENT_SESSION_EXPIRY_MARGIN_SEC: config.payment.sessionExpiryMarginSec,
       DB_POOL_MAX: config.database.poolMax,
     }).toEqual(CROSS_RULE_FOREIGN_DEFAULTS);
   });

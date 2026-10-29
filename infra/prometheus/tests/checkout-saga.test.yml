@@ -198,7 +198,7 @@ tests:
   # An authorization left uncaptured: the age climbs through 900s and holds, then it is captured.
   - interval: 1m
     input_series:
-      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-api", instance="app:3000"}'
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x5 600+60x20 0x5'
     alert_rule_test:
       - eval_time: 16m
@@ -358,14 +358,16 @@ tests:
         alertname: CheckoutLateAuthorization
         exp_alerts: []
 
-  # The wiring regression: the api is still scraped but both gauges went absent.
+  # The wiring regression: both services are still scraped but their gauges went absent.
   - interval: 1m
     input_series:
       - series: 'up{job="jcool-api", instance="app:3000"}'
         values: '1x40'
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x40'
       - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
         values: '1x10 _x30'
-      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-api", instance="app:3000"}'
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x10 _x30'
     alert_rule_test:
       - eval_time: 20m
@@ -388,17 +390,19 @@ tests:
           - exp_labels:
               severity: ticket
             exp_annotations:
-              summary: 'Payment authorization metrics are missing from the api'
-              description: 'The api is being scraped but reports no payment_authorized_uncaptured_oldest_seconds, so PaymentAuthorizationUncaptured cannot fire: the payment collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+              summary: 'Payment authorization metrics are missing from the payment-service'
+              description: 'The payment-service is being scraped but reports no payment_authorized_uncaptured_oldest_seconds, so PaymentAuthorizationUncaptured cannot fire: the payment collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
 
-  # The api is down: `up` reads 0 and every series of the app is gone.
+  # Both services are down: `up` reads 0 and every series of each app is gone.
   - interval: 1m
     input_series:
       - series: 'up{job="jcool-api", instance="app:3000"}'
         values: '1x10 0x40'
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x10 0x40'
       - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
         values: '1x10 _x40'
-      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-api", instance="app:3000"}'
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x10 _x40'
     alert_rule_test:
       - eval_time: 30m
@@ -419,14 +423,28 @@ tests:
     input_series:
       - series: 'up{job="jcool-api", instance="app:3000"}'
         values: '1x40'
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x40'
       - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
         values: '0x40'
-      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-api", instance="app:3000"}'
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x40'
     alert_rule_test:
       - eval_time: 30m
         alertname: CheckoutSagaMetricsAbsent
         exp_alerts: []
+      - eval_time: 30m
+        alertname: PaymentMetricsAbsent
+        exp_alerts: []
+
+  # A scraped api says nothing about the payment-service: never scraped, PaymentScrapeDown owns it.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+      - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+    alert_rule_test:
       - eval_time: 30m
         alertname: PaymentMetricsAbsent
         exp_alerts: []

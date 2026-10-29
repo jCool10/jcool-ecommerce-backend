@@ -3,37 +3,26 @@ import { asc, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { DomainEventProcessor } from '@jcool/messaging';
+import { OUTBOX_WRITER, type OutboxRecord, type OutboxWriterPort } from '@jcool/messaging/outbox-port';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
-import {
-  OUTBOX_WRITER,
-  type OutboxRecord,
-  type OutboxWriterPort,
-} from '../../src/shared/messaging/outbox/outbox-writer.port';
 import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { relayAuthorization } from '../setup/fixtures/checkout-saga.fixture';
+import { relayedAuthorizations } from '../setup/fixtures/checkout-saga.fixture';
 import { readReservationOrder } from '../setup/fixtures/inventory.fixture';
 import {
+  authorizePayment,
   buyerWithCart,
   placeAndOpenSession,
-  postWebhook,
-  readPayment,
   readStock,
   seedSellableSku,
   untilOrderStatus,
 } from '../setup/fixtures/order-flow.fixture';
-import {
-  closeAppAfterAll,
-  createTestAppWithFakeGateway,
-  createTestAppWithPool,
-  resetSagasAndDatabaseBeforeEach,
-} from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
-import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
 
-const WEBHOOK_SECRET = 'whsec_e2e_outbox_secret_0123456789';
 const STOCK = 5;
 const PRICE = 150_000;
 
@@ -43,10 +32,9 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
-  let gateway: FakeSignerGatewayAdapter;
 
   beforeAll(async () => {
-    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
+    ({ app, pool, db } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
@@ -133,19 +121,12 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
   it('appends order.paid once in the finalize transaction, however often delivered', async () => {
     const sku = await seedSellableSku(app, { onHand: STOCK, priceMinor: PRICE });
     const open = await placeAndOpenSession(app, sku);
-    gateway.authorize(open.sessionId);
-    const signed = signWebhook({
-      secret: WEBHOOK_SECRET,
-      event: checkoutSessionCompleted(
-        open.sessionId,
-        { ...open.charge, paymentStatus: 'unpaid' },
-        { eventId: 'evt_outbox_paid' },
-      ),
-    });
+    await authorizePayment(open.orderId);
+    const [job] = await relayedAuthorizations(app, open.orderId);
+    const processor = app.get(DomainEventProcessor);
 
-    await postWebhook(app, signed).expect(200);
-    await postWebhook(app, signed).expect(200); // at-least-once delivery: the same event again
-    await relayAuthorization(app, open.orderId);
+    await processor.process(job.data, ORDER_EVENTS_QUEUE);
+    await processor.process(job.data, ORDER_EVENTS_QUEUE); // at-least-once delivery: the same job again
     await untilOrderStatus(app, open.orderId, 'PAID');
 
     const rows = await readOutbox(open.orderId);
@@ -153,9 +134,9 @@ describe('Transactional outbox append (integration, real Postgres)', () => {
     expect(rows[1]).toMatchObject({ publishedAt: null, attempts: 0 });
     expect(rows[1].payload).toMatchObject({
       orderId: open.orderId,
-      totalAmountMinor: open.charge.amountMinor,
-      currency: open.charge.currency,
-      paymentRef: (await readPayment(app, open.orderId)).id,
+      totalAmountMinor: PRICE,
+      currency: 'VND',
+      paymentRef: open.paymentId,
       occurredAt: expect.any(String),
     });
   });

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PermanentError } from '@shared/messaging/errors';
-import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, PermanentError } from '@jcool/messaging';
 import { sampleId } from '@shared/testing/id-generator.double';
 import type { ForwardPaymentAuthorizationUseCase } from '../../application/use-cases';
 import { PaymentAuthorizedHandler } from './payment-authorized.handler';
@@ -56,7 +55,9 @@ describe('PaymentAuthorizedHandler', () => {
       { ...PAYLOAD, amountMinor: '200000' },
       { ...PAYLOAD, amountMinor: 1.5 },
       { ...PAYLOAD, currency: '' },
+      { ...PAYLOAD, currency: 'vnd' },
       { ...PAYLOAD, authorizedAt: 'yesterday' },
+      { ...PAYLOAD, authorizedAt: '2026-10-20T15:10:00+07:00' },
     ];
 
     for (const payload of broken) {

@@ -1,40 +1,39 @@
 import type { INestApplication } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { DomainEventProcessor } from '@jcool/messaging';
 import { authHeader } from '../setup/bearer.helper';
-import { orderEventTypes, relayAuthorization, sagaHandle } from '../setup/fixtures/checkout-saga.fixture';
+import { orderEventTypes, relayedAuthorizations, sagaHandle } from '../setup/fixtures/checkout-saga.fixture';
 import { readReservationOrder } from '../setup/fixtures/inventory.fixture';
 import {
   auditLedgerInvariants,
+  authorizePayment,
   buyerWithCart,
   checkout,
   openSession,
-  postWebhook,
-  readPayment,
   readPaymentOrder,
   readStock,
   seedSellableSku,
   untilOrderStatus,
 } from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
-import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
+import { type PaymentServiceStub, paymentServiceStub } from '../setup/payment-service-stub';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_happy_path_01';
 const PRICE = 90_000;
 const ON_HAND = 5;
-const WEBHOOK_DELIVERIES = 3;
+const DELIVERIES = 3;
 
 describe('Checkout saga happy path (integration, real Temporal, real HTTP, fake Stripe)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let gateway: FakeSignerGatewayAdapter;
+  let payment: PaymentServiceStub;
 
   beforeAll(async () => {
-    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
+    payment = await paymentServiceStub();
+    ({ app, pool } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
@@ -51,29 +50,23 @@ describe('Checkout saga happy path (integration, real Temporal, real HTTP, fake 
     expect(placed.body).toMatchObject({ status: 'PENDING', totalAmountMinor: 2 * PRICE });
     expect((await readStock(app, sku.variantId))?.quantityReserved).toBe(2);
 
-    const pay = await openSession(app, token, orderId).expect(201);
-    const sessionId = pay.body.providerSessionId as string;
-    const intentId = gateway.authorize(sessionId);
-    const { amountMinor, currency } = await readPayment(app, orderId);
-    const signed = signWebhook({
-      secret: app.get(ConfigService).getOrThrow<string>('payment.webhookSecret'),
-      event: checkoutSessionCompleted(
-        sessionId,
-        { amountMinor, currency, paymentStatus: 'unpaid' },
-        { eventId: 'evt_happy_path' },
-      ),
-    });
+    await openSession(app, token, orderId).expect(201);
+    await authorizePayment(orderId);
+    // Payment dedups the webhook itself; what reaches the api more than once is the job.
+    const [job, ...others] = await relayedAuthorizations(app, orderId);
+    expect(others).toEqual([]);
+    const processor = app.get(DomainEventProcessor);
     const answers: string[] = [];
-    for (let delivery = 0; delivery < WEBHOOK_DELIVERIES; delivery++) {
-      answers.push((await postWebhook(app, signed).expect(200)).body.status as string);
+    for (let delivery = 0; delivery < DELIVERIES; delivery++) {
+      answers.push(await processor.process(job.data, ORDER_EVENTS_QUEUE));
     }
+    await job.remove();
     expect(answers).toEqual(['processed', 'duplicate', 'duplicate']);
 
-    expect(await relayAuthorization(app, orderId)).toBe(1);
     await untilOrderStatus(app, orderId, 'PAID');
 
     expect(await sagaHandle(app, orderId).result()).toBe('COMPLETED');
-    expect(gateway.captureCalls(intentId)).toBe(1);
+    expect(payment.providerCaptures(orderId)).toBe(1);
     expect((await readReservationOrder(app, orderId))?.status).toBe('COMMITTED');
     expect((await readPaymentOrder(app, orderId))?.status).toBe('CAPTURED');
     expect(await orderEventTypes(app, orderId)).toEqual(['order.placed', 'order.paid']);

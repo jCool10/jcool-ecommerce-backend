@@ -2,6 +2,8 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
+import { DomainEventProcessor, InboxStore } from '@jcool/messaging';
 import {
   CHECKOUT_SAGA_ENGINE,
   CheckoutEngineUnavailableError,
@@ -22,10 +24,7 @@ import {
 import { RunCheckoutInvariantsUseCase } from '../../src/modules/order/application/use-cases';
 import { stateQuery } from '../../src/modules/order/infrastructure/temporal/checkout-saga.contract';
 import { CheckoutReservingReaperScheduler } from '../../src/modules/order/interface/checkout-reserving-reaper.scheduler';
-import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { InboxStore } from '../../src/shared/messaging/inbox/inbox.store';
 import { CHECKOUT_SAGA_DEFAULTS } from '../../src/shared/config/checkout-saga.config';
-import { DomainEventProcessor } from '../../src/shared/messaging/queue/domain-event.processor';
 import { authHeader } from '../setup/bearer.helper';
 import { eventually } from '../setup/eventually';
 import {
@@ -38,11 +37,12 @@ import {
   relayedAuthorizations,
   releaseHung,
   sagaHandle,
+  shortSessionFloorBeforeEach,
 } from '../setup/fixtures/checkout-saga.fixture';
 import { readReservationOrder } from '../setup/fixtures/inventory.fixture';
 import {
   auditLedgerInvariants,
-  authorizeSession,
+  authorizePayment,
   buyerWithCart,
   checkout,
   openSession,
@@ -54,11 +54,11 @@ import {
   untilOrderStatus,
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
+import { type PaymentServiceStub, paymentServiceStub } from '../setup/payment-service-stub';
 import { sleep } from '../setup/sleep';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_crash_convergence';
 const ON_HAND = 5;
 const ACTIVITY_TIMEOUT_MS = 11_000;
 const RETRY_BASE_MS = 200;
@@ -76,7 +76,7 @@ const CASE_TIMEOUT_MS = CONVERGE_MS + 10_000;
 // + 5 spare stays inside the pool of 20.
 const CRASH_ENV = {
   SAGA_ACTIVITY_TIMEOUT_MS: String(ACTIVITY_TIMEOUT_MS),
-  PAYMENT_CAPTURE_TIMEOUT_MS: '1000',
+  PAYMENT_COMMAND_TIMEOUT_MS: '5000',
   SAGA_RETRY_BASE_MS: String(RETRY_BASE_MS),
   SAGA_RETRY_CAP_MS: '2000',
   SAGA_ACTIVITY_CONCURRENCY: '4',
@@ -91,6 +91,12 @@ const CRASH_ENV = {
 const inventoryOf = (app: INestApplication) => app.get<OrderInventoryParticipantPort>(ORDER_INVENTORY_PARTICIPANT);
 const paymentOf = (app: INestApplication) => app.get<OrderPaymentParticipantPort>(ORDER_PAYMENT_PARTICIPANT);
 const ordersOf = (app: INestApplication) => app.get<OrderRepositoryPort>(ORDER_REPOSITORY);
+
+let payment: PaymentServiceStub;
+
+beforeAll(async () => {
+  payment = await paymentServiceStub();
+});
 
 async function expectSettledCleanly(app: INestApplication, sku: SellableSku): Promise<void> {
   expect((await auditLedgerInvariants(app, { [sku.variantId]: ON_HAND })).violations).toEqual([]);
@@ -110,18 +116,17 @@ async function placed(app: INestApplication) {
 }
 
 async function placedWithSession(app: INestApplication) {
-  const { sku, token, orderId } = await placed(app);
-  const pay = await openSession(app, token, orderId).expect(201);
-  return { sku, token, orderId, sessionId: pay.body.providerSessionId as string };
+  const order = await placed(app);
+  await openSession(app, order.token, order.orderId).expect(201);
+  return order;
 }
 
 describe('Checkout saga crash convergence (integration, real Temporal, fake Stripe)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let gateway: FakeSignerGatewayAdapter;
 
   beforeAll(async () => {
-    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, CRASH_ENV));
+    ({ app, pool } = await createTestAppWithPool(CRASH_ENV));
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
@@ -211,27 +216,27 @@ describe('Checkout saga crash convergence (integration, real Temporal, fake Stri
   );
 
   it('pays once when the claim of a delivered authorization did not commit', async () => {
-    const { sku, orderId, sessionId } = await placedWithSession(app);
-    const intentId = await authorizeSession(app, sessionId, orderId);
+    const { sku, orderId } = await placedWithSession(app);
+    await authorizePayment(orderId);
     // Keeps the run open, so the redelivery meets it rather than a closed one.
     const capture = holdCalls(paymentOf(app), 'capture');
     const claim = failOnce(app.get(InboxStore), 'claim');
     const [job] = await relayedAuthorizations(app, orderId);
     const processor = app.get(DomainEventProcessor);
 
-    await expect(processor.process(job.data)).rejects.toThrow('failure injected by the test');
-    await expect(processor.process(job.data)).resolves.toBe('processed');
+    await expect(processor.process(job.data, ORDER_EVENTS_QUEUE)).rejects.toThrow('failure injected by the test');
+    await expect(processor.process(job.data, ORDER_EVENTS_QUEUE)).resolves.toBe('processed');
     capture.release();
 
     await untilOrderStatus(app, orderId, 'PAID');
     expect(claim.calls()).toBe(2);
-    expect(gateway.captureCalls(intentId)).toBe(1);
+    expect(payment.providerCaptures(orderId)).toBe(1);
     await expectSettledCleanly(app, sku);
   });
 
   it('pays once the authorization reaches Temporal on redelivery', async () => {
-    const { sku, orderId, sessionId } = await placedWithSession(app);
-    const intentId = await authorizeSession(app, sessionId, orderId);
+    const { sku, orderId } = await placedWithSession(app);
+    await authorizePayment(orderId);
     failOnce(app.get<CheckoutSagaEnginePort>(CHECKOUT_SAGA_ENGINE), 'notifyAuthorized', {
       orderId,
       error: new CheckoutEngineUnavailableError(),
@@ -239,21 +244,23 @@ describe('Checkout saga crash convergence (integration, real Temporal, fake Stri
     const [job] = await relayedAuthorizations(app, orderId);
     const processor = app.get(DomainEventProcessor);
 
-    await expect(processor.process(job.data)).rejects.toBeInstanceOf(CheckoutEngineUnavailableError);
+    await expect(processor.process(job.data, ORDER_EVENTS_QUEUE)).rejects.toBeInstanceOf(
+      CheckoutEngineUnavailableError,
+    );
     expect((await pool.query('SELECT 1 FROM inbox')).rowCount).toBe(0);
-    await expect(processor.process(job.data)).resolves.toBe('processed');
+    await expect(processor.process(job.data, ORDER_EVENTS_QUEUE)).resolves.toBe('processed');
 
     await untilOrderStatus(app, orderId, 'PAID');
-    expect(gateway.captureCalls(intentId)).toBe(1);
+    expect(payment.providerCaptures(orderId)).toBe(1);
     await expectSettledCleanly(app, sku);
   });
 
   it(
     'pays when the stock commit was applied but its activity never answered',
     async () => {
-      const { sku, orderId, sessionId } = await placedWithSession(app);
+      const { sku, orderId } = await placedWithSession(app);
       const commit = hangAfter(inventoryOf(app), 'commit', { orderId });
-      const intentId = await authorizeSession(app, sessionId, orderId);
+      await authorizePayment(orderId);
       await relayAuthorization(app, orderId);
 
       await commit.reached;
@@ -261,7 +268,7 @@ describe('Checkout saga crash convergence (integration, real Temporal, fake Stri
 
       await untilOrderStatus(app, orderId, 'PAID', reachedAt + CONVERGE_MS - Date.now());
       expect(commit.calls()).toBe(2);
-      expect(gateway.captureCalls(intentId)).toBe(1);
+      expect(payment.providerCaptures(orderId)).toBe(1);
       expect((await reservationsFor(app, orderId)).map(({ status }) => status)).toEqual(['COMMITTED']);
       await expectSettledCleanly(app, sku);
     },
@@ -271,9 +278,9 @@ describe('Checkout saga crash convergence (integration, real Temporal, fake Stri
   it(
     'pays once when the capture was applied but its activity never answered',
     async () => {
-      const { sku, orderId, sessionId } = await placedWithSession(app);
+      const { sku, orderId } = await placedWithSession(app);
       const capture = hangAfter(paymentOf(app), 'capture', { orderId });
-      const intentId = await authorizeSession(app, sessionId, orderId);
+      await authorizePayment(orderId);
       await relayAuthorization(app, orderId);
 
       await capture.reached;
@@ -281,7 +288,7 @@ describe('Checkout saga crash convergence (integration, real Temporal, fake Stri
 
       await untilOrderStatus(app, orderId, 'PAID', reachedAt + CONVERGE_MS - Date.now());
       expect(capture.calls()).toBe(2);
-      expect(gateway.captureCalls(intentId)).toBe(1);
+      expect(payment.providerCaptures(orderId)).toBe(1);
       await expectSettledCleanly(app, sku);
     },
     CASE_TIMEOUT_MS,
@@ -290,10 +297,10 @@ describe('Checkout saga crash convergence (integration, real Temporal, fake Stri
   it(
     'writes order.paid once when the PAID change committed but its activity never answered',
     async () => {
-      const { sku, orderId, sessionId } = await placedWithSession(app);
+      const { sku, orderId } = await placedWithSession(app);
       // Held past CONFIRMING, so the next order change is the PAID one.
       const capture = holdCalls(paymentOf(app), 'capture');
-      await authorizeSession(app, sessionId, orderId);
+      await authorizePayment(orderId);
       await relayAuthorization(app, orderId);
       await capture.waitForCalls(1);
       const paid = hangAfter(ordersOf(app), 'applyOrderChange', { orderId });
@@ -353,10 +360,9 @@ describe('Checkout saga crash convergence: abandoned session (integration, short
   const GRACE_MS = Number(SHORT_DEADLINE_CHECKOUT_ENV.SAGA_AUTH_GRACE_SEC) * 1000;
   let app: INestApplication;
   let pool: Pool;
-  let gateway: FakeSignerGatewayAdapter;
 
   beforeAll(async () => {
-    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+    ({ app, pool } = await createTestAppWithPool({
       ...SHORT_DEADLINE_CHECKOUT_ENV,
       CHECKOUT_INVARIANT_SETTLE_SEC: '0',
     }));
@@ -366,16 +372,17 @@ describe('Checkout saga crash convergence: abandoned session (integration, short
     () => [app],
     () => pool,
   );
+  shortSessionFloorBeforeEach();
 
   it('expires an order whose buyer opened a session and walked away', async () => {
-    const { sku, orderId, sessionId } = await placedWithSession(app);
+    const { sku, orderId } = await placedWithSession(app);
     const deadlineMs = ((await readOrder(app, orderId)).paymentDeadlineAt as Date).getTime();
 
     await untilOrderStatus(app, orderId, 'EXPIRED', deadlineMs + GRACE_MS + 5_000 - Date.now());
 
     // The order turns EXPIRED first; the compensations land before the run closes.
     expect(await sagaHandle(app, orderId).result()).toBe('COMPENSATED');
-    expect(gateway.wasExpired(sessionId)).toBe(true);
+    expect(payment.sessionFor(orderId)?.status).toBe('EXPIRED');
     expect((await readReservationOrder(app, orderId))?.status).toBe('RELEASED');
     await expectSettledCleanly(app, sku);
   });
@@ -384,12 +391,11 @@ describe('Checkout saga crash convergence: abandoned session (integration, short
 describe('Checkout saga crash convergence: worker restart (integration, two apps on one task queue)', () => {
   let first: INestApplication;
   let firstPool: Pool;
-  let gateway: FakeSignerGatewayAdapter;
   let second: INestApplication | undefined;
   let firstClosed = false;
 
   beforeAll(async () => {
-    ({ app: first, pool: firstPool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, CRASH_ENV));
+    ({ app: first, pool: firstPool } = await createTestAppWithPool(CRASH_ENV));
   });
   afterAll(async () => {
     if (!firstClosed) await first.close();
@@ -407,9 +413,9 @@ describe('Checkout saga crash convergence: worker restart (integration, two apps
   it(
     'pays on the next worker when the first one dies in the middle of a capture',
     async () => {
-      const { sku, orderId, sessionId } = await placedWithSession(first);
+      const { sku, orderId } = await placedWithSession(first);
       const capture = hangAfter(paymentOf(first), 'capture', { orderId });
-      const intentId = await authorizeSession(first, sessionId, orderId);
+      await authorizePayment(orderId);
       await relayAuthorization(first, orderId);
       await capture.reached;
       const reachedAt = Date.now();
@@ -418,12 +424,12 @@ describe('Checkout saga crash convergence: worker restart (integration, two apps
       await first.close();
       firstClosed = true;
       expect(Date.now() - closingAt).toBeLessThan(SHUTDOWN_GRACE_MS + SHUTDOWN_FORCE_MS + 5_000);
-      ({ app: second } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, CRASH_ENV, [], { gateway }));
+      ({ app: second } = await createTestAppWithPool(CRASH_ENV));
       const retried = vi.spyOn(paymentOf(second), 'capture');
 
       await untilOrderStatus(second, orderId, 'PAID', reachedAt + CONVERGE_MS - Date.now());
       expect(capture.calls() + retried.mock.calls.length).toBe(2);
-      expect(gateway.captureCalls(intentId)).toBe(1);
+      expect(payment.providerCaptures(orderId)).toBe(1);
       expect((await readPaymentOrder(second, orderId))?.status).toBe('CAPTURED');
       expect((await reservationsFor(second, orderId)).map(({ status }) => status)).toEqual(['COMMITTED']);
       await expectSettledCleanly(second, sku);

@@ -25,7 +25,6 @@ import { OrderItem } from '../../src/modules/order/domain/order-item.entity';
 import { Order } from '../../src/modules/order/domain/order.entity';
 import { checkoutWorkflowId, stateQuery } from '../../src/modules/order/infrastructure/temporal/checkout-saga.contract';
 import { TEMPORAL_CLIENT } from '../../src/modules/order/infrastructure/temporal/temporal.providers';
-import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import {
@@ -36,21 +35,14 @@ import {
   sagaWorker,
 } from '../setup/fixtures/checkout-saga.fixture';
 import { readReservationOrder, seedStock } from '../setup/fixtures/inventory.fixture';
-import {
-  postWebhook,
-  readOrder,
-  readPaymentOrder,
-  readStock,
-  reservationsFor,
-} from '../setup/fixtures/order-flow.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { readOrder, readPaymentOrder, readStock, reservationsFor } from '../setup/fixtures/order-flow.fixture';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { type InventoryServiceStub, inventoryServiceStub } from '../setup/inventory-service-stub';
-import { checkoutSessionCompleted, signWebhook } from '../setup/sign-webhook.helper';
+import { type PaymentServiceStub, paymentServiceStub } from '../setup/payment-service-stub';
 import { sleep } from '../setup/sleep';
 import { temporalTaskQueueForCurrentSpec } from '../setup/temporal-task-queue';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_engine_01';
 const PRICE = 50_000;
 const CURRENCY = 'VND';
 const DEADLINE_MS = 60 * 60_000;
@@ -71,9 +63,7 @@ const SHORT_DEADLINE_ENV = {
   INVENTORY_COMMAND_TIMEOUT_MS: '2000',
   SAGA_AUTH_GRACE_SEC: '1',
   SAGA_ACTIVITY_TIMEOUT_MS: '8000',
-  PAYMENT_CAPTURE_TIMEOUT_MS: '500',
-  PAYMENT_SESSION_MIN_TTL_SEC: '0',
-  PAYMENT_SESSION_EXPIRY_MARGIN_SEC: '0',
+  PAYMENT_COMMAND_TIMEOUT_MS: '2000',
 };
 
 async function eventually<T>(read: () => Promise<T>, done: (value: T) => boolean, timeoutMs = 15_000): Promise<T> {
@@ -98,13 +88,14 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
   let app: INestApplication;
   let pool: Pool;
   let db: DrizzleDB;
-  let gateway: FakeSignerGatewayAdapter;
+  let paymentService: PaymentServiceStub;
   let inventoryService: InventoryServiceStub;
   // Apps a nested describe opens next to the main one; the reset drains their workers too.
   const extraApps: INestApplication[] = [];
 
   beforeAll(async () => {
-    ({ app, pool, db, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV));
+    ({ app, pool, db } = await createTestAppWithPool(SAGA_ENV));
+    paymentService = await paymentServiceStub();
     inventoryService = await inventoryServiceStub();
     await workerRunning(app);
   });
@@ -153,23 +144,11 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
     return session;
   }
 
-  /** The buyer pays: a manual-capture hold on the card, reported by a signed webhook. */
-  async function authorizeOnProvider(sessionId: string): Promise<string> {
-    const intentId = gateway.authorize(sessionId);
-    const event = checkoutSessionCompleted(
-      sessionId,
-      { amountMinor: PRICE, currency: CURRENCY, paymentStatus: 'unpaid' },
-      { eventId: `evt_${testId()}` },
-    );
-    await postWebhook(app, signWebhook({ secret: WEBHOOK_SECRET, event })).expect(200);
-    return intentId;
-  }
-
   async function payThroughSaga(orderId: string, relayVia: INestApplication = app) {
     const session = await openSession(orderId);
-    const intentId = await authorizeOnProvider(session.providerSessionId);
+    await paymentService.authorize(orderId);
     await relayAuthorizationDirect(relayVia, orderId);
-    return { paymentId: session.paymentId, intentId };
+    return { paymentId: session.paymentId };
   }
 
   const orderStatus = async (orderId: string) => (await readOrder(app, orderId))?.status;
@@ -276,14 +255,14 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
   it('settles a paid order end to end: stock committed, money captured, one order.paid', async () => {
     const { orderId } = await placeHeld();
 
-    const { paymentId, intentId } = await payThroughSaga(orderId);
+    const { paymentId } = await payThroughSaga(orderId);
 
     await untilOrderIs(orderId, 'PAID');
     expect(await readOrder(app, orderId)).toMatchObject({ paymentRef: paymentId });
     expect((await readReservationOrder(app, orderId))?.status).toBe('COMMITTED');
     expect((await readPaymentOrder(app, orderId))?.status).toBe('CAPTURED');
     expect(await orderEvents(orderId)).toEqual(['order.placed', 'order.paid']);
-    expect(gateway.captureCalls(intentId)).toBe(1);
+    expect(paymentService.providerCaptures(orderId)).toBe(1);
     expect(await saga(orderId).result()).toBe('COMPLETED');
   });
 
@@ -310,9 +289,9 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
 
     await signal(); // the session is still OPEN: nothing is authorized yet
     await signal({ amountMinor: PRICE - 1 }); // never reaches verification
-    // Before the webhook, or the first check could already read the header as AUTHORIZED.
+    // Before the authorization, or the first check could already read the header as AUTHORIZED.
     await verified(1);
-    await authorizeOnProvider(session.providerSessionId);
+    await paymentService.authorize(orderId);
     await signal({ paymentId: testId() }); // authorized, but not by this payment
     await verified(2);
     await untilQuiet(orderId);
@@ -427,8 +406,7 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
     let second: INestApplication;
 
     beforeAll(async () => {
-      // The same fake gateway, so an activity sees one provider whichever app runs it.
-      ({ app: second } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, SAGA_ENV, [], { gateway }));
+      ({ app: second } = await createTestAppWithPool(SAGA_ENV));
       extraApps.push(second);
       await workerRunning(second);
     });
@@ -440,14 +418,12 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
     it('takes every saga to PAID exactly once', async () => {
       const apps = [app, second, app, second];
       const placed = await Promise.all(apps.map((engineApp) => placeHeld(engineApp)));
-      const paid = await Promise.all(
-        placed.map(({ orderId }, index) => payThroughSaga(orderId, apps[(index + 1) % apps.length])),
-      );
+      await Promise.all(placed.map(({ orderId }, index) => payThroughSaga(orderId, apps[(index + 1) % apps.length])));
 
-      for (const [index, { orderId }] of placed.entries()) {
+      for (const { orderId } of placed) {
         await untilOrderIs(orderId, 'PAID');
         expect((await orderEvents(orderId)).sort()).toEqual(['order.paid', 'order.placed']);
-        expect(gateway.captureCalls(paid[index].intentId)).toBe(1);
+        expect(paymentService.providerCaptures(orderId)).toBe(1);
       }
     });
   });
@@ -459,7 +435,7 @@ describe('Checkout saga engine (integration, real Temporal dev server, real part
 
     beforeAll(async () => {
       // Its own queue: the main app is still polling the file's queue with its own settings.
-      ({ app: expiryApp } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+      ({ app: expiryApp } = await createTestAppWithPool({
         ...SAGA_ENV,
         ...SHORT_DEADLINE_ENV,
         TEMPORAL_TASK_QUEUE: temporalTaskQueueForCurrentSpec('expiry'),

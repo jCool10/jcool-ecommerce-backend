@@ -1,12 +1,12 @@
 /**
- * Drain the domain-events dead-letter queue back onto the main queue:
- *   npm run queue:replay-dlq                       # list what would be replayed, change nothing
- *   npm run queue:replay-dlq -- --apply            # actually replay
- *   npm run queue:replay-dlq -- --apply --limit 20
- *   npm run queue:replay-dlq -- --apply --force    # past the retention horizon; it can never
- *                                                 # override a claim that is actually there
+ * Drain one queue's dead-letter queue back onto it:
+ *   pnpm queue:replay-dlq --queue order-events                   # list what would be replayed, change nothing
+ *   pnpm queue:replay-dlq --queue order-events --apply           # actually replay
+ *   pnpm queue:replay-dlq --queue api-events --apply --limit 20
+ *   pnpm queue:replay-dlq --queue order-events --apply --force   # past the retention horizon; it can never
+ *                                                                # override a claim that is actually there
  * In a deployed container (no devDependencies, so no `tsx`), the compiled twin:
- *   npm run queue:replay-dlq:prod -- --apply
+ *   pnpm queue:replay-dlq:prod --queue order-events --apply
  *
  * A replay cannot fix the reason the message failed — read the printed `failedReason` and deploy the
  * fix first, or the same messages come straight back.
@@ -21,27 +21,33 @@ import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
+import { buildJobOptions, replayDeadLetters, type InboxClaimLookup } from '@jcool/messaging';
+import { inbox } from '@jcool/messaging/schema';
 import configuration from '@shared/config/configuration';
-import { inbox } from '../inbox/schema/inbox.schema';
-import { replayDeadLetters, type InboxClaimLookup } from './dead-letter.replay';
-import {
-  buildJobOptions,
-  DOMAIN_EVENTS_CONSUMER,
-  jobOptionsFor,
-  QUEUE_DOMAIN_EVENTS,
-  QUEUE_DOMAIN_EVENTS_DLQ,
-} from './queue.constants';
+import { API_CONSUMED_QUEUES } from '../event-routes';
 
 const DAY_MS = 86_400_000;
 
+const argAfter = (flag: string): string | undefined => {
+  const at = process.argv.indexOf(flag);
+  return at === -1 ? undefined : process.argv[at + 1];
+};
+
 const apply = process.argv.includes('--apply');
 const force = process.argv.includes('--force');
-const limitArg = process.argv.indexOf('--limit');
-const limit = limitArg === -1 ? 100 : Number(process.argv[limitArg + 1]);
+const limitArg = argAfter('--limit');
+const limit = limitArg === undefined ? 100 : Number(limitArg);
+const queueArg = argAfter('--queue');
 
 async function main(): Promise<void> {
+  // Required: with one dead-letter queue per queue, a default would be a guess at which one is on fire.
+  const selected = API_CONSUMED_QUEUES.find(({ name }) => name === queueArg);
+  if (!selected) {
+    const valid = API_CONSUMED_QUEUES.map(({ name }) => name).join(', ');
+    throw new Error(`--queue must be one of: ${valid}${queueArg === undefined ? '' : ` (got "${queueArg}")`}`);
+  }
   if (!Number.isInteger(limit) || limit < 1) {
-    throw new Error(`--limit must be a positive integer, got "${process.argv[limitArg + 1]}"`);
+    throw new Error(`--limit must be a positive integer, got "${limitArg}"`);
   }
 
   // The app's own config factory, but read from THIS process's environment, so every value here can
@@ -54,7 +60,7 @@ async function main(): Promise<void> {
 
   // maxRetriesPerRequest: null is BullMQ's requirement — it refuses a finite budget, not a preference.
   const connection = new Redis(redis.url, { maxRetriesPerRequest: null });
-  const domainEvents = new Queue(QUEUE_DOMAIN_EVENTS, {
+  const mainQueue = new Queue(selected.name, {
     connection,
     prefix,
     // BullMQ stamps these onto the job at add time, so a queue built without them replays with
@@ -62,9 +68,9 @@ async function main(): Promise<void> {
     // a failed record kept forever instead of expiring with the inbox claim that guards it.
     defaultJobOptions: buildJobOptions(queue.consumerAttempts, queue.consumerBackoffMs),
   });
-  // Still no defaults here, for the reason queue.providers.ts gives: nothing consumes the DLQ, so
-  // retention rules would delete the record it exists to keep.
-  const dlq = new Queue(QUEUE_DOMAIN_EVENTS_DLQ, { connection, prefix });
+  // Still no defaults here: nothing consumes a DLQ, so retention rules would delete the record it
+  // exists to keep.
+  const dlq = new Queue(selected.dlq, { connection, prefix });
 
   // One connection: this reads at most `limit` rows, one at a time, and then exits.
   const pool = new Pool({ connectionString: database.url, max: 1 });
@@ -74,25 +80,25 @@ async function main(): Promise<void> {
     const [row] = await db
       .select({ processedAt: inbox.processedAt })
       .from(inbox)
-      .where(and(eq(inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(inbox.messageId, messageId)))
+      .where(and(eq(inbox.consumer, selected.consumer), eq(inbox.messageId, messageId)))
       .limit(1);
     return row?.processedAt ?? null;
   };
 
   try {
-    const summary = await replayDeadLetters(domainEvents, dlq, {
+    const summary = await replayDeadLetters(mainQueue, dlq, {
       limit,
       dryRun: !apply,
       inboxLookup,
       inboxRetentionMs: retention.inboxDays * DAY_MS,
       force,
-      jobOptionsFor: (eventType) => jobOptionsFor(eventType, queue.orderPaidAttempts),
+      jobOptionsFor: (eventType) => selected.jobOptionsFor(eventType, queue.orderPaidAttempts),
     });
 
     // The window is printed because the guard is only as good as its match with the deployment whose
     // inbox is being swept, and nothing here can detect a mismatch.
     console.log(
-      `\n--- dead-letter replay (${apply ? 'APPLY' : 'dry run'}, limit ${limit}, ` +
+      `\n--- dead-letter replay of ${selected.dlq} (${apply ? 'APPLY' : 'dry run'}, limit ${limit}, ` +
         `inbox window ${retention.inboxDays}d${force ? ', FORCED' : ''}) ---`,
     );
     if (summary.outcomes.length === 0) {
@@ -111,7 +117,7 @@ async function main(): Promise<void> {
       console.log('re-run with --apply to replay these messages');
     }
   } finally {
-    await domainEvents.close();
+    await mainQueue.close();
     await dlq.close();
     await connection.quit().catch(() => connection.disconnect());
     await pool.end();

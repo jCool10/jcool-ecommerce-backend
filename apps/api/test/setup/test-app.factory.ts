@@ -11,6 +11,7 @@ import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
 import { idServiceStub } from './id-service-stub';
 import { inventoryServiceStub } from './inventory-service-stub';
+import { paymentServiceStub } from './payment-service-stub';
 import { waitForRedisReady } from './redis-ready';
 import { TEMPORAL_TEST_NAMESPACE } from './temporal-server';
 import { temporalTaskQueueForCurrentSpec } from './temporal-task-queue';
@@ -38,9 +39,6 @@ export async function createTestApp(
   // logical db would let one file's TRUNCATE and cache keys reach into another's. See worker-resources.ts.
   process.env.DATABASE_URL = workerDatabaseUrl();
   process.env.REDIS_URL = workerRedisUrl();
-  // Payment defaults to the Stripe adapter, which refuses to construct without a webhook secret;
-  // provide a dummy so AppModule boots. Signed-webhook e2e can override with its own known secret.
-  process.env.PAYMENT_WEBHOOK_SECRET ??= 'whsec_test_not_a_real_secret_0000'; // schema needs ≥16 chars
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
@@ -48,7 +46,6 @@ export async function createTestApp(
   // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Assigned
   // unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's .env into
   // process.env, so from the second app onwards `??=` would inherit an untracked local file.
-  process.env.RECONCILE_ENABLED = 'false';
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
@@ -65,6 +62,7 @@ export async function createTestApp(
   process.env.USER_SERVICE_INTERNAL_URL = userService.url;
   process.env.ID_SERVICE_URL = (await idServiceStub()).url;
   process.env.INVENTORY_SERVICE_URL = (await inventoryServiceStub()).url;
+  process.env.PAYMENT_SERVICE_URL = (await paymentServiceStub()).url;
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
   // a file that leaves jobs waiting hands them to the next file that boots a worker, which then
   // applies events its own test never published. Same value for every app in a file, because a
@@ -77,13 +75,8 @@ export async function createTestApp(
   process.env.TEMPORAL_NAMESPACE = TEMPORAL_TEST_NAMESPACE;
   process.env.TEMPORAL_TASK_QUEUE = temporalTaskQueueForCurrentSpec();
   process.env.TEMPORAL_WORKFLOW_BUNDLE_PATH = inject('TEMPORAL_WORKFLOW_BUNDLE_PATH');
-  // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
-  // live path, billable and non-deterministic.
-  if (!('STRIPE_SECRET_KEY' in envOverrides)) {
-    delete process.env.STRIPE_SECRET_KEY;
-  }
-  // Same reason: `.env.example` ships an SMTP_URL, so a copied .env would put every suite in this
-  // file on the real transport, mailing a developer's local Mailpit from unrelated tests.
+  // Vitest loads the developer's .env, and `.env.example` ships an SMTP_URL, so a copied .env would
+  // put every suite in this file on the real transport, mailing a developer's local Mailpit.
   if (!('SMTP_URL' in envOverrides)) {
     delete process.env.SMTP_URL;
     delete process.env.MAIL_FROM;
@@ -111,8 +104,7 @@ export async function createTestApp(
       builder = builder.overrideProvider(override.provide).useValue(override.useValue);
     }
     const moduleRef = await builder.compile();
-    // `rawBody: true` mirrors main.ts so the payment webhook's raw-body signature check works in e2e.
-    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, rawBody: true });
+    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true });
     app.useLogger(app.get(Logger));
 
     // Mirror main.ts edge config so the e2e app exercises the same middleware.

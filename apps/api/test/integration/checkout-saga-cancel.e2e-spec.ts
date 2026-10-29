@@ -14,7 +14,6 @@ import {
   ORDER_REPOSITORY,
   type OrderRepositoryPort,
 } from '../../src/modules/order/application/ports/order-repository.port';
-import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import { authHeader } from '../setup/bearer.helper';
 import { eventually } from '../setup/eventually';
 import {
@@ -22,10 +21,11 @@ import {
   holdCalls,
   relayAuthorization,
   sagaHandle,
+  shortSessionFloorBeforeEach,
 } from '../setup/fixtures/checkout-saga.fixture';
 import {
   auditLedgerInvariants,
-  authorizeSession,
+  authorizePayment,
   buyerWithCart,
   checkout,
   openSession,
@@ -36,9 +36,9 @@ import {
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { type PaymentServiceStub, paymentServiceStub } from '../setup/payment-service-stub';
 
-const WEBHOOK_SECRET = 'whsec_e2e_checkout_saga_cancel_0001';
 const CANCEL_WAIT_MS = 3000;
 const GRACE_MS = Number(SHORT_DEADLINE_CHECKOUT_ENV.SAGA_AUTH_GRACE_SEC) * 1000;
 const ON_HAND = 5;
@@ -46,10 +46,11 @@ const ON_HAND = 5;
 describe('Checkout saga cancel (integration, real Temporal, real HTTP, fake Stripe)', () => {
   let app: INestApplication;
   let pool: Pool;
-  let gateway: FakeSignerGatewayAdapter;
+  let payment: PaymentServiceStub;
 
   beforeAll(async () => {
-    ({ app, pool, gateway } = await createTestAppWithFakeGateway(WEBHOOK_SECRET, {
+    payment = await paymentServiceStub();
+    ({ app, pool } = await createTestAppWithPool({
       ...SHORT_DEADLINE_CHECKOUT_ENV,
       CHECKOUT_CANCEL_WAIT_MS: String(CANCEL_WAIT_MS),
     }));
@@ -59,6 +60,7 @@ describe('Checkout saga cancel (integration, real Temporal, real HTTP, fake Stri
     () => [app],
     () => pool,
   );
+  shortSessionFloorBeforeEach();
 
   const server = () => app.getHttpServer();
   const cancel = (token: string, orderId: string) =>
@@ -90,8 +92,8 @@ describe('Checkout saga cancel (integration, real Temporal, real HTTP, fake Stri
   it('answers 409 while the payment is being taken, and the order still completes', async () => {
     const { sku, token, orderId } = await placed();
     const commit = holdCalls(app.get<OrderInventoryParticipantPort>(ORDER_INVENTORY_PARTICIPANT), 'commit');
-    const pay = await openSession(app, token, orderId).expect(201);
-    await authorizeSession(app, pay.body.providerSessionId as string, orderId);
+    await openSession(app, token, orderId).expect(201);
+    await authorizePayment(orderId);
     await relayAuthorization(app, orderId);
     await commit.waitForCalls(1);
 
@@ -106,8 +108,8 @@ describe('Checkout saga cancel (integration, real Temporal, real HTTP, fake Stri
   it('answers 409 from the saga once the payment is verified, though the order still reads PENDING', async () => {
     const { sku, token, orderId } = await placed();
     const confirming = holdCalls(app.get<OrderRepositoryPort>(ORDER_REPOSITORY), 'applyOrderChange');
-    const pay = await openSession(app, token, orderId).expect(201);
-    await authorizeSession(app, pay.body.providerSessionId as string, orderId);
+    await openSession(app, token, orderId).expect(201);
+    await authorizePayment(orderId);
     await relayAuthorization(app, orderId);
     await confirming.waitForCalls(1);
     expect((await readOrder(app, orderId)).status).toBe('PENDING');
@@ -161,8 +163,8 @@ describe('Checkout saga cancel (integration, real Temporal, real HTTP, fake Stri
 
   it('lets exactly one of a cancel and an authorization win the race', async () => {
     const { sku, token, orderId } = await placed();
-    const pay = await openSession(app, token, orderId).expect(201);
-    const intentId = await authorizeSession(app, pay.body.providerSessionId as string, orderId);
+    await openSession(app, token, orderId).expect(201);
+    await authorizePayment(orderId);
 
     const [cancelled] = await Promise.all([cancel(token, orderId), relayAuthorization(app, orderId)]);
 
@@ -171,14 +173,14 @@ describe('Checkout saga cancel (integration, real Temporal, real HTTP, fake Stri
     if (status === 'CANCELLED') {
       expect(cancelled.status).toBe(200);
       await eventually(
-        () => gateway.wasVoided(intentId),
-        (voided) => voided,
+        () => payment.sessionFor(orderId)?.status,
+        (attempt) => attempt === 'VOIDED',
       );
-      expect(gateway.captureCalls(intentId)).toBe(0);
+      expect(payment.providerCaptures(orderId)).toBe(0);
     } else {
       expect(status).toBe('PAID');
       expect(cancelled.status).toBe(409);
-      expect(gateway.captureCalls(intentId)).toBe(1);
+      expect(payment.providerCaptures(orderId)).toBe(1);
     }
     await expectCleanLedger(sku);
   });

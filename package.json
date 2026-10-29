@@ -17,7 +17,7 @@
     "test:e2e": "turbo run test:e2e",
     "dev": "turbo watch dev",
     "dev:link-env": "ln -sf ../../.env apps/api/.env",
-    "dev:gateway": "docker compose stop id-service && API_UPSTREAM=host.docker.internal:3000 AUTH_UPSTREAM=host.docker.internal:3002 INVENTORY_UPSTREAM=host.docker.internal:3004 ID_SERVICE_HOST=host.docker.internal ID_SERVICE_PORT=3003 docker compose up -d --no-deps gateway",
+    "dev:gateway": "docker compose stop id-service && API_UPSTREAM=host.docker.internal:3000 AUTH_UPSTREAM=host.docker.internal:3002 INVENTORY_UPSTREAM=host.docker.internal:3004 PAYMENT_UPSTREAM=host.docker.internal:3005 ID_SERVICE_HOST=host.docker.internal ID_SERVICE_PORT=3003 docker compose up -d --no-deps gateway",
     "format": "pnpm --filter @jcool/api format",
     "start": "pnpm --filter @jcool/api start",
     "start:dev": "pnpm --filter @jcool/api start:dev",

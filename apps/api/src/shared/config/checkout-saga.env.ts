@@ -193,12 +193,10 @@ export function CheckoutSagaEnv<TBase extends EnvBase>(Base: TBase) {
 
 // Defaults owned by other config namespaces; configuration.spec pins them to what actually loads.
 export const CROSS_RULE_FOREIGN_DEFAULTS = {
-  PAYMENT_CAPTURE_TIMEOUT_MS: 10_000,
+  PAYMENT_COMMAND_TIMEOUT_MS: 45_000,
   BREAKER_TIMEOUT_MS: 3000,
   INVENTORY_COMMAND_TIMEOUT_MS: 5000,
   QUEUE_WORKER_CONCURRENCY: 5,
-  PAYMENT_SESSION_MIN_TTL_SEC: 1800,
-  PAYMENT_SESSION_EXPIRY_MARGIN_SEC: 120,
   DB_POOL_MAX: API_DB_POOL_MAX_DEFAULT,
 } as const;
 
@@ -207,8 +205,8 @@ type NumericKey = keyof typeof DEFAULTS;
 
 // HTTP and the schedulers keep this many connections no worker can take.
 const POOL_SPARE = 5;
-// Production only: the buyer's minute to act on a session that opened right at the cutoff.
-const PRODUCTION_CUTOFF_MARGIN_SEC = 60;
+// order-events and api-events: each worker's handlers hold a connection for the claim transaction.
+const QUEUE_WORKERS = 2;
 
 type CrossRuleEnv = Partial<Record<NumericKey, number>> & {
   NODE_ENV?: string;
@@ -232,16 +230,13 @@ export function assertCheckoutSagaEnv(env: CrossRuleEnv): void {
     }
   }
 
-  // The slowest activity, a payment cancel, chains four gateway calls of up to T each: expire,
-  // retrieve, void and the void's read-back. Temporal does not stop an attempt it timed out.
+  // A payment command may spend its whole deadline before the activity gets to record the answer.
+  // Temporal does not stop an attempt it timed out.
   require(v('SAGA_ACTIVITY_TIMEOUT_MS') >
-    4 * v('PAYMENT_CAPTURE_TIMEOUT_MS') +
-      5000, `${shown('SAGA_ACTIVITY_TIMEOUT_MS')} must exceed 4 × ${shown('PAYMENT_CAPTURE_TIMEOUT_MS')} + 5000`);
+    v('PAYMENT_COMMAND_TIMEOUT_MS') +
+      5000, `${shown('SAGA_ACTIVITY_TIMEOUT_MS')} must exceed ${shown('PAYMENT_COMMAND_TIMEOUT_MS')} + 5000`);
   require(v('SAGA_ACTIVITY_TIMEOUT_MS') >
-    Math.max(
-      v('BREAKER_TIMEOUT_MS'),
-      2 * v('PAYMENT_CAPTURE_TIMEOUT_MS') + 1000,
-    ), `${shown('SAGA_ACTIVITY_TIMEOUT_MS')} must exceed max(${shown('BREAKER_TIMEOUT_MS')}, 2 × ${shown('PAYMENT_CAPTURE_TIMEOUT_MS')} + 1000)`);
+    v('BREAKER_TIMEOUT_MS'), `${shown('SAGA_ACTIVITY_TIMEOUT_MS')} must exceed ${shown('BREAKER_TIMEOUT_MS')}`);
   // An inventory command may spend its whole deadline before the activity gets to record the answer.
   require(v('SAGA_ACTIVITY_TIMEOUT_MS') >
     v('INVENTORY_COMMAND_TIMEOUT_MS') +
@@ -263,24 +258,20 @@ export function assertCheckoutSagaEnv(env: CrossRuleEnv): void {
     v(
       'CHECKOUT_INVARIANT_SETTLE_SEC',
     ), `${shown('CHECKOUT_INVARIANT_WINDOW_SEC')} must exceed ${shown('CHECKOUT_INVARIANT_SETTLE_SEC')}`);
-  require(v('QUEUE_WORKER_CONCURRENCY') +
+  require(QUEUE_WORKERS * v('QUEUE_WORKER_CONCURRENCY') +
     v('SAGA_ACTIVITY_CONCURRENCY') +
     v('SAGA_LOCAL_ACTIVITY_CONCURRENCY') +
     POOL_SPARE <=
     v(
       'DB_POOL_MAX',
-    ), `${shown('QUEUE_WORKER_CONCURRENCY')} + ${shown('SAGA_ACTIVITY_CONCURRENCY')} + ${shown('SAGA_LOCAL_ACTIVITY_CONCURRENCY')} + ${POOL_SPARE} must not exceed ${shown('DB_POOL_MAX')}`);
+    ), `${QUEUE_WORKERS} × ${shown('QUEUE_WORKER_CONCURRENCY')} + ${shown('SAGA_ACTIVITY_CONCURRENCY')} + ${shown('SAGA_LOCAL_ACTIVITY_CONCURRENCY')} + ${POOL_SPARE} must not exceed ${shown('DB_POOL_MAX')}`);
   require(v('SAGA_RETRY_CAP_MS') >=
     v('SAGA_RETRY_BASE_MS'), `${shown('SAGA_RETRY_CAP_MS')} must be at least ${shown('SAGA_RETRY_BASE_MS')}`);
   require(v('CHECKOUT_PAYMENT_DEADLINE_SEC') >
     v(
       'CHECKOUT_PAY_CUTOFF_SEC',
     ), `${shown('CHECKOUT_PAYMENT_DEADLINE_SEC')} must exceed ${shown('CHECKOUT_PAY_CUTOFF_SEC')}`);
-  const margin = env.NODE_ENV === NodeEnv.Production ? PRODUCTION_CUTOFF_MARGIN_SEC : 0;
-  require(v('CHECKOUT_PAY_CUTOFF_SEC') >=
-    v('PAYMENT_SESSION_MIN_TTL_SEC') +
-      v('PAYMENT_SESSION_EXPIRY_MARGIN_SEC') +
-      margin, `${shown('CHECKOUT_PAY_CUTOFF_SEC')} must be at least ${shown('PAYMENT_SESSION_MIN_TTL_SEC')} + ${shown('PAYMENT_SESSION_EXPIRY_MARGIN_SEC')}${margin ? ` + ${margin}` : ''}`);
+  // CHECKOUT_PAY_CUTOFF_SEC against the payment-service's session floor spans two processes: RUNBOOK.
 
   if (violations.length > 0) {
     throw new Error(`Environment validation failed -> ${violations.join('; ')}`);

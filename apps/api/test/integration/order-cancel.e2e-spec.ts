@@ -17,10 +17,9 @@ import {
   type SellableSku,
 } from '../setup/fixtures/order-flow.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { closeAppAfterAll, createTestAppWithFakeGateway, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
+import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 
-const WEBHOOK_SECRET = 'whsec_e2e_order_cancel_secret_01234';
 const STOCK = 10;
 const QUANTITY = 2;
 const ABSENT_ID = testId();
@@ -34,7 +33,7 @@ describe('Order cancel (integration, real Postgres + Redis)', () => {
   let sku: SellableSku;
 
   beforeAll(async () => {
-    ({ app, pool, db } = await createTestAppWithFakeGateway(WEBHOOK_SECRET));
+    ({ app, pool, db } = await createTestAppWithPool());
   });
   closeAppAfterAll(() => app);
   resetSagasAndDatabaseBeforeEach(
