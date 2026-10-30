@@ -22,7 +22,6 @@ import { HttpExceptionFilter } from '@jcool/platform/interface';
 import { DebugController } from '@shared/interface/controllers/debug.controller';
 import { CartModule } from '@modules/cart/cart.module';
 import { MediaModule } from '@modules/media/media.module';
-import { OrderModule } from '@modules/order/order.module';
 import { ProductModule } from '@modules/product/product.module';
 
 // ClsModule precedes ObservabilityLoggerModule so its correlation middleware mounts before pino;
@@ -54,7 +53,6 @@ import { ProductModule } from '@modules/product/product.module';
     CartModule,
     // Position carries no meaning here: Product reaches Media through MEDIA_FACADE in the DI graph.
     MediaModule,
-    OrderModule,
   ],
   controllers: [DebugController],
   providers: [

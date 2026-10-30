@@ -14,15 +14,6 @@ const COLUMNS = [
       pool.query(`INSERT INTO carts (id, user_id) VALUES ($2, $1)`, [userId, testId()]),
   },
   {
-    column: 'orders.user_id',
-    constraint: 'ck_orders_user_id_routable',
-    insert: (pool: Pool, userId: string) =>
-      pool.query(`INSERT INTO orders (id, user_id, currency, total_amount) VALUES ($2, $1, 'VND', 0)`, [
-        userId,
-        testId(),
-      ]),
-  },
-  {
     column: 'media_assets.uploaded_by',
     constraint: 'ck_media_assets_uploaded_by_routable',
     insert: (pool: Pool, userId: string) =>

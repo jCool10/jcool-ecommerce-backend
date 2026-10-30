@@ -66,6 +66,7 @@ export async function startStack(count = 3, { env = {}, freeNodes }: StackOption
       API_UPSTREAM: 'api:3000',
       INVENTORY_UPSTREAM: 'inventory:3000',
       PAYMENT_UPSTREAM: 'payment:3000',
+      ORDER_UPSTREAM: 'order:3000',
       GATEWAY_SHUTDOWN_DELAY: '0s',
       // Zero would be an endless grace period to Caddy.
       GATEWAY_GRACE_PERIOD: '1ms',

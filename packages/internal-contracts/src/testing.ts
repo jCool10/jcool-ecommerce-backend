@@ -1,3 +1,5 @@
+export * from './api/contract-cases';
+export * from './api/http-contract-driver';
 export * from './common/contract-mismatch';
 export * from './inventory/contract-cases';
 export * from './inventory/http-contract-driver';

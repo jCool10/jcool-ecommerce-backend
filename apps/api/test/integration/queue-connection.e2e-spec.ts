@@ -3,9 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
 import { QUEUE_CONNECTION, QueueLifecycle, queueToken } from '@jcool/messaging';
 import { RedisService } from '@jcool/platform/redis';
+import { API_EVENTS_QUEUE } from '../../src/shared/messaging/event-routes';
 import { closeAppAfterAll, obliterateQueueBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { createTestApp } from '../setup/test-app.factory';
@@ -22,7 +22,7 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
 
   beforeAll(async () => {
     app = await createTestApp({ QUEUE_CONSUMER_ATTEMPTS: '5', QUEUE_CONSUMER_BACKOFF_MS: '250' });
-    queue = app.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
+    queue = app.get<Queue>(queueToken(API_EVENTS_QUEUE));
     connection = app.get<Redis>(QUEUE_CONNECTION);
     prefix = app.get(ConfigService).getOrThrow<string>('queue.prefix');
   });
@@ -30,13 +30,13 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   closeAppAfterAll(() => app);
   obliterateQueueBeforeEach(() => [queue]);
 
-  it('publishes a job onto the order-events queue with the configured retention', async () => {
-    await queue.add('order.placed', job);
+  it('publishes a job onto the api-events queue with the configured retention', async () => {
+    await queue.add('catalog.product.changed', job);
 
     expect(await queue.getWaitingCount()).toBe(1);
     const waiting = await queue.getJobs(['waiting']);
     expect(waiting).toHaveLength(1);
-    expect(waiting[0].name).toBe('order.placed');
+    expect(waiting[0].name).toBe('catalog.product.changed');
     expect(waiting[0].data).toEqual(job);
     // Stamped at publish time: without it the worker would get jobs that never retry.
     expect(waiting[0].opts).toMatchObject({
@@ -48,9 +48,9 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
   });
 
   it('namespaces its keys under the configured prefix', async () => {
-    await queue.add('order.placed', job);
+    await queue.add('catalog.product.changed', job);
 
-    const keys = await connection.keys(`${prefix}:${ORDER_EVENTS_QUEUE}:*`);
+    const keys = await connection.keys(`${prefix}:${API_EVENTS_QUEUE}:*`);
     expect(keys.length).toBeGreaterThan(0);
   });
 
@@ -65,27 +65,27 @@ describe('BullMQ queue infrastructure (integration, real Redis)', () => {
 
   it('rejects a publish mid-reconnect instead of buffering it in memory', async () => {
     const isolated = await createTestApp();
-    const isolatedQueue = isolated.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
+    const isolatedQueue = isolated.get<Queue>(queueToken(API_EVENTS_QUEUE));
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
 
-    await isolatedQueue.add('order.placed', job);
+    await isolatedQueue.add('catalog.product.changed', job);
 
     // Only a reconnecting client consults the offline queue; the slow retry holds that state.
     isolatedConnection.options.retryStrategy = () => 5_000;
     isolatedConnection.stream.destroy();
     await vi.waitFor(() => expect(isolatedConnection.status).toBe('reconnecting'));
 
-    await expect(isolatedQueue.add('order.placed', job)).rejects.toThrow(/enableOfflineQueue/);
+    await expect(isolatedQueue.add('catalog.product.changed', job)).rejects.toThrow(/enableOfflineQueue/);
 
     await isolated.close();
   });
 
   it('closes the queue and its connection when the app shuts down', async () => {
     const isolated = await createTestApp();
-    const isolatedQueue = isolated.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
+    const isolatedQueue = isolated.get<Queue>(queueToken(API_EVENTS_QUEUE));
     const isolatedConnection = isolated.get<Redis>(QUEUE_CONNECTION);
 
-    await isolatedQueue.add('order.placed', job);
+    await isolatedQueue.add('catalog.product.changed', job);
     expect(isolatedConnection.status).toBe('ready');
 
     await isolated.close();

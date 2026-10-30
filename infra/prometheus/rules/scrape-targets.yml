@@ -31,3 +31,12 @@ groups:
         annotations:
           summary: 'Prometheus has not scraped the payment-service for 5 minutes'
           description: 'The payment-service is down, unreachable from Prometheus, or refusing the metrics token. Down, no checkout can open a payment session and no saga can capture or void one; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → PaymentScrapeDown.'
+
+      - alert: OrderScrapeDown
+        expr: up{job="jcool-order"} == 0 or absent(up{job="jcool-order"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the order-service for 5 minutes'
+          description: 'The order-service is down, unreachable from Prometheus, or refusing the metrics token. Down, no checkout starts or settles; in any case every saga and checker alert, the absent-metrics ones included, is blind until it is scraped again. RUNBOOK → The checkout saga → OrderScrapeDown.'

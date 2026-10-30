@@ -239,6 +239,13 @@
       "when": 1793155857334,
       "tag": "0033_drop_retired_stock_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793244705820,
+      "tag": "0034_drop_retired_payment_tables",
+      "breakpoints": true
     }
   ]
 }

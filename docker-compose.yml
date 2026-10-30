@@ -162,7 +162,6 @@ services:
       REDIS_URL: redis://redis:6379
       SEARCH_URL: http://elasticsearch:9200
       SEARCH_PASSWORD: ${SEARCH_PASSWORD:-jcool-local-search-pw-not-secret}
-      SMTP_URL: smtp://mailpit:1025
       STORAGE_ENDPOINT: http://minio:9000
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
@@ -175,15 +174,8 @@ services:
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
-      # Stock lives there; the token is the inventory-service's INTERNAL_CALLER_TOKEN_API below.
-      INVENTORY_SERVICE_URL: http://inventory-service:3000
-      INVENTORY_SERVICE_TOKEN: local-api-to-inventory-token-not-a-secret-00
-      # Payments too; the payment-service's INTERNAL_CALLER_TOKEN_API below.
-      PAYMENT_SERVICE_URL: http://payment-service:3000
-      PAYMENT_SERVICE_TOKEN: local-api-to-payment-token-not-a-secret-0000
-      TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_NAMESPACE: jcool
-      TEMPORAL_TASK_QUEUE: checkout-saga
+      # The order-service's API_SERVICE_TOKEN below: it reads carts and SKU views on /internal/v1.
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-api-token-not-a-secret-000000
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -197,15 +189,6 @@ services:
       minio-init:
         condition: service_completed_successfully
       gateway:
-        condition: service_started
-      # The app boots without it, but its saga worker would only retry until it came up.
-      temporal:
-        condition: service_healthy
-      # Same: a checkout only answers 503 until it is up.
-      inventory-service:
-        condition: service_started
-      # And `/pay` answers 502.
-      payment-service:
         condition: service_started
     # Probes with node (present in the image) because node:24-slim has no curl/wget.
     healthcheck:
@@ -424,6 +407,8 @@ services:
       ID_SERVICE_URL: http://gateway:4000
       # The inventory-service's USER_SERVICE_TOKEN below; it may read session epochs only.
       INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE: local-inventory-caller-token-not-a-secret-00
+      # The order-service's USER_SERVICE_TOKEN below: session epochs and the order.paid mail's summary.
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-user-token-not-a-secret-00000
     depends_on:
       user-migrate:
         condition: service_completed_successfully
@@ -483,8 +468,8 @@ services:
     networks:
       - jcool-net
 
-  # The gateway routes /admin/inventory here; the app's checkout saga calls its internal API.
-  # Also published on loopback, for checks that bypass the edge.
+  # The gateway routes /admin/inventory here; the order-service's checkout saga calls its internal
+  # API. Also published on loopback, for checks that bypass the edge.
   inventory-service:
     image: jcool-inventory-service:local
     pull_policy: never
@@ -507,6 +492,7 @@ services:
       USER_SERVICE_URL: http://user-service:3000
       USER_SERVICE_TOKEN: local-inventory-caller-token-not-a-secret-00
       INTERNAL_CALLER_TOKEN_API: local-api-to-inventory-token-not-a-secret-00
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-inventory-token-not-a-secret
       CATALOG_PUBLIC_URL: http://gateway:8080
       # Taken from .env, like the app's, so infra/prometheus/secrets/metrics-token matches both.
       METRICS_TOKEN:
@@ -569,8 +555,8 @@ services:
     networks:
       - jcool-net
 
-  # The gateway routes the provider's webhook here; the app's checkout saga calls its internal API.
-  # Also published on loopback, for checks that bypass the edge.
+  # The gateway routes the provider's webhook here; the order-service's checkout saga calls its
+  # internal API. Also published on loopback, for checks that bypass the edge.
   payment-service:
     image: jcool-payment-service:local
     pull_policy: never
@@ -584,10 +570,11 @@ services:
       # The gateway, and only the gateway, names the client.
       TRUST_PROXY: 1
       DATABASE_URL: postgresql://payment:${PAYMENT_POSTGRES_PASSWORD:-payment}@payment-postgres:5432/payment
-      # The app's Redis: payment.authorized goes onto its order-events queue.
+      # The shared Redis: payment.authorized goes onto the order-service's order-events queue.
       REDIS_URL: redis://redis:6379
       ID_SERVICE_URL: http://gateway:4000
       INTERNAL_CALLER_TOKEN_API: local-api-to-payment-token-not-a-secret-0000
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-payment-token-not-a-secret-0
       # Taken from .env, where the app read them before payments moved here. NODE_ENV=production
       # refuses to boot without a real sk_test_ STRIPE_SECRET_KEY and STRIPE_SUCCESS_URL there.
       PAYMENT_WEBHOOK_SECRET:
@@ -600,6 +587,106 @@ services:
       payment-migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+  # Checkout's own database, published on loopback like the payment-service's.
+  order-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-order-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ORDER_POSTGRES_HOST_PORT:-5437}:5432"
+    environment:
+      POSTGRES_USER: order
+      POSTGRES_PASSWORD: ${ORDER_POSTGRES_PASSWORD:-order}
+      POSTGRES_DB: order
+    volumes:
+      - orderpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order -d order"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  order-migrate:
+    build:
+      context: .
+      dockerfile: apps/order-service/Dockerfile
+    image: jcool-order-service:local
+    container_name: jcool-order-migrate
+    command: ['node', 'dist/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://order:${ORDER_POSTGRES_PASSWORD:-order}@order-postgres:5432/order
+    depends_on:
+      order-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  # The gateway routes /orders and /admin/orders here; it runs the checkout saga's Temporal worker.
+  # Also published on loopback, for checks that bypass the edge.
+  order-service:
+    image: jcool-order-service:local
+    pull_policy: never
+    container_name: jcool-order-service
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ORDER_SERVICE_HOST_PORT:-3006}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # The gateway, and only the gateway, names the client.
+      TRUST_PROXY: 1
+      DATABASE_URL: postgresql://order:${ORDER_POSTGRES_PASSWORD:-order}@order-postgres:5432/order
+      # The shared Redis: session epochs, the denylist, and the order-events queue.
+      REDIS_URL: redis://redis:6379
+      ID_SERVICE_URL: http://gateway:4000
+      AUTH_JWKS_URL: http://user-service:3000/.well-known/jwks.json
+      JWT_ISSUER: http://localhost:8080
+      JWT_AUDIENCE: jcool-api
+      # Each <TARGET>_SERVICE_TOKEN is that service's INTERNAL_CALLER_TOKEN_ORDER_SERVICE above.
+      USER_SERVICE_URL: http://user-service:3000
+      USER_SERVICE_TOKEN: local-order-to-user-token-not-a-secret-00000
+      # The app itself, never the gateway: the gateway answers /internal with 404.
+      API_SERVICE_URL: http://app:3000
+      API_SERVICE_TOKEN: local-order-to-api-token-not-a-secret-000000
+      INVENTORY_SERVICE_URL: http://inventory-service:3000
+      INVENTORY_SERVICE_TOKEN: local-order-to-inventory-token-not-a-secret
+      PAYMENT_SERVICE_URL: http://payment-service:3000
+      PAYMENT_SERVICE_TOKEN: local-order-to-payment-token-not-a-secret-0
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: jcool
+      TEMPORAL_TASK_QUEUE: checkout-saga
+      SMTP_URL: smtp://mailpit:1025
+      # Taken from .env, where the app read them before checkout moved here.
+      MAIL_FROM:
+      METRICS_TOKEN:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    depends_on:
+      order-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      # Readiness includes Temporal, so the service only reports healthy once the worker can poll.
+      temporal:
         condition: service_healthy
       gateway:
         condition: service_started
@@ -642,6 +729,7 @@ services:
       AUTH_UPSTREAM: ${AUTH_UPSTREAM:-user-service:3000}
       INVENTORY_UPSTREAM: ${INVENTORY_UPSTREAM:-inventory-service:3000}
       PAYMENT_UPSTREAM: ${PAYMENT_UPSTREAM:-payment-service:3000}
+      ORDER_UPSTREAM: ${ORDER_UPSTREAM:-order-service:3000}
       # Answers every write under /auth with 503, reads untouched. See RUNBOOK.md.
       AUTH_WRITE_FREEZE: ${AUTH_WRITE_FREEZE:-false}
     # Not on app: the id-service smoke brings up only this and id-service, and Caddy dials per request.
@@ -732,6 +820,7 @@ volumes:
   userpgdata:
   inventorypgdata:
   paymentpgdata:
+  orderpgdata:
   redisdata:
   esdata:
   miniodata:

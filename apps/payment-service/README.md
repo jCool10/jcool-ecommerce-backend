@@ -1,6 +1,6 @@
 # payment-service
 
-Owns payments and the checkout's TCC payment branch, from its own Postgres (`payment-postgres`): `payment_orders` (the per-order fence), `payments`, `webhook_events` and `outbox`. The api's checkout saga calls it over `/internal/v1/payments`; the gateway sends `POST /webhooks/payment` here and answers `/internal/*` with 404 on the public listener. Money is held with a Stripe Checkout Session in manual-capture mode and only moved by an explicit capture.
+Owns payments and the checkout's TCC payment branch, from its own Postgres (`payment-postgres`): `payment_orders` (the per-order fence), `payments`, `webhook_events` and `outbox`. The order-service's checkout saga and `/pay` call it over `/internal/v1/payments`; the gateway sends `POST /webhooks/payment` here and answers `/internal/*` with 404 on the public listener. Money is held with a Stripe Checkout Session in manual-capture mode and only moved by an explicit capture.
 
 ## API
 
@@ -13,13 +13,13 @@ Owns payments and the checkout's TCC payment branch, from its own Postgres (`pay
 | `POST /webhooks/payment` | Stripe's events, verified over the raw body with `PAYMENT_WEBHOOK_SECRET`. `200` once accepted (including a duplicate), `401` on a bad signature or a stale timestamp, `503` when Stripe could not confirm the event yet. |
 | `GET /health/live`, `GET /health/ready`, `GET /metrics` | As in the api. |
 
-Every command is idempotent per order through `payment_orders`, so retrying after a lost answer is safe. `400` is a malformed id or body. Anything the participant throws is `503` with `Retry-After: 1`; the caller repeats it, which is safe. When Stripe failed or its breaker is open, the body carries `code: "PROVIDER_UNAVAILABLE"`, so the api's `payment-service` breaker does not count it: the service itself is up, and status reads and cancels that need no Stripe still answer.
+Every command is idempotent per order through `payment_orders`, so retrying after a lost answer is safe. `400` is a malformed id or body. Anything the participant throws is `503` with `Retry-After: 1`; the caller repeats it, which is safe. When Stripe failed or its breaker is open, the body carries `code: "PROVIDER_UNAVAILABLE"`, so the caller's `payment-service` breaker does not count it: the service itself is up, and status reads and cancels that need no Stripe still answer.
 
-`/internal/*` takes `Authorization: Bearer <INTERNAL_CALLER_TOKEN_API>`, or `INTERNAL_CALLER_TOKEN_API_PREVIOUS` while rotating. Nothing is throttled: the api calls from private addresses, and Stripe only retries harder when refused.
+`/internal/*` takes `Authorization: Bearer <INTERNAL_CALLER_TOKEN_ORDER_SERVICE>` from the order-service, or `<INTERNAL_CALLER_TOKEN_API>` from the api, which keeps its routes for a rollback of the checkout cut-over; each `_PREVIOUS` is also accepted while rotating. Nothing is throttled: the callers call from private addresses, and Stripe only retries harder when refused.
 
 ## Events
 
-An authorization recorded from a webhook writes `payment.authorized` to `outbox` in the same transaction. The relay moves it onto the api's `order-events` queue in the shared Redis, on the long ladder (`ORDER_PAID_CONSUMER_ATTEMPTS` attempts, `order-paid` backoff), where the api signals the checkout saga. The service consumes no queue, so it runs no worker and has no inbox; webhook deduplication lives in `webhook_events`.
+An authorization recorded from a webhook writes `payment.authorized` to `outbox` in the same transaction. The relay moves it onto the order-service's `order-events` queue in the shared Redis, on the long ladder (`ORDER_PAID_CONSUMER_ATTEMPTS` attempts, `order-paid` backoff), where the order-service signals the checkout saga. The service consumes no queue, so it runs no worker and has no inbox; webhook deduplication lives in `webhook_events`.
 
 ## Ids
 
@@ -33,10 +33,11 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | --- | --- | --- |
 | `ID_SERVICE_URL` | required | The gateway's internal listener, never a replica. |
 | `ID_SERVICE_TIMEOUT_MS` | `2000` | |
-| `INTERNAL_CALLER_TOKEN_API` | required | The api's `PAYMENT_SERVICE_TOKEN`, at least 32 characters. Without one the service refuses to boot. |
-| `INTERNAL_CALLER_TOKEN_API_PREVIOUS` | unset | Also accepted, while the api moves to a new token. |
-| `QUEUE_PREFIX` | `bull` | Must equal the api's. |
-| `ORDER_PAID_CONSUMER_ATTEMPTS` | `15` | 1 to 30. Stamped on every `payment.authorized` job; keep it equal to the api's. |
+| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` | unset | The order-service's `PAYMENT_SERVICE_TOKEN`, at least 32 characters. |
+| `INTERNAL_CALLER_TOKEN_API` | unset | The api's `PAYMENT_SERVICE_TOKEN`, at least 32 characters. With no caller token at all the service refuses to boot. |
+| `INTERNAL_CALLER_TOKEN_*_PREVIOUS` | unset | Also accepted, while that caller moves to a new token. |
+| `QUEUE_PREFIX` | `bull` | Must equal the order-service's. |
+| `ORDER_PAID_CONSUMER_ATTEMPTS` | `15` | 1 to 30. Stamped on every `payment.authorized` job; keep it equal to the order-service's. |
 | `OUTBOX_RELAY_ENABLED`, `OUTBOX_POLL_MS`, `OUTBOX_BATCH_SIZE` | `true`, `1000`, `100` | |
 | `PAYMENT_WEBHOOK_SECRET` | required | At least 16 characters. |
 | `PAYMENT_WEBHOOK_TOLERANCE_SEC` | `300` | |

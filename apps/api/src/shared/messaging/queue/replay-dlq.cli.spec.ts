@@ -12,16 +12,16 @@ const built = vi.hoisted(() => ({
 const outcome = vi.hoisted(() => ({
   skipped: {
     messageId: '0193c1f0-1111-7000-8000-000000000001',
-    eventType: 'order.placed',
+    eventType: 'catalog.category.renamed',
     status: 'skipped' as const,
     failedReason: 'ECONNREFUSED postgres:5432',
     detail: 'already applied at 2026-01-01T00:00:00.000Z, a replay would be a silent no-op',
   },
   replayed: {
     messageId: '0193c1f0-2222-7000-8000-000000000002',
-    eventType: 'order.paid',
+    eventType: 'catalog.product.changed',
     status: 'replayed' as const,
-    failedReason: 'handler threw TypeError',
+    failedReason: 'search engine unavailable',
   },
 }));
 
@@ -118,22 +118,22 @@ describe('replay-dlq CLI', () => {
   // Replayed without the app's ladder, a message that already failed gets no retry budget. The DLQ
   // has no consumer, so retention defaults there would delete the record it exists to keep.
   it("replays on the app's retry ladders and keeps job defaults off the DLQ", async () => {
-    await runCli('--queue', 'order-events');
+    await runCli('--queue', 'api-events');
 
-    expect(options('order-events')?.defaultJobOptions).toEqual(buildJobOptions(ATTEMPTS, BACKOFF_MS));
-    for (const eventType of ['order.paid', 'payment.authorized']) {
+    expect(options('api-events')?.defaultJobOptions).toEqual(buildJobOptions(ATTEMPTS, BACKOFF_MS));
+    for (const eventType of ['catalog.product.changed', 'catalog.category.renamed']) {
       expect(built.replayOptions?.jobOptionsFor(eventType), eventType).toEqual({
         attempts: ORDER_PAID_ATTEMPTS,
         backoff: { type: ORDER_PAID_BACKOFF },
       });
     }
-    expect(options('order-events-dlq')).toBeDefined();
-    expect(options('order-events-dlq')?.defaultJobOptions).toBeUndefined();
+    expect(options('api-events-dlq')).toBeDefined();
+    expect(options('api-events-dlq')?.defaultJobOptions).toBeUndefined();
   });
 
   // Redis is the only other place the parked reason exists, and this tool runs when the app is broken.
   it('prints the labelled parked reason on each line, before the skip verdict', async () => {
-    await runCli('--queue', 'order-events');
+    await runCli('--queue', 'api-events');
     const skipped = lineFor(outcome.skipped.messageId);
 
     expect(lineFor(outcome.replayed.messageId)).toContain(`[parked: ${outcome.replayed.failedReason}]`);
@@ -141,13 +141,14 @@ describe('replay-dlq CLI', () => {
     expect(skipped.indexOf(outcome.skipped.failedReason)).toBeLessThan(skipped.indexOf(outcome.skipped.detail));
   });
 
-  it.each([[[]], [['--queue', 'domain-events']]])(
+  // order-events included: its inbox lives in the order-service's database, not this one.
+  it.each([[[]], [['--queue', 'domain-events']], [['--queue', 'order-events']]])(
     'exits non-zero and lists the valid queues for %j',
     async (args: string[]) => {
       await runCli(...args);
 
       expect(process.exitCode).toBe(1);
-      expect(errors.join('\n')).toContain('order-events, api-events');
+      expect(errors.join('\n')).toContain('--queue must be one of: api-events');
       expect(built.queues).toEqual([]);
     },
   );

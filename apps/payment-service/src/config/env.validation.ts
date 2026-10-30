@@ -45,6 +45,16 @@ export class EnvironmentVariables extends PlatformEnv {
   @MinLength(32)
   INTERNAL_CALLER_TOKEN_API_PREVIOUS?: string;
 
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS?: string;
+
   // A blank prefix would produce a different key layout rather than fall back to the default.
   @IsOptional()
   @IsString()

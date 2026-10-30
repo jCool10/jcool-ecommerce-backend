@@ -69,6 +69,16 @@ export class EnvironmentVariables extends PlatformEnv {
   @MinLength(32)
   INTERNAL_CALLER_TOKEN_API_PREVIOUS?: string;
 
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS?: string;
+
   // The public catalog the stock seed lists variants from.
   @IsUrl(HTTP_URL)
   CATALOG_PUBLIC_URL!: string;

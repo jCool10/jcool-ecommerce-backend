@@ -1,4 +1,4 @@
-import { isOneOf, isRecord } from '../common/body-guards';
+import { isNonEmptyString, isOneOf, isRecord } from '../common/body-guards';
 import {
   CANCEL_OUTCOME_STATUS,
   CAPTURE_OUTCOME_STATUS,
@@ -23,7 +23,6 @@ const isCaptureOutcome = isOneOf(CAPTURE_OUTCOMES);
 const isCancelOutcome = isOneOf(CANCEL_OUTCOMES);
 const isPaymentOrderStatus = isOneOf(PAYMENT_ORDER_STATUSES);
 
-const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 const isOptionalString = (value: unknown) => value === undefined || typeof value === 'string';
 
 export function isOpenSessionResponse(body: unknown): body is OpenSessionResponse {

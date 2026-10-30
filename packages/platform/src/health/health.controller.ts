@@ -1,10 +1,17 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOkResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
-import { HealthCheck, HealthCheckResult, HealthCheckService } from '@nestjs/terminus';
+import {
+  HealthCheck,
+  HealthCheckResult,
+  HealthCheckService,
+  type HealthIndicatorResult,
+  HealthIndicatorService,
+} from '@nestjs/terminus';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '../throttler';
 import { Public } from '../rbac';
 import { DrizzleHealthIndicator, RedisHealthIndicator, ShutdownHealthIndicator } from './indicators';
+import { type ReadinessCheck, ReadinessCheckRegistry } from './readiness-check.registry';
 
 // Probes are unauthenticated and arrive on a schedule: a 429 would pull a healthy instance from
 // service, and every tier left active costs a Redis round-trip on the route whose whole job is to
@@ -20,6 +27,8 @@ export class HealthController {
     private readonly drizzleHealth: DrizzleHealthIndicator,
     private readonly redisHealth: RedisHealthIndicator,
     private readonly shutdownHealth: ShutdownHealthIndicator,
+    private readonly indicators: HealthIndicatorService,
+    private readonly registry: ReadinessCheckRegistry,
   ) {}
 
   // Checks no dependency: a flaky DB/Redis must not make an orchestrator kill a healthy process.
@@ -41,6 +50,17 @@ export class HealthController {
       () => this.shutdownHealth.isHealthy('shutdown'),
       () => this.drizzleHealth.isHealthy('database'),
       () => this.redisHealth.isHealthy('redis'),
+      ...this.registry.all().map((check) => () => this.run(check)),
     ]);
+  }
+
+  private async run({ name, check }: ReadinessCheck): Promise<HealthIndicatorResult> {
+    const indicator = this.indicators.check(name);
+    try {
+      await check();
+      return indicator.up();
+    } catch (error: unknown) {
+      return indicator.down({ message: error instanceof Error ? error.message : String(error) });
+    }
   }
 }

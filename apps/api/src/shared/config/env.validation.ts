@@ -1,12 +1,10 @@
 import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
 import { MIN_INBOX_RETENTION_DAYS } from '@jcool/messaging';
-import { CheckoutSagaEnv, assertCheckoutSagaEnv } from './checkout-saga.env';
 import {
   AppEnv,
   DatabaseEnv,
   EmptyEnv,
   IsStrictBoolean,
-  MailEnv,
   NodeEnv,
   ObservabilityEnv,
   RedisEnv,
@@ -17,16 +15,18 @@ import {
   validateEnv,
 } from '@jcool/platform/config';
 
-const PlatformEnv = RetentionEnv(
-  MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
-);
-const ApiEnv = CheckoutSagaEnv(PlatformEnv);
+const PlatformEnv = RetentionEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv)))))));
 
 const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
 
+// What configuration.ts loads for an unset var; configuration.spec pins the two together.
+export const POOL_RULE_DEFAULTS = { QUEUE_WORKER_CONCURRENCY: 5, DB_POOL_MAX: 10 } as const;
+// HTTP and the schedulers keep this many connections the api-events worker cannot take.
+const POOL_SPARE = 5;
+
 /** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS. */
-export class EnvironmentVariables extends ApiEnv {
+export class EnvironmentVariables extends PlatformEnv {
   // @IsNotEmpty because a blank prefix would silently produce a different, colliding key layout
   // rather than falling back to the default.
   @IsOptional()
@@ -86,24 +86,11 @@ export class EnvironmentVariables extends ApiEnv {
   @Max(1000)
   OUTBOX_BATCH_SIZE?: number;
 
-  // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  RETENTION_IDEMPOTENCY_GRACE_SEC?: number;
-
   @IsOptional()
   @StrictInt()
   @IsInt()
   @Min(1)
   RETENTION_OUTBOX_DAYS?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  RETENTION_REJECTED_ORDER_DAYS?: number;
 
   // A correctness bound: while the queue can still redeliver a message, its claim is the only thing
   // stopping the effect being applied twice. The floor is DERIVED from the queue's failed-job
@@ -282,43 +269,18 @@ export class EnvironmentVariables extends ApiEnv {
   @Min(100)
   ID_SERVICE_TIMEOUT_MS?: number;
 
-  @IsUrl(HTTP_URL)
-  INVENTORY_SERVICE_URL!: string;
-
-  // The inventory-service's INTERNAL_CALLER_TOKEN_API.
+  // Optional, like every caller token: the guard is what refuses a boot with none.
+  @IsOptional()
   @IsString()
   @MinLength(32)
-  INVENTORY_SERVICE_TOKEN!: string;
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
 
   @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(100)
-  INVENTORY_COMMAND_TIMEOUT_MS?: number;
-
-  @IsUrl(HTTP_URL)
-  PAYMENT_SERVICE_URL!: string;
-
-  // The payment-service's INTERNAL_CALLER_TOKEN_API.
   @IsString()
   @MinLength(32)
-  PAYMENT_SERVICE_TOKEN!: string;
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS?: string;
 
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1000)
-  PAYMENT_COMMAND_TIMEOUT_MS?: number;
-
-  // Duration form. How long after an order is paid a user the directory does not know is still
-  // worth waiting for.
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  USER_DIRECTORY_NOT_FOUND_GRACE?: string;
-
-  // order.paid (user-service) and catalog events (search engine) wait on another service, so they outlast
-  // the default ladder.
+  // Catalog events wait on the search engine, so they outlast the default ladder.
   @IsOptional()
   @StrictInt()
   @IsInt()
@@ -342,6 +304,12 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
     );
   }
-  assertCheckoutSagaEnv(env);
+  const concurrency = env.QUEUE_WORKER_CONCURRENCY ?? POOL_RULE_DEFAULTS.QUEUE_WORKER_CONCURRENCY;
+  const poolMax = env.DB_POOL_MAX ?? POOL_RULE_DEFAULTS.DB_POOL_MAX;
+  if (concurrency + POOL_SPARE > poolMax) {
+    throw new Error(
+      `Environment validation failed -> QUEUE_WORKER_CONCURRENCY (${concurrency}) + ${POOL_SPARE} must not exceed DB_POOL_MAX (${poolMax})`,
+    );
+  }
   return env;
 }

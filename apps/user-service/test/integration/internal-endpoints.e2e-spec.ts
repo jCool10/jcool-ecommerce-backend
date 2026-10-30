@@ -12,6 +12,8 @@ import { inProcessIdGenerator } from '../setup/test-app.factory';
 const PREVIOUS_INTERNAL_API_TOKEN = 'e2e-internal-api-token-previous-not-a-secret-0';
 const INVENTORY_SERVICE_TOKEN = 'e2e-inventory-service-caller-token-not-a-secret';
 const PREVIOUS_INVENTORY_SERVICE_TOKEN = 'e2e-inventory-service-previous-token-not-a-secret';
+const ORDER_SERVICE_TOKEN = 'e2e-order-service-caller-token-not-a-secret-0';
+const PREVIOUS_ORDER_SERVICE_TOKEN = 'e2e-order-service-previous-token-not-a-secret-0';
 // Past the default tier's 100 per minute.
 const BURST = 150;
 
@@ -26,6 +28,8 @@ describe('Internal service-to-service API (integration)', () => {
       INTERNAL_API_TOKEN_PREVIOUS: PREVIOUS_INTERNAL_API_TOKEN,
       INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE: INVENTORY_SERVICE_TOKEN,
       INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS: PREVIOUS_INVENTORY_SERVICE_TOKEN,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS: PREVIOUS_ORDER_SERVICE_TOKEN,
     }));
     await redisOf(app).flushdb();
   });
@@ -89,6 +93,17 @@ describe('Internal service-to-service API (integration)', () => {
       await internal(`/sessions/${user.id}/epoch`, PREVIOUS_INVENTORY_SERVICE_TOKEN).expect(200);
       await internal(`/users/${user.id}/summary`, INVENTORY_SERVICE_TOKEN).expect(403);
       await internal('/cutover/digest', INVENTORY_SERVICE_TOKEN).expect(403);
+    });
+
+    // Its auth reads epochs, and the order.paid mail reads the buyer's address.
+    it('lets the order-service read an epoch and a user summary, but not the cutover digest', async () => {
+      const { user } = await createTestUser(app);
+
+      for (const token of [ORDER_SERVICE_TOKEN, PREVIOUS_ORDER_SERVICE_TOKEN]) {
+        await internal(`/sessions/${user.id}/epoch`, token).expect(200);
+        await internal(`/users/${user.id}/summary`, token).expect(200);
+      }
+      await internal('/cutover/digest', ORDER_SERVICE_TOKEN).expect(403);
     });
   });
 

@@ -16,17 +16,10 @@ const BUYER_ROUTES: Route[] = [
   ['patch', `/cart/items/${ID}`],
   ['delete', `/cart/items/${ID}`],
   ['delete', '/cart'],
-  ['post', '/orders'],
-  ['get', '/orders'],
-  ['get', `/orders/${ID}`],
-  ['post', `/orders/${ID}/cancel`],
-  ['post', `/orders/${ID}/pay`],
 ];
 
+// The order routes are the order-service's, pinned by its own order-authz suite.
 const ADMIN_ROUTES: Route[] = [
-  ['get', '/admin/orders'],
-  ['get', `/admin/orders/${ID}`],
-  ['post', `/admin/orders/${ID}/cancel`],
   ['post', '/admin/categories'],
   ['patch', `/admin/categories/${ID}`],
   ['delete', `/admin/categories/${ID}`],

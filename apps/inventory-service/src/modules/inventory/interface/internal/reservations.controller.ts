@@ -44,7 +44,7 @@ import { LockBudgetExhaustedFilter, RETRY_AFTER_SEC } from './lock-budget-exhaus
 @SkipThrottle({ [DEFAULT_THROTTLER]: true, [ACCOUNT_THROTTLER]: true })
 @UseGuards(CallerTokenGuard)
 @UseFilters(LockBudgetExhaustedFilter)
-@InternalCallers('api')
+@InternalCallers('api', 'order-service')
 @Controller(RESERVATIONS_PREFIX)
 export class ReservationsController {
   constructor(@Inject(INVENTORY_PARTICIPANT) private readonly participant: InventoryParticipant) {}

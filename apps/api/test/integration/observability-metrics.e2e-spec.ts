@@ -9,8 +9,21 @@ import { createTestApp } from '../setup/test-app.factory';
 const INFRA = resolve(__dirname, '../../../../infra');
 // Scraped from Prometheus itself, Loki and the id-service, not from the api.
 const NOT_THE_API = /^(up|loki_\w+|id_clock_\w+)$/;
-// Recorded only by the inventory-service or the payment-service, each checking them on its own /metrics.
-const OWNED_ELSEWHERE = new Set<string>(['payment_authorized_uncaptured_oldest_seconds']);
+// Recorded only by the order-service or a participant, each checking them on its own /metrics.
+const OWNED_ELSEWHERE = new Set<string>([
+  'payment_authorized_uncaptured_oldest_seconds',
+  'orders_created_total',
+  'order_value_minor',
+  'checkout_saga_overdue',
+  'checkout_saga_closed_abnormally',
+  'checkout_saga_task_queue_pollers',
+  'checkout_saga_task_queue_backlog_age_seconds',
+  'checkout_saga_engine_up',
+  'checkout_invariant_violations',
+  'checkout_invariant_check_total',
+  'saga_step_total',
+  'saga_compensation_total',
+]);
 
 describe('Metrics endpoint (integration)', () => {
   let app: INestApplication;

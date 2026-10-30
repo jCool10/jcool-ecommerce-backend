@@ -33,7 +33,7 @@ export default () => ({
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
   },
   internalApi: {
-    callers: callerTokensFromEnv(['api']),
+    callers: callerTokensFromEnv(['api', 'order-service']),
   },
   catalog: {
     publicUrl: process.env.CATALOG_PUBLIC_URL,

@@ -5,7 +5,8 @@ import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { decode } from '@jcool/id-codec';
 import { authHeader } from '../setup/bearer.helper';
-import { addToCart, checkout, seedSellableSku } from '../setup/fixtures/order-flow.fixture';
+import { addToCart } from '../setup/cart.helper';
+import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { STUB_NODE_ID, idServiceStub, testId } from '../setup/id-service-stub';
@@ -28,20 +29,14 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
     for (const { id } of rows) expect(decode(id).nodeId, id).toBe(STUB_NODE_ID);
   };
 
-  it('mints the cart, order and everything under the order through the id-service', async () => {
-    const sku = await seedSellableSku(app, { onHand: 5 });
+  it('mints the cart and its lines through the id-service', async () => {
+    const sku = await createTestProduct(app);
     const { accessToken } = await createTestPrincipal(app);
 
     await addToCart(app, accessToken, sku.variantId, 2);
-    const order = await checkout(app, accessToken).expect(201);
-    const orderId = order.body.id as string;
 
-    expect(decode(orderId).nodeId, orderId).toBe(STUB_NODE_ID);
     await expectMintedIds('SELECT id FROM carts');
     await expectMintedIds('SELECT id FROM cart_items');
-    await expectMintedIds('SELECT id FROM order_items WHERE order_id = $1', [orderId]);
-    await expectMintedIds('SELECT id FROM idempotency_keys');
-    await expectMintedIds('SELECT id FROM outbox');
   });
 
   it('mints catalog ids through the id-service', async () => {
@@ -69,10 +64,11 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
 
   it('refuses a uuid where an id belongs, and 404s a routable id nobody minted', async () => {
     const { accessToken } = await createTestPrincipal(app);
-    const unknown = testId();
+    const line = (skuId: string) =>
+      request(app.getHttpServer()).patch(`/cart/items/${skuId}`).set(authHeader(accessToken)).send({ quantity: 1 });
 
-    await request(app.getHttpServer()).get(`/orders/${randomUUID()}`).set(authHeader(accessToken)).expect(400);
-    await request(app.getHttpServer()).get(`/orders/${unknown}`).set(authHeader(accessToken)).expect(404);
+    await line(randomUUID()).expect(400);
+    await line(testId()).expect(404);
     await request(app.getHttpServer())
       .post('/cart/items')
       .set(authHeader(accessToken))
@@ -81,7 +77,7 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
   });
 
   it('answers 503 and writes nothing when the id service cannot mint', async () => {
-    const sku = await seedSellableSku(app, { onHand: 5 });
+    const sku = await createTestProduct(app);
     const { accessToken } = await createTestPrincipal(app);
     (await idServiceStub()).fail(503);
 

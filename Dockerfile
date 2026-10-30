@@ -1,5 +1,6 @@
 # Node 24: current deps require Node >=22 (undici, testcontainers, dependency-cruiser, commander).
-# Debian slim, not Alpine: the Temporal worker's native core ships glibc builds only.
+# Debian slim while a rollback can still put the Temporal worker back in the api: its native core
+# ships glibc builds only.
 FROM node:24-slim AS builder
 WORKDIR /repo
 # pnpm version comes from the root `packageManager` field.

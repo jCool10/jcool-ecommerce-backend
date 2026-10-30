@@ -45,9 +45,16 @@ describe('validate', () => {
   // Only the guard refuses a service with no caller at all, so a caller can be added or dropped while
   // the service still runs the code that predates it.
   it('takes every caller token as optional, but none shorter than 32 characters', () => {
-    const tokens = ['INTERNAL_CALLER_TOKEN_API', 'INTERNAL_CALLER_TOKEN_API_PREVIOUS', 'USER_SERVICE_TOKEN'];
+    const tokens = [
+      'INTERNAL_CALLER_TOKEN_API',
+      'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
+      'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+      'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
+      'USER_SERVICE_TOKEN',
+    ];
 
     expect(refusal({ ...BASE, INTERNAL_CALLER_TOKEN_API: 'a'.repeat(32) })).toBeNull();
+    expect(refusal({ ...BASE, INTERNAL_CALLER_TOKEN_ORDER_SERVICE: 'o'.repeat(32) })).toBeNull();
     expect(tokens.filter((name) => refusal({ ...BASE, [name]: 'a'.repeat(31) })?.includes(name))).toEqual(tokens);
   });
 
@@ -97,6 +104,8 @@ describe('configuration', () => {
     'INVENTORY_HOLD_SWEEP_BATCH_SIZE',
     'INTERNAL_CALLER_TOKEN_API',
     'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
+    'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+    'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
     'USER_SERVICE_URL',
     'USER_SERVICE_TOKEN',
     'USER_SERVICE_TIMEOUT_MS',
@@ -137,11 +146,16 @@ describe('configuration', () => {
     expect(budgets).toEqual([3, 3]);
   });
 
-  it('accepts the api as its only caller, current and previous token', () => {
-    process.env.INTERNAL_CALLER_TOKEN_API = 'current';
-    process.env.INTERNAL_CALLER_TOKEN_API_PREVIOUS = 'previous';
+  it('accepts the api and the order-service as callers, each with a current and previous token', () => {
+    process.env.INTERNAL_CALLER_TOKEN_API = 'api-current';
+    process.env.INTERNAL_CALLER_TOKEN_API_PREVIOUS = 'api-previous';
+    process.env.INTERNAL_CALLER_TOKEN_ORDER_SERVICE = 'order-current';
+    process.env.INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS = 'order-previous';
 
-    expect(configuration().internalApi.callers).toEqual({ api: ['current', 'previous'] });
+    expect(configuration().internalApi.callers).toEqual({
+      api: ['api-current', 'api-previous'],
+      'order-service': ['order-current', 'order-previous'],
+    });
   });
 
   it('maps its user-service credentials onto the keys the shared client reads', () => {

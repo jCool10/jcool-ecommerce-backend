@@ -39,3 +39,11 @@ scrape_configs:
       credentials_file: /etc/prometheus/secrets/metrics-token
     static_configs:
       - targets: ['payment-service:3000']
+
+  - job_name: jcool-order
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics-token
+    static_configs:
+      - targets: ['order-service:3000']

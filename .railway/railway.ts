@@ -10,12 +10,14 @@ const ID_ETCD_PORT = '2379';
 const USER_SERVICE_PORT = '3000';
 const INVENTORY_SERVICE_PORT = '3000';
 const PAYMENT_SERVICE_PORT = '3000';
+const ORDER_SERVICE_PORT = '3000';
 const PROMETHEUS_PORT = '9090';
 const GRAFANA_PORT = '3000';
 const LOKI_PORT = '3100';
 const ELASTICSEARCH_PORT = '9200';
 const TEMPORAL_PORT = '7233';
 const TEMPORAL_NAMESPACE = 'jcool';
+const TEMPORAL_TASK_QUEUE = 'checkout-saga';
 
 // Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
 const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
@@ -23,14 +25,16 @@ const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
-  // Set by hand at a service cut-over (RUNBOOK), unset otherwise.
+  // Set by hand at a service cut-over (RUNBOOK), unset otherwise. Read only by a rollback build now.
   'CHECKOUT_INVARIANT_NOT_BEFORE',
+  // The order-service's caller token, pair and rotation slot, for carts and SKU views.
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
   'LOG_LEVEL',
   'MAIL_FROM',
   // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.
   'METRICS_TOKEN',
   'NODE_ENV',
-  'PAYMENT_WEBHOOK_SECRET',
   'POSTGRES_DB',
   'POSTGRES_HOST_PORT',
   'POSTGRES_PASSWORD',
@@ -42,9 +46,6 @@ const API_VARIABLES = [
   'STORAGE_BUCKET',
   'STORAGE_ENDPOINT',
   'STORAGE_SECRET_ACCESS_KEY',
-  'STRIPE_CANCEL_URL',
-  'STRIPE_SECRET_KEY',
-  'STRIPE_SUCCESS_URL',
   'SWAGGER_ENABLED',
   'THROTTLE_ENABLED',
   // Flipped by hand with the public domain (RUNBOOK), so an apply never reverts it.
@@ -64,6 +65,9 @@ const USER_SERVICE_VARIABLES = [
   // The inventory-service's caller token, allowed to read session epochs only.
   'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE',
   'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS',
+  // The order-service's, for session epochs and the order.paid mail's user summary.
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
   'JWT_ACCESS_TTL',
   'JWT_AUDIENCE',
   'JWT_ES256_ACTIVE_KID',
@@ -77,18 +81,30 @@ const USER_SERVICE_VARIABLES = [
   'THROTTLE_ENABLED',
 ];
 
-// The api's caller token, pair and rotation slot; the api references the first one.
-const INVENTORY_SERVICE_VARIABLES = ['INTERNAL_CALLER_TOKEN_API', 'INTERNAL_CALLER_TOKEN_API_PREVIOUS'];
+// A caller token per caller, pair and rotation slot; each caller references the first one. The api's
+// stays until a rollback can no longer bring checkout back to it.
+const INVENTORY_SERVICE_VARIABLES = [
+  'INTERNAL_CALLER_TOKEN_API',
+  'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
+];
 
-// The same pair, plus the webhook secret and the provider's keys.
+// The same pairs, plus the webhook secret and the provider's keys.
 const PAYMENT_SERVICE_VARIABLES = [
   'INTERNAL_CALLER_TOKEN_API',
   'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
   'PAYMENT_WEBHOOK_SECRET',
   'STRIPE_SECRET_KEY',
   'STRIPE_SUCCESS_URL',
   'STRIPE_CANCEL_URL',
 ];
+
+// Copied from the api at the cut-over (RUNBOOK); the invariant floor stays empty, as the database
+// starts empty.
+const ORDER_SERVICE_VARIABLES = ['CHECKOUT_INVARIANT_NOT_BEFORE', 'MAIL_FROM', 'SMTP_URL'];
 
 const preserved = (names: string[]) => Object.fromEntries(names.map((name) => [name, preserve()]));
 
@@ -119,15 +135,17 @@ export default defineRailway(() => {
       DATABASE_URL: API_DATABASE_URL,
       REDIS_URL,
       // Railway keeps routing to the old deployment for a moment after SIGTERM, and kills it when
-      // drainingSeconds runs out. The shutdown steps take at most this grace + Temporal worker grace
-      // and force (defaults) + 1000 stop slack + two BullMQ closes of 5000 each + 1000 Redis quit
-      // = 5000 + 4000 + 4000 + 1000 + 2 × 5000 + 1000 = 25000 ≤ 30 × 1000 − 1000. The outbox relay drain
-      // (5000, before the steps) and the telemetry flush (3000, after them) are not in that sum;
-      // RUNBOOK "The shutdown budget".
+      // drainingSeconds runs out. The shutdown steps take at most this grace + one BullMQ close of
+      // 5000 + 1000 Redis quit = 11000. drainingSeconds stays at 30 for a rollback build, whose
+      // Temporal worker and second queue make it 5000 + 4000 + 4000 + 1000 + 2 × 5000 + 1000 = 25000
+      // ≤ 30 × 1000 − 1000. The outbox relay drain (5000, before the steps) and the telemetry flush
+      // (3000, after them) are not in either sum; RUNBOOK "The shutdown budget".
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
+      // Unread since checkout moved to the order-service: kept so a rollback build boots with its
+      // saga worker and participants.
       TEMPORAL_ADDRESS: `\${{temporal.RAILWAY_PRIVATE_DOMAIN}}:${TEMPORAL_PORT}`,
       TEMPORAL_NAMESPACE,
-      TEMPORAL_TASK_QUEUE: 'checkout-saga',
+      TEMPORAL_TASK_QUEUE,
       // Every request depends on these: the api verifies what the user-service signed, and reads
       // an epoch or an address from it. Referenced, not preserved, so the two cannot drift.
       JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
@@ -137,10 +155,9 @@ export default defineRailway(() => {
       AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
       // Every row id is minted there, through the gateway's internal load balancer.
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
-      // The checkout saga holds and settles stock there. Referenced like the user-service token.
+      // The rollback build's participants, like the Temporal names above.
       INVENTORY_SERVICE_URL: `http://\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
       INVENTORY_SERVICE_TOKEN: '${{inventory-service.INTERNAL_CALLER_TOKEN_API}}',
-      // And opens, captures and voids payments there.
       PAYMENT_SERVICE_URL: `http://\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
       PAYMENT_SERVICE_TOKEN: '${{payment-service.INTERNAL_CALLER_TOKEN_API}}',
       LOKI_URL,
@@ -208,6 +225,7 @@ export default defineRailway(() => {
       API_UPSTREAM: `tcp6/\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
       INVENTORY_UPSTREAM: `tcp6/\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
       PAYMENT_UPSTREAM: `tcp6/\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
+      ORDER_UPSTREAM: `tcp6/\${{order-service.RAILWAY_PRIVATE_DOMAIN}}:${ORDER_SERVICE_PORT}`,
       ID_SERVICE_HOST: idService.env.RAILWAY_PRIVATE_DOMAIN,
       ID_SERVICE_PORT,
       ID_LB_PORT,
@@ -263,7 +281,7 @@ export default defineRailway(() => {
   });
 
   // No source, like the id-service: CD uploads it. No domain: the gateway's INVENTORY_UPSTREAM and the
-  // api's internal calls are the only ways in.
+  // order-service's internal calls are the only ways in.
   const inventoryService = service('inventory-service', {
     build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/inventory-service/Dockerfile' },
     deploy: {
@@ -306,7 +324,7 @@ export default defineRailway(() => {
   });
 
   // No source, like the inventory-service. No domain: the gateway's PAYMENT_UPSTREAM (the webhook) and
-  // the api's internal calls are the only ways in.
+  // the order-service's internal calls are the only ways in.
   const paymentService = service('payment-service', {
     build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/payment-service/Dockerfile' },
     deploy: {
@@ -323,15 +341,69 @@ export default defineRailway(() => {
       NODE_ENV: 'production',
       PORT: PAYMENT_SERVICE_PORT,
       DATABASE_URL: paymentPostgres.env.DATABASE_URL,
-      // The api's instance and its default QUEUE_PREFIX: payment.authorized lands on its order-events.
+      // The api's instance and the default QUEUE_PREFIX: payment.authorized lands on the
+      // order-service's order-events.
       REDIS_URL,
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
       METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
       TRUST_PROXY: 'fd12::/16',
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
-      // Stamped on every payment.authorized job. The api runs on its code default, so nothing here
-      // can reference it: change one, change both (RUNBOOK cross rules).
+      // Stamped on every payment.authorized job. The order-service runs on its code default, so
+      // nothing here can reference it: change one, change both (RUNBOOK cross rules).
       ORDER_PAID_CONSUMER_ATTEMPTS: '15',
+      LOKI_URL,
+    },
+  });
+
+  const orderPostgres = database('order-postgres', 'postgres', {
+    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    defaultMountPath: '/var/lib/postgresql/data',
+  });
+
+  // No source, like the payment-service. No domain: the gateway's ORDER_UPSTREAM is the only way in.
+  const orderService = service('order-service', {
+    build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/order-service/Dockerfile' },
+    deploy: {
+      numReplicas: 1,
+      preDeployCommand: ['node dist/database/migrate-cli.js'],
+      // Includes Temporal, unlike the api's: with Temporal down, CD stops here, before the api.
+      healthcheckPath: '/health/ready',
+      healthcheckTimeout: 120,
+      restartPolicyMaxRetries: 5,
+      overlapSeconds: 20,
+      // The shutdown steps take at most SHUTDOWN_GRACE_PERIOD_MS + Temporal worker grace and force
+      // (defaults) + 1000 stop slack + two 5000 waits closing order-events
+      // = 5000 + 4000 + 4000 + 1000 + 2 × 5000 = 24000 ≤ 30 × 1000 − 1000.
+      drainingSeconds: 30,
+    },
+    env: {
+      ...preserved(ORDER_SERVICE_VARIABLES),
+      NODE_ENV: 'production',
+      PORT: ORDER_SERVICE_PORT,
+      DATABASE_URL: orderPostgres.env.DATABASE_URL,
+      // The api's instance: auth:*, the throttler, and the order-events queue.
+      REDIS_URL,
+      ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
+      AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
+      JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
+      JWT_AUDIENCE: '${{user-service.JWT_AUDIENCE}}',
+      // Each token is the target's INTERNAL_CALLER_TOKEN_ORDER_SERVICE, referenced so it cannot drift.
+      USER_SERVICE_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
+      USER_SERVICE_TOKEN: '${{user-service.INTERNAL_CALLER_TOKEN_ORDER_SERVICE}}',
+      // The api's private address, never the gateway: the gateway answers /internal with 404.
+      API_SERVICE_URL: `http://\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
+      API_SERVICE_TOKEN: `\${{${API_SERVICE}.INTERNAL_CALLER_TOKEN_ORDER_SERVICE}}`,
+      INVENTORY_SERVICE_URL: `http://\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
+      INVENTORY_SERVICE_TOKEN: '${{inventory-service.INTERNAL_CALLER_TOKEN_ORDER_SERVICE}}',
+      PAYMENT_SERVICE_URL: `http://\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
+      PAYMENT_SERVICE_TOKEN: '${{payment-service.INTERNAL_CALLER_TOKEN_ORDER_SERVICE}}',
+      // The namespace and task queue the api's worker polled, so open sagas keep a worker.
+      TEMPORAL_ADDRESS: `\${{temporal.RAILWAY_PRIVATE_DOMAIN}}:${TEMPORAL_PORT}`,
+      TEMPORAL_NAMESPACE,
+      TEMPORAL_TASK_QUEUE,
+      METRICS_TOKEN: `\${{${API_SERVICE}.METRICS_TOKEN}}`,
+      TRUST_PROXY: 'fd12::/16',
+      SHUTDOWN_GRACE_PERIOD_MS: '5000',
       LOKI_URL,
     },
   });
@@ -398,6 +470,7 @@ export default defineRailway(() => {
       API_TARGET: `\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
       INVENTORY_TARGET: `\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
       PAYMENT_TARGET: `\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
+      ORDER_TARGET: `\${{order-service.RAILWAY_PRIVATE_DOMAIN}}:${ORDER_SERVICE_PORT}`,
       LOKI_TARGET: `\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`,
     },
   });
@@ -462,6 +535,8 @@ export default defineRailway(() => {
       inventoryService,
       paymentPostgres,
       paymentService,
+      orderPostgres,
+      orderService,
       temporalPostgres,
       temporal,
       elasticsearchData,

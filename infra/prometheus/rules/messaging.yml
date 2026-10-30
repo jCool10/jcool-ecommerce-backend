@@ -1,5 +1,6 @@
-# Alerts for the BullMQ queues the api consumes. Consumer lag shows nowhere else: the relay keeps
-# publishing, so the outbox stays young, the DLQ stays empty and the saga timers fire as designed.
+# Alerts for the BullMQ queues: order-events, which the order-service consumes, and api-events, the
+# api's. Consumer lag shows nowhere else: the relay keeps publishing, so the outbox stays young, the
+# DLQ stays empty and the saga timers fire as designed.
 groups:
   - name: messaging
     rules:
@@ -12,16 +13,16 @@ groups:
           summary: 'Queue {{ $labels.queue }} is not being consumed'
           description: 'The oldest waiting job on {{ $labels.queue }} is {{ $value | humanizeDuration }} old and has been over a minute for 5 minutes. On order-events that holds back payment.authorized on its way to the saga, so paid checkouts run into their deadline and compensate. RUNBOOK → The checkout saga → MessagingQueueConsumerLagging.'
 
-      # Joined `on()` to the api's `up` for the reason given in checkout-saga.yml. One branch per queue
-      # the api consumes, so a queue whose consumer moves to another service changes only its own.
+      # Joined `on()` to the consumer's `up` for the reason given in checkout-saga.yml. One branch per
+      # queue, each joined to the service that consumes it, so moving a consumer changes only its own.
       - alert: MessagingQueueMetricsAbsent
         expr: >-
-          (absent(messaging_queue_oldest_waiting_seconds{queue="order-events"}) and on() (count(up{job="jcool-api"} == 1) > 0))
+          (absent(messaging_queue_oldest_waiting_seconds{queue="order-events"}) and on() (count(up{job="jcool-order"} == 1) > 0))
           or
           (absent(messaging_queue_oldest_waiting_seconds{queue="api-events"}) and on() (count(up{job="jcool-api"} == 1) > 0))
         for: 10m
         labels:
           severity: ticket
         annotations:
-          summary: 'Queue depth metrics for {{ $labels.queue }} are missing from the api'
-          description: 'The api is being scraped but reports no messaging_queue_oldest_waiting_seconds for {{ $labels.queue }}, so MessagingQueueConsumerLagging cannot fire on it: the queue depth collector does not cover that queue in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+          summary: 'Queue depth metrics for {{ $labels.queue }} are missing from its consumer'
+          description: 'The service that consumes {{ $labels.queue }} is being scraped but reports no messaging_queue_oldest_waiting_seconds for it, so MessagingQueueConsumerLagging cannot fire on it: the queue depth collector does not cover that queue in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'

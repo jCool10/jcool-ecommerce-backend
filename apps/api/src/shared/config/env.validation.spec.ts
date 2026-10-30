@@ -14,22 +14,11 @@ const BASE_ENV = {
   USER_SERVICE_INTERNAL_URL: 'http://user-service.railway.internal:3000',
   INTERNAL_API_TOKEN: 'internal-api-token-not-a-real-secret-0000',
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
-  INVENTORY_SERVICE_URL: 'http://inventory-service.railway.internal:3000',
-  INVENTORY_SERVICE_TOKEN: 'inventory-service-token-not-a-real-secret-00',
-  PAYMENT_SERVICE_URL: 'http://payment-service.railway.internal:3000',
-  PAYMENT_SERVICE_TOKEN: 'payment-service-token-not-a-real-secret-000',
-};
-
-// Also required in production; covered on their own in checkout-saga.env.spec.ts.
-const TEMPORAL_ENV = {
-  TEMPORAL_ADDRESS: 'temporal.railway.internal:7233',
-  TEMPORAL_NAMESPACE: 'jcool',
-  TEMPORAL_TASK_QUEUE: 'checkout-saga',
 };
 
 describe('env validation', () => {
   it('refuses to boot in production until TRUST_PROXY is set to anything', () => {
-    const production = { ...BASE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production };
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production };
 
     expect(() => validate(production)).toThrow(/TRUST_PROXY/);
     for (const value of ['fd12::/16', '1', 'false']) {
@@ -43,9 +32,28 @@ describe('env validation', () => {
 
   // Stripe lives in the payment-service now, along with its boot guard.
   it('boots in production with no Stripe setting at all', () => {
-    const production = { ...BASE_ENV, ...TEMPORAL_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
 
     expect(() => validate(production)).not.toThrow();
+  });
+
+  // The order-service owns checkout now; a deployment still carrying the old names must boot.
+  it('boots in production without Temporal or a participant service', () => {
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
+
+    expect(() => validate(production)).not.toThrow();
+    expect(() =>
+      validate({ ...production, INVENTORY_SERVICE_URL: 'not-a-url', PAYMENT_COMMAND_TIMEOUT_MS: 'x' }),
+    ).not.toThrow();
+  });
+
+  // Each api-events job holds a connection for its transaction; HTTP keeps five no worker can take.
+  it('keeps five pool connections spare beyond the queue worker', () => {
+    expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '5' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '6' })).toThrow(
+      /QUEUE_WORKER_CONCURRENCY \(6\) \+ 5 must not exceed DB_POOL_MAX \(10\)/,
+    );
+    expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '6', DB_POOL_MAX: '11' })).not.toThrow();
   });
 
   // Without any one of these the api boots and then refuses every caller.
@@ -83,54 +91,16 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, AUTH_JWKS_URL: 'jwks.json' })).toThrow(/AUTH_JWKS_URL/);
   });
 
-  it('refuses to boot without the inventory-service address or its token', () => {
-    for (const key of ['INVENTORY_SERVICE_URL', 'INVENTORY_SERVICE_TOKEN']) {
-      const without: Record<string, unknown> = { ...BASE_ENV };
-      delete without[key];
-
-      expect(() => validate(without), key).toThrow(new RegExp(key));
-    }
-    expect(() => validate({ ...BASE_ENV, INVENTORY_SERVICE_URL: 'inventory-service:3000' })).toThrow(
-      /INVENTORY_SERVICE_URL/,
-    );
-    expect(() => validate({ ...BASE_ENV, INVENTORY_SERVICE_TOKEN: 'a'.repeat(31) })).toThrow(/INVENTORY_SERVICE_TOKEN/);
-  });
-
-  it('bounds the inventory command timeout', () => {
-    expect(() => validate({ ...BASE_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '99' })).toThrow(/INVENTORY_COMMAND_TIMEOUT_MS/);
-    expect(() => validate({ ...BASE_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '5e3' })).toThrow(
-      /INVENTORY_COMMAND_TIMEOUT_MS/,
-    );
-    expect(() => validate({ ...BASE_ENV, INVENTORY_COMMAND_TIMEOUT_MS: '5000' })).not.toThrow();
-  });
-
-  it('refuses to boot without the payment-service address or its token', () => {
-    for (const key of ['PAYMENT_SERVICE_URL', 'PAYMENT_SERVICE_TOKEN']) {
-      const without: Record<string, unknown> = { ...BASE_ENV };
-      delete without[key];
-
-      expect(() => validate(without), key).toThrow(new RegExp(key));
-    }
-    expect(() => validate({ ...BASE_ENV, PAYMENT_SERVICE_URL: 'payment-service:3000' })).toThrow(/PAYMENT_SERVICE_URL/);
-    expect(() => validate({ ...BASE_ENV, PAYMENT_SERVICE_TOKEN: 'a'.repeat(31) })).toThrow(/PAYMENT_SERVICE_TOKEN/);
-  });
-
-  it('bounds the payment command timeout', () => {
-    expect(() => validate({ ...BASE_ENV, PAYMENT_COMMAND_TIMEOUT_MS: '999' })).toThrow(/PAYMENT_COMMAND_TIMEOUT_MS/);
-    expect(() => validate({ ...BASE_ENV, PAYMENT_COMMAND_TIMEOUT_MS: '45e3' })).toThrow(/PAYMENT_COMMAND_TIMEOUT_MS/);
-    expect(() => validate({ ...BASE_ENV, PAYMENT_COMMAND_TIMEOUT_MS: '1000' })).not.toThrow();
-  });
-
   it('caps the order.paid retry budget', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '31' })).toThrow(/ORDER_PAID_CONSUMER_ATTEMPTS/);
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
   });
 
-  it('keeps a rejected order at least a day', () => {
-    expect(() => validate({ ...BASE_ENV, RETENTION_REJECTED_ORDER_DAYS: '0' })).toThrow(
-      /RETENTION_REJECTED_ORDER_DAYS/,
-    );
-    expect(() => validate({ ...BASE_ENV, RETENTION_REJECTED_ORDER_DAYS: '1' })).not.toThrow();
+  it('accepts the order-service caller token only at full length', () => {
+    for (const key of ['INTERNAL_CALLER_TOKEN_ORDER_SERVICE', 'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS']) {
+      expect(() => validate({ ...BASE_ENV, [key]: 'a'.repeat(31) }), key).toThrow(new RegExp(key));
+      expect(() => validate({ ...BASE_ENV, [key]: 'a'.repeat(32) }), key).not.toThrow();
+    }
   });
 
   // The platform injects its own variables, and a retired key can linger in a deployment.

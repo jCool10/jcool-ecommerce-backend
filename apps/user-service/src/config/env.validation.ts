@@ -120,6 +120,17 @@ export class EnvironmentVariables extends PlatformEnv {
   @MinLength(32)
   INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS?: string;
 
+  // The order-service reads epochs and, for the order.paid mail, user summaries.
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS?: string;
+
   @IsOptional()
   @IsStrictBoolean()
   SESSION_EPOCH_RECONCILE_ENABLED?: string;

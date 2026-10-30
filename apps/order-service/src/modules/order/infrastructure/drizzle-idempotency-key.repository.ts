@@ -1,0 +1,118 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { and, eq, inArray, lt } from 'drizzle-orm';
+import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '../../../database';
+import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '../../../shared/identity/id-generator.port';
+import type {
+  IdempotencyRecord,
+  IdempotencyStorePort,
+  InsertInProgressInput,
+  MarkCompletedInput,
+} from '../application/ports/idempotency-store.port';
+import { idempotencyKeys } from './schema/idempotency-key.schema';
+
+type Row = typeof idempotencyKeys.$inferSelect;
+
+@Injectable()
+export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
+  ) {}
+
+  async tryInsertInProgress(input: InsertInProgressInput): Promise<IdempotencyRecord | null> {
+    const [row] = await this.db
+      .insert(idempotencyKeys)
+      .values({
+        id: await mintOne(this.idGenerator),
+        scope: input.scope,
+        key: input.key,
+        requestHash: input.requestHash,
+        method: input.method,
+        path: input.path,
+        expiresAt: input.expiresAt,
+      })
+      .onConflictDoNothing({ target: [idempotencyKeys.scope, idempotencyKeys.key] })
+      .returning();
+    return row ? toRecord(row) : null;
+  }
+
+  async findByScopeAndKey(scope: string, key: string): Promise<IdempotencyRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(idempotencyKeys)
+      .where(and(eq(idempotencyKeys.scope, scope), eq(idempotencyKeys.key, key)))
+      .limit(1);
+    return row ? toRecord(row) : null;
+  }
+
+  async markCompleted(input: MarkCompletedInput, tx?: DrizzleTx): Promise<void> {
+    const exec = tx ?? this.db;
+    await exec
+      .update(idempotencyKeys)
+      .set({
+        status: 'COMPLETED',
+        responseStatus: input.responseStatus,
+        responseBody: input.responseBody,
+        orderId: input.orderId ?? null,
+      })
+      .where(and(eq(idempotencyKeys.scope, input.scope), eq(idempotencyKeys.key, input.key)));
+  }
+
+  async deleteInProgress(scope: string, key: string, tx?: DrizzleTx): Promise<void> {
+    const exec = tx ?? this.db;
+    await exec
+      .delete(idempotencyKeys)
+      .where(
+        and(eq(idempotencyKeys.scope, scope), eq(idempotencyKeys.key, key), eq(idempotencyKeys.status, 'IN_PROGRESS')),
+      );
+  }
+
+  async deleteExpiredInProgress(scope: string, key: string, cutoff: Date): Promise<number> {
+    const deleted = await this.db
+      .delete(idempotencyKeys)
+      .where(
+        and(
+          eq(idempotencyKeys.scope, scope),
+          eq(idempotencyKeys.key, key),
+          eq(idempotencyKeys.status, 'IN_PROGRESS'),
+          lt(idempotencyKeys.createdAt, cutoff),
+        ),
+      )
+      .returning({ id: idempotencyKeys.id });
+    return deleted.length;
+  }
+
+  async deleteExpired(now: Date, limit: number): Promise<number> {
+    // Postgres has no LIMIT on DELETE, so the batch bound comes from a subquery. Bounded because
+    // this table is on the checkout write path: an unbounded DELETE would hold row locks there for
+    // as long as the backlog takes.
+    const doomed = this.db
+      .select({ id: idempotencyKeys.id })
+      .from(idempotencyKeys)
+      .where(lt(idempotencyKeys.expiresAt, now))
+      .limit(limit);
+
+    const deleted = await this.db
+      .delete(idempotencyKeys)
+      .where(inArray(idempotencyKeys.id, doomed))
+      .returning({ id: idempotencyKeys.id });
+    return deleted.length;
+  }
+}
+
+function toRecord(row: Row): IdempotencyRecord {
+  return {
+    id: row.id,
+    scope: row.scope,
+    key: row.key,
+    requestHash: row.requestHash,
+    status: row.status,
+    responseStatus: row.responseStatus,
+    responseBody: row.responseBody,
+    orderId: row.orderId,
+    method: row.method,
+    path: row.path,
+    expiresAt: row.expiresAt,
+    createdAt: row.createdAt,
+  };
+}

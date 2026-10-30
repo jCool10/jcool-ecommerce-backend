@@ -8,16 +8,16 @@ import { CartService } from './application/cart.service';
 import { CatalogQueryAdapter } from './infrastructure/catalog-query.adapter';
 import { DrizzleCartRepository } from './infrastructure/drizzle-cart.repository';
 import { CartController } from './interface/cart.controller';
+import { CartLinesInternalController } from './interface/internal/cart-lines.internal.controller';
 
 @Module({
   imports: [ProductModule],
-  controllers: [CartController],
+  controllers: [CartController, CartLinesInternalController],
   providers: [
     CartService,
     { provide: CART_REPOSITORY, useClass: DrizzleCartRepository },
     { provide: CATALOG_QUERY, useClass: CatalogQueryAdapter },
     { provide: CART_SNAPSHOT, useClass: CartSnapshotService },
   ],
-  exports: [CART_SNAPSHOT],
 })
 export class CartModule {}

@@ -4,7 +4,6 @@ import { eq, inArray, isNull } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { Pool } from 'pg';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
 import { type DomainEventJob, OutboxRelay, QUEUE_CONNECTION, jobIdFor, queueToken } from '@jcool/messaging';
 import type { DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
@@ -21,12 +20,12 @@ import { testId } from '../setup/id-service-stub';
 
 const TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 
-const seedRow = (overrides: Record<string, unknown> = {}, orderId = testId()) => ({
+const seedRow = (overrides: Record<string, unknown> = {}, productId = testId()) => ({
   id: testId(),
-  aggregateType: 'Order',
-  aggregateId: orderId,
-  eventType: 'order.placed',
-  payload: { orderId, totalAmountMinor: 150_000 },
+  aggregateType: 'Product',
+  aggregateId: productId,
+  eventType: 'catalog.product.changed',
+  payload: { productId },
   ...overrides,
 });
 
@@ -35,7 +34,6 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
   let relay: OutboxRelay;
   let queue: Queue;
-  let apiQueue: Queue;
   let connection: Redis;
   let db: DrizzleDB;
   let pool: Pool;
@@ -43,13 +41,12 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
   beforeAll(async () => {
     ({ app, pool, db } = await createTestAppWithPool());
     relay = app.get(OutboxRelay);
-    queue = app.get<Queue>(queueToken(ORDER_EVENTS_QUEUE));
-    apiQueue = app.get<Queue>(queueToken(API_EVENTS_QUEUE));
+    queue = app.get<Queue>(queueToken(API_EVENTS_QUEUE));
     connection = app.get<Redis>(QUEUE_CONNECTION);
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
-  obliterateQueueBeforeEach(() => [queue, apiQueue]);
+  obliterateQueueBeforeEach(() => [queue]);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -85,12 +82,12 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
 
     const [job] = await queue.getJobs(['waiting']);
     expect(job.id).toBe(jobIdFor(row.id));
-    expect(job.name).toBe('order.placed');
+    expect(job.name).toBe('catalog.product.changed');
     expect(job.data as DomainEventJob).toEqual({
       outboxId: row.id,
-      aggregateType: 'Order',
+      aggregateType: 'Product',
       aggregateId: row.aggregateId,
-      eventType: 'order.placed',
+      eventType: 'catalog.product.changed',
       payload: row.payload,
       occurredAt: row.createdAt.toISOString(),
       // Trace id, not the whole header: with an SDK registered the relay re-injects under its own
@@ -99,14 +96,15 @@ describe('Outbox relay (integration, real Postgres + Redis)', () => {
     });
   });
 
-  it('sends order events to order-events and catalog events to api-events', async () => {
-    const [order] = await seed(1);
-    const [product] = await seed(1, { aggregateType: 'Product', eventType: 'catalog.product.changed', payload: {} });
+  // An order row here predates the cut-over; the order-service's outbox publishes those now.
+  it('sends catalog events to api-events and leaves an event it does not route unpublished', async () => {
+    const [product] = await seed(1);
+    const [order] = await seed(1, { aggregateType: 'Order', eventType: 'order.placed', payload: {} });
 
-    await expect(relay.runOnce(10)).resolves.toEqual({ published: 2, failed: 0 });
+    await expect(relay.runOnce(10)).resolves.toEqual({ published: 1, failed: 1 });
 
-    expect((await queue.getJobs(['waiting'])).map((job) => job.id)).toEqual([jobIdFor(order.id)]);
-    expect((await apiQueue.getJobs(['waiting'])).map((job) => job.id)).toEqual([jobIdFor(product.id)]);
+    expect((await queue.getJobs(['waiting'])).map((job) => job.id)).toEqual([jobIdFor(product.id)]);
+    expect(await byId(order.id)).toMatchObject({ publishedAt: null, attempts: 1 });
   });
 
   it('never publishes more than the batch size in one tick', async () => {

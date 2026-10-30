@@ -5,12 +5,9 @@ import {
   type PostCommitEffect,
   UnhandledEventError,
 } from '@jcool/messaging';
-import { OrderPaidMailHandler } from '@modules/order/interface/queue/order-paid-mail.handler';
-import { PaymentAuthorizedHandler } from '@modules/order/interface/queue/payment-authorized.handler';
 import { CategoryRenamedHandler } from '@modules/product/interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from '@modules/product/interface/catalog/queue/product-changed.handler';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
-import { OrderEventsHandler } from './order-events.handler';
 
 /**
  * An effect runs inside the consumer's transaction — the same one holding the inbox claim — so a
@@ -28,11 +25,6 @@ export type TransactionalStep = (tx: DrizzleTx) => Promise<PostCommitEffect | vo
  */
 type PreparedHandler = (job: DomainEventJob) => Promise<TransactionalStep>;
 
-const inTransaction =
-  (handle: DomainEventHandler): PreparedHandler =>
-  (job) =>
-    Promise.resolve((tx) => handle(job, tx));
-
 // For work that must be retried until it lands, which a post-commit effect never is: a failure rejects
 // before the claim commits. It runs on every delivery, duplicates included, and nothing it does rolls
 // back with the claim, so it must be safe to repeat.
@@ -43,38 +35,13 @@ const beforeClaim =
     return () => Promise.resolve();
   };
 
-/** One table for both queues the api consumes: each only ever delivers the events routed to it. */
+/** The api-events table; order events are the order-service's to consume. */
 @Injectable()
 export class DomainEventDispatcher implements DomainEventDispatcherPort {
   private readonly handlers: ReadonlyMap<string, PreparedHandler>;
 
-  constructor(
-    orderEvents: OrderEventsHandler,
-    paymentAuthorized: PaymentAuthorizedHandler,
-    orderPaidMail: OrderPaidMailHandler,
-    productChanged: ProductChangedHandler,
-    categoryRenamed: CategoryRenamedHandler,
-  ) {
+  constructor(productChanged: ProductChangedHandler, categoryRenamed: CategoryRenamedHandler) {
     this.handlers = new Map<string, PreparedHandler>([
-      // Order events only record: the saga already applied every effect before emitting them.
-      ['order.placed', inTransaction((job) => orderEvents.record(job))],
-      // The buyer's confirmation is still owed, which is why order.paid hands back an effect
-      // instead of sending inline.
-      [
-        'order.paid',
-        async (job) => {
-          const confirmation = await orderPaidMail.prepare(job);
-          return async () => {
-            await orderEvents.record(job);
-            return confirmation;
-          };
-        },
-      ],
-      ['order.failed', inTransaction((job) => orderEvents.record(job))],
-      ['order.expired', inTransaction((job) => orderEvents.record(job))],
-      ['order.cancelled', inTransaction((job) => orderEvents.record(job))],
-      // Signals the order's saga, which treats a repeat as a no-op.
-      ['payment.authorized', beforeClaim((job) => paymentAuthorized.forward(job))],
       ['catalog.product.changed', beforeClaim((job) => productChanged.apply(job))],
       ['catalog.category.renamed', beforeClaim((job) => categoryRenamed.apply(job))],
     ]);

@@ -63,10 +63,15 @@ describe('validate', () => {
   });
 
   // A caller's token is set before that caller first deploys, so its absence must still boot.
-  it('takes the inventory-service caller tokens as optional, but never short', () => {
-    const names = ['INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE', 'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS'];
+  it('takes the inventory-service and order-service caller tokens as optional, but never short', () => {
+    const names = [
+      'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE',
+      'INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS',
+      'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+      'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
+    ];
 
-    expect(names.map((name) => refusal({ ...BASE, [name]: 'i'.repeat(32) }))).toEqual([null, null]);
+    expect(names.map((name) => refusal({ ...BASE, [name]: 'i'.repeat(32) }))).toEqual(names.map(() => null));
     expect(names.filter((name) => refusal({ ...BASE, [name]: 'i'.repeat(31) })?.includes(name))).toEqual(names);
   });
 

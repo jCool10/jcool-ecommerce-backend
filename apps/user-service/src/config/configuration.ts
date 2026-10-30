@@ -41,7 +41,7 @@ export default () => ({
     callers: {
       // The api keeps the name it had before tokens were per caller.
       api: acceptedTokens(process.env.INTERNAL_API_TOKEN, process.env.INTERNAL_API_TOKEN_PREVIOUS),
-      ...callerTokensFromEnv(['inventory-service']),
+      ...callerTokensFromEnv(['inventory-service', 'order-service']),
     },
   },
   sessionEpoch: {

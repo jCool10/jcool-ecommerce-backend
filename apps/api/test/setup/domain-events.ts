@@ -1,7 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { count, isNull } from 'drizzle-orm';
-import { ORDER_EVENTS_QUEUE } from '@jcool/internal-contracts/queues/order-events';
 import { type DomainEventJob, DomainEventProcessor, OutboxRelay, queueToken } from '@jcool/messaging';
 import type { ConsumeResult } from '@jcool/metrics-port';
 import { DRIZZLE, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
@@ -10,7 +9,7 @@ import { API_EVENTS_QUEUE } from '../../src/shared/messaging/event-routes';
 
 const RELAY_BATCH = 100;
 const QUEUED_STATES = ['waiting', 'delayed', 'prioritized'] as const;
-const CONSUMED_QUEUES = [ORDER_EVENTS_QUEUE, API_EVENTS_QUEUE];
+const CONSUMED_QUEUES = [API_EVENTS_QUEUE];
 
 export interface DrainedEvent {
   eventType: string;

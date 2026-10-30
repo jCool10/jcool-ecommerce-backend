@@ -11,7 +11,7 @@ tests:
   # A saga past its deadline for longer than the hold, then compensated away.
   - interval: 1m
     input_series:
-      - series: 'checkout_saga_overdue{job="jcool-api", instance="app:3000"}'
+      - series: 'checkout_saga_overdue{job="jcool-order", instance="order-service:3000"}'
         values: '0x5 1x15 0x10'
     alert_rule_test:
       - eval_time: 10m
@@ -32,13 +32,13 @@ tests:
   # The workflow task type loses its pollers for longer than the hold, then a worker comes back.
   - interval: 1m
     input_series:
-      - series: 'checkout_saga_task_queue_pollers{job="jcool-api", instance="app:3000", task_type="workflow"}'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
         values: '1x5 0x10 1x10'
-      - series: 'checkout_saga_task_queue_pollers{job="jcool-api", instance="app:3000", task_type="activity"}'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="activity"}'
         values: '1x26'
-      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-api", instance="app:3000", task_type="workflow"}'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
         values: '0x26'
-      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-api", instance="app:3000", task_type="activity"}'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="activity"}'
         values: '0x26'
     alert_rule_test:
       - eval_time: 10m
@@ -51,7 +51,7 @@ tests:
               severity: page
             exp_annotations:
               summary: 'Checkout saga tasks are not being picked up'
-              description: 'A checkout task queue has had no poller, or a task waiting over 2 minutes, for 5 minutes: Temporal answers but no worker is running the saga, so checkouts neither start nor settle. Together with CheckoutSagaEngineDown this is the only Temporal signal the api has: /health/ready does not include Temporal, so the api stays ready throughout. If Temporal itself is unwell, RUNBOOK → Temporal down. RUNBOOK → The checkout saga → CheckoutSagaWorkerStalled.'
+              description: 'A checkout task queue has had no poller, or a task waiting over 2 minutes, for 5 minutes: Temporal answers but no worker is running the saga, so checkouts neither start nor settle. The order-service stays ready while a worker that is running polls nothing, so readiness does not catch this. If Temporal itself is unwell, RUNBOOK → Temporal down. RUNBOOK → The checkout saga → CheckoutSagaWorkerStalled.'
       - eval_time: 20m
         alertname: CheckoutSagaWorkerStalled
         exp_alerts: []
@@ -59,13 +59,13 @@ tests:
   # Pollers are present but every activity slot is held: the backlog ages past 2 minutes.
   - interval: 1m
     input_series:
-      - series: 'checkout_saga_task_queue_pollers{job="jcool-api", instance="app:3000", task_type="workflow"}'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
         values: '1x27'
-      - series: 'checkout_saga_task_queue_pollers{job="jcool-api", instance="app:3000", task_type="activity"}'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="activity"}'
         values: '1x27'
-      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-api", instance="app:3000", task_type="workflow"}'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
         values: '0x27'
-      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-api", instance="app:3000", task_type="activity"}'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="activity"}'
         values: '0x5 180+60x15 0x5'
     alert_rule_test:
       - eval_time: 10m
@@ -81,13 +81,13 @@ tests:
   # A deploy: both task types drop to 0 pollers for 2 minutes while the worker restarts.
   - interval: 1m
     input_series:
-      - series: 'checkout_saga_task_queue_pollers{job="jcool-api", instance="app:3000", task_type="workflow"}'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
         values: '1x5 0x1 1x20'
-      - series: 'checkout_saga_task_queue_pollers{job="jcool-api", instance="app:3000", task_type="activity"}'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="activity"}'
         values: '1x5 0x1 1x20'
-      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-api", instance="app:3000", task_type="workflow"}'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
         values: '0x27'
-      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-api", instance="app:3000", task_type="activity"}'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="activity"}'
         values: '0x27'
     alert_rule_test:
       - eval_time: 7m
@@ -100,7 +100,7 @@ tests:
   # Temporal unreachable past the 2m hold, then back.
   - interval: 1m
     input_series:
-      - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
         values: '1x5 0x10 1x10'
     alert_rule_test:
       - eval_time: 7m
@@ -112,8 +112,8 @@ tests:
           - exp_labels:
               severity: page
             exp_annotations:
-              summary: 'The api cannot read the checkout sagas from Temporal'
-              description: 'The saga collector has not read Temporal within 2s for 2 minutes, and every other saga gauge is withdrawn meanwhile. With Temporal down, checkout answers 503 and no saga moves; with only its visibility store slow, checkout still works but every saga alert is blind. Together with CheckoutSagaWorkerStalled this is the only Temporal signal the api has: /health/ready does not include Temporal, so deploys and healthchecks stay green throughout. RUNBOOK → The checkout saga → CheckoutSagaEngineDown.'
+              summary: 'The order-service cannot read the checkout sagas from Temporal'
+              description: 'The saga collector has not read Temporal within 2s for 2 minutes, and every other saga gauge is withdrawn meanwhile. With Temporal down, checkout answers 503, no saga moves, and the order-service''s /health/ready is down too, so a deploy stops at it; the api, the gateway and a freeze flip are unaffected. With only its visibility store slow, checkout still works but every saga alert is blind. RUNBOOK → The checkout saga → CheckoutSagaEngineDown.'
       - eval_time: 18m
         alertname: CheckoutSagaEngineDown
         exp_alerts: []
@@ -122,13 +122,13 @@ tests:
   # leaves the gauge's one-hour window.
   - interval: 1m
     input_series:
-      - series: 'checkout_saga_closed_abnormally{job="jcool-api", instance="app:3000", status="Failed"}'
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="Failed"}'
         values: '0x5 1x10 0x5'
-      - series: 'checkout_saga_closed_abnormally{job="jcool-api", instance="app:3000", status="Terminated"}'
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="Terminated"}'
         values: '0x21'
-      - series: 'checkout_saga_closed_abnormally{job="jcool-api", instance="app:3000", status="TimedOut"}'
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="TimedOut"}'
         values: '0x21'
-      - series: 'checkout_saga_closed_abnormally{job="jcool-api", instance="app:3000", status="Canceled"}'
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="Canceled"}'
         values: '0x21'
     alert_rule_test:
       - eval_time: 5m
@@ -150,11 +150,11 @@ tests:
   # of the window. A compensation that applied cleanly, however often, is not a conflict.
   - interval: 1m
     input_series:
-      - series: 'saga_step_total{job="jcool-api", instance="app:3000", step="cancel_payment", outcome="captured_conflict"}'
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="cancel_payment", outcome="captured_conflict"}'
         values: '_x5 1x40'
-      - series: 'saga_step_total{job="jcool-api", instance="app:3000", step="cancel_payment", outcome="cancelled"}'
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="cancel_payment", outcome="cancelled"}'
         values: '_x2 1+1x40'
-      - series: 'saga_step_total{job="jcool-api", instance="app:3000", step="commit_stock", outcome="conflict"}'
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="commit_stock", outcome="conflict"}'
         values: '_x2 1x40'
     alert_rule_test:
       - eval_time: 4m
@@ -176,7 +176,7 @@ tests:
   # A later conflict on a counter that already exists.
   - interval: 1m
     input_series:
-      - series: 'saga_step_total{job="jcool-api", instance="app:3000", step="release_stock", outcome="conflict"}'
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="release_stock", outcome="conflict"}'
         values: '1x30 2x30'
     alert_rule_test:
       - eval_time: 20m
@@ -219,15 +219,15 @@ tests:
   # One kind reports violations for longer than the hold; the checker writes every kind each run.
   - interval: 1m
     input_series:
-      - series: 'checkout_invariant_violations{job="jcool-api", instance="app:3000", kind="captured_without_paid"}'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="captured_without_paid"}'
         values: '0x5 2x10 0x10'
-      - series: 'checkout_invariant_violations{job="jcool-api", instance="app:3000", kind="paid_without_capture"}'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="paid_without_capture"}'
         values: '0x26'
-      - series: 'checkout_invariant_violations{job="jcool-api", instance="app:3000", kind="paid_without_commit"}'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="paid_without_commit"}'
         values: '0x26'
-      - series: 'checkout_invariant_violations{job="jcool-api", instance="app:3000", kind="orphan_hold"}'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="orphan_hold"}'
         values: '0x26'
-      - series: 'checkout_invariant_violations{job="jcool-api", instance="app:3000", kind="authorized_on_dead_order"}'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="authorized_on_dead_order"}'
         values: '0x26'
     alert_rule_test:
       - eval_time: 6m
@@ -241,20 +241,20 @@ tests:
               severity: page
             exp_annotations:
               summary: 'Checkout invariant broken: captured_without_paid'
-              description: 'The invariant checker found 2 settled order(s) that disagree with a participant. It only reports and fixes nothing; each orderId is in the api logs at level error. RUNBOOK → The checkout saga → CheckoutInvariantViolation.'
+              description: 'The invariant checker found 2 settled order(s) that disagree with a participant. It only reports and fixes nothing; each orderId is in the order-service logs at level error. RUNBOOK → The checkout saga → CheckoutInvariantViolation.'
       - eval_time: 20m
         alertname: CheckoutInvariantViolation
         exp_alerts: []
 
-  # Every run errors from the start, so only `result="error"` exists while the api is scraped; the
-  # first completed run clears it.
+  # Every run errors from the start, so only `result="error"` exists while the order-service is
+  # scraped; the first completed run clears it.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x40'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="error"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="error"}'
         values: '1+1x40'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="ok"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
         values: '_x30 1+1x10'
     alert_rule_test:
       - eval_time: 9m
@@ -267,7 +267,7 @@ tests:
               severity: ticket
             exp_annotations:
               summary: 'The checkout invariant checker is not completing runs'
-              description: 'The api is being scraped but the checker has not finished a run: every run is erroring, it never started, or it stopped being scheduled. Until it runs again an order that disagrees with its stock or payment goes unnoticed. RUNBOOK → The checkout saga → CheckoutInvariantCheckerSilent.'
+              description: 'The order-service is being scraped but the checker has not finished a run: every run is erroring, it never started, or it stopped being scheduled. Until it runs again an order that disagrees with its stock or payment goes unnoticed. RUNBOOK → The checkout saga → CheckoutInvariantCheckerSilent.'
       - eval_time: 33m
         alertname: CheckoutInvariantCheckerSilent
         exp_alerts: []
@@ -275,13 +275,13 @@ tests:
   # The checker completed runs, then only errors: ok and violations stay flat for 30 minutes.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x70'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="ok"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
         values: '0+1x20 20x50'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="violations"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="violations"}'
         values: '0x70'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="error"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="error"}'
         values: '0x20 1+1x50'
     alert_rule_test:
       - eval_time: 55m
@@ -291,16 +291,16 @@ tests:
         alertname: CheckoutInvariantCheckerSilent
         exp_alerts: *checker_silent
 
-  # The api goes down and every one of its series goes with it: ApiScrapeDown owns that.
+  # The order-service goes down and every one of its series goes with it: OrderScrapeDown owns that.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x20 0x60'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="ok"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
         values: '0+1x20 _x60'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="violations"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="violations"}'
         values: '0x20 _x60'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="error"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="error"}'
         values: '0x20 _x60'
     alert_rule_test:
       - eval_time: 40m
@@ -316,11 +316,11 @@ tests:
   # Same, with the target gone from Prometheus entirely: no `up` series at all.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x20 _x60'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="ok"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
         values: '0+1x20 _x60'
-      - series: 'checkout_invariant_check_total{job="jcool-api", instance="app:3000", result="violations"}'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="violations"}'
         values: '0x20 _x60'
     alert_rule_test:
       - eval_time: 40m
@@ -334,9 +334,9 @@ tests:
   # kind, and age out of the 30m window. Compensations for other reasons are not late ones.
   - interval: 1m
     input_series:
-      - series: 'saga_compensation_total{job="jcool-api", instance="app:3000", kind="cancel_payment", reason="late_authorization"}'
+      - series: 'saga_compensation_total{job="jcool-order", instance="order-service:3000", kind="cancel_payment", reason="late_authorization"}'
         values: '_x5 1x60'
-      - series: 'saga_compensation_total{job="jcool-api", instance="app:3000", kind="release_stock", reason="cancelled"}'
+      - series: 'saga_compensation_total{job="jcool-order", instance="order-service:3000", kind="release_stock", reason="cancelled"}'
         values: '_x2 1+1x60'
     alert_rule_test:
       - eval_time: 4m
@@ -361,11 +361,11 @@ tests:
   # The wiring regression: both services are still scraped but their gauges went absent.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x40'
       - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
         values: '1x40'
-      - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
         values: '1x10 _x30'
       - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x10 _x30'
@@ -379,8 +379,8 @@ tests:
           - exp_labels:
               severity: ticket
             exp_annotations:
-              summary: 'Checkout saga metrics are missing from the api'
-              description: 'The api is being scraped but reports no checkout_saga_engine_up, so every saga alert is blind: the saga collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+              summary: 'Checkout saga metrics are missing from the order-service'
+              description: 'The order-service is being scraped but reports no checkout_saga_engine_up, so every saga alert is blind: the saga collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
       - eval_time: 20m
         alertname: PaymentMetricsAbsent
         exp_alerts: []
@@ -396,11 +396,11 @@ tests:
   # Both services are down: `up` reads 0 and every series of each app is gone.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x10 0x40'
       - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
         values: '1x10 0x40'
-      - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
         values: '1x10 _x40'
       - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x10 _x40'
@@ -421,11 +421,11 @@ tests:
   # Present at 0 is reporting, not absent: Temporal unreachable and nothing authorized.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x40'
       - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
         values: '1x40'
-      - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
         values: '0x40'
       - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x40'
@@ -437,14 +437,28 @@ tests:
         alertname: PaymentMetricsAbsent
         exp_alerts: []
 
-  # A scraped api says nothing about the payment-service: never scraped, PaymentScrapeDown owns it.
+  # A scraped order-service says nothing about the payment-service: never scraped, PaymentScrapeDown
+  # owns it.
   - interval: 1m
     input_series:
-      - series: 'up{job="jcool-api", instance="app:3000"}'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
         values: '1x40'
-      - series: 'checkout_saga_engine_up{job="jcool-api", instance="app:3000"}'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
         values: '1x40'
     alert_rule_test:
       - eval_time: 30m
         alertname: PaymentMetricsAbsent
+        exp_alerts: []
+
+  # The api no longer records any saga or checker series, so its being scraped proves nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: CheckoutInvariantCheckerSilent
         exp_alerts: []

@@ -48,6 +48,18 @@
 	handle @internal {
 		respond 404
 	}
+	# Stops order writes while checkout is being cut over; reads pass. A request enters only one
+	# handle, so this one must come before the order route's or the freeze is skipped.
+	# Substituted at parse time like the auth flag, so it needs a redeploy.
+	@checkoutFrozen {
+		method POST
+		path /orders /orders/*
+		expression `"{$CHECKOUT_WRITE_FREEZE:false}" == "true"`
+	}
+	handle @checkoutFrozen {
+		header Retry-After 120
+		respond "checkout is read-only during a migration" 503
+	}
 	@auth path /auth /auth/* /.well-known/jwks.json
 	handle @auth {
 		# Stops auth writes while a migration must not race one, reads untouched. The expression is
@@ -68,6 +80,13 @@
 			}
 		}
 	}
+	# Checkout and every order read; the api only keeps the retired tables.
+	@orders path /orders /orders/* /admin/orders /admin/orders/*
+	handle @orders {
+		reverse_proxy {$ORDER_UPSTREAM} {
+			import upstream
+		}
+	}
 	# Stock is the inventory-service's; the api only keeps its retired tables.
 	@inventory path /admin/inventory /admin/inventory/*
 	handle @inventory {
@@ -83,21 +102,8 @@
 		}
 	}
 	handle {
-		# Stops order writes while checkout is being cut over; reads pass.
-		# Substituted at parse time like the auth flag, so it needs a redeploy.
-		@checkoutFrozen {
-			method POST
-			path /orders /orders/*
-			expression `"{$CHECKOUT_WRITE_FREEZE:false}" == "true"`
-		}
-		handle @checkoutFrozen {
-			header Retry-After 120
-			respond "checkout is read-only during a migration" 503
-		}
-		handle {
-			reverse_proxy {$API_UPSTREAM} {
-				import upstream
-			}
+		reverse_proxy {$API_UPSTREAM} {
+			import upstream
 		}
 	}
 }

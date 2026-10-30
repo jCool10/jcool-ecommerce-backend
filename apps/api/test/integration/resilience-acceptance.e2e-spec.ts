@@ -3,12 +3,11 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
-import { DEFAULT_THROTTLER, ORDER_THROTTLE, USER_THROTTLER } from '@jcool/platform/throttler';
+import { DEFAULT_THROTTLER, GLOBAL_THROTTLERS } from '@jcool/platform/throttler';
 import { CircuitBreakerFactory } from '@jcool/platform/resilience';
 import { authHeader } from '../setup/bearer.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
 import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { createTestAppWithPool } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -20,8 +19,14 @@ const BREAKER_RESET_MS = 5_000;
 // Its own breaker, so tripping it leaves every real dependency's circuit alone.
 const PROBE_BREAKER = 'resilience-acceptance-probe';
 
-const IP_LIMIT = ORDER_THROTTLE[DEFAULT_THROTTLER].limit;
-const USER_LIMIT = ORDER_THROTTLE[USER_THROTTLER].limit;
+// The app-wide floor; the api has no route of its own with a tighter one since checkout moved out.
+const IP_LIMIT = fixedLimit(DEFAULT_THROTTLER);
+
+function fixedLimit(tier: string): number {
+  const limit = GLOBAL_THROTTLERS.find(({ name }) => name === tier)?.limit;
+  if (typeof limit !== 'number') throw new Error(`throttler tier "${tier}" has no fixed limit`);
+  return limit;
+}
 
 describe('Resilience acceptance: cache, limiter, and breaker in one app (integration)', () => {
   let app: INestApplication;
@@ -81,35 +86,6 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     return sampleOf(text, name, labels) ?? 0;
   }
 
-  function postOrder(token: string): request.Test {
-    return request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).send();
-  }
-
-  it('turns an account away at the IP tier while its own budget is untouched', async () => {
-    // The per-user tier is pinned in rate-limit-sensitive-endpoints; this spends the shared address
-    // budget, which any one account can exhaust for everyone.
-    await resetThrottleCounters();
-    const before = baselineOf(await scrape(), 'rate_limit_rejections_total', {
-      tier: DEFAULT_THROTTLER,
-      route: '/orders',
-    });
-
-    for (let spent = 0; spent < IP_LIMIT;) {
-      const { accessToken } = await createTestPrincipal(app);
-      for (let i = 0; i < Math.min(USER_LIMIT, IP_LIMIT - spent); i++, spent++) {
-        // 400, not merely "not 429": a fresh buyer has an empty cart, so a broken auth or route
-        // cannot spend the budget silently.
-        expect((await postOrder(accessToken)).status).toBe(400);
-      }
-    }
-
-    const newcomer = await createTestPrincipal(app);
-    expect((await postOrder(newcomer.accessToken)).status).toBe(429);
-    expect(sampleOf(await scrape(), 'rate_limit_rejections_total', { tier: DEFAULT_THROTTLER, route: '/orders' })).toBe(
-      before + 1,
-    );
-  });
-
   it('reports cache, limiter and breaker activity on one scrape', async () => {
     await resetThrottleCounters();
     const before = await scrape();
@@ -117,11 +93,12 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     const { slug } = await createTestProduct(app);
     await request(server()).get(`/products/${slug}`).expect(200);
 
+    // Throttle keys are per handler, so the product read above leaves the cart's budget whole.
     const { accessToken } = await createTestPrincipal(app);
-    for (let attempt = 0; attempt < USER_LIMIT; attempt++) {
-      expect((await postOrder(accessToken)).status).toBe(400);
+    for (let attempt = 0; attempt < IP_LIMIT; attempt++) {
+      expect((await request(server()).get('/cart').set(authHeader(accessToken))).status).toBe(200);
     }
-    expect((await postOrder(accessToken)).status).toBe(429);
+    expect((await request(server()).get('/cart').set(authHeader(accessToken))).status).toBe(429);
 
     const probe = app.get(CircuitBreakerFactory).create(PROBE_BREAKER);
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -129,7 +106,7 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     }
 
     const after = await scrape();
-    const limited = { tier: USER_THROTTLER, route: '/orders' };
+    const limited = { tier: DEFAULT_THROTTLER, route: '/cart' };
     expect(sampleOf(after, 'catalog_cache_operations_total', { result: 'miss' })).toBeGreaterThan(
       baselineOf(before, 'catalog_cache_operations_total', { result: 'miss' }),
     );

@@ -17,27 +17,18 @@ export default defineConfig({
       LOG_LEVEL: 'warn',
       DATABASE_URL: 'postgresql://e2e:e2e@127.0.0.1:5432/e2e_import_time_placeholder',
       REDIS_URL: 'redis://127.0.0.1:6379',
-      // Placeholders for the import-time validation; createTestApp points them at the user-service,
-      // id-service, inventory-service and payment-service stubs once their ports are known.
+      // Placeholders for the import-time validation; createTestApp points them at the user-service
+      // and id-service stubs once their ports are known.
       AUTH_JWKS_URL: 'http://127.0.0.1:1/.well-known/jwks.json',
       USER_SERVICE_INTERNAL_URL: 'http://127.0.0.1:1',
       ID_SERVICE_URL: 'http://127.0.0.1:1',
-      INVENTORY_SERVICE_URL: 'http://127.0.0.1:1',
-      PAYMENT_SERVICE_URL: 'http://127.0.0.1:1',
       INTERNAL_API_TOKEN: 'e2e-internal-api-token-not-a-real-secret-0',
-      INVENTORY_SERVICE_TOKEN: 'e2e-inventory-service-token-not-a-secret-0',
-      PAYMENT_SERVICE_TOKEN: 'e2e-payment-service-token-not-a-secret-00',
+      // The guard on the cart and catalog reads refuses to boot without a caller token.
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: 'e2e-order-service-caller-token-not-a-secret',
       JWT_ISSUER: 'https://users.jcool.test',
       JWT_AUDIENCE: 'jcool-api',
-      // Left at the production default, which the pool rule in env validation needs (2 × 5 + 2 + 2 + 5 ≤ 20).
-      // No spec holds more than two apps open at once (`queue-connection.e2e-spec.ts`, the two-app saga
-      // cases), so the real peak is 2 × 20 × 4 workers = 160 plus a handful of raw pools, inside the
-      // container's max_connections=300. Capping it lower starves the 12-16 contender races, which
-      // serialize on a stock row lock while each in-flight request holds a pool client: once the queue
-      // outlives `DB_POOL_CONNECTION_TIMEOUT_MS` (5000ms default, @jcool/platform database.config) the
-      // acquire throws and the request 500s, breaking the "every non-winner answered a clean 409, none
-      // errored" assertions.
-      DB_POOL_MAX: '20',
+      // The production default, so the suite runs against the pool the api actually gets.
+      DB_POOL_MAX: '10',
     },
     // Path aliases (mirror tsconfig paths) for the e2e runner. Semantic aliases
     // first (`@modules`/`@shared`), `@` catch-all last.

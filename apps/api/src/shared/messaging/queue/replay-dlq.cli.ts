@@ -1,12 +1,13 @@
 /**
- * Drain one queue's dead-letter queue back onto it:
- *   pnpm queue:replay-dlq --queue order-events                   # list what would be replayed, change nothing
- *   pnpm queue:replay-dlq --queue order-events --apply           # actually replay
+ * Drain the api-events dead-letter queue back onto it:
+ *   pnpm queue:replay-dlq --queue api-events                     # list what would be replayed, change nothing
+ *   pnpm queue:replay-dlq --queue api-events --apply             # actually replay
  *   pnpm queue:replay-dlq --queue api-events --apply --limit 20
- *   pnpm queue:replay-dlq --queue order-events --apply --force   # past the retention horizon; it can never
+ *   pnpm queue:replay-dlq --queue api-events --apply --force     # past the retention horizon; it can never
  *                                                                # override a claim that is actually there
  * In a deployed container (no devDependencies, so no `tsx`), the compiled twin:
- *   pnpm queue:replay-dlq:prod --queue order-events --apply
+ *   pnpm queue:replay-dlq:prod --queue api-events --apply
+ * order-events is the order-service's: `pnpm queue:replay-dlq:order` at the root.
  *
  * A replay cannot fix the reason the message failed — read the printed `failedReason` and deploy the
  * fix first, or the same messages come straight back.
@@ -40,7 +41,7 @@ const limit = limitArg === undefined ? 100 : Number(limitArg);
 const queueArg = argAfter('--queue');
 
 async function main(): Promise<void> {
-  // Required: with one dead-letter queue per queue, a default would be a guess at which one is on fire.
+  // Required even with one queue: `order-events` is the order-service's, and its inbox is not in this database.
   const selected = API_CONSUMED_QUEUES.find(({ name }) => name === queueArg);
   if (!selected) {
     const valid = API_CONSUMED_QUEUES.map(({ name }) => name).join(', ');

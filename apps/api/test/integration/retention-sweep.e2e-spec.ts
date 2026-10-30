@@ -10,11 +10,8 @@ import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
 import { testId } from '../setup/id-service-stub';
 
 const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
 const daysAgo = (days: number) => new Date(Date.now() - days * DAY_MS);
-const hoursFromNow = (hours: number) => new Date(Date.now() + hours * HOUR_MS);
-const ORDER_ID = testId();
-const USER_ID = testId();
+const PRODUCT_ID = testId();
 const STALE_MESSAGE_ID = testId();
 const YOUNG_MESSAGE_ID = testId();
 
@@ -24,8 +21,6 @@ const WINDOWS = {
   METRICS_TOKEN: E2E_METRICS_TOKEN,
   RETENTION_OUTBOX_DAYS: '30',
   RETENTION_INBOX_DAYS: '7',
-  RETENTION_IDEMPOTENCY_GRACE_SEC: '0',
-  RETENTION_REJECTED_ORDER_DAYS: '30',
 };
 
 // Each table exists to make some retry safe, so every test asserts on the survivor: over-collecting
@@ -45,35 +40,11 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
   const outboxRow = (overrides: Partial<typeof schema.outbox.$inferInsert> = {}) => ({
     id: testId(),
-    aggregateType: 'Order',
-    aggregateId: ORDER_ID,
-    eventType: 'order.placed',
-    payload: { orderId: ORDER_ID },
+    aggregateType: 'Product',
+    aggregateId: PRODUCT_ID,
+    eventType: 'catalog.product.changed',
+    payload: { productId: PRODUCT_ID },
     ...overrides,
-  });
-
-  const idempotencyRow = (key: string, expiresAt: Date, status: 'IN_PROGRESS' | 'COMPLETED' = 'IN_PROGRESS') => ({
-    id: testId(),
-    scope: `user:${USER_ID}`,
-    key,
-    requestHash: 'a'.repeat(64),
-    status,
-    method: 'POST',
-    path: '/orders',
-    expiresAt,
-  });
-
-  const keysLeft = async () =>
-    (await db.select({ key: schema.idempotencyKeys.key }).from(schema.idempotencyKeys)).map((r) => r.key);
-
-  const orderRow = (status: 'REJECTED' | 'CANCELLED', finalizedAt: Date) => ({
-    id: testId(),
-    userId: USER_ID,
-    status,
-    currency: 'VND',
-    totalAmount: 100_000,
-    placedAt: finalizedAt,
-    finalizedAt,
   });
 
   beforeAll(async () => {
@@ -87,13 +58,7 @@ describe('Retention sweeps (integration, real Postgres)', () => {
 
   // A sweep that was never registered produces no error and no metric; the table just grows.
   it('registers a sweep for every table with a retention rule', () => {
-    expect([...registry.names()].sort()).toEqual([
-      'media:assets',
-      'messaging:inbox',
-      'messaging:outbox',
-      'order:idempotency-keys',
-      'order:rejected-orders',
-    ]);
+    expect([...registry.names()].sort()).toEqual(['media:assets', 'messaging:inbox', 'messaging:outbox']);
   });
 
   describe('messaging:outbox', () => {
@@ -122,16 +87,16 @@ describe('Retention sweeps (integration, real Postgres)', () => {
       await db.insert(schema.inbox).values([
         {
           id: testId(),
-          consumer: 'order-events',
+          consumer: 'api-events',
           messageId: STALE_MESSAGE_ID,
-          eventType: 'order.placed',
+          eventType: 'catalog.product.changed',
           processedAt: daysAgo(8),
         },
         {
           id: testId(),
-          consumer: 'order-events',
+          consumer: 'api-events',
           messageId: YOUNG_MESSAGE_ID,
-          eventType: 'order.placed',
+          eventType: 'catalog.product.changed',
           processedAt: daysAgo(6),
         },
       ]);
@@ -144,68 +109,6 @@ describe('Retention sweeps (integration, real Postgres)', () => {
     });
   });
 
-  describe('order:idempotency-keys', () => {
-    // The dangerous over-collection: a COMPLETED row is the frozen response a retry replays, so
-    // deleting one early turns the next retry of POST /orders into a second order.
-    it('keeps a COMPLETED key that has not expired, and collects one that has', async () => {
-      await db
-        .insert(schema.idempotencyKeys)
-        .values([
-          idempotencyRow('completed-live', hoursFromNow(1), 'COMPLETED'),
-          idempotencyRow('completed-expired', daysAgo(1), 'COMPLETED'),
-          idempotencyRow('in-progress-live', hoursFromNow(1)),
-          idempotencyRow('in-progress-expired', daysAgo(1)),
-        ]);
-
-      const deleted = await sweepNamed('order:idempotency-keys').sweep(500);
-
-      // Status is deliberately not part of the predicate in either direction: expiry alone decides.
-      expect(deleted).toBe(2);
-      expect((await keysLeft()).sort()).toEqual(['completed-live', 'in-progress-live']);
-    });
-
-    it('deletes no more than the batch allows, so one tick cannot lock the table', async () => {
-      await db
-        .insert(schema.idempotencyKeys)
-        .values([1, 2, 3, 4, 5].map((n) => idempotencyRow(`expired-${n}`, daysAgo(1))));
-
-      expect(await sweepNamed('order:idempotency-keys').sweep(2)).toBe(2);
-      expect(await keysLeft()).toHaveLength(3);
-    });
-  });
-
-  describe('order:rejected-orders', () => {
-    // Only REJECTED is disposable: every other terminal order is the buyer's record.
-    it('collects a REJECTED order past the window with its lines, and keeps everything else', async () => {
-      const stale = orderRow('REJECTED', daysAgo(31));
-      const recent = orderRow('REJECTED', daysAgo(29));
-      const cancelled = orderRow('CANCELLED', daysAgo(100));
-      await db.insert(schema.orders).values([stale, recent, cancelled]);
-      await db.insert(schema.orderItems).values({
-        id: testId(),
-        orderId: stale.id,
-        skuId: testId(),
-        productName: 'Tee',
-        unitPrice: 100_000,
-        quantity: 1,
-      });
-
-      const deleted = await sweepNamed('order:rejected-orders').sweep(500);
-
-      expect(deleted).toBe(1);
-      const left = await db.select({ id: schema.orders.id }).from(schema.orders);
-      expect(left.map((row) => row.id).sort()).toEqual([recent.id, cancelled.id].sort());
-      expect(await db.select().from(schema.orderItems)).toHaveLength(0);
-    });
-
-    it('deletes no more than the batch allows', async () => {
-      await db.insert(schema.orders).values([1, 2, 3].map(() => orderRow('REJECTED', daysAgo(31))));
-
-      expect(await sweepNamed('order:rejected-orders').sweep(2)).toBe(2);
-      expect(await db.select().from(schema.orders)).toHaveLength(1);
-    });
-  });
-
   // Registered last: the registry has no way to remove a sweep, so a permanently failing one added
   // here would follow every test that came after it.
   describe('fault isolation across a tick', () => {
@@ -215,13 +118,11 @@ describe('Retention sweeps (integration, real Postgres)', () => {
         sweep: () => Promise.reject(new Error('relation does not exist')),
       });
       await db.insert(schema.outbox).values(outboxRow({ createdAt: daysAgo(60), publishedAt: daysAgo(60) }));
-      await db.insert(schema.idempotencyKeys).values(idempotencyRow('expired', daysAgo(1)));
 
       // A single try/catch around the tick would have let the first failure take the rest with it.
       await expect(scheduler.tick()).resolves.toBeUndefined();
 
       expect(await db.select().from(schema.outbox)).toHaveLength(0);
-      expect(await keysLeft()).toHaveLength(0);
 
       const { text } = await request(app.getHttpServer()).get('/metrics').set(metricsAuthHeader()).expect(200);
 

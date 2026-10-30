@@ -8,6 +8,7 @@ set -eu
 : "${API_TARGET:?API_TARGET is required}"
 : "${INVENTORY_TARGET:?INVENTORY_TARGET is required}"
 : "${PAYMENT_TARGET:?PAYMENT_TARGET is required}"
+: "${ORDER_TARGET:?ORDER_TARGET is required}"
 : "${LOKI_TARGET:?LOKI_TARGET is required}"
 
 mkdir -p /etc/prometheus/secrets
@@ -15,7 +16,8 @@ printf '%s' "$METRICS_TOKEN" > /etc/prometheus/secrets/metrics-token
 chmod 600 /etc/prometheus/secrets/metrics-token
 
 sed -e "s|__API_TARGET__|${API_TARGET}|g" -e "s|__INVENTORY_TARGET__|${INVENTORY_TARGET}|g" \
-  -e "s|__PAYMENT_TARGET__|${PAYMENT_TARGET}|g" -e "s|__LOKI_TARGET__|${LOKI_TARGET}|g" \
+  -e "s|__PAYMENT_TARGET__|${PAYMENT_TARGET}|g" -e "s|__ORDER_TARGET__|${ORDER_TARGET}|g" \
+  -e "s|__LOKI_TARGET__|${LOKI_TARGET}|g" \
   /etc/prometheus/prometheus.railway.yml > /etc/prometheus/prometheus.yml
 
 # Railway's private network is IPv6-only: bound to 0.0.0.0 (the default), Grafana could not reach it.

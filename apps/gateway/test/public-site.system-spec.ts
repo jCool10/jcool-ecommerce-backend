@@ -43,14 +43,15 @@ const contractHeaders = (res: Response) =>
 
 const echoOf = async (res: Promise<Response>) => (await (await res).json()) as Echo;
 
-// Fake upstreams stand in for the api, the inventory-service, the payment-service and a future auth
-// service; a fake edge stands in for Railway's.
+// Fake upstreams stand in for the api, the inventory-service, the payment-service, the order-service
+// and a future auth service; a fake edge stands in for Railway's.
 describe('gateway: public site', () => {
   let network: StartedNetwork;
   let api: StartedTestContainer;
   let auth: StartedTestContainer;
   let inventory: StartedTestContainer;
   let payment: StartedTestContainer;
+  let order: StartedTestContainer;
   let idService: StartedTestContainer;
   let edge: StartedTestContainer;
   let gateway: StartedTestContainer;
@@ -59,11 +60,12 @@ describe('gateway: public site', () => {
   beforeAll(async () => {
     await buildGatewayImage();
     network = await new Network().start();
-    [api, auth, inventory, payment, idService, edge] = await Promise.all([
+    [api, auth, inventory, payment, order, idService, edge] = await Promise.all([
       startFixture(network, 'fake-upstream.cjs', 'api', { NAME: 'api' }),
       startFixture(network, 'fake-upstream.cjs', 'auth', { NAME: 'auth' }),
       startFixture(network, 'fake-upstream.cjs', 'inventory', { NAME: 'inventory' }),
       startFixture(network, 'fake-upstream.cjs', 'payment', { NAME: 'payment' }),
+      startFixture(network, 'fake-upstream.cjs', 'order', { NAME: 'order' }),
       startFixture(network, 'fake-id-service.cjs', 'id-service'),
       startFixture(network, 'fake-edge.cjs', 'edge', { UPSTREAM: 'gateway:8080' }),
     ]);
@@ -71,6 +73,7 @@ describe('gateway: public site', () => {
       API_UPSTREAM: 'api:3000',
       INVENTORY_UPSTREAM: 'inventory:3000',
       PAYMENT_UPSTREAM: 'payment:3000',
+      ORDER_UPSTREAM: 'order:3000',
       ID_SERVICE_HOST: 'id-service',
       ID_SERVICE_PORT: '3000',
       TRUSTED_PROXY_CIDRS: `${edge.getIpAddress(network.getName())}/32`,
@@ -83,7 +86,7 @@ describe('gateway: public site', () => {
 
   afterAll(async () => {
     await Promise.allSettled(
-      [gateway, api, auth, inventory, payment, idService, edge].map((container) => container?.stop()),
+      [gateway, api, auth, inventory, payment, order, idService, edge].map((container) => container?.stop()),
     );
     await network?.stop();
   });
@@ -105,12 +108,12 @@ describe('gateway: public site', () => {
   }
 
   it('passes a request to the api byte for byte', async () => {
-    const body = Buffer.from('{"items":[{"skuId":"1",  "quantity": 2}]}\n');
+    const body = Buffer.from('{"skuId":"1",  "quantity": 2}\n');
 
     const echo = await echoOf(
-      direct('/orders?attempt=2', {
+      direct('/cart/items?attempt=2', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': 'key-1' },
+        headers: { 'content-type': 'application/json', 'x-request-id': 'req-1' },
         body,
       }),
     );
@@ -118,10 +121,10 @@ describe('gateway: public site', () => {
     expect(echo).toMatchObject({
       upstream: 'api',
       method: 'POST',
-      url: '/orders?attempt=2',
+      url: '/cart/items?attempt=2',
       body: body.toString('base64'),
     });
-    expect(echo.headers['idempotency-key']).toBe('key-1');
+    expect(echo.headers['x-request-id']).toBe('req-1');
   });
 
   it("hands the api's response back without adding or changing a header", async () => {
@@ -228,7 +231,7 @@ describe('gateway: public site', () => {
       });
 
       it('leaves writes outside /auth alone', async () => {
-        expect((await echoOf(direct('/orders', { method: 'POST' }, frozen))).upstream).toBe('api');
+        expect((await echoOf(direct('/cart/items', { method: 'POST' }, frozen))).upstream).toBe('api');
       });
     });
   });
@@ -241,7 +244,8 @@ describe('gateway: public site', () => {
         expect(await upstreamOf(path), path).toBe('inventory');
       }
       expect(await upstreamOf('/admin/inventory/x/adjust', 'POST')).toBe('inventory');
-      for (const path of ['/admin/orders', '/admin/inventoryx', '/inventory']) {
+      expect(await upstreamOf('/admin/orders')).toBe('order');
+      for (const path of ['/admin/inventoryx', '/inventory']) {
         expect(await upstreamOf(path), path).toBe('api');
       }
     });
@@ -280,9 +284,10 @@ describe('gateway: public site', () => {
       const upstreamOf = async (path: string) => (await echoOf(direct(path, { method: 'POST' }))).upstream;
 
       for (const path of ['/webhooks/payment', '/Webhooks/Payment']) expect(await upstreamOf(path), path).toBe('payment');
-      for (const path of ['/webhooks', '/webhooks/paymentx', '/webhooks/payment/x', '/orders/1/pay']) {
+      for (const path of ['/webhooks', '/webhooks/paymentx', '/webhooks/payment/x']) {
         expect(await upstreamOf(path), path).toBe('api');
       }
+      expect(await upstreamOf('/orders/1/pay')).toBe('order');
     });
 
     it("keep the service's internal payment API off the public listener", async () => {
@@ -307,18 +312,18 @@ describe('gateway: public site', () => {
     it.each(['/orders', '/orders/', '/orders/1/pay', '/orders/1/pay/', '/orders/1/cancel'])(
       'turns a POST to %s away with 503 and Retry-After',
       async (path) => {
-        const before = await hits(api);
+        const before = await hits(order);
 
         const res = await direct(path, { method: 'POST' }, frozen);
 
         expect(res.status).toBe(503);
         expect(res.headers.get('retry-after')).toBe('120');
-        expect(await hits(api)).toBe(before);
+        expect(await hits(order)).toBe(before);
       },
     );
 
     it('still serves reads and the payment webhook', async () => {
-      expect((await echoOf(direct('/orders', undefined, frozen))).upstream).toBe('api');
+      expect((await echoOf(direct('/orders', undefined, frozen))).upstream).toBe('order');
       expect((await echoOf(direct('/webhooks/payment', { method: 'POST' }, frozen))).upstream).toBe('payment');
     });
   });
@@ -348,6 +353,12 @@ describe('gateway: public site', () => {
 
     it('refuses to start without PAYMENT_UPSTREAM', async () => {
       const { PAYMENT_UPSTREAM: _missing, ...env } = baseEnv;
+
+      await expect(exitsWith(env)).rejects.toThrow(/failed to start/);
+    });
+
+    it('refuses to start without ORDER_UPSTREAM', async () => {
+      const { ORDER_UPSTREAM: _missing, ...env } = baseEnv;
 
       await expect(exitsWith(env)).rejects.toThrow(/failed to start/);
     });

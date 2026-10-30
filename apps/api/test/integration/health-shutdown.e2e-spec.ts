@@ -24,6 +24,13 @@ describe('Health shutdown-aware readiness (integration, real Postgres + Redis)',
   });
   closeAppAfterAll(() => app);
 
+  // Freeze and rollback redeploy the gateway through this probe, so it waits on nothing but the api's own stores.
+  it('checks only shutdown, Postgres and Redis', async () => {
+    const { body } = await request(app.getHttpServer()).get('/health/ready').expect(200);
+
+    expect(Object.keys(body.details)).toEqual(['shutdown', 'database', 'redis']);
+  });
+
   it('turns readiness to 503 once draining while liveness stays 200', async () => {
     const before = await request(app.getHttpServer()).get('/health/ready');
     expect(before.status).toBe(200);

@@ -66,11 +66,10 @@ async function bootstrap(): Promise<void> {
       .setTitle('JCool E-commerce API')
       .setDescription(
         [
-          'Single-store e-commerce backend — three bounded contexts in one deployable process.',
+          'Single-store e-commerce backend — the catalog and the cart. Checkout is the order-service.',
           '',
           '- **Catalog** — public product/SKU reads and search; admin CRUD behind `ADMIN`.',
           '- **Cart** — per-user cart lines, priced from the catalog at read time.',
-          '- **Order** — checkout: the order, not the cart, is the source of truth for a transaction. Stock is held by the inventory-service, payments by the payment-service.',
         ].join('\n'),
       )
       .setVersion(readApiVersion())
@@ -91,7 +90,6 @@ async function bootstrap(): Promise<void> {
       trustProxy,
       corsOrigins: corsOrigins.length,
       searchEnabled: configService.get<boolean>('search.enabled'),
-      inventoryLockStrategy: configService.get<string>('inventory.lockStrategy'),
       queueWorkerEnabled: configService.get<boolean>('queue.workerEnabled'),
       queueWorkerConcurrency: configService.get<number>('queue.workerConcurrency'),
       tracingEnabled: configService.get<boolean>('tracing.enabled'),

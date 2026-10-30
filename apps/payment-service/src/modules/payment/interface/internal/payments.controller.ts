@@ -38,7 +38,7 @@ import { ProviderUnavailableFilter, RETRY_AFTER_SEC } from './provider-unavailab
 @ApiExcludeController()
 @UseGuards(CallerTokenGuard)
 @UseFilters(ProviderUnavailableFilter)
-@InternalCallers('api')
+@InternalCallers('api', 'order-service')
 @Controller(PAYMENTS_PREFIX)
 export class PaymentsController {
   constructor(@Inject(PAYMENT_PARTICIPANT) private readonly participant: PaymentParticipant) {}

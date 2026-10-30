@@ -28,7 +28,7 @@ export class InternalApiController {
   ) {}
 
   @Get('users/:id/summary')
-  @InternalCallers('api')
+  @InternalCallers('api', 'order-service')
   async userSummary(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<UserSummary> {
     const summary = await this.userFacade.getUserSummary(id);
     if (!summary) throw new NotFoundException();
@@ -37,7 +37,7 @@ export class InternalApiController {
 
   // Every service that verifies access tokens reads it on a Redis miss.
   @Get('sessions/:userId/epoch')
-  @InternalCallers('api', 'inventory-service')
+  @InternalCallers('api', 'inventory-service', 'order-service')
   async sessionEpoch(@Param('userId', ParseSnowflakeIdPipe) userId: string): Promise<{ epoch: number }> {
     const epoch = await this.fillSessionEpoch.execute(userId);
     if (epoch === null) throw new NotFoundException();

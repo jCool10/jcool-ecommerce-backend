@@ -31,6 +31,7 @@ import {
 } from './infrastructure/catalog';
 import { AdminCatalogController } from './interface/catalog/admin-catalog.controller';
 import { CatalogController } from './interface/catalog/catalog.controller';
+import { SkuViewsInternalController } from './interface/catalog/internal/sku-views.internal.controller';
 import { CategoryRenamedHandler } from './interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from './interface/catalog/queue/product-changed.handler';
 
@@ -38,7 +39,7 @@ import { ProductChangedHandler } from './interface/catalog/queue/product-changed
 @Module({
   // MediaModule for `MEDIA_FACADE` only — image bytes and their lifecycle stay entirely over there.
   imports: [CacheModule, MediaModule, ResilienceModule],
-  controllers: [CatalogController, AdminCatalogController],
+  controllers: [CatalogController, AdminCatalogController, SkuViewsInternalController],
   providers: [
     ListProductsUseCase,
     GetProductDetailUseCase,

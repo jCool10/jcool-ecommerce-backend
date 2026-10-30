@@ -1,42 +1,8 @@
-import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
-import { type StubHeader, inventoryServiceStub } from '../inventory-service-stub';
 import { sleep } from '../sleep';
-
-// Stock is the inventory-service's, so these arrange and read it on the worker's stub. The unused app
-// argument keeps every caller unchanged.
 
 const LOCK_POLL_MS = 20;
 const LOCK_WAIT_TIMEOUT_MS = 5_000;
-
-export interface SeededStock {
-  variantId: string;
-  onHand: number;
-  reserved: number;
-}
-
-export interface StockView {
-  onHand: number;
-  reserved: number;
-  available: number;
-}
-
-export async function seedStock(
-  _app: INestApplication,
-  variantId: string,
-  onHand: number,
-  reserved = 0,
-): Promise<SeededStock> {
-  (await inventoryServiceStub()).seedStock(variantId, onHand, reserved);
-  return { variantId, onHand, reserved };
-}
-
-/** `available` is the invariant a race must keep >= 0. */
-export async function getStockView(_app: INestApplication, variantId: string): Promise<StockView | null> {
-  const level = (await inventoryServiceStub()).stockOf(variantId);
-  if (!level) return null;
-  return { onHand: level.onHand, reserved: level.reserved, available: level.onHand - level.reserved };
-}
 
 /**
  * Blocks until at least one backend is parked on a row lock, so a race test can commit the holder
@@ -82,14 +48,4 @@ export async function releaseOnceBlocked(
   } finally {
     releaseHolder();
   }
-}
-
-/** The order's participant header, or undefined when no command ever reached it. */
-export async function readReservationOrder(_app: INestApplication, orderId: string): Promise<StubHeader | undefined> {
-  return (await inventoryServiceStub()).headerOf(orderId);
-}
-
-/** Must equal the number of winning holds after a race. */
-export async function countHeldReservations(_app: INestApplication, variantId: string): Promise<number> {
-  return (await inventoryServiceStub()).heldCount(variantId);
 }

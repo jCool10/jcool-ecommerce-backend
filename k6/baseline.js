@@ -34,7 +34,8 @@ const writeOps = new Counter('sim_write_ops');
 // only surfacing as http_req_failed noise.
 const placeOps = new Counter('sim_place_ops');
 
-const BASE = __ENV.BASE_URL || 'http://localhost:3000';
+// The gateway, not the api: /auth and /orders live in their own services now.
+const BASE = __ENV.BASE_URL || 'http://localhost:8080';
 const PW = 'correct horse battery staple';
 const READ_PEAK_VUS = Number(__ENV.READ_PEAK_VUS || 20);
 const WRITE_VUS = Number(__ENV.WRITE_VUS || 3);

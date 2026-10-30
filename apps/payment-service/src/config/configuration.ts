@@ -35,7 +35,7 @@ export default () => ({
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
   },
   internalApi: {
-    callers: callerTokensFromEnv(['api']),
+    callers: callerTokensFromEnv(['api', 'order-service']),
   },
   payment: {
     // Kept as a boot-time assertion: env validation rejects anything but 'stripe'.

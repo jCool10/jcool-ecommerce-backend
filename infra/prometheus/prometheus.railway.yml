@@ -1,9 +1,9 @@
 # Railway scrape config. Same shape as prometheus.yml, but the targets are placeholders: private
 # domains are only known at runtime, so railway-entrypoint.sh substitutes them.
 #
-# The SLO recording rules in rules/ select job="jcool-api", so the inventory-service's and the
-# payment-service's HTTP series stay out of the api's SLI. Any other rule aggregating without a job selector must not read a series two
-# jobs export.
+# The SLO recording rules in rules/ select the api's and the order-service's jobs, so the
+# inventory-service's and the payment-service's HTTP series stay out of the public SLI. Any other
+# rule aggregating without a job selector must not read a series two jobs export.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -36,6 +36,14 @@ scrape_configs:
       credentials_file: /etc/prometheus/secrets/metrics-token
     static_configs:
       - targets: ['__PAYMENT_TARGET__']
+
+  - job_name: jcool-order
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics-token
+    static_configs:
+      - targets: ['__ORDER_TARGET__']
 
   # Only the loki_* series rules/loki.yml reads, which the api never exports.
   - job_name: loki

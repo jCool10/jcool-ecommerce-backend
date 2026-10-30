@@ -9,12 +9,16 @@ import { testId } from '../setup/id-service-stub';
 import { createTestApp } from '../setup/test-app.factory';
 
 const PREVIOUS_API_TOKEN = 'e2e-api-caller-token-previous-not-a-secret-0';
+const ORDER_SERVICE_TOKEN = 'e2e-order-service-caller-token-not-a-secret-0';
 
 describe('Internal API auth (integration)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    app = await createTestApp({ INTERNAL_CALLER_TOKEN_API_PREVIOUS: PREVIOUS_API_TOKEN });
+    app = await createTestApp({
+      INTERNAL_CALLER_TOKEN_API_PREVIOUS: PREVIOUS_API_TOKEN,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
+    });
   });
   closeAppAfterAll(() => app);
 
@@ -49,8 +53,15 @@ describe('Internal API auth (integration)', () => {
       .expect(200);
   });
 
+  it('accepts the order-service, which takes checkout over from the api', async () => {
+    await internalPost(app, paymentRoutes.cancel(testId()), ORDER_SERVICE_TOKEN).expect(200, { outcome: 'FENCED' });
+    await internalPost(app, paymentRoutes.status, ORDER_SERVICE_TOKEN)
+      .send({ orderIds: [testId()] })
+      .expect(200);
+  });
+
   // The guard refuses a route that names no caller, so a handler-level override could only narrow it.
-  it('admits only the api on every internal route', () => {
+  it('admits the api and the order-service on every internal route', () => {
     const reflector = app.get(Reflector);
     const handlers = ['openSession', 'capture', 'cancel', 'status'] as const;
 
@@ -61,12 +72,26 @@ describe('Internal API auth (integration)', () => {
       reflector.getAllAndOverride<string[] | undefined>(INTERNAL_CALLERS_KEY, [handlerOf(name), PaymentsController]),
     );
 
-    expect(callers).toEqual(handlers.map(() => ['api']));
+    expect(callers).toEqual(handlers.map(() => ['api', 'order-service']));
   });
 });
 
-describe('Boot without a caller token (integration)', () => {
-  it('refuses to start, so the internal API is never left open', async () => {
+// The api's token is dropped while this service still runs, so no single caller may be required.
+describe('Boot with caller tokens (integration)', () => {
+  it('starts with the order-service as its only caller', async () => {
+    const app = await createTestApp({
+      INTERNAL_CALLER_TOKEN_API: undefined,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
+    });
+    try {
+      await internalPost(app, paymentRoutes.cancel(testId()), ORDER_SERVICE_TOKEN).expect(200);
+      await internalPost(app, paymentRoutes.cancel(testId())).expect(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses to start with none, so the internal API is never left open', async () => {
     await expect(createTestApp({ INTERNAL_CALLER_TOKEN_API: undefined })).rejects.toThrow(
       'no internal caller token is set',
     );

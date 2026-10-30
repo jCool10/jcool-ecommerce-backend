@@ -77,10 +77,16 @@ describe('env validation', () => {
   });
 
   // Only the guard refuses a service with no caller at all.
-  it('takes the api caller tokens as optional, but none shorter than 32 characters', () => {
-    const tokens = ['INTERNAL_CALLER_TOKEN_API', 'INTERNAL_CALLER_TOKEN_API_PREVIOUS'];
+  it('takes every caller token as optional, but none shorter than 32 characters', () => {
+    const tokens = [
+      'INTERNAL_CALLER_TOKEN_API',
+      'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
+      'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
+      'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
+    ];
 
     expect(refusal({ ...BASE_ENV, INTERNAL_CALLER_TOKEN_API: 'a'.repeat(32) })).toBeNull();
+    expect(refusal({ ...BASE_ENV, INTERNAL_CALLER_TOKEN_ORDER_SERVICE: 'o'.repeat(32) })).toBeNull();
     expect(tokens.filter((name) => refusal({ ...BASE_ENV, [name]: 'a'.repeat(31) })?.includes(name))).toEqual(tokens);
   });
 

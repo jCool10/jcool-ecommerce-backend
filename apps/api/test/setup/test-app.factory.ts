@@ -5,16 +5,12 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { expect, inject } from 'vitest';
+import { expect } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
 import { idServiceStub } from './id-service-stub';
-import { inventoryServiceStub } from './inventory-service-stub';
-import { paymentServiceStub } from './payment-service-stub';
 import { waitForRedisReady } from './redis-ready';
-import { TEMPORAL_TEST_NAMESPACE } from './temporal-server';
-import { temporalTaskQueueForCurrentSpec } from './temporal-task-queue';
 import { userServiceStub } from './user-service-stub';
 import { workerDatabaseUrl, workerRedisUrl } from './worker-resources';
 
@@ -43,14 +39,12 @@ export async function createTestApp(
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
   // Background drivers forced off so nothing runs behind a test's back: a tick firing mid-assertion
-  // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Assigned
-  // unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's .env into
-  // process.env, so from the second app onwards `??=` would inherit an untracked local file.
+  // would publish a row, drain a job, or DELETE the row under assertion. Assigned unconditionally,
+  // NOT with `??=`: the first app's ConfigModule loads the developer's .env into process.env, so
+  // from the second app onwards `??=` would inherit an untracked local file.
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
-  process.env.CHECKOUT_REAPER_ENABLED = 'false';
-  process.env.CHECKOUT_INVARIANT_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
   // is a plain sleep inside `app.close()`, so a developer's `SHUTDOWN_GRACE_PERIOD_MS=8000` charges
   // every app in every file 8 seconds of doing nothing. Nothing asserts on the window's length:
@@ -61,27 +55,12 @@ export async function createTestApp(
   process.env.AUTH_JWKS_URL = userService.jwksUrl;
   process.env.USER_SERVICE_INTERNAL_URL = userService.url;
   process.env.ID_SERVICE_URL = (await idServiceStub()).url;
-  process.env.INVENTORY_SERVICE_URL = (await inventoryServiceStub()).url;
-  process.env.PAYMENT_SERVICE_URL = (await paymentServiceStub()).url;
   // One BullMQ keyspace per spec file. Redis is not truncated between files the way Postgres is, so
   // a file that leaves jobs waiting hands them to the next file that boots a worker, which then
   // applies events its own test never published. Same value for every app in a file, because a
   // suite may drive one app's relay and read the queue through another's.
   process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
-  // On: every checkout runs the saga, so an app without a worker would answer 503 to POST /orders.
-  // The queue is per spec file and per worker for the same reason as QUEUE_PREFIX.
-  process.env.TEMPORAL_WORKER_ENABLED = 'true';
-  process.env.TEMPORAL_ADDRESS = inject('TEMPORAL_ADDRESS');
-  process.env.TEMPORAL_NAMESPACE = TEMPORAL_TEST_NAMESPACE;
-  process.env.TEMPORAL_TASK_QUEUE = temporalTaskQueueForCurrentSpec();
-  process.env.TEMPORAL_WORKFLOW_BUNDLE_PATH = inject('TEMPORAL_WORKFLOW_BUNDLE_PATH');
-  // Vitest loads the developer's .env, and `.env.example` ships an SMTP_URL, so a copied .env would
-  // put every suite in this file on the real transport, mailing a developer's local Mailpit.
-  if (!('SMTP_URL' in envOverrides)) {
-    delete process.env.SMTP_URL;
-    delete process.env.MAIL_FROM;
-  }
-  // Same again for object storage: `.env.example` ships the local MinIO credentials, so a copied
+  // Vitest loads the developer's .env, and `.env.example` ships the local MinIO credentials, so a copied
   // .env would point every suite's uploads at the developer's own bucket and leave objects there.
   if (!('STORAGE_ENDPOINT' in envOverrides)) {
     delete process.env.STORAGE_ENDPOINT;

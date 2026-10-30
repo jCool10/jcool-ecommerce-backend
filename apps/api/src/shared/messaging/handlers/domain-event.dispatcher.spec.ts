@@ -1,17 +1,14 @@
-import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { describe, expect, it, vi } from 'vitest';
 import { type DomainEventJob, UnhandledEventError, eventLabel } from '@jcool/messaging';
-import type { OrderFinalizedEvent } from '@modules/order/domain/order.entity';
 import type { DrizzleTx } from '@shared/infrastructure/database/drizzle.tokens';
 import { dispatcherWith } from '../testing/domain-event-dispatcher.double';
-import { OrderEventsHandler } from './order-events.handler';
 
 const tx = Symbol('tx') as unknown as DrizzleTx;
 
 function job(eventType: string): DomainEventJob {
   return {
     outboxId: '0198f0d8-0000-7000-8000-000000000001',
-    aggregateType: 'Order',
+    aggregateType: 'Product',
     aggregateId: '0198f0d8-1111-7000-8000-000000000001',
     eventType,
     payload: {},
@@ -20,87 +17,17 @@ function job(eventType: string): DomainEventJob {
   };
 }
 
-// Order's finalized events come from its domain type, so a new one fails typecheck here until it is
-// listed. Payment's and Catalog's are literals in their outbox mappers.
+// Catalog's are literals in its outbox mapper.
 const PRODUCED_EVENT_TYPES = Object.keys({
-  'order.placed': true,
-  'order.paid': true,
-  'order.failed': true,
-  'order.expired': true,
-  'order.cancelled': true,
-  'payment.authorized': true,
   'catalog.product.changed': true,
   'catalog.category.renamed': true,
-} satisfies Record<
-  | OrderFinalizedEvent['eventName']
-  | 'order.placed'
-  | 'payment.authorized'
-  | 'catalog.product.changed'
-  | 'catalog.category.renamed',
-  true
->);
-
-const run = async (dispatcher: ReturnType<typeof dispatcherWith>, event: DomainEventJob) =>
-  (await dispatcher.prepare(event))(tx);
+} satisfies Record<'catalog.product.changed' | 'catalog.category.renamed', true>);
 
 describe('DomainEventDispatcher', () => {
   it('registers every event type a producer emits', () => {
     const dispatcher = dispatcherWith();
 
     expect(PRODUCED_EVENT_TYPES.filter((type) => !dispatcher.handles(type))).toEqual([]);
-  });
-
-  // A signal to Temporal cannot roll back with the claim; it must land before the claim commits.
-  it('forwards payment.authorized before the transaction and leaves the step empty', async () => {
-    const forwardAuthorization = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = dispatcherWith({ forwardAuthorization });
-    const guarded = new Proxy({} as DrizzleTx, {
-      get: () => {
-        throw new Error('payment.authorized must not use the transaction');
-      },
-    });
-
-    const step = await dispatcher.prepare(job('payment.authorized'));
-    expect(forwardAuthorization).toHaveBeenCalledOnce();
-
-    await expect(step(guarded)).resolves.toBeUndefined();
-  });
-
-  it('fails the prepare when the authorization cannot be forwarded', async () => {
-    const outage = new Error('temporal unavailable');
-    const dispatcher = dispatcherWith({ forwardAuthorization: vi.fn().mockRejectedValue(outage) });
-
-    await expect(dispatcher.prepare(job('payment.authorized'))).rejects.toBe(outage);
-  });
-
-  it('records an audit line for an order event it has nothing else to do for', async () => {
-    const info = vi.fn();
-    const event = job('order.placed');
-
-    await run(dispatcherWith({ orderEvents: new OrderEventsHandler(fakePinoLogger({ info })) }), event);
-
-    expect(info).toHaveBeenCalledWith(
-      {
-        eventType: 'order.placed',
-        orderId: event.aggregateId,
-        messageId: event.outboxId,
-        occurredAt: event.occurredAt,
-      },
-      expect.any(String),
-    );
-  });
-
-  // The address can come from another service, and that call must not hold the consumer's connection.
-  it('prepares the order.paid mail before the transaction and hands it back unsent', async () => {
-    const sendMail = vi.fn();
-    const prepareMail = vi.fn().mockResolvedValue(sendMail);
-    const dispatcher = dispatcherWith({ prepareMail });
-
-    const step = await dispatcher.prepare(job('order.paid'));
-    expect(prepareMail).toHaveBeenCalledOnce();
-
-    await expect(step(tx)).resolves.toBe(sendMail);
-    expect(sendMail).not.toHaveBeenCalled();
   });
 
   const catalogEvents = [
@@ -130,32 +57,18 @@ describe('DomainEventDispatcher', () => {
     await expect(dispatcher.prepare(job(eventType))).rejects.toBe(outage);
   });
 
-  // The saga has already closed the payment session by the time either is emitted.
-  it('only records order.expired and order.cancelled', async () => {
-    const info = vi.fn();
-    const dispatcher = dispatcherWith({ orderEvents: new OrderEventsHandler(fakePinoLogger({ info })) });
-
-    for (const eventType of ['order.expired', 'order.cancelled']) {
-      await expect(run(dispatcher, job(eventType))).resolves.toBeUndefined();
-    }
-
-    expect(info.mock.calls.map(([fields]) => (fields as { eventType: string }).eventType)).toEqual([
-      'order.expired',
-      'order.cancelled',
-    ]);
-  });
-
   it('refuses an event it has no handler for', async () => {
     await expect(dispatcherWith().prepare(job('cart.abandoned'))).rejects.toBeInstanceOf(UnhandledEventError);
+    // The order-service consumes these now.
+    await expect(dispatcherWith().prepare(job('order.placed'))).rejects.toBeInstanceOf(UnhandledEventError);
   });
 
   // A name off the wire is unbounded; as a metric label it would mint a time series per value.
   it('folds an unregistered event type into one label', () => {
     const dispatcher = dispatcherWith();
 
-    expect(['order.paid', 'order.paid; DROP TABLE'].map((type) => eventLabel(dispatcher, type))).toEqual([
-      'order.paid',
-      'unregistered',
-    ]);
+    expect(
+      ['catalog.product.changed', 'catalog.product.changed; DROP TABLE'].map((type) => eventLabel(dispatcher, type)),
+    ).toEqual(['catalog.product.changed', 'unregistered']);
   });
 });

@@ -3,7 +3,6 @@ import type { Queue } from 'bullmq';
 import type { Pool } from 'pg';
 import { afterAll, beforeEach } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
-import { resetCheckoutSagas } from './fixtures/checkout-saga.fixture';
 import type { StartedObjectStorage } from './object-storage';
 import { resetDatabase } from './reset-database';
 import { createTestApp, type EnvOverrides, type ProviderOverride } from './test-app.factory';
@@ -75,17 +74,6 @@ export function closeAppAfterAll(getApp: () => INestApplication | undefined): vo
  */
 export function resetDatabaseBeforeEach(getPool: () => Pool): void {
   beforeEach(async () => {
-    await resetDatabase(getPool());
-  });
-}
-
-/**
- * For suites with a Temporal worker. Saga runs outlive a TRUNCATE, so they are terminated first,
- * while their order ids can still be read.
- */
-export function resetSagasAndDatabaseBeforeEach(getApps: () => INestApplication[], getPool: () => Pool): void {
-  beforeEach(async () => {
-    await resetCheckoutSagas(getApps());
     await resetDatabase(getPool());
   });
 }

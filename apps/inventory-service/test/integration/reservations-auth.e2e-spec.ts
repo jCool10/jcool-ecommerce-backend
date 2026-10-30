@@ -1,8 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { SESSION_EPOCH_KEY_PREFIX } from '@jcool/auth-verifier';
 import { RESERVATION_COMMANDS, reservationRoutes } from '@jcool/internal-contracts';
+import { INTERNAL_CALLERS_KEY } from '@jcool/platform/internal-api';
+import { ReservationsController } from '../../src/modules/inventory/interface/internal/reservations.controller';
 import { authHeader } from '../setup/bearer.helper';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
@@ -13,16 +16,30 @@ import { createTestApp } from '../setup/test-app.factory';
 import { userServiceStub } from '../setup/user-service-stub';
 
 const PREVIOUS_API_TOKEN = 'e2e-api-caller-token-previous-not-a-secret-0';
+const ORDER_SERVICE_TOKEN = 'e2e-order-service-caller-token-not-a-secret-0';
+
+const holdUntil = () => new Date(Date.now() + 3_600_000).toISOString();
+
+async function reserveOne(app: INestApplication, token: string): Promise<number> {
+  const variantId = testId();
+  await seedStock(app, variantId, 1);
+  const { status } = await internalPost(app, reservationRoutes.try(testId()), token).send({
+    lines: [{ variantId, quantity: 1 }],
+    holdUntil: holdUntil(),
+  });
+  return status;
+}
 
 describe('Internal and admin auth (integration)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    app = await createTestApp({ INTERNAL_CALLER_TOKEN_API_PREVIOUS: PREVIOUS_API_TOKEN });
+    app = await createTestApp({
+      INTERNAL_CALLER_TOKEN_API_PREVIOUS: PREVIOUS_API_TOKEN,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
+    });
   });
   closeAppAfterAll(() => app);
-
-  const holdUntil = () => new Date(Date.now() + 3_600_000).toISOString();
 
   describe('internal API', () => {
     const everyRoute = () => {
@@ -55,15 +72,35 @@ describe('Internal and admin auth (integration)', () => {
     });
 
     it('accepts the previous token while the api rolls over', async () => {
-      const variantId = testId();
-      await seedStock(app, variantId, 1);
-
-      await internalPost(app, reservationRoutes.try(testId()), PREVIOUS_API_TOKEN)
-        .send({ lines: [{ variantId, quantity: 1 }], holdUntil: holdUntil() })
-        .expect(201);
+      expect(await reserveOne(app, PREVIOUS_API_TOKEN)).toBe(201);
       await internalPost(app, reservationRoutes.status, PREVIOUS_API_TOKEN)
         .send({ orderIds: [testId()] })
         .expect(200);
+    });
+
+    it('accepts the order-service, which takes checkout over from the api', async () => {
+      expect(await reserveOne(app, ORDER_SERVICE_TOKEN)).toBe(201);
+      await internalPost(app, reservationRoutes.status, ORDER_SERVICE_TOKEN)
+        .send({ orderIds: [testId()] })
+        .expect(200);
+    });
+
+    // The guard refuses a route that names no caller, so a handler-level override could only narrow it.
+    it('admits the api and the order-service on every internal route', () => {
+      const reflector = app.get(Reflector);
+      const handlers = ['tryReserve', 'commit', 'release', 'restock', 'status'] as const;
+
+      // Only a metadata target, never called.
+      const handlerOf = (name: string) =>
+        Object.getOwnPropertyDescriptor(ReservationsController.prototype, name)?.value as () => unknown;
+      const callers = handlers.map((name) =>
+        reflector.getAllAndOverride<string[] | undefined>(INTERNAL_CALLERS_KEY, [
+          handlerOf(name),
+          ReservationsController,
+        ]),
+      );
+
+      expect(callers).toEqual(handlers.map(() => ['api', 'order-service']));
     });
   });
 
@@ -106,5 +143,27 @@ describe('Internal and admin auth (integration)', () => {
       await getStock(revoked.accessToken).expect(401);
       expect(stub.calls('epoch') - asked).toBe(2);
     });
+  });
+});
+
+// The api's token is dropped while this service still runs, so no single caller may be required.
+describe('Boot with caller tokens (integration)', () => {
+  it('starts with the order-service as its only caller', async () => {
+    const app = await createTestApp({
+      INTERNAL_CALLER_TOKEN_API: undefined,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
+    });
+    try {
+      expect(await reserveOne(app, ORDER_SERVICE_TOKEN)).toBe(201);
+      expect(await reserveOne(app, E2E_API_CALLER_TOKEN)).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses to start with none, so the internal API is never left open', async () => {
+    await expect(createTestApp({ INTERNAL_CALLER_TOKEN_API: undefined })).rejects.toThrow(
+      'no internal caller token is set',
+    );
   });
 });

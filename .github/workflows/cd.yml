@@ -177,10 +177,12 @@ jobs:
         run: railway config plan --detailed-exit-code
 
       # One at a time, each live before the next starts; a failure stops the rest. A service goes out
-      # before its callers: the user-service's allowlist before the inventory-service that it lets in,
-      # the inventory-service and the payment-service before the api's saga. The gateway goes last
-      # because its healthcheck is the api's: an api release that fixes a broken api must not wait
-      # behind it.
+      # before its callers: the user-service's allowlist before the inventory-service and the
+      # order-service it lets in, the inventory-service and the payment-service before the
+      # order-service's saga. The order-service goes before the api, so a Temporal outage (its
+      # readiness includes Temporal) stops the run while the old api still serves. The gateway goes
+      # last because its healthcheck is the api's: an api release that fixes a broken api must not
+      # wait behind it.
       - name: Deploy id-service
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -208,6 +210,13 @@ jobs:
         run: |
           railway up --ci --service payment-service --environment "$RAILWAY_ENVIRONMENT"
           scripts/railway-wait-for-rollout.sh payment-service
+
+      - name: Deploy order-service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --ci --service order-service --environment "$RAILWAY_ENVIRONMENT"
+          scripts/railway-wait-for-rollout.sh order-service
 
       - name: Deploy api
         env:

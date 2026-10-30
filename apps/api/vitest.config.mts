@@ -48,10 +48,10 @@ export default defineConfig({
       // controllers are covered by the e2e tier. Measured minus two.
       thresholds: {
         'src/**/{domain,application}/**': {
-          statements: 85,
-          branches: 84,
-          functions: 84,
-          lines: 85,
+          statements: 75,
+          branches: 72,
+          functions: 78,
+          lines: 76,
         },
       },
     },

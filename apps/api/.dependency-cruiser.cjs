@@ -73,31 +73,6 @@ module.exports = {
       to: { path: '^src/modules/' },
     },
     {
-      name: 'workflow-sandbox-imports',
-      severity: 'error',
-      comment:
-        'Workflow code is bundled alone into the deterministic sandbox: only the Temporal workflow API, the saga contract and the pure saga domain may come in. Node core, Nest, the DB, the other Temporal packages and every other layer either break the bundle or break replay.',
-      from: { path: '^src/modules/order/infrastructure/temporal/workflows/' },
-      to: {
-        pathNot: [
-          '^src/modules/order/infrastructure/temporal/workflows/',
-          '^src/modules/order/infrastructure/temporal/checkout-saga\\.(contract|activities)\\.ts$',
-          '^src/modules/order/domain/(checkout-saga|order-status)\\.ts$',
-          '(^|/)node_modules/@temporalio/(workflow|common)/',
-        ],
-      },
-    },
-    {
-      name: 'workflow-activities-type-only',
-      severity: 'error',
-      comment: 'The workflow may name the activities type, never load the Nest class that implements it.',
-      from: { path: '^src/modules/order/infrastructure/temporal/workflows/' },
-      to: {
-        path: '^src/modules/order/infrastructure/temporal/checkout-saga\\.activities\\.ts$',
-        dependencyTypesNot: ['type-only'],
-      },
-    },
-    {
       name: 'no-orphans',
       severity: 'warn',
       comment: 'Dead file — nothing imports it and it imports nothing (excludes entry points, specs, barrels, published facades).',
@@ -135,8 +110,8 @@ module.exports = {
     tsPreCompilationDeps: true,
     exclude: {
       // Packages a rule matches on stay in the graph (unfollowed), or edges into them are invisible:
-      // @jcool, plus the framework and DB packages domain-is-pure and the workflow rule forbid.
-      path: 'node_modules/(?!(@jcool|@temporalio|@nestjs)/|drizzle-orm/|pg/)|^src/shared/infrastructure/database/migrations/',
+      // @jcool, plus the framework and DB packages domain-is-pure forbids.
+      path: 'node_modules/(?!(@jcool|@nestjs)/|drizzle-orm/|pg/)|^src/shared/infrastructure/database/migrations/',
     },
   },
 };

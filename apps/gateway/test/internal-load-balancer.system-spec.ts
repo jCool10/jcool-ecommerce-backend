@@ -32,6 +32,7 @@ describe('gateway: internal load balancer over id-service', () => {
       API_UPSTREAM: 'api:3000',
       INVENTORY_UPSTREAM: 'inventory:3000',
       PAYMENT_UPSTREAM: 'payment:3000',
+      ORDER_UPSTREAM: 'order:3000',
       ID_SERVICE_HOST: ID_SERVICE_ALIAS,
       ID_SERVICE_PORT: String(ID_SERVICE_PORT),
       // Outlasts every run of requests below, so a replica seen once was seen once because it sat out.

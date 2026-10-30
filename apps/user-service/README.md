@@ -21,7 +21,7 @@ The gateway sends `/auth` and `/.well-known/jwks.json` here; the api serves ever
 
 The three link pages are left out of the OpenAPI document, take the same throttle as their JSON siblings, and answer with `Content-Security-Policy: default-src 'none'; form-action 'self'`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer` (the token is in the URL) and `X-Robots-Tag: noindex`.
 
-`/internal/*` takes `Authorization: Bearer <INTERNAL_API_TOKEN>` (or `INTERNAL_API_TOKEN_PREVIOUS` while rotating). It is unthrottled, left out of the OpenAPI document, and answered with 404 by the gateway.
+`/internal/*` takes `Authorization: Bearer <INTERNAL_API_TOKEN>` from the api, and a token of its own from each other caller (`INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE`, `INTERNAL_CALLER_TOKEN_ORDER_SERVICE`), each with a `_PREVIOUS` accepted while rotating. The order-service reads `sessions/:userId/epoch` and `users/:id/summary`, the buyer's address for `order.paid`. It is unthrottled, left out of the OpenAPI document, and answered with 404 by the gateway.
 
 ### Access tokens
 
@@ -67,6 +67,7 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | `ID_SERVICE_TIMEOUT_MS` | `2000` | Covers the gateway's retries, not one attempt. |
 | `INTERNAL_API_TOKEN` | required | At least 32 characters. |
 | `INTERNAL_API_TOKEN_PREVIOUS` | unset | Also accepted, while callers move to a new token. |
+| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE`, `_PREVIOUS` | unset | The order-service's `USER_SERVICE_TOKEN`, at least 32 characters. |
 | `SESSION_EPOCH_RECONCILE_ENABLED` | `true` | |
 | `SESSION_EPOCH_RECONCILE_INTERVAL_MS` | `5000` | |
 | `RETENTION_AUTH_TOKEN_GRACE_DAYS` | `7` | |
