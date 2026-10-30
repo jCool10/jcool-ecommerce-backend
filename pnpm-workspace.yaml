@@ -3,8 +3,10 @@ packages:
   - packages/*
 
 overrides:
-  multer: ^2.4.0
+  multer: ^2.5.0
   proxy-addr: ^2.0.8
+  # @temporalio/worker's bundler (webpack > postcss) pins 1.2.1 (GHSA-68fv-2mgg-jv7q).
+  source-map-js: ^1.2.2
 
 # argon2 compiles from source when no prebuild matches the platform. The rest only verify or
 # optimize binaries that already arrive as platform packages.

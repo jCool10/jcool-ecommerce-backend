@@ -3,17 +3,11 @@ import { Job, type JobsOptions, type Queue } from 'bullmq';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type DeadLetterJob, type DomainEventJob, OutboxRelay, jobIdFor, queueToken } from '@jcool/messaging';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import * as schema from '../../src/shared/infrastructure/database/schema';
+import { API_EVENTS_CONSUMER, API_EVENTS_DLQ, API_EVENTS_QUEUE } from '../../src/shared/messaging/event-routes';
 import { DomainEventDispatcher } from '../../src/shared/messaging/handlers/domain-event.dispatcher';
-import { OutboxRelay } from '../../src/shared/messaging/outbox/outbox-relay';
-import type { DeadLetterJob } from '../../src/shared/messaging/queue/dead-letter';
-import { type DomainEventJob, jobIdFor } from '../../src/shared/messaging/queue/domain-event.job';
-import {
-  DOMAIN_EVENTS_CONSUMER,
-  DOMAIN_EVENTS_DLQ_QUEUE,
-  DOMAIN_EVENTS_QUEUE,
-} from '../../src/shared/messaging/queue/queue.constants';
 import { spyOnEffect } from '../setup/dispatcher-effect.helper';
 import { resetDatabase } from '../setup/reset-database';
 import { createTestApp } from '../setup/test-app.factory';
@@ -23,12 +17,12 @@ import { testId } from '../setup/id-service-stub';
 const ATTEMPTS = '1';
 const BACKOFF_MS = '50';
 
-const seedRow = (orderId = testId()) => ({
+const seedRow = (productId = testId()) => ({
   id: testId(),
-  aggregateType: 'Order',
-  aggregateId: orderId,
-  eventType: 'order.placed',
-  payload: { orderId, totalAmountMinor: 150_000 },
+  aggregateType: 'Product',
+  aggregateId: productId,
+  eventType: 'catalog.product.changed',
+  payload: { productId },
 });
 
 // BullMQ dedups `add` on whether the job key exists, not on whether the event was applied.
@@ -45,12 +39,14 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     app = await createTestApp({
       QUEUE_WORKER_ENABLED: 'true',
       QUEUE_CONSUMER_ATTEMPTS: ATTEMPTS,
+      // Catalog events ride the long ladder, which takes its attempts from here.
+      ORDER_PAID_CONSUMER_ATTEMPTS: ATTEMPTS,
       QUEUE_CONSUMER_BACKOFF_MS: BACKOFF_MS,
     });
     relay = app.get(OutboxRelay);
     dispatcher = app.get(DomainEventDispatcher);
-    queue = app.get<Queue>(DOMAIN_EVENTS_QUEUE);
-    dlq = app.get<Queue>(DOMAIN_EVENTS_DLQ_QUEUE);
+    queue = app.get<Queue>(queueToken(API_EVENTS_QUEUE));
+    dlq = app.get<Queue>(queueToken(API_EVENTS_DLQ));
     db = app.get<DrizzleDB>(DRIZZLE);
     pool = app.get<Pool>(PG_POOL);
   });
@@ -81,7 +77,7 @@ describe('Outbox relay against a job the queue already remembers (integration, r
     db
       .select()
       .from(schema.inbox)
-      .where(and(eq(schema.inbox.consumer, DOMAIN_EVENTS_CONSUMER), eq(schema.inbox.messageId, messageId)));
+      .where(and(eq(schema.inbox.consumer, API_EVENTS_CONSUMER), eq(schema.inbox.messageId, messageId)));
 
   const stateOf = async (id: string): Promise<string> => {
     const job = await Job.fromId<DomainEventJob>(queue, jobIdFor(id));

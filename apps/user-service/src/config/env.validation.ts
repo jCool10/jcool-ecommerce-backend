@@ -108,6 +108,29 @@ export class EnvironmentVariables extends PlatformEnv {
   @MinLength(32)
   INTERNAL_API_TOKEN_PREVIOUS?: string;
 
+  // The inventory-service reads session epochs on its admin routes. Optional, so the token can be
+  // set before that service first deploys and dropped again after it stops calling.
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS?: string;
+
+  // The order-service reads epochs and, for the order.paid mail, user summaries.
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS?: string;
+
   @IsOptional()
   @IsStrictBoolean()
   SESSION_EPOCH_RECONCILE_ENABLED?: string;

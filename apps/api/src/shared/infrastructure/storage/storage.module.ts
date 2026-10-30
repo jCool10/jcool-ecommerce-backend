@@ -30,7 +30,7 @@ class UnconfiguredObjectStorage implements ObjectStoragePort {
 }
 
 /**
- * Presence of the bucket settings is the switch, the way `SMTP_URL` and `SENTRY_DSN` are. In
+ * Presence of the bucket settings is the switch, the way `SENTRY_DSN` is. In
  * production a half-set group is a boot failure: partially configured storage would mint upload
  * URLs against the wrong endpoint rather than fail.
  */

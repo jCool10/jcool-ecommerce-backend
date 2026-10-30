@@ -6,8 +6,9 @@ import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/app.setup';
 
 /**
- * Boots the real module graph on the keyspace under `keyPrefix`; the lease is already claimed when it
- * resolves. `env` applies to this app only: config is read when the module compiles, then restored.
+ * Boots the real module graph on the keyspace under `keyPrefix`; the first claim attempt has settled when
+ * it resolves, but a failed one leaves the app unready until the keeper's retry lands.
+ * `env` applies to this app only: config is read when the module compiles, then restored.
  */
 export async function createTestApp(keyPrefix: string, env: Record<string, string> = {}): Promise<INestApplication> {
   const overrides = { ETCD_ENDPOINTS: inject('ETCD_URL'), ETCD_KEY_PREFIX: keyPrefix, ...env };

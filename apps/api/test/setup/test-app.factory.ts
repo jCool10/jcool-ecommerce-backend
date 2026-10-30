@@ -35,27 +35,22 @@ export async function createTestApp(
   // logical db would let one file's TRUNCATE and cache keys reach into another's. See worker-resources.ts.
   process.env.DATABASE_URL = workerDatabaseUrl();
   process.env.REDIS_URL = workerRedisUrl();
-  // Payment defaults to the Stripe adapter, which refuses to construct without a webhook secret;
-  // provide a dummy so AppModule boots. Signed-webhook e2e can override with its own known secret.
-  process.env.PAYMENT_WEBHOOK_SECRET ??= 'whsec_test_not_a_real_secret_0000'; // schema needs ≥16 chars
   // Rate limiting off by default so the shared loopback IP doesn't make suites
   // flaky. A suite that tests throttling sets THROTTLE_ENABLED='true' first.
   process.env.THROTTLE_ENABLED ??= 'false';
   // Background drivers forced off so nothing runs behind a test's back: a tick firing mid-assertion
-  // would settle an order, publish a row, drain a job, or DELETE the row under assertion. Assigned
-  // unconditionally, NOT with `??=`: the first app's ConfigModule loads the developer's .env into
-  // process.env, so from the second app onwards `??=` would inherit an untracked local file.
-  process.env.RECONCILE_ENABLED = 'false';
+  // would publish a row, drain a job, or DELETE the row under assertion. Assigned unconditionally,
+  // NOT with `??=`: the first app's ConfigModule loads the developer's .env into process.env, so
+  // from the second app onwards `??=` would inherit an untracked local file.
   process.env.OUTBOX_RELAY_ENABLED = 'false';
   process.env.QUEUE_WORKER_ENABLED = 'false';
-  process.env.RESERVATION_SWEEP_ENABLED = 'false';
   process.env.RETENTION_ENABLED = 'false';
   // Same reason, and it is the single most expensive line in the tier when it leaks: the drain window
   // is a plain sleep inside `app.close()`, so a developer's `SHUTDOWN_GRACE_PERIOD_MS=8000` charges
   // every app in every file 8 seconds of doing nothing. Nothing asserts on the window's length:
   // `health-shutdown.e2e-spec.ts` reads the readiness flag, which flips before the wait.
   process.env.SHUTDOWN_GRACE_PERIOD_MS = '0';
-  // Both URLs are placeholders in vitest-e2e.config.mts; only the stub's port is known this late.
+  // These URLs are placeholders in vitest-e2e.config.mts; only the stubs' ports are known this late.
   const userService = await userServiceStub();
   process.env.AUTH_JWKS_URL = userService.jwksUrl;
   process.env.USER_SERVICE_INTERNAL_URL = userService.url;
@@ -65,18 +60,7 @@ export async function createTestApp(
   // applies events its own test never published. Same value for every app in a file, because a
   // suite may drive one app's relay and read the queue through another's.
   process.env.QUEUE_PREFIX = queuePrefixForCurrentSpec();
-  // Vitest loads the developer's .env, so a real STRIPE_SECRET_KEY would put createSession on the
-  // live path, billable and non-deterministic.
-  if (!('STRIPE_SECRET_KEY' in envOverrides)) {
-    delete process.env.STRIPE_SECRET_KEY;
-  }
-  // Same reason: `.env.example` ships an SMTP_URL, so a copied .env would put every suite in this
-  // file on the real transport, mailing a developer's local Mailpit from unrelated tests.
-  if (!('SMTP_URL' in envOverrides)) {
-    delete process.env.SMTP_URL;
-    delete process.env.MAIL_FROM;
-  }
-  // Same again for object storage: `.env.example` ships the local MinIO credentials, so a copied
+  // Vitest loads the developer's .env, and `.env.example` ships the local MinIO credentials, so a copied
   // .env would point every suite's uploads at the developer's own bucket and leave objects there.
   if (!('STORAGE_ENDPOINT' in envOverrides)) {
     delete process.env.STORAGE_ENDPOINT;
@@ -99,8 +83,7 @@ export async function createTestApp(
       builder = builder.overrideProvider(override.provide).useValue(override.useValue);
     }
     const moduleRef = await builder.compile();
-    // `rawBody: true` mirrors main.ts so the payment webhook's raw-body signature check works in e2e.
-    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true, rawBody: true });
+    const app = moduleRef.createNestApplication<NestExpressApplication>({ bufferLogs: true });
     app.useLogger(app.get(Logger));
 
     // Mirror main.ts edge config so the e2e app exercises the same middleware.
@@ -124,7 +107,9 @@ export async function createTestApp(
       // Bind a real port. supertest ephemeral-listens a non-listening server per request and tears
       // that listener down again; firing a herd of concurrent requests races those binds and
       // surfaces as `read ECONNRESET`, moving the race off the DB/cache/lock under test.
-      await app.listen(0);
+      // Loopback, not the `::` wildcard: on macOS a wildcard socket can share its port with another
+      // worker's 127.0.0.1 listener, and supertest then lands on that one.
+      await app.listen(0, '127.0.0.1');
       await waitForRedisReady(app.get(RedisService).getClient());
       return app;
     } catch (error) {

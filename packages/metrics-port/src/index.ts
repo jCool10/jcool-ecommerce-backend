@@ -36,18 +36,84 @@ export type ConsumeResult = 'processed' | 'duplicate' | 'failed';
 
 export type DeadLetterReason = 'permanent' | 'attempts_exhausted';
 
-/** In the order the saga runs them. */
-export type SagaStep = 'reserve' | 'payment_session' | 'finalize';
+/** A checkout saga activity that calls a participant. */
+export type SagaStep =
+  'try_reserve' | 'commit_stock' | 'capture_payment' | 'release_stock' | 'restock' | 'cancel_payment';
 
-export type CompensationTrigger = 'payment_failed' | 'ttl_expired' | 'cancelled';
+/** The participant's own outcome, lower-cased; `error` is a call that threw and will be retried. */
+export type SagaStepOutcome =
+  | 'reserved'
+  | 'out_of_stock'
+  | 'contended'
+  | 'conflict'
+  | 'applied'
+  | 'idempotent'
+  | 'captured'
+  | 'not_capturable'
+  | 'cancelled'
+  | 'fenced'
+  | 'captured_conflict'
+  | 'error';
+
+export type CompensationKind = 'release_stock' | 'restock' | 'cancel_payment';
+
+export type CompensationReason =
+  | 'try_failed'
+  | 'try_timeout'
+  | 'abandoned'
+  | 'expired'
+  | 'cancelled'
+  | 'commit_conflict'
+  | 'capture_failed'
+  | 'late_authorization';
+
+export type CheckoutInvariantKind =
+  'captured_without_paid' | 'paid_without_capture' | 'paid_without_commit' | 'orphan_hold' | 'authorized_on_dead_order';
+
+export type InvariantCheckResult = 'ok' | 'violations' | 'error';
 
 /** WHICH PATH noticed money on an order that will never ship — the observer, not the cause. */
-export type RefundOwedSource = 'expire_session' | 'webhook_direct' | 'settlement_event';
+export type RefundOwedSource = 'webhook_direct';
 
 export type MailKind = 'email_verification' | 'password_reset' | 'order_paid';
 
 /** `miss` is a read-through to the user-service, paid for on the request path. */
 export type SessionEpochLookupResult = 'hit' | 'miss';
+
+export type TccParticipant = 'inventory' | 'payment';
+
+export type TccOp =
+  | 'try'
+  | 'commit'
+  | 'release'
+  | 'restock'
+  | 'lapse_release'
+  | 'open_session'
+  | 'capture'
+  | 'cancel'
+  | 'record_authorization';
+
+/** The command's own outcome, lower-cased; `error` is a command that threw instead of answering. */
+export type TccBranchOutcome =
+  | 'reserved'
+  | 'out_of_stock'
+  | 'contended'
+  | 'applied'
+  | 'idempotent'
+  | 'conflict'
+  | 'opened'
+  | 'closed'
+  | 'captured'
+  | 'not_capturable'
+  | 'cancelled'
+  | 'fenced'
+  | 'captured_conflict'
+  | 'recorded'
+  | 'recorded_late'
+  | 'already_recorded'
+  | 'amount_mismatch'
+  | 'stray_voided'
+  | 'error';
 
 /**
  * Every `string` parameter below is a Prometheus LABEL: callers pass only bounded values, never an
@@ -75,12 +141,15 @@ export interface MetricsPort {
   recordEventConsumed(eventType: string, result: ConsumeResult): void;
   recordConsumeRetry(eventType: string): void;
   recordDeadLetter(eventType: string, reason: DeadLetterReason): void;
-  /** Read as a funnel: orders holding stock that never reach `finalize` are what the sweep expires. */
-  recordSagaStep(step: SagaStep, outcome: 'success' | 'failed'): void;
-  recordCompensation(trigger: CompensationTrigger): void;
+  /** Every attempt, retries included: a step retried until it lands counts each answer it got. */
+  recordSagaStep(step: SagaStep, outcome: SagaStepOutcome): void;
+  /** Only the attempt that applied it, so retries of a landed compensation are not counted again. */
+  recordCompensation(kind: CompensationKind, reason: CompensationReason): void;
+  /** Every kind, zeros included: one left out would keep its last value. */
+  setCheckoutInvariantViolations(counts: Record<CheckoutInvariantKind, number>): void;
+  recordInvariantCheck(result: InvariantCheckResult): void;
   /** Observations, not refunds — one order can raise several. */
   recordRefundOwed(source: RefundOwedSource): void;
-  recordReservationExpiry(): void;
   /** Nothing retries a failed send, so this counts mail actually lost, not mail delayed. */
   recordMailSendFailure(kind: MailKind): void;
   /** `sweep` is a fixed `context:table` name. Same for the two below. */
@@ -90,4 +159,7 @@ export interface MetricsPort {
   recordRetentionSweepFailure(sweep: string): void;
   recordMediaBytesReclaimed(bytes: number): void;
   recordSessionEpochLookup(result: SessionEpochLookupResult): void;
+  recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void;
+  /** Money was captured on a payment the order had already cancelled. Each one needs a human. */
+  recordCaptureConflict(): void;
 }

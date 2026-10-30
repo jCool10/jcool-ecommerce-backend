@@ -7,7 +7,7 @@ const LOCK_NAMESPACE = 0x1d_00_0002;
 const LOCK_KEY = 1;
 
 // Every table a seed script writes: the next run's floor is read back from them.
-const SEEDED_TABLES = ['categories', 'products', 'product_variants', 'prices', 'stock_levels', 'carts', 'cart_items'];
+const SEEDED_TABLES = ['categories', 'products', 'product_variants', 'prices', 'carts', 'cart_items'];
 
 export type ScriptsMint = () => string;
 

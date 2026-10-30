@@ -45,10 +45,10 @@ mkdir -p "$OUT"
 
 psql_q() { docker exec "$PG_CONTAINER" psql -U "$PGU" -d "$PGD" -qtAF$'\t' -c "$1"; }
 
-# pool.max is the app's own ceiling (DB_POOL_MAX, default 10 in apps/api/src/shared/config/configuration.ts).
+# pool.max is the app's own ceiling (DB_POOL_MAX, default 20 in apps/api/src/shared/config/checkout-saga.config.ts).
 # Utilization below is server-side backends / this, which is the only view available without an
 # app-side gauge: the pool never opens more sessions than it holds.
-POOL_MAX=${DB_POOL_MAX:-10}
+POOL_MAX=${DB_POOL_MAX:-20}
 
 echo "[capture] $LABEL — ${DURATION}s @ ${INTERVAL}s → $OUT"
 

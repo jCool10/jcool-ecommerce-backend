@@ -48,6 +48,18 @@
 	handle @internal {
 		respond 404
 	}
+	# Stops order writes while checkout is being cut over; reads pass. A request enters only one
+	# handle, so this one must come before the order route's or the freeze is skipped.
+	# Substituted at parse time like the auth flag, so it needs a redeploy.
+	@checkoutFrozen {
+		method POST
+		path /orders /orders/*
+		expression `"{$CHECKOUT_WRITE_FREEZE:false}" == "true"`
+	}
+	handle @checkoutFrozen {
+		header Retry-After 120
+		respond "checkout is read-only during a migration" 503
+	}
 	@auth path /auth /auth/* /.well-known/jwks.json
 	handle @auth {
 		# Stops auth writes while a migration must not race one, reads untouched. The expression is
@@ -66,6 +78,27 @@
 			reverse_proxy {$AUTH_UPSTREAM} {
 				import upstream
 			}
+		}
+	}
+	# Checkout and every order read belong to the order-service.
+	@orders path /orders /orders/* /admin/orders /admin/orders/*
+	handle @orders {
+		reverse_proxy {$ORDER_UPSTREAM} {
+			import upstream
+		}
+	}
+	# Stock is the inventory-service's.
+	@inventory path /admin/inventory /admin/inventory/*
+	handle @inventory {
+		reverse_proxy {$INVENTORY_UPSTREAM} {
+			import upstream
+		}
+	}
+	# The provider's webhook; the payment-service checks its signature over the raw body.
+	@payment path /webhooks/payment
+	handle @payment {
+		reverse_proxy {$PAYMENT_UPSTREAM} {
+			import upstream
 		}
 	}
 	handle {

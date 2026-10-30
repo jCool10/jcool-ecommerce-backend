@@ -16,17 +16,11 @@ module.exports = {
       },
     },
     {
-      name: 'product-aggregate-isolation',
+      name: 'runtime-never-loads-contract-cases',
       severity: 'error',
-      comment:
-        'Catalog and stock share the product module, not an aggregate: in no layer may one subdomain import the other, so stock can leave as its own service without splitting an aggregate. They meet only through product.module.ts and application/public.',
-      from: { path: '^src/modules/product/[^/]+/(catalog|stock)/' },
-      to: {
-        // A file at a layer's root (say a barrel re-exporting both subdomains) is a target too, or it
-        // would launder the crossing.
-        path: '^src/modules/product/([^/]+/(catalog|stock)/|(domain|application|infrastructure|interface)/[^/]+$)',
-        pathNot: '^src/modules/product/[^/]+/$1/',
-      },
+      comment: 'The shared case table and its HTTP driver are test code.',
+      from: { path: '^src/', pathNot: '\\.spec\\.ts$' },
+      to: { path: '^node_modules/@jcool/internal-contracts/dist/testing' },
     },
     {
       name: 'domain-is-pure',
@@ -63,8 +57,8 @@ module.exports = {
         'domain/application may reach messaging only through its pure port. The package barrel pulls the Drizzle adapter and, transitively, @opentelemetry/api — which app-domain-telemetry-free cannot catch, because it matches direct edges only.',
       from: { path: '^src/modules/[^/]+/(domain|application)/' },
       to: {
-        path: '^src/shared/messaging/',
-        pathNot: '^src/shared/messaging/outbox/outbox-writer\\.port',
+        path: '^src/shared/messaging/|^node_modules/@jcool/messaging/',
+        pathNot: '^node_modules/@jcool/messaging/dist/outbox-port\\.',
       },
     },
     {
@@ -115,8 +109,9 @@ module.exports = {
     tsConfig: { fileName: './tsconfig.json' },
     tsPreCompilationDeps: true,
     exclude: {
-      // @jcool packages stay in the graph so rules can match edges into them.
-      path: 'node_modules/(?!@jcool/)|^src/shared/infrastructure/database/migrations/',
+      // Packages a rule matches on stay in the graph (unfollowed), or edges into them are invisible:
+      // @jcool, plus the framework and DB packages domain-is-pure forbids.
+      path: 'node_modules/(?!(@jcool|@nestjs)/|drizzle-orm/|pg/)|^src/shared/infrastructure/database/migrations/',
     },
   },
 };

@@ -20,6 +20,9 @@ build
 .idea
 .vscode
 *.log
+# Local output that git ignores too; it would otherwise ride along in every image's `COPY . .`.
+assets
+tmp
 
 # Repo-only material not needed to build or run the app.
 .claude
@@ -53,6 +56,10 @@ k6
 !infra/elasticsearch/Dockerfile
 !infra/elasticsearch/elasticsearch.yml
 !infra/elasticsearch/railway-entrypoint.sh
+!infra/temporal/Dockerfile
+!infra/temporal/entrypoint.sh
+!infra/temporal/config
+!infra/temporal/dynamicconfig
 infra/prometheus/secrets
 
 # Not compiled into the image — tsconfig.build.json already excludes both.

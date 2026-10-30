@@ -15,8 +15,9 @@
 // Tunables (env):  BASE_URL, READ_PEAK_VUS, WRITE_VUS
 //
 // Preconditions: stack up (docker compose --profile observability up -d), DB seeded
-// (npm run db:seed — also seeds generous inventory stock so placement, which now reserves
-// stock, stays on the success path), THROTTLE_ENABLED=false (single-host load would otherwise
+// (pnpm db:seed — the api's catalog, then the inventory-service's stock top-up, which gives every
+// listed variant 1e9 on hand so placement stays on the success path; it reads the catalog through
+// the gateway, so the stack must be up first), THROTTLE_ENABLED=false (single-host load would otherwise
 // hit the 100 req/60s limiter), and auth.requireVerifiedEmail=false (the default) so login
 // returns a token with no email step.
 
@@ -33,7 +34,8 @@ const writeOps = new Counter('sim_write_ops');
 // only surfacing as http_req_failed noise.
 const placeOps = new Counter('sim_place_ops');
 
-const BASE = __ENV.BASE_URL || 'http://localhost:3000';
+// The gateway, not the api: /auth and /orders live in their own services now.
+const BASE = __ENV.BASE_URL || 'http://localhost:8080';
 const PW = 'correct horse battery staple';
 const READ_PEAK_VUS = Number(__ENV.READ_PEAK_VUS || 20);
 const WRITE_VUS = Number(__ENV.WRITE_VUS || 3);

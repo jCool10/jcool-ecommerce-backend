@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import { PermanentError } from '@shared/messaging/errors';
-import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, PermanentError } from '@jcool/messaging';
 import type { CatalogSearchPort, ProductSearchStatePort } from '../../../application/catalog/ports';
 import { ProductSearchSyncService } from '../../../application/catalog/services/product-search-sync.service';
 import { fakeCatalogSearch, fakeProductSearchState } from '../../../testing/catalog-port.doubles';

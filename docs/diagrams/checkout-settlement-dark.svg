@@ -1,4 +1,4 @@
-<svg class="ak-diagram-svg" viewBox="36 26 988 778" width="988" height="778" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Checkout and settlement"><title>Checkout and settlement</title><desc>Checkout commits the order, its price-snapshot lines, the stock hold, the order.placed outbox row and the idempotency result in one transaction. Payment opens a hosted Stripe session; the HMAC-verified webhook settles the order through FinalizeOrderUseCase, which commits the hold in the same transaction as the status flip. A payment event or the reconcile sweep reaches the same use case if the webhook never arrives.</desc><defs><style>
+<svg class="ak-diagram-svg" viewBox="36 26 1528 1228" width="1528" height="1228" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Checkout saga"><title>Checkout saga</title><desc>tx A writes RESERVING with price-snapshot lines; Update-with-Start runs the CheckoutSaga Temporal workflow, waiting up to CHECKOUT_RESERVE_WAIT_MS. Its stock Try runs in stock&apos;s own transaction, fenced by reservation_orders; tx B lands PENDING plus order.placed, or REJECTED. /pay opens a Stripe manual-capture session. The signed webhook or reconcile sweep records the authorization; its event signals the saga: verify, commit stock, capture (the pivot), PAID. Past the deadline: EXPIRED, compensated.</desc><defs><style>
       svg {
         --ak-bg: #ffffff; --ak-surface: #f8fafc; --ak-surface-border: #e2e8f0;
         --ak-text-primary: #0f172a; --ak-text-secondary: #475569; --ak-text-muted: #94a3b8;
@@ -9,57 +9,90 @@
       }
       svg { --ak-bg: #090d16; --ak-text-primary: #f8fafc; --ak-text-secondary: #94a3b8; --ak-node-bg: #0f172a; --ak-node-border: #334155; --ak-edge-stroke: #475569; --ak-edge-active: #38bdf8; }
       svg { --ak-accent: #06b6d4; --ak-edge-stroke: #0ea5e9; --ak-edge-active: #38bdf8; }
-      
-      
-    svg { --ak-surface: #111827; --ak-surface-border: #334155; }</style><marker id="ak-arrowhead-00c9a260" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+
+
+    svg { --ak-surface: #111827; --ak-surface-border: #334155; }</style><marker id="ak-arrowhead-3fecad22" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="var(--ak-edge-stroke)" />
     </marker>
-  </defs><rect x="36" y="26" width="988" height="778" rx="12" fill="var(--ak-bg)" /><line x1="125" y1="98" x2="125" y2="780" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="395" y1="98" x2="395" y2="780" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="665" y1="98" x2="665" y2="780" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="935" y1="98" x2="935" y2="780" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><g class="ak-edge" data-from="buyer" data-to="api" data-edge-id="msg-0">
-        <line x1="125" y1="140" x2="395" y2="140" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
+  </defs><rect x="36" y="26" width="1528" height="1228" rx="12" fill="var(--ak-bg)" /><line x1="125" y1="98" x2="125" y2="1230" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="395" y1="98" x2="395" y2="1230" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="665" y1="98" x2="665" y2="1230" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="935" y1="98" x2="935" y2="1230" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="1205" y1="98" x2="1205" y2="1230" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><line x1="1475" y1="98" x2="1475" y2="1230" stroke="var(--ak-edge-stroke)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6" /><g class="ak-edge" data-from="buyer" data-to="api" data-edge-id="msg-0">
+        <line x1="125" y1="140" x2="395" y2="140" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
         <text x="260" y="134" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">POST /orders · Idempotency-Key</text>
-      </g><g class="ak-edge" data-from="api" data-to="postgres" data-edge-id="msg-1">
-        <line x1="395" y1="190" x2="665" y2="190" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="530" y="184" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">one tx: order + lines, hold, outbox, key</text>
-      </g><g class="ak-edge" data-from="api" data-to="buyer" data-edge-id="msg-2">
-        <line x1="395" y1="240" x2="125" y2="240" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="260" y="234" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">201 PENDING</text>
-      </g><g class="ak-edge" data-from="buyer" data-to="api" data-edge-id="msg-3">
-        <line x1="125" y1="290" x2="395" y2="290" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="260" y="284" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">POST /orders/:id/pay</text>
-      </g><g class="ak-edge" data-from="api" data-to="stripe" data-edge-id="msg-4">
-        <line x1="395" y1="340" x2="935" y2="340" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="665" y="334" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">create checkout session</text>
-      </g><g class="ak-edge" data-from="stripe" data-to="api" data-edge-id="msg-5">
-        <line x1="935" y1="390" x2="395" y2="390" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="665" y="384" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">session url</text>
-      </g><g class="ak-edge" data-from="api" data-to="buyer" data-edge-id="msg-6">
-        <line x1="395" y1="440" x2="125" y2="440" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="260" y="434" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">redirect url</text>
-      </g><g class="ak-edge" data-from="buyer" data-to="stripe" data-edge-id="msg-7">
-        <line x1="125" y1="490" x2="935" y2="490" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="530" y="484" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">pay on the hosted page</text>
-      </g><g class="ak-edge" data-from="stripe" data-to="api" data-edge-id="msg-8">
-        <line x1="935" y1="540" x2="395" y2="540" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="665" y="534" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">webhook · HMAC over raw body</text>
-      </g><g class="ak-edge" data-from="api" data-to="postgres" data-edge-id="msg-9">
-        <line x1="395" y1="590" x2="665" y2="590" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="530" y="584" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">finalize: FOR UPDATE → PAID, commit hold</text>
-      </g><g class="ak-edge" data-from="api" data-to="stripe" data-edge-id="msg-10">
-        <line x1="395" y1="640" x2="935" y2="640" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="665" y="634" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">200 processed | duplicate</text>
-      </g><g class="ak-edge" data-from="api" data-to="stripe" data-edge-id="msg-11">
-        <line x1="395" y1="690" x2="935" y2="690" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-00c9a260)" />
-        <text x="665" y="684" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">reconcile sweep: probe stale PENDING</text>
+      </g><g class="ak-edge" data-from="api" data-to="api" data-edge-id="msg-1">
+        <path d="M 395 190 H 431 V 206 H 397" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="395" y="184" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">tx A: order RESERVING + price-snapshot lines</text>
+      </g><g class="ak-edge" data-from="api" data-to="saga" data-edge-id="msg-2">
+        <line x1="395" y1="240" x2="665" y2="240" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="530" y="234" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">Update-with-Start · wait ≤ CHECKOUT_RESERVE_WAIT_MS</text>
+      </g><g class="ak-edge" data-from="saga" data-to="stock" data-edge-id="msg-3">
+        <line x1="665" y1="290" x2="935" y2="290" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="800" y="284" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">Try in its own tx · reservation_orders HELD</text>
+      </g><g class="ak-edge" data-from="saga" data-to="saga" data-edge-id="msg-4">
+        <path d="M 665 340 H 701 V 356 H 667" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="665" y="334" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">tx B: PENDING + order.placed outbox row, or REJECTED</text>
+      </g><g class="ak-edge" data-from="api" data-to="buyer" data-edge-id="msg-5">
+        <line x1="395" y1="390" x2="125" y2="390" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="260" y="384" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">201 PENDING · 409 sold out · 503 + Retry-After</text>
+      </g><g class="ak-edge" data-from="buyer" data-to="api" data-edge-id="msg-6">
+        <line x1="125" y1="440" x2="395" y2="440" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="260" y="434" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">POST /orders/:id/pay</text>
+      </g><g class="ak-edge" data-from="api" data-to="payment" data-edge-id="msg-7">
+        <line x1="395" y1="490" x2="1205" y2="490" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="800" y="484" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">open a manual-capture session</text>
+      </g><g class="ak-edge" data-from="payment" data-to="stripe" data-edge-id="msg-8">
+        <line x1="1205" y1="540" x2="1475" y2="540" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="1340" y="534" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">create checkout session</text>
+      </g><g class="ak-edge" data-from="api" data-to="buyer" data-edge-id="msg-9">
+        <line x1="395" y1="590" x2="125" y2="590" stroke="var(--ak-edge-stroke)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="260" y="584" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">session URL</text>
+      </g><g class="ak-edge" data-from="buyer" data-to="stripe" data-edge-id="msg-10">
+        <line x1="125" y1="640" x2="1475" y2="640" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="800" y="634" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">authorize the card on the hosted page</text>
+      </g><g class="ak-edge" data-from="stripe" data-to="payment" data-edge-id="msg-11">
+        <line x1="1475" y1="690" x2="1205" y2="690" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="1340" y="684" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">HMAC-signed checkout.session.completed</text>
+      </g><g class="ak-edge" data-from="payment" data-to="stripe" data-edge-id="msg-12">
+        <line x1="1205" y1="740" x2="1475" y2="740" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="1340" y="734" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">or the reconcile sweep, if no webhook comes</text>
+      </g><g class="ak-edge" data-from="payment" data-to="payment" data-edge-id="msg-13">
+        <path d="M 1205 790 H 1241 V 806 H 1207" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="1205" y="784" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">AUTHORIZED + one payment.authorized outbox row per order</text>
+      </g><g class="ak-edge" data-from="payment" data-to="saga" data-edge-id="msg-14">
+        <line x1="1205" y1="840" x2="665" y2="840" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="935" y="834" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">payment.authorized → queue consumer → signal</text>
+      </g><g class="ak-edge" data-from="saga" data-to="saga" data-edge-id="msg-15">
+        <path d="M 665 890 H 701 V 906 H 667" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="665" y="884" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">verify the authorization → CONFIRMING</text>
+      </g><g class="ak-edge" data-from="saga" data-to="stock" data-edge-id="msg-16">
+        <line x1="665" y1="940" x2="935" y2="940" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="800" y="934" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">commit</text>
+      </g><g class="ak-edge" data-from="saga" data-to="payment" data-edge-id="msg-17">
+        <line x1="665" y1="990" x2="1205" y2="990" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="935" y="984" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">capture (the pivot)</text>
+      </g><g class="ak-edge" data-from="saga" data-to="saga" data-edge-id="msg-18">
+        <path d="M 665 1040 H 701 V 1056 H 667" fill="none" stroke="var(--ak-edge-stroke)" stroke-width="2" marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="665" y="1034" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">PAID + order.paid outbox row</text>
+      </g><g class="ak-edge" data-from="saga" data-to="stock" data-edge-id="msg-19">
+        <line x1="665" y1="1090" x2="935" y2="1090" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="800" y="1084" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">instead, at the deadline: EXPIRED · release</text>
+      </g><g class="ak-edge" data-from="saga" data-to="payment" data-edge-id="msg-20">
+        <line x1="665" y1="1140" x2="1205" y2="1140" stroke="var(--ak-edge-stroke)" stroke-width="2"  marker-end="url(#ak-arrowhead-3fecad22)" />
+        <text x="935" y="1134" font-size="11" fill="var(--ak-text-secondary)" text-anchor="middle" font-family="var(--ak-font-sans)">close the session or void the hold</text>
       </g><g class="ak-node" data-node-id="buyer" data-label="Buyer" data-role="client" data-desc="client" tabindex="0">
         <rect x="60" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
         <text x="125" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Buyer</text>
-      </g><g class="ak-node" data-node-id="api" data-label="api" data-role="service" data-desc="Order and Payment contexts, one process." tabindex="0">
+      </g><g class="ak-node" data-node-id="api" data-label="api (Order)" data-role="service" data-desc="Order context: POST /orders and /pay, tx A, Update-with-Start." tabindex="0">
         <rect x="330" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
-        <text x="395" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">api</text>
-      </g><g class="ak-node" data-node-id="postgres" data-label="PostgreSQL" data-role="database" data-desc="database" tabindex="0">
+        <text x="395" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">api (Order)</text>
+      </g><g class="ak-node" data-node-id="saga" data-label="CheckoutSaga" data-role="service" data-desc="Temporal workflow; the only writer of order statuses past DRAFT." tabindex="0">
         <rect x="600" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
-        <text x="665" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">PostgreSQL</text>
-      </g><g class="ak-node" data-node-id="stripe" data-label="Stripe" data-role="external" data-desc="external" tabindex="0">
+        <text x="665" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">CheckoutSaga</text>
+      </g><g class="ak-node" data-node-id="stock" data-label="Stock" data-role="service" data-desc="Stock TCC participant: Try, commit, release, fenced by a reservation_orders header." tabindex="0">
         <rect x="870" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
-        <text x="935" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Stripe</text>
+        <text x="935" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Stock</text>
+      </g><g class="ak-node" data-node-id="payment" data-label="Payment" data-role="service" data-desc="Payment TCC participant over Stripe manual capture: open, capture, void; webhook sink and reconcile sweep." tabindex="0">
+        <rect x="1140" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="1205" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Payment</text>
+      </g><g class="ak-node" data-node-id="stripe" data-label="Stripe" data-role="external" data-desc="external" tabindex="0">
+        <rect x="1410" y="50" width="130" height="48" rx="6" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
+        <text x="1475" y="78" font-size="13" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Stripe</text>
       </g></svg>

@@ -1,11 +1,10 @@
-import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
-import { MIN_INBOX_RETENTION_DAYS } from '@shared/messaging/queue/queue.constants';
+import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
+import { MIN_INBOX_RETENTION_DAYS } from '@jcool/messaging';
 import {
   AppEnv,
   DatabaseEnv,
   EmptyEnv,
   IsStrictBoolean,
-  MailEnv,
   NodeEnv,
   ObservabilityEnv,
   RedisEnv,
@@ -16,22 +15,14 @@ import {
   validateEnv,
 } from '@jcool/platform/config';
 
-export enum InventoryLockStrategy {
-  Pessimistic = 'pessimistic',
-  Optimistic = 'optimistic',
-}
-
-// One member today: the enum earns its place by rejecting any other value at startup instead of
-// letting a typo pick a gateway that does not exist.
-export enum PaymentProvider {
-  Stripe = 'stripe',
-}
-
-const PlatformEnv = RetentionEnv(
-  MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
-);
+const PlatformEnv = RetentionEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv)))))));
 
 const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
+
+// What configuration.ts loads for an unset var; configuration.spec pins the two together.
+export const POOL_RULE_DEFAULTS = { QUEUE_WORKER_CONCURRENCY: 5, DB_POOL_MAX: 10 } as const;
+// HTTP and the schedulers keep this many connections the api-events worker cannot take.
+const POOL_SPARE = 5;
 
 /** Validated once at startup, so a bad value fails the boot. Every optional var falls back to a
  * default applied in configuration.ts; the comments here only explain the BOUNDS. */
@@ -96,71 +87,6 @@ export class EnvironmentVariables extends PlatformEnv {
   OUTBOX_BATCH_SIZE?: number;
 
   @IsOptional()
-  @IsStrictBoolean()
-  RECONCILE_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn the sweep into a busy loop hammering the payment gateway.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1000)
-  RECONCILE_INTERVAL_MS?: number;
-
-  // Capped so one tick can't fan out an unbounded number of gateway round-trips.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  @Max(500)
-  RECONCILE_BATCH_SIZE?: number;
-
-  // 0 is legal — e2e drives the sweep deterministically.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  ORDER_STALE_THRESHOLD_SEC?: number;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  ORDER_TTL_SEC?: number;
-
-  @IsOptional()
-  @IsStrictBoolean()
-  RESERVATION_SWEEP_ENABLED?: string;
-
-  // Min 1000 so a typo can't turn the sweep into a busy loop opening transactions.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1000)
-  RESERVATION_SWEEP_INTERVAL_MS?: number;
-
-  // Capped because each distinct order in the batch costs a finalize transaction.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(1)
-  @Max(500)
-  RESERVATION_SWEEP_BATCH_SIZE?: number;
-
-  // 0 is legal — e2e drives the sweep deterministically.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  RESERVATION_SWEEP_GRACE_SEC?: number;
-
-  // 0 is legal: the key's own TTL is already the retry window, so this is only slack for clock skew.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  RETENTION_IDEMPOTENCY_GRACE_SEC?: number;
-
-  @IsOptional()
   @StrictInt()
   @IsInt()
   @Min(1)
@@ -174,13 +100,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsInt()
   @Min(MIN_INBOX_RETENTION_DAYS)
   RETENTION_INBOX_DAYS?: number;
-
-  // The floor tracks the GATEWAY's redelivery window (Stripe retries for ~72h), not the queue's.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(14)
-  RETENTION_WEBHOOK_EVENT_DAYS?: number;
 
   // Min 1 — a 0 would make every entry stale the instant it is written, turning every read into a
   // stale serve plus a background rebuild.
@@ -315,56 +234,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(1024)
   MEDIA_MAX_BYTES?: number;
 
-  @IsOptional()
-  @IsEnum(InventoryLockStrategy)
-  INVENTORY_LOCK_STRATEGY?: InventoryLockStrategy;
-
-  // Duration form ("15m"/"1h").
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  INVENTORY_RESERVATION_TTL?: string;
-
-  // Capped so a misconfig can't spin the CAS loop while it pins the stock row's write-lock.
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  @Max(10)
-  INVENTORY_OPTIMISTIC_MAX_RETRIES?: number;
-
-  @IsOptional()
-  @IsEnum(PaymentProvider)
-  PAYMENT_PROVIDER?: PaymentProvider;
-
-  // Optional here so a boot that doesn't touch payments isn't blocked; the Stripe adapter
-  // fail-fasts at construction when it's absent.
-  @IsOptional()
-  @IsString()
-  @MinLength(16)
-  PAYMENT_WEBHOOK_SECRET?: string;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(0)
-  PAYMENT_WEBHOOK_TOLERANCE_SEC?: number;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(8)
-  STRIPE_SECRET_KEY?: string;
-
-  // String, not @IsUrl: the operator's value carries Stripe's {CHECKOUT_SESSION_ID} brace
-  // template, which strict URL validation would reject.
-  @IsOptional()
-  @IsString()
-  STRIPE_SUCCESS_URL?: string;
-
-  @IsOptional()
-  @IsString()
-  STRIPE_CANCEL_URL?: string;
-
   // The only way in: without it every token is refused, so it is required rather than optional.
   @IsUrl(HTTP_URL)
   AUTH_JWKS_URL!: string;
@@ -400,15 +269,18 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(100)
   ID_SERVICE_TIMEOUT_MS?: number;
 
-  // Duration form. How long after an order is paid a user the directory does not know is still
-  // worth waiting for.
+  // Optional, like every caller token: the guard is what refuses a boot with none.
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  USER_DIRECTORY_NOT_FOUND_GRACE?: string;
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
 
-  // order.paid (user-service) and catalog events (search engine) wait on another service, so they outlast
-  // the default ladder.
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS?: string;
+
+  // Catalog events wait on the search engine, so they outlast the default ladder.
   @IsOptional()
   @StrictInt()
   @IsInt()
@@ -430,6 +302,13 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
   if (env.NODE_ENV === NodeEnv.Production && env.TRUST_PROXY === undefined) {
     throw new Error(
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
+    );
+  }
+  const concurrency = env.QUEUE_WORKER_CONCURRENCY ?? POOL_RULE_DEFAULTS.QUEUE_WORKER_CONCURRENCY;
+  const poolMax = env.DB_POOL_MAX ?? POOL_RULE_DEFAULTS.DB_POOL_MAX;
+  if (concurrency + POOL_SPARE > poolMax) {
+    throw new Error(
+      `Environment validation failed -> QUEUE_WORKER_CONCURRENCY (${concurrency}) + ${POOL_SPARE} must not exceed DB_POOL_MAX (${poolMax})`,
     );
   }
   return env;

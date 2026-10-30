@@ -5,12 +5,16 @@
 //   - stack up:  docker compose --profile observability up -d
 //   - perf user seeded, then catalog at perf scale:  pnpm db:seed:perf-user && pnpm db:seed:perf
 //     (the api seed resolves the user by logging in to user-service)
+//   - then the catalog cache bump and the stock seed its last log line prints, in that order: the stock
+//     seed lists the public catalog, which serves the pre-seed generation until the bump. Without stock
+//     every perf SKU answers 409 OUT_OF_STOCK.
 //   - THROTTLE_ENABLED=false — every measured route is throttled otherwise:
 //     /auth/* at 20 req/60s per IP with a FIVE-MINUTE block once tripped, and POST /orders
-//     at 10 req/60s PER USER (apps/api/src/shared/infrastructure/throttler/throttler.constants.ts:24-45).
+//     at 10 req/60s PER USER (packages/platform/src/throttler/throttler.constants.ts).
 //     A 429 is rejected in a guard, ahead of the RED interceptor, so the run would look green
 //     and fast while measuring the rate limiter. In a split topology set it on the auth service
-//     too — that is the one a load script hits first, in setup(), before anything is measured.
+//     and the order-service too — the auth service is the one a load script hits first, in
+//     setup(), before anything is measured.
 //   - auth.requireVerifiedEmail=false (the default) so login returns a token directly.
 //
 // Authoritative latency/throughput comes from the app's own Prometheus recording rules
@@ -19,7 +23,8 @@
 
 import http from 'k6/http';
 
-export const BASE = __ENV.BASE_URL || 'http://localhost:3000';
+// The gateway, not the api: /orders lives in the order-service now.
+export const BASE = __ENV.BASE_URL || 'http://localhost:8080';
 export const JSON_HDR = { 'Content-Type': 'application/json' };
 
 // Defaults to BASE — the monolith topology these experiments are specified against. Split out

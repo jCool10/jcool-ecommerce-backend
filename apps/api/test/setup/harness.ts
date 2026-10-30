@@ -2,8 +2,6 @@ import type { INestApplication } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import type { Pool } from 'pg';
 import { afterAll, beforeEach } from 'vitest';
-import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
-import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/shared/infrastructure/database/drizzle.tokens';
 import type { StartedObjectStorage } from './object-storage';
 import { resetDatabase } from './reset-database';
@@ -28,32 +26,6 @@ export async function createTestAppWithPool(
 ): Promise<TestAppResources> {
   const app = await createTestApp(envOverrides, providerOverrides);
   return { app, pool: app.get<Pool>(PG_POOL), db: app.get<DrizzleDB>(DRIZZLE) };
-}
-
-export interface TestAppWithGateway extends TestAppResources {
-  /** The one boundary outside the system under test: it signs like the provider and settles on demand. */
-  gateway: FakeSignerGatewayAdapter;
-}
-
-/**
- * The webhook suites all need the same three things wired to one secret: the app's
- * `PAYMENT_WEBHOOK_SECRET`, a gateway that signs with it, and that gateway injected over the real
- * adapter. Splitting them across a spec's `beforeAll` is how they drift apart.
- */
-export async function createTestAppWithFakeGateway(
-  webhookSecret: string,
-  envOverrides: EnvOverrides = {},
-  providerOverrides: ProviderOverride[] = [],
-): Promise<TestAppWithGateway> {
-  const gateway = new FakeSignerGatewayAdapter(webhookSecret);
-  // Secret after the spread, not before: it IS the wiring this wrapper exists to guarantee, so a
-  // caller passing `PAYMENT_WEBHOOK_SECRET` in `envOverrides` would otherwise get a gateway signing
-  // with one value and an app verifying with another, failing every webhook on signature.
-  const resources = await createTestAppWithPool({ ...envOverrides, PAYMENT_WEBHOOK_SECRET: webhookSecret }, [
-    { provide: PAYMENT_GATEWAY, useValue: gateway },
-    ...providerOverrides,
-  ]);
-  return { ...resources, gateway };
 }
 
 /**

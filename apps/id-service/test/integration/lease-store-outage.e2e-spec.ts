@@ -27,6 +27,12 @@ describe('the lease store going away', () => {
       ID_LEASE_RENEW_EVERY_MS: String(RENEW_EVERY_MS),
       ETCD_REQUEST_TIMEOUT_MS: '300',
     });
+    // The boot claim rides a cold gRPC channel that can outlast the 300ms deadline on a busy runner;
+    // the keeper then boots unready and claims on its next retry.
+    await eventually(async () => {
+      const { status } = await request(app.getHttpServer()).get('/health/ready');
+      return status === 200 ? true : undefined;
+    });
   });
 
   afterAll(async () => {

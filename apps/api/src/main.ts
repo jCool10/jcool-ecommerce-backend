@@ -28,10 +28,7 @@ function readApiVersion(): string {
 }
 
 async function bootstrap(): Promise<void> {
-  // `rawBody: true` captures the exact request bytes on `req.rawBody` so the payment webhook can
-  // verify its HMAC signature over what the gateway actually signed — the global JSON parser would
-  // re-serialize and break it.
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true, rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
   const logger = app.get(Logger);
   app.useLogger(logger);
   logProcessCrashes(await app.resolve(PinoLogger));
@@ -69,13 +66,10 @@ async function bootstrap(): Promise<void> {
       .setTitle('JCool E-commerce API')
       .setDescription(
         [
-          'Single-store e-commerce backend — five bounded contexts in one deployable process.',
+          'Single-store e-commerce backend — the catalog and the cart. Checkout is the order-service.',
           '',
           '- **Catalog** — public product/SKU reads and search; admin CRUD behind `ADMIN`.',
           '- **Cart** — per-user cart lines, priced from the catalog at read time.',
-          '- **Order** — checkout: the order, not the cart, is the source of truth for a transaction.',
-          '- **Payment** — gateway sessions and the webhook sink; one purchase intent, one charge.',
-          '- **Inventory** — stock reservations that hold the "never oversell" invariant under contention.',
         ].join('\n'),
       )
       .setVersion(readApiVersion())
@@ -96,7 +90,6 @@ async function bootstrap(): Promise<void> {
       trustProxy,
       corsOrigins: corsOrigins.length,
       searchEnabled: configService.get<boolean>('search.enabled'),
-      inventoryLockStrategy: configService.get<string>('inventory.lockStrategy'),
       queueWorkerEnabled: configService.get<boolean>('queue.workerEnabled'),
       queueWorkerConcurrency: configService.get<number>('queue.workerConcurrency'),
       tracingEnabled: configService.get<boolean>('tracing.enabled'),

@@ -10,6 +10,10 @@ import { publishedEpoch } from '../setup/session-epoch.helper';
 import { inProcessIdGenerator } from '../setup/test-app.factory';
 
 const PREVIOUS_INTERNAL_API_TOKEN = 'e2e-internal-api-token-previous-not-a-secret-0';
+const INVENTORY_SERVICE_TOKEN = 'e2e-inventory-service-caller-token-not-a-secret';
+const PREVIOUS_INVENTORY_SERVICE_TOKEN = 'e2e-inventory-service-previous-token-not-a-secret';
+const ORDER_SERVICE_TOKEN = 'e2e-order-service-caller-token-not-a-secret-0';
+const PREVIOUS_ORDER_SERVICE_TOKEN = 'e2e-order-service-previous-token-not-a-secret-0';
 // Past the default tier's 100 per minute.
 const BURST = 150;
 
@@ -20,7 +24,13 @@ describe('Internal service-to-service API (integration)', () => {
   beforeAll(async () => {
     // On, so "never throttled" is a claim about the routes rather than about the harness.
     process.env.THROTTLE_ENABLED = 'true';
-    ({ app, pool } = await createTestAppWithPool({ INTERNAL_API_TOKEN_PREVIOUS: PREVIOUS_INTERNAL_API_TOKEN }));
+    ({ app, pool } = await createTestAppWithPool({
+      INTERNAL_API_TOKEN_PREVIOUS: PREVIOUS_INTERNAL_API_TOKEN,
+      INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE: INVENTORY_SERVICE_TOKEN,
+      INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS: PREVIOUS_INVENTORY_SERVICE_TOKEN,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS: PREVIOUS_ORDER_SERVICE_TOKEN,
+    }));
     await redisOf(app).flushdb();
   });
 
@@ -62,8 +72,39 @@ describe('Internal service-to-service API (integration)', () => {
     it('accepts the previous token while callers roll over', async () => {
       const { user } = await createTestUser(app);
 
-      await internal(`/users/${user.id}/summary`, PREVIOUS_INTERNAL_API_TOKEN).expect(200);
       await internal(`/sessions/${user.id}/epoch`, PREVIOUS_INTERNAL_API_TOKEN).expect(200);
+      await internal('/cutover/digest', PREVIOUS_INTERNAL_API_TOKEN).expect(200);
+    });
+  });
+
+  describe('caller allowlists', () => {
+    // The order.paid mail moved to the order-service, and with it the only reason to read an address.
+    it('lets the api read an epoch and the cutover digest, but not a user summary', async () => {
+      const { user } = await createTestUser(app);
+
+      await internal(`/sessions/${user.id}/epoch`).expect(200);
+      await internal('/cutover/digest').expect(200);
+      await internal(`/users/${user.id}/summary`).expect(403);
+    });
+
+    it('lets the inventory-service read an epoch and nothing else', async () => {
+      const { user } = await createTestUser(app);
+
+      await internal(`/sessions/${user.id}/epoch`, INVENTORY_SERVICE_TOKEN).expect(200);
+      await internal(`/sessions/${user.id}/epoch`, PREVIOUS_INVENTORY_SERVICE_TOKEN).expect(200);
+      await internal(`/users/${user.id}/summary`, INVENTORY_SERVICE_TOKEN).expect(403);
+      await internal('/cutover/digest', INVENTORY_SERVICE_TOKEN).expect(403);
+    });
+
+    // Its auth reads epochs, and the order.paid mail reads the buyer's address.
+    it('lets the order-service read an epoch and a user summary, but not the cutover digest', async () => {
+      const { user } = await createTestUser(app);
+
+      for (const token of [ORDER_SERVICE_TOKEN, PREVIOUS_ORDER_SERVICE_TOKEN]) {
+        await internal(`/sessions/${user.id}/epoch`, token).expect(200);
+        await internal(`/users/${user.id}/summary`, token).expect(200);
+      }
+      await internal('/cutover/digest', ORDER_SERVICE_TOKEN).expect(403);
     });
   });
 
@@ -71,13 +112,13 @@ describe('Internal service-to-service API (integration)', () => {
     it('answers with id, email and role, and nothing else', async () => {
       const { user } = await createTestUser(app);
 
-      const { body } = await internal(`/users/${user.id}/summary`).expect(200);
+      const { body } = await internal(`/users/${user.id}/summary`, ORDER_SERVICE_TOKEN).expect(200);
 
       expect(body).toEqual({ id: user.id, email: user.email, role: user.role });
     });
 
     it('404s an unknown user', async () => {
-      await internal(`/users/${await unknownUserId()}/summary`).expect(404);
+      await internal(`/users/${await unknownUserId()}/summary`, ORDER_SERVICE_TOKEN).expect(404);
     });
   });
 
@@ -130,7 +171,7 @@ describe('Internal service-to-service API (integration)', () => {
     const refused: string[] = [];
     for (const path of [`/users/${user.id}/summary`, `/sessions/${user.id}/epoch`]) {
       for (let i = 0; i < BURST; i++) {
-        const { status } = await internal(path);
+        const { status } = await internal(path, ORDER_SERVICE_TOKEN);
         if (status !== 200) refused.push(`${path} ${status}`);
       }
     }

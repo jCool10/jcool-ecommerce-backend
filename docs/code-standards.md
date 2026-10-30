@@ -14,7 +14,7 @@ Before proposing a change that relaxes a gate, or that "fixes" something that lo
 
 A behavior provable against plain objects is a unit spec beside its source (`src/**/*.spec.ts`). A behavior that only exists once the app is wired to real Postgres, Redis, S3, Elasticsearch or SMTP is an integration suite in that app's `test/integration/`. Do not mock the database to pull an integration concern down into the unit tier — that mock is precisely the thing the integration tier exists to stop trusting. Tiers, what each covers, and how to run them: [`../README.md#testing`](../README.md#testing).
 
-Coverage is measured on the unit tier only, and the floor is scoped to a glob, not global: `apps/api` and `apps/user-service` floor only their `domain`/`application` glob, because repositories, adapters and controllers are left to the e2e tier; `apps/id-service` and the packages floor the whole project. Current numbers and globs live in each project's `vitest.config.mts`, not here. A floor is the measured value minus two points — raising one after a genuine coverage win is welcome, lowering one so a change fits under it is not. Because e2e coverage never counts toward the floor, deleting a spec inside the glob lowers the measured value directly, even when an e2e suite appears to cover the same behavior; the same deletion outside the glob costs nothing.
+Coverage is measured on the unit tier only, and the floor is scoped to a glob, not global: `apps/api`, `apps/user-service` and `apps/inventory-service` floor only their `domain`/`application` glob, because repositories, adapters and controllers are left to the e2e tier; `apps/id-service` and the packages floor the whole project. Current numbers and globs live in each project's `vitest.config.mts`, not here. A floor is the measured value minus two points — raising one after a genuine coverage win is welcome, lowering one so a change fits under it is not. Because e2e coverage never counts toward the floor, deleting a spec inside the glob lowers the measured value directly, even when an e2e suite appears to cover the same behavior; the same deletion outside the glob costs nothing.
 
 Use `fakePinoLogger()` from `@jcool/testing/fake-pino-logger` in any spec that touches a `PinoLogger`, never a partial stub — its own docstring explains why a partial hides the exact bug a spec is meant to catch. Assert a log line only when the line is the behavior itself: an audit record, a count or level that changes on a state transition, or the only observable output of a failure path. Otherwise assert the outcome and leave the log alone. When a line is the behavior, assert its fields structurally and its level, and pin the exact message only when something outside the code keys on it.
 
@@ -31,10 +31,10 @@ One decision the README does not place: `Idempotency-Key` support is not a platf
 | Name | Used by | Persisted / on the wire |
 | --- | --- | --- |
 | `skuId` | Cart, Order, Product's catalog side and its published `PRODUCT_SKU_QUERY` port | `cart_items.sku_id`, `order_items.sku_id`; `/cart/items/:skuId`, `/admin/skus/:skuId/price` |
-| `variantId` | Product's stock side, prices, and the published `PRODUCT_STOCK_RESERVATION` port | `prices.variant_id`, `stock_levels.variant_id`, `reservations.variant_id`; `/admin/inventory/:variantId` |
+| `variantId` | Prices, the inventory-service and its `INVENTORY_PARTICIPANT` port, and the internal reservations API | `prices.variant_id`, `stock_levels.variant_id`, `reservations.variant_id`; `/admin/inventory/:variantId`, `lines[].variantId` on `/internal/v1/reservations/:orderId/try` |
 | `sku` | `product_variants.sku` | The human-readable SKU code (`TSHIRT-RED-M`) — never an id |
 
-A new field takes the name of the side it lives on. The crossing is translated in one place — Order's [`inventory-reservation.adapter.ts`](../apps/api/src/modules/order/infrastructure/inventory-reservation.adapter.ts) maps `skuId` to `variantId` — never inline in a use case. Both names are persisted and on the wire, so unifying them is a migration plus a breaking API change, not a rename. The one route where they meet, `PUT /admin/skus/:skuId/price`, answers with `variantId`.
+A new field takes the name of the side it lives on. The crossing is translated in one place — Order's [`order-inventory-participant.http-adapter.ts`](../apps/api/src/modules/order/infrastructure/order-inventory-participant.http-adapter.ts) maps `skuId` to `variantId` — never inline in a use case. Both names are persisted and on the wire, so unifying them is a migration plus a breaking API change, not a rename. The one route where they meet, `PUT /admin/skus/:skuId/price`, answers with `variantId`.
 
 ### Injected dependencies
 
@@ -52,7 +52,7 @@ Framework and infrastructure handles keep their short names, because each is one
 
 ## Migrations
 
-Schema changes are generated, never typed into an existing file: edit the Drizzle schema, run the project's `db:generate`, and commit the emitted `.sql` together with its `meta/_journal.json` entry. This applies per Postgres-backed service — `apps/api` and `apps/user-service` each own a schema, a `drizzle.config.ts` and a migrations journal; `apps/id-service` keeps its state in etcd and has none.
+Schema changes are generated, never typed into an existing file: edit the Drizzle schema, run the project's `db:generate`, and commit the emitted `.sql` together with its `meta/_journal.json` entry. This applies per Postgres-backed service — `apps/api`, `apps/user-service` and `apps/inventory-service` each own a schema, a `drizzle.config.ts` and a migrations journal; `apps/id-service` keeps its state in etcd and has none.
 
 A migration that has been merged is immutable. Drizzle records each file's hash in the journal, so an edited file no longer matches what every database that already applied it ran — a correction is a new migration, never an edit.
 
@@ -60,7 +60,7 @@ Production applies migrations as a release command, separate from application bo
 
 ## Logging
 
-One logger, one call shape, everywhere a `PinoLogger` is injected: `apps/api`, `apps/user-service`, `apps/id-service` and `packages/platform` all enforce the same rules through their own `eslint.config.mjs`. The framework-free packages (`kernel`, `id-codec`, `id-generator`, `auth-verifier`, `testing`) never inject one, so the rules don't apply there.
+One logger, one call shape, everywhere a `PinoLogger` is injected: `apps/api`, `apps/user-service`, `apps/inventory-service`, `apps/id-service` and `packages/platform` all enforce the same rules through their own `eslint.config.mjs`. The framework-free packages (`kernel`, `id-codec`, `id-generator`, `auth-verifier`, `internal-contracts`, `testing`) never inject one, so the rules don't apply there.
 
 ```ts
 this.logger.setContext(LOG_CONTEXT); // once, in the constructor
@@ -118,4 +118,4 @@ Always stdout. With `LOKI_URL` set, `logger-params.ts` also pushes every line to
 
 Conventional commits (`feat`, `fix`, `refactor`, `test`, …) with a scope when one is meaningful. Work reaches `main` through a pull request; CI runs on the pull request and again on `main`.
 
-Never commit a secret. `.env*` is ignored except `.env.example` — the root [`.env.example`](../.env.example) for the api and [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service are the committed templates and the reference for every configuration key. A new environment variable is added to its service's template, with a comment explaining it, in the same commit. The local Prometheus scrape token follows the same pattern: only its `.example` is committed.
+Never commit a secret. `.env*` is ignored except `.env.example` — the root [`.env.example`](../.env.example) for the api, [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service and [`apps/inventory-service/.env.example`](../apps/inventory-service/.env.example) for the inventory-service are the committed templates and the reference for every configuration key. A new environment variable is added to its service's template, with a comment explaining it, in the same commit. The local Prometheus scrape token follows the same pattern: only its `.example` is committed.

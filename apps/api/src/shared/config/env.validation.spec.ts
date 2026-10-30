@@ -30,6 +30,32 @@ describe('env validation', () => {
     expect(() => validate(BASE_ENV)).not.toThrow();
   });
 
+  // Stripe lives in the payment-service now, along with its boot guard.
+  it('boots in production with no Stripe setting at all', () => {
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
+
+    expect(() => validate(production)).not.toThrow();
+  });
+
+  // The order-service owns checkout now; a deployment still carrying the old names must boot.
+  it('boots in production without Temporal or a participant service', () => {
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
+
+    expect(() => validate(production)).not.toThrow();
+    expect(() =>
+      validate({ ...production, INVENTORY_SERVICE_URL: 'not-a-url', PAYMENT_COMMAND_TIMEOUT_MS: 'x' }),
+    ).not.toThrow();
+  });
+
+  // Each api-events job holds a connection for its transaction; HTTP keeps five no worker can take.
+  it('keeps five pool connections spare beyond the queue worker', () => {
+    expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '5' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '6' })).toThrow(
+      /QUEUE_WORKER_CONCURRENCY \(6\) \+ 5 must not exceed DB_POOL_MAX \(10\)/,
+    );
+    expect(() => validate({ ...BASE_ENV, QUEUE_WORKER_CONCURRENCY: '6', DB_POOL_MAX: '11' })).not.toThrow();
+  });
+
   // Without any one of these the api boots and then refuses every caller.
   it('refuses to boot without a setting the user-service link needs', () => {
     const required = ['AUTH_JWKS_URL', 'JWT_ISSUER', 'JWT_AUDIENCE', 'USER_SERVICE_INTERNAL_URL', 'INTERNAL_API_TOKEN'];
@@ -70,6 +96,13 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
   });
 
+  it('accepts the order-service caller token only at full length', () => {
+    for (const key of ['INTERNAL_CALLER_TOKEN_ORDER_SERVICE', 'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS']) {
+      expect(() => validate({ ...BASE_ENV, [key]: 'a'.repeat(31) }), key).toThrow(new RegExp(key));
+      expect(() => validate({ ...BASE_ENV, [key]: 'a'.repeat(32) }), key).not.toThrow();
+    }
+  });
+
   // The platform injects its own variables, and a retired key can linger in a deployment.
   it('boots with env keys the schema does not declare', () => {
     expect(() => validate({ ...BASE_ENV, RAILWAY_DEPLOYMENT_DRAINING_SECONDS: 'not-a-number' })).not.toThrow();
@@ -79,9 +112,9 @@ describe('env validation', () => {
   // '6e4' would load as 6ms, not 60000ms. Validation must refuse the value a loader would misread
   // rather than accept it and drift.
   it('refuses scientific-notation and hex integers that a loader would parse differently', () => {
-    expect(() => validate({ ...BASE_ENV, RECONCILE_INTERVAL_MS: '6e4' })).toThrow(/RECONCILE_INTERVAL_MS/);
+    expect(() => validate({ ...BASE_ENV, OUTBOX_POLL_MS: '1e3' })).toThrow(/OUTBOX_POLL_MS/);
     expect(() => validate({ ...BASE_ENV, QUEUE_CONSUMER_BACKOFF_MS: '1e3' })).toThrow(/QUEUE_CONSUMER_BACKOFF_MS/);
-    expect(() => validate({ ...BASE_ENV, RECONCILE_INTERVAL_MS: '60000' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, OUTBOX_POLL_MS: '1000' })).not.toThrow();
   });
 
   // configuration.ts reads these with `!== 'false'` or `=== 'true'`, so '0'/'1' must be refused

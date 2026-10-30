@@ -204,6 +204,55 @@
       "when": 1790661984409,
       "tag": "0028_snowflake_layout_v2_id_floor",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792506991898,
+      "tag": "0029_reservation_orders_fence",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792511947011,
+      "tag": "0030_payment_orders_fence",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792569015539,
+      "tag": "0031_order_saga_statuses_and_payment_deadline",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792745429664,
+      "tag": "0032_drop_pending_orders_placed_at_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1793155857334,
+      "tag": "0033_drop_retired_stock_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793244705820,
+      "tag": "0034_drop_retired_payment_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1793335856045,
+      "tag": "0035_drop_retired_order_tables",
+      "breakpoints": true
     }
   ]
 }

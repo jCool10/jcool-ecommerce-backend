@@ -38,9 +38,16 @@ describe('BusinessMetrics', () => {
     metrics.recordEventConsumed('order.placed', 'duplicate');
     metrics.recordConsumeRetry('order.paid');
     metrics.recordDeadLetter('order.paid', 'permanent');
-    metrics.recordSagaStep('payment_session', 'failed');
-    metrics.recordCompensation('ttl_expired');
-    metrics.recordReservationExpiry();
+    metrics.recordSagaStep('release_stock', 'idempotent');
+    metrics.recordCompensation('release_stock', 'late_authorization');
+    metrics.setCheckoutInvariantViolations({
+      captured_without_paid: 0,
+      paid_without_capture: 0,
+      paid_without_commit: 0,
+      orphan_hold: 2,
+      authorized_on_dead_order: 0,
+    });
+    metrics.recordInvariantCheck('violations');
     metrics.recordRefundOwed('webhook_direct');
     metrics.recordMailSendFailure('order_paid');
     metrics.recordRetentionSweep('messaging:outbox', 0);
@@ -53,6 +60,8 @@ describe('BusinessMetrics', () => {
     metrics.recordBreakerCall('payment_gateway', 'rejected');
     metrics.recordRateLimitRejection('account', '/auth/login');
     metrics.recordSessionEpochLookup('miss');
+    metrics.recordTccBranch('inventory', 'release', 'applied');
+    metrics.recordCaptureConflict();
 
     const exposition = await registry.metrics();
     const expected = [
@@ -65,9 +74,12 @@ describe('BusinessMetrics', () => {
       'messaging_consume_total{event_type="order.placed",result="duplicate"} 1',
       'messaging_consume_retries_total{event_type="order.paid"} 1',
       'messaging_dlq_total{event_type="order.paid",reason="permanent"} 1',
-      'saga_step_total{step="payment_session",outcome="failed"} 1',
-      'saga_compensation_total{trigger="ttl_expired"} 1',
-      'reservation_expiry_total 1',
+      'saga_step_total{step="release_stock",outcome="idempotent"} 1',
+      'saga_compensation_total{kind="release_stock",reason="late_authorization"} 1',
+      'checkout_invariant_violations{kind="orphan_hold"} 2',
+      // Zeros are written too, so an alert sees a clean kind rather than a missing one.
+      'checkout_invariant_violations{kind="captured_without_paid"} 0',
+      'checkout_invariant_check_total{result="violations"} 1',
       'payment_refund_owed_total{source="webhook_direct"} 1',
       'mail_send_failures_total{kind="order_paid"} 1',
       // Recorded at zero so an idle sweep still has a series to alert on.
@@ -81,10 +93,18 @@ describe('BusinessMetrics', () => {
       'circuit_breaker_calls_total{breaker="payment_gateway",result="rejected"} 1',
       'rate_limit_rejections_total{tier="account",route="/auth/login"} 1',
       'session_epoch_lookups_total{result="miss"} 1',
+      'tcc_branch_total{participant="inventory",op="release",outcome="applied"} 1',
+      'payment_capture_conflict_total 1',
     ];
 
     expect(warn).not.toHaveBeenCalled();
     expect(expected.filter((line) => !exposition.includes(line))).toEqual([]);
+  });
+
+  it('no longer exposes the counters of the settlement path the saga replaced', async () => {
+    const { registry } = await build();
+
+    expect(registry.getSingleMetric('reservation_expiry_total')).toBeUndefined();
   });
 
   // resilience.yml fires on `circuit_breaker_state >= 1` and `>= 2`.

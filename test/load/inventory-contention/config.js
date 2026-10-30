@@ -4,8 +4,8 @@ import { LOAD_EMAIL_DOMAIN, discoverSkus, discoverSlugs } from '../shared/config
 
 export { BASE, JSON_HDR, authHeaders, mintToken, toSeconds, uuidv4 } from '../shared/config.js';
 
-// Labels the artifact directory only. The strategy is selected by the APP's env
-// (INVENTORY_LOCK_STRATEGY=pessimistic|optimistic) and must be confirmed from the startup config
+// Labels the artifact directory only. The strategy is selected by the inventory-service's env
+// (INVENTORY_LOCK_STRATEGY=pessimistic|optimistic) and must be confirmed from its startup config
 // log — both strategies bump stock_levels.version, so the counter alone cannot tell them apart.
 export const STRATEGY = __ENV.STRATEGY || 'pessimistic';
 
@@ -14,8 +14,8 @@ export const STRATEGY = __ENV.STRATEGY || 'pessimistic';
 // c2 — finite stock (quantity_on_hand = K): 409s are a mix of CONTENDED and OUT_OF_STOCK and are
 //      not interpreted. The assertions are exact and run in SQL afterwards: exactly K holds,
 //      quantity_reserved == K, zero 5xx.
-// Both map to the same ConflictException → 409 (checkout-order.use-case.ts:76-82), which is why
-// one run cannot serve both purposes.
+// Both map to the same ConflictException → 409 (checkout-order.use-case.ts), which is why one run
+// cannot serve both purposes.
 export const MODE = __ENV.MODE || 'c1';
 
 // Placements per second. One run per level; the crossover between strategies is the result.
@@ -26,8 +26,9 @@ export const DURATION = __ENV.DURATION || '5m'; // the [5m] recording-rule windo
 // checkout, and POST /cart/items ACCUMULATES (cart.repository onConflict LEAST(qty + n, cap)),
 // so a shared cart would make later orders reserve more than one unit each and destroy C2's
 // "exactly K holds" assertion. maxVUs is pinned to the pool for the same reason: k6 must drop
-// an iteration rather than hand a second VU someone else's cart.
-export const POOL = Number(__ENV.POOL || 100);
+// an iteration rather than hand a second VU someone else's cart. 200 accounts at 3 in-flight
+// orders each leave room for c2's K=500 holds before the per-user cap answers instead of stock.
+export const POOL = Number(__ENV.POOL || 200);
 
 export const EMAIL_PREFIX = __ENV.EMAIL_PREFIX || 'ct';
 

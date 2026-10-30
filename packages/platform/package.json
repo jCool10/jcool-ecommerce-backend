@@ -32,6 +32,10 @@
       "types": "./dist/interface/index.d.ts",
       "default": "./dist/interface/index.js"
     },
+    "./internal-api": {
+      "types": "./dist/internal-api/index.d.ts",
+      "default": "./dist/internal-api/index.js"
+    },
     "./mail": {
       "types": "./dist/mail/index.d.ts",
       "default": "./dist/mail/index.js"

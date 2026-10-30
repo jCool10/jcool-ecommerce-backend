@@ -1,4 +1,4 @@
-import type { OutboxRecord } from '@shared/messaging/outbox/outbox-writer.port';
+import type { OutboxRecord } from '@jcool/messaging/outbox-port';
 
 // Thin events: the consumer re-reads Postgres, so the payload carries nothing to version.
 

@@ -162,7 +162,6 @@ services:
       REDIS_URL: redis://redis:6379
       SEARCH_URL: http://elasticsearch:9200
       SEARCH_PASSWORD: ${SEARCH_PASSWORD:-jcool-local-search-pw-not-secret}
-      SMTP_URL: smtp://mailpit:1025
       STORAGE_ENDPOINT: http://minio:9000
       # Traces export to the Collector service (only up under `--profile observability`). Harmless
       # when OTEL_ENABLED is false or the Collector is down — OTLP export is fire-and-forget.
@@ -175,6 +174,8 @@ services:
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
+      # The order-service's API_SERVICE_TOKEN below: it reads carts and SKU views on /internal/v1.
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-api-token-not-a-secret-000000
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -189,7 +190,7 @@ services:
         condition: service_completed_successfully
       gateway:
         condition: service_started
-    # Probes with node (present in the image) because alpine has no curl/wget.
+    # Probes with node, the one tool the image is sure to have.
     healthcheck:
       test:
         [
@@ -250,7 +251,7 @@ services:
     pull_policy: never
     restart: unless-stopped
     deploy:
-      replicas: 3
+      replicas: 1
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -273,6 +274,74 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    networks:
+      - jcool-net
+
+  # Holds the checkout saga's state for the Temporal server below: databases temporal and
+  # temporal_visibility, which the server's entrypoint creates on first boot.
+  temporal-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-temporal-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+    volumes:
+      - temporalpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # Self-hosted, as on Railway. gRPC only, on loopback: the frontend has no auth.
+  temporal:
+    build:
+      context: .
+      dockerfile: infra/temporal/Dockerfile
+    container_name: jcool-temporal
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TEMPORAL_HOST_PORT:-7233}:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: temporal-postgres
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      BIND_ON_IP: 0.0.0.0
+      # Fixed for the life of the volume.
+      NUM_HISTORY_SHARDS: 4
+      TEMPORAL_NAMESPACE: jcool
+      TEMPORAL_NAMESPACE_RETENTION: 1d
+    # The entrypoint creates the search attributes last, so their presence means bootstrap finished.
+    healthcheck:
+      test: ["CMD-SHELL", "temporal --address 127.0.0.1:7233 operator search-attribute list --namespace jcool | grep -q CheckoutDeadlineAt"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  temporal-ui:
+    image: temporalio/ui:2.55.0
+    container_name: jcool-temporal-ui
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_DEFAULT_NAMESPACE: jcool
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_HOST_PORT:-8233}:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
     networks:
       - jcool-net
 
@@ -336,10 +405,286 @@ services:
       REDIS_URL: redis://redis:6379
       SMTP_URL: smtp://mailpit:1025
       ID_SERVICE_URL: http://gateway:4000
+      # The inventory-service's USER_SERVICE_TOKEN below; it may read session epochs only.
+      INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE: local-inventory-caller-token-not-a-secret-00
+      # The order-service's USER_SERVICE_TOKEN below: session epochs and the order.paid mail's summary.
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-user-token-not-a-secret-00000
     depends_on:
       user-migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+  # Stock's own database. Published on loopback, like the user-service's, for scripts run from the host.
+  inventory-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-inventory-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${INVENTORY_POSTGRES_HOST_PORT:-5435}:5432"
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${INVENTORY_POSTGRES_PASSWORD:-inventory}
+      POSTGRES_DB: inventory
+    volumes:
+      - inventorypgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory -d inventory"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  # Schema only. Stock comes from `pnpm db:seed`, which needs the catalog up behind the gateway.
+  inventory-migrate:
+    build:
+      context: .
+      dockerfile: apps/inventory-service/Dockerfile
+    image: jcool-inventory-service:local
+    container_name: jcool-inventory-migrate
+    command: ['node', 'dist/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://inventory:${INVENTORY_POSTGRES_PASSWORD:-inventory}@inventory-postgres:5432/inventory
+    depends_on:
+      inventory-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  # The gateway routes /admin/inventory here; the order-service's checkout saga calls its internal
+  # API. Also published on loopback, for checks that bypass the edge.
+  inventory-service:
+    image: jcool-inventory-service:local
+    pull_policy: never
+    container_name: jcool-inventory-service
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${INVENTORY_SERVICE_HOST_PORT:-3004}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # The gateway, and only the gateway, names the client.
+      TRUST_PROXY: 1
+      DATABASE_URL: postgresql://inventory:${INVENTORY_POSTGRES_PASSWORD:-inventory}@inventory-postgres:5432/inventory
+      # The app's Redis, where the user-service publishes session epochs and the denylist.
+      REDIS_URL: redis://redis:6379
+      ID_SERVICE_URL: http://gateway:4000
+      AUTH_JWKS_URL: http://user-service:3000/.well-known/jwks.json
+      JWT_ISSUER: http://localhost:8080
+      JWT_AUDIENCE: jcool-api
+      USER_SERVICE_URL: http://user-service:3000
+      USER_SERVICE_TOKEN: local-inventory-caller-token-not-a-secret-00
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-inventory-token-not-a-secret
+      CATALOG_PUBLIC_URL: http://gateway:8080
+      # Taken from .env, like the app's, so infra/prometheus/secrets/metrics-token matches both.
+      METRICS_TOKEN:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    depends_on:
+      inventory-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+  # Payments' own database, published on loopback like the inventory-service's.
+  payment-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-payment-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PAYMENT_POSTGRES_HOST_PORT:-5436}:5432"
+    environment:
+      POSTGRES_USER: payment
+      POSTGRES_PASSWORD: ${PAYMENT_POSTGRES_PASSWORD:-payment}
+      POSTGRES_DB: payment
+    volumes:
+      - paymentpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment -d payment"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  payment-migrate:
+    build:
+      context: .
+      dockerfile: apps/payment-service/Dockerfile
+    image: jcool-payment-service:local
+    container_name: jcool-payment-migrate
+    command: ['node', 'dist/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://payment:${PAYMENT_POSTGRES_PASSWORD:-payment}@payment-postgres:5432/payment
+    depends_on:
+      payment-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  # The gateway routes the provider's webhook here; the order-service's checkout saga calls its
+  # internal API. Also published on loopback, for checks that bypass the edge.
+  payment-service:
+    image: jcool-payment-service:local
+    pull_policy: never
+    container_name: jcool-payment-service
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PAYMENT_SERVICE_HOST_PORT:-3005}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # The gateway, and only the gateway, names the client.
+      TRUST_PROXY: 1
+      DATABASE_URL: postgresql://payment:${PAYMENT_POSTGRES_PASSWORD:-payment}@payment-postgres:5432/payment
+      # The shared Redis: payment.authorized goes onto the order-service's order-events queue.
+      REDIS_URL: redis://redis:6379
+      ID_SERVICE_URL: http://gateway:4000
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-payment-token-not-a-secret-0
+      # Taken from .env, where the app read them before payments moved here. NODE_ENV=production
+      # refuses to boot without a real sk_test_ STRIPE_SECRET_KEY and STRIPE_SUCCESS_URL there.
+      PAYMENT_WEBHOOK_SECRET:
+      STRIPE_SECRET_KEY:
+      STRIPE_SUCCESS_URL:
+      STRIPE_CANCEL_URL:
+      METRICS_TOKEN:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    depends_on:
+      payment-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - jcool-net
+
+  # Checkout's own database, published on loopback like the payment-service's.
+  order-postgres:
+    image: postgres:16-alpine
+    container_name: jcool-order-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ORDER_POSTGRES_HOST_PORT:-5437}:5432"
+    environment:
+      POSTGRES_USER: order
+      POSTGRES_PASSWORD: ${ORDER_POSTGRES_PASSWORD:-order}
+      POSTGRES_DB: order
+    volumes:
+      - orderpgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order -d order"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - jcool-net
+
+  order-migrate:
+    build:
+      context: .
+      dockerfile: apps/order-service/Dockerfile
+    image: jcool-order-service:local
+    container_name: jcool-order-migrate
+    command: ['node', 'dist/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://order:${ORDER_POSTGRES_PASSWORD:-order}@order-postgres:5432/order
+    depends_on:
+      order-postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  # The gateway routes /orders and /admin/orders here; it runs the checkout saga's Temporal worker.
+  # Also published on loopback, for checks that bypass the edge.
+  order-service:
+    image: jcool-order-service:local
+    pull_policy: never
+    container_name: jcool-order-service
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ORDER_SERVICE_HOST_PORT:-3006}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # The gateway, and only the gateway, names the client.
+      TRUST_PROXY: 1
+      DATABASE_URL: postgresql://order:${ORDER_POSTGRES_PASSWORD:-order}@order-postgres:5432/order
+      # The shared Redis: session epochs, the denylist, and the order-events queue.
+      REDIS_URL: redis://redis:6379
+      ID_SERVICE_URL: http://gateway:4000
+      AUTH_JWKS_URL: http://user-service:3000/.well-known/jwks.json
+      JWT_ISSUER: http://localhost:8080
+      JWT_AUDIENCE: jcool-api
+      # Each <TARGET>_SERVICE_TOKEN is that service's INTERNAL_CALLER_TOKEN_ORDER_SERVICE above.
+      USER_SERVICE_URL: http://user-service:3000
+      USER_SERVICE_TOKEN: local-order-to-user-token-not-a-secret-00000
+      # The app itself, never the gateway: the gateway answers /internal with 404.
+      API_SERVICE_URL: http://app:3000
+      API_SERVICE_TOKEN: local-order-to-api-token-not-a-secret-000000
+      INVENTORY_SERVICE_URL: http://inventory-service:3000
+      INVENTORY_SERVICE_TOKEN: local-order-to-inventory-token-not-a-secret
+      PAYMENT_SERVICE_URL: http://payment-service:3000
+      PAYMENT_SERVICE_TOKEN: local-order-to-payment-token-not-a-secret-0
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: jcool
+      TEMPORAL_TASK_QUEUE: checkout-saga
+      SMTP_URL: smtp://mailpit:1025
+      # Taken from .env, where the app read them before checkout moved here.
+      MAIL_FROM:
+      METRICS_TOKEN:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    depends_on:
+      order-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      # Readiness includes Temporal, so the service only reports healthy once the worker can poll.
+      temporal:
         condition: service_healthy
       gateway:
         condition: service_started
@@ -380,6 +725,9 @@ services:
       # Nothing sits in front of it here, so the socket address is the client.
       TRUSTED_PROXY_CIDRS: ""
       AUTH_UPSTREAM: ${AUTH_UPSTREAM:-user-service:3000}
+      INVENTORY_UPSTREAM: ${INVENTORY_UPSTREAM:-inventory-service:3000}
+      PAYMENT_UPSTREAM: ${PAYMENT_UPSTREAM:-payment-service:3000}
+      ORDER_UPSTREAM: ${ORDER_UPSTREAM:-order-service:3000}
       # Answers every write under /auth with 503, reads untouched. See RUNBOOK.md.
       AUTH_WRITE_FREEZE: ${AUTH_WRITE_FREEZE:-false}
     # Not on app: the id-service smoke brings up only this and id-service, and Caddy dials per request.
@@ -466,7 +814,11 @@ services:
 volumes:
   pgdata:
   idetcddata:
+  temporalpgdata:
   userpgdata:
+  inventorypgdata:
+  paymentpgdata:
+  orderpgdata:
   redisdata:
   esdata:
   miniodata:

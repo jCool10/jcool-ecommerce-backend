@@ -11,7 +11,7 @@ export default defineConfig({
       provider: 'v8',
       reportsDirectory: './coverage',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.spec.ts', 'src/**/*.module.ts', 'src/index.ts'],
+      exclude: ['src/**/*.spec.ts', 'src/**/*.module.ts', 'src/**/index.ts'],
       // Measured minus two.
       thresholds: { statements: 98, branches: 98, functions: 98, lines: 98 },
     },

@@ -2,7 +2,7 @@ import { ConflictException, Inject, Injectable, NotFoundException } from '@nestj
 import { and, asc, count, eq, inArray, max, ne, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '@shared/identity/id-generator.port';
-import { OUTBOX_WRITER, type OutboxWriterPort } from '@shared/messaging/outbox/outbox-writer.port';
+import { OUTBOX_WRITER, type OutboxWriterPort } from '@jcool/messaging/outbox-port';
 import { Money } from '@jcool/kernel';
 import { MEDIA_FACADE, type MediaFacade } from '@modules/media/application/public/media-facade.port';
 import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';

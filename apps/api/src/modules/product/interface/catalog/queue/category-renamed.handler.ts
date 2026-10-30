@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { isRoutableId } from '@jcool/id-codec';
 import { PinoLogger } from 'nestjs-pino';
-import { PermanentError } from '@shared/messaging/errors';
-import type { DomainEventJob } from '@shared/messaging/queue/domain-event.job';
+import { type DomainEventJob, PermanentError } from '@jcool/messaging';
 import { ProductSearchSyncService } from '../../../application/catalog/services/product-search-sync.service';
 
 const LOG_CONTEXT = 'CategoryRenamedHandler';

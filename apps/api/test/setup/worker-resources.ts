@@ -6,7 +6,7 @@ import { workerCount } from './worker-count';
  *
  * The e2e tier runs file-parallel. Two things break when 60 files share one Postgres database and
  * one Redis logical db: `TRUNCATE`-all resets rip rows out from under a neighbour's transaction
- * (foreign-key violations and deadlocks), and Redis-backed cache/idempotency/denylist/throttle keys
+ * (foreign-key violations and deadlocks), and Redis-backed cache/denylist/throttle keys
  * collide across files.
  *
  * Each worker therefore gets its own database, cloned from a migrated template
@@ -65,7 +65,7 @@ export function assertWorkerBudget(): void {
     throw new Error(
       `E2E worker ${workerId} exceeds Redis's ${MAX_REDIS_DB_INDEX + 1} logical databases. ` +
         `Cap E2E_WORKERS at ${MAX_REDIS_DB_INDEX}; beyond that, workers would share a Redis db and ` +
-        `cache/idempotency/throttle keys would collide silently.`,
+        `cache/throttle keys would collide silently.`,
     );
   }
 }

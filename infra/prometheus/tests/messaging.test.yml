@@ -1,0 +1,134 @@
+# Rule unit tests for messaging.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+#
+# Series carry the `job`/`instance` a real scrape attaches, so the `and on()` join against `up` is
+# exercised the way production evaluates it. order-events is the order-service's, api-events the api's.
+rule_files:
+  - ../rules/messaging.yml
+
+evaluation_interval: 15s
+
+tests:
+  # The consumer stops: the oldest waiting job ages past a minute and keeps ageing, then the
+  # consumer drains the queue.
+  - interval: 1m
+    input_series:
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-order", instance="order-service:3000", queue="order-events"}'
+        values: '0x4 30+60x20 0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MessagingQueueConsumerLagging
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: MessagingQueueConsumerLagging
+        exp_alerts:
+          - exp_labels:
+              queue: order-events
+              severity: page
+            exp_annotations:
+              summary: 'Queue order-events is not being consumed'
+              description: 'The oldest waiting job on order-events is 7m 30s old and has been over a minute for 5 minutes. On order-events that holds back payment.authorized on its way to the saga, so paid checkouts run into their deadline and compensate. RUNBOOK → The checkout saga → MessagingQueueConsumerLagging.'
+      - eval_time: 28m
+        alertname: MessagingQueueConsumerLagging
+        exp_alerts: []
+
+  # The wiring regression: both consumers are still scraped but one queue's gauge went absent while
+  # the other's kept reporting.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-order", instance="order-service:3000", queue="order-events"}'
+        values: '0x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
+        values: '0x10 _x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              queue: api-events
+              severity: ticket
+            exp_annotations:
+              summary: 'Queue depth metrics for api-events are missing from its consumer'
+              description: 'The service that consumes api-events is being scraped but reports no messaging_queue_oldest_waiting_seconds for it, so MessagingQueueConsumerLagging cannot fire on it: the queue depth collector does not cover that queue in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-order", instance="order-service:3000", queue="order-events"}'
+        values: '0x10 _x30'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 26m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              queue: order-events
+              severity: ticket
+            exp_annotations:
+              summary: 'Queue depth metrics for order-events are missing from its consumer'
+              description: 'The service that consumes order-events is being scraped but reports no messaging_queue_oldest_waiting_seconds for it, so MessagingQueueConsumerLagging cannot fire on it: the queue depth collector does not cover that queue in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+
+  # The order-service is down: `up` reads 0 and its gauge is gone with it. OrderScrapeDown owns
+  # that, and the api, still scraped, vouches only for its own queue.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x50'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x10 0x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-order", instance="order-service:3000", queue="order-events"}'
+        values: '0x10 _x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
+        values: '0x50'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts: []
+
+  # The api is down: the same for api-events, with ApiScrapeDown owning it.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x10 0x40'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x50'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-order", instance="order-service:3000", queue="order-events"}'
+        values: '0x50'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
+        values: '0x10 _x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts: []
+
+  # An empty queue reports 0, which is present, not absent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-order", instance="order-service:3000", queue="order-events"}'
+        values: '0x40'
+      - series: 'messaging_queue_oldest_waiting_seconds{job="jcool-api", instance="app:3000", queue="api-events"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MessagingQueueMetricsAbsent
+        exp_alerts: []

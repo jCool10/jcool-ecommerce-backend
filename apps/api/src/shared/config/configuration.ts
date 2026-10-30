@@ -2,7 +2,6 @@
 import {
   appConfig,
   databaseConfig,
-  mailConfig,
   observabilityConfig,
   parseIntOr,
   redisConfig,
@@ -10,6 +9,7 @@ import {
   retentionConfig,
   throttleConfig,
 } from '@jcool/platform/config';
+import { callerTokensFromEnv } from '@jcool/platform/internal-api';
 
 export default () => ({
   ...appConfig(),
@@ -23,23 +23,19 @@ export default () => ({
     // Off leaves jobs waiting in Redis (no TTL) rather than losing them, which is what e2e suites
     // want while they drive the processor by hand.
     workerEnabled: process.env.QUEUE_WORKER_ENABLED !== 'false',
-    // Each job holds a pg connection for the length of its transaction, so this competes DIRECTLY
-    // with the HTTP path for DB_POOL_MAX (default 10) — size the two together rather than raising
-    // this alone.
+    // The api-events worker's. Each job holds a pg connection for the length of its transaction, so
+    // it competes with the HTTP path for DB_POOL_MAX (default 10); env validation keeps five spare.
     workerConcurrency: parseIntOr(process.env.QUEUE_WORKER_CONCURRENCY, 5),
     // Deliveries before a message is dead-lettered, the first included. Capped at 10 in the env
     // schema: the backoff below doubles, so the tail grows faster than the count suggests. Eight
-    // spans roughly two minutes, which an order expiry needs — past it the session that can still
-    // charge for a released order stays open until someone replays the dead letter. That figure
-    // holds only because the gateway handlers fail fast under the breaker; with BREAKER_ENABLED=false
-    // the attempts wait out the provider SDK and the ladder stretches well past it.
+    // spans roughly two minutes.
     consumerAttempts: parseIntOr(process.env.QUEUE_CONSUMER_ATTEMPTS, 8),
     // First retry delay; each further one doubles it. 1s through 64s at the defaults — long enough
     // to ride out a restart or a provider outage, short enough that a poison message reaches the
     // dead-letter queue while the deploy that caused it is still the obvious suspect.
     consumerBackoffMs: parseIntOr(process.env.QUEUE_CONSUMER_BACKOFF_MS, 1000),
-    // order.paid starts on the same backoff, doubling up to this cap: at the defaults it rides out a
-    // user-service outage of 30 minutes before the dead-letter queue.
+    // The long ladder catalog events ride (named after order.paid, which shares it in the
+    // order-service): the same backoff doubling up to this cap, about 30 minutes at the defaults.
     orderPaidAttempts: parseIntOr(process.env.ORDER_PAID_CONSUMER_ATTEMPTS, 15),
     orderPaidBackoffCapMs: parseIntOr(process.env.ORDER_PAID_CONSUMER_BACKOFF_CAP_MS, 300_000),
   },
@@ -58,8 +54,8 @@ export default () => ({
     audience: process.env.JWT_AUDIENCE,
   },
   userService: {
-    internalUrl: process.env.USER_SERVICE_INTERNAL_URL,
-    internalApiToken: process.env.INTERNAL_API_TOKEN,
+    url: process.env.USER_SERVICE_INTERNAL_URL,
+    token: process.env.INTERNAL_API_TOKEN,
     // Sits on the request path whenever an epoch misses Redis.
     timeoutMs: parseIntOr(process.env.USER_SERVICE_TIMEOUT_MS, 500),
   },
@@ -68,61 +64,18 @@ export default () => ({
     // Covers the gateway's retries across replicas, not one attempt.
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
   },
-  userDirectory: {
-    notFoundGrace: process.env.USER_DIRECTORY_NOT_FOUND_GRACE ?? '10m',
+  // Who may read carts and SKU views on /internal/v1.
+  internalApi: {
+    callers: callerTokensFromEnv(['order-service']),
   },
-  ...mailConfig(),
   ...throttleConfig(),
-  payment: {
-    // Declared but never dispatched on: payment.module.ts constructs Stripe unconditionally. This
-    // survives as a boot-time assertion — env.validation rejects anything but 'stripe', so a deploy
-    // that thinks it configured another gateway fails loudly instead of silently getting Stripe.
-    provider: process.env.PAYMENT_PROVIDER ?? 'stripe',
-    // Undefined → the Stripe adapter refuses to construct (fail-fast).
-    webhookSecret: process.env.PAYMENT_WEBHOOK_SECRET,
-    // Timestamp tolerance (s) for webhook replay defence; 300s matches Stripe's default.
-    webhookToleranceSec: parseIntOr(process.env.PAYMENT_WEBHOOK_TOLERANCE_SEC, 300),
-    // Unset → the adapter stays on its network-free coded path (fabricated cs_...). Set to
-    // sk_test_.../sk_live_... to create real Checkout Sessions a webhook can settle.
-    secretKey: process.env.STRIPE_SECRET_KEY,
-    // No default: an unset var stays undefined and trips the adapter's live-key fail-fast, so a
-    // missing success URL is caught at boot instead of on a real buyer's post-charge redirect. The
-    // cancel default below is not guarded that way, but it is reached before any money moves.
-    successUrl: process.env.STRIPE_SUCCESS_URL,
-    cancelUrl: process.env.STRIPE_CANCEL_URL ?? 'http://localhost:3000/payments/cancel',
-  },
-  reconcile: {
-    // Off for e2e suites, which drive the use case directly, and for one-off job containers.
-    enabled: process.env.RECONCILE_ENABLED !== 'false',
-    intervalMs: parseIntOr(process.env.RECONCILE_INTERVAL_MS, 60_000),
-    batchSize: parseIntOr(process.env.RECONCILE_BATCH_SIZE, 50),
-    // Below this age an order is still waiting on a webhook probably in flight; polling burns a call.
-    staleAfterSec: parseIntOr(process.env.ORDER_STALE_THRESHOLD_SEC, 120),
-    // Matches INVENTORY_RESERVATION_TTL, so an order never outlives the stock hold it depends on.
-    orderTtlSec: parseIntOr(process.env.ORDER_TTL_SEC, 900),
-  },
-  reservationSweep: {
-    enabled: process.env.RESERVATION_SWEEP_ENABLED !== 'false',
-    intervalMs: parseIntOr(process.env.RESERVATION_SWEEP_INTERVAL_MS, 60_000),
-    batchSize: parseIntOr(process.env.RESERVATION_SWEEP_BATCH_SIZE, 50),
-    // Extra age past a hold's `expires_at` before this sweep expires the order. A full ORDER_TTL_SEC
-    // by default, so the gateway-driven reconcile — the only sweep that can also close the checkout
-    // session — always gets there first, and this one only clears what that could not settle.
-    graceSec: parseIntOr(process.env.RESERVATION_SWEEP_GRACE_SEC, 900),
-  },
   retention: {
     ...retentionConfig().retention,
-    // Extra age past an idempotency key's own `expires_at`. Its TTL is already the retry window, so
-    // this is only slack for clock skew between app and database.
-    idempotencyGraceSec: parseIntOr(process.env.RETENTION_IDEMPOTENCY_GRACE_SEC, 3_600),
     // How long a PUBLISHED outbox row is kept. Unpublished rows are never collected at any age.
     outboxDays: parseIntOr(process.env.RETENTION_OUTBOX_DAYS, 30),
     // How long an inbox claim is kept — the one retention number that is a correctness bound.
     // Guarded at boot against the main queue's failed-job horizon (see sweep-inbox.ts).
     inboxDays: parseIntOr(process.env.RETENTION_INBOX_DAYS, 30),
-    // Must outlast the GATEWAY's redelivery window, not the queue's — this table is the replay
-    // defence at ingress. Stripe retries for ~72h; floored at 14 days in env.validation.
-    webhookEventDays: parseIntOr(process.env.RETENTION_WEBHOOK_EVENT_DAYS, 30),
   },
   catalog: {
     // Catalog's own fresh window; the stale window, jitter and lock bounds below are shared. The
@@ -158,7 +111,7 @@ export default () => ({
     requestTimeoutMs: parseIntOr(process.env.SEARCH_REQUEST_TIMEOUT_MS, 5000),
   },
   storage: {
-    // Presence of the whole group is the switch, like SMTP_URL: set → a real bucket, unset → the
+    // Presence of the whole group is the switch, like SENTRY_DSN: set → a real bucket, unset → the
     // media routes fail loudly and everything else boots (and a boot failure in production).
     endpoint: process.env.STORAGE_ENDPOINT,
     bucket: process.env.STORAGE_BUCKET,
@@ -185,15 +138,4 @@ export default () => ({
     maxBytes: parseIntOr(process.env.MEDIA_MAX_BYTES, 5 * 1024 * 1024),
   },
   ...resilienceConfig(),
-  inventory: {
-    // 'pessimistic' (SELECT ... FOR UPDATE) or 'optimistic' (version CAS + retry).
-    lockStrategy: process.env.INVENTORY_LOCK_STRATEGY ?? 'pessimistic',
-    // How far ahead a HELD reservation stamps `expiresAt` — the deadline the expiry sweep reclaims
-    // an unpaid hold from.
-    reservationTtl: process.env.INVENTORY_RESERVATION_TTL ?? '15m',
-    // Re-CAS attempts after losing a version race before giving up with a 409 (0 = never retry).
-    // Real shortfalls never consume a retry. A NaN budget would leave the CAS loop unbounded, so
-    // this must never fall through to a bare parseInt.
-    optimisticMaxRetries: parseIntOr(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES, 3),
-  },
 });

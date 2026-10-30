@@ -1,0 +1,464 @@
+# Rule unit tests for checkout-saga.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+#
+# Series carry the `job`/`instance` a real scrape attaches, so the `and on()` joins against `up` are
+# exercised the way production evaluates them.
+rule_files:
+  - ../rules/checkout-saga.yml
+
+evaluation_interval: 15s
+
+tests:
+  # A saga past its deadline for longer than the hold, then compensated away.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_saga_overdue{job="jcool-order", instance="order-service:3000"}'
+        values: '0x5 1x15 0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CheckoutSagaStuck
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: CheckoutSagaStuck
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'Checkout sagas are running past their payment deadline'
+              description: '1 saga(s) are still running past their deadline plus grace, so the deadline timer did not end them: a participant keeps failing, a compensation keeps conflicting, or a workflow task keeps failing. Their stock stays held and their payment may stay authorized. RUNBOOK → The checkout saga → CheckoutSagaStuck.'
+      - eval_time: 25m
+        alertname: CheckoutSagaStuck
+        exp_alerts: []
+
+  # The workflow task type loses its pollers for longer than the hold, then a worker comes back.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
+        values: '1x5 0x10 1x10'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="activity"}'
+        values: '1x26'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
+        values: '0x26'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="activity"}'
+        values: '0x26'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: &worker_stalled
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'Checkout saga tasks are not being picked up'
+              description: 'A checkout task queue has had no poller, or a task waiting over 2 minutes, for 5 minutes: Temporal answers but no worker is running the saga, so checkouts neither start nor settle. The order-service stays ready while a worker that is running polls nothing, so readiness does not catch this. If Temporal itself is unwell, RUNBOOK → Temporal down. RUNBOOK → The checkout saga → CheckoutSagaWorkerStalled.'
+      - eval_time: 20m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: []
+
+  # Pollers are present but every activity slot is held: the backlog ages past 2 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
+        values: '1x27'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="activity"}'
+        values: '1x27'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
+        values: '0x27'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="activity"}'
+        values: '0x5 180+60x15 0x5'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: *worker_stalled
+      - eval_time: 25m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: []
+
+  # A deploy: both task types drop to 0 pollers for 2 minutes while the worker restarts.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
+        values: '1x5 0x1 1x20'
+      - series: 'checkout_saga_task_queue_pollers{job="jcool-order", instance="order-service:3000", task_type="activity"}'
+        values: '1x5 0x1 1x20'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="workflow"}'
+        values: '0x27'
+      - series: 'checkout_saga_task_queue_backlog_age_seconds{job="jcool-order", instance="order-service:3000", task_type="activity"}'
+        values: '0x27'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: CheckoutSagaWorkerStalled
+        exp_alerts: []
+
+  # Temporal unreachable past the 2m hold, then back.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x5 0x10 1x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CheckoutSagaEngineDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: CheckoutSagaEngineDown
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'The order-service cannot read the checkout sagas from Temporal'
+              description: 'The saga collector has not read Temporal within 2s for 2 minutes, and every other saga gauge is withdrawn meanwhile. With Temporal down, checkout answers 503, no saga moves, and the order-service''s /health/ready is down too, so a deploy stops at it; the api, the gateway and a freeze flip are unaffected. With only its visibility store slow, checkout still works but every saga alert is blind. RUNBOOK → The checkout saga → CheckoutSagaEngineDown.'
+      - eval_time: 18m
+        alertname: CheckoutSagaEngineDown
+        exp_alerts: []
+
+  # One Failed run: it fires at the first sample above 0, with no hold, and clears once the run
+  # leaves the gauge's one-hour window.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="Failed"}'
+        values: '0x5 1x10 0x5'
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="Terminated"}'
+        values: '0x21'
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="TimedOut"}'
+        values: '0x21'
+      - series: 'checkout_saga_closed_abnormally{job="jcool-order", instance="order-service:3000", status="Canceled"}'
+        values: '0x21'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CheckoutSagaClosedAbnormally
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CheckoutSagaClosedAbnormally
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'A checkout saga closed as Failed, Terminated, TimedOut or Canceled'
+              description: 'The saga never closes this way on its own, so this is a bug or an operator, and the run stopped where it was: its stock may still be held and its payment still authorized. The gauge counts the last hour, so this stays firing for an hour after the closure; it is not evidence that more runs closed. RUNBOOK → The checkout saga → CheckoutSagaClosedAbnormally.'
+      - eval_time: 18m
+        alertname: CheckoutSagaClosedAbnormally
+        exp_alerts: []
+
+  # The first conflict: the counter is born already at 1. It must fire, name its step, and age out
+  # of the window. A compensation that applied cleanly, however often, is not a conflict.
+  - interval: 1m
+    input_series:
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="cancel_payment", outcome="captured_conflict"}'
+        values: '_x5 1x40'
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="cancel_payment", outcome="cancelled"}'
+        values: '_x2 1+1x40'
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="commit_stock", outcome="conflict"}'
+        values: '_x2 1x40'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CheckoutCompensationConflict
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CheckoutCompensationConflict
+        exp_alerts:
+          - exp_labels:
+              step: cancel_payment
+              severity: page
+            exp_annotations:
+              summary: 'Checkout compensation cancel_payment hit a conflict'
+              description: 'A compensation found its participant in a state it cannot undo, such as stock already committed or a payment already captured, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
+      - eval_time: 22m
+        alertname: CheckoutCompensationConflict
+        exp_alerts: []
+
+  # A later conflict on a counter that already exists.
+  - interval: 1m
+    input_series:
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="release_stock", outcome="conflict"}'
+        values: '1x30 2x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CheckoutCompensationConflict
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: CheckoutCompensationConflict
+        exp_alerts:
+          - exp_labels:
+              step: release_stock
+              severity: page
+            exp_annotations:
+              summary: 'Checkout compensation release_stock hit a conflict'
+              description: 'A compensation found its participant in a state it cannot undo, such as stock already committed or a payment already captured, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
+      - eval_time: 50m
+        alertname: CheckoutCompensationConflict
+        exp_alerts: []
+
+  # An authorization left uncaptured: the age climbs through 900s and holds, then it is captured.
+  - interval: 1m
+    input_series:
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
+        values: '0x5 600+60x20 0x5'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: PaymentAuthorizationUncaptured
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: PaymentAuthorizationUncaptured
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'A payment has been authorized but not captured for over 15 minutes'
+              description: 'The oldest AUTHORIZED payment is 22m 0s old. The money is held on the card while the saga neither captures nor cancels it, and left alone the authorization expires at the provider. RUNBOOK → The checkout saga → PaymentAuthorizationUncaptured.'
+      - eval_time: 30m
+        alertname: PaymentAuthorizationUncaptured
+        exp_alerts: []
+
+  # One kind reports violations for longer than the hold; the checker writes every kind each run.
+  - interval: 1m
+    input_series:
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="captured_without_paid"}'
+        values: '0x5 2x10 0x10'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="paid_without_capture"}'
+        values: '0x26'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="paid_without_commit"}'
+        values: '0x26'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="orphan_hold"}'
+        values: '0x26'
+      - series: 'checkout_invariant_violations{job="jcool-order", instance="order-service:3000", kind="authorized_on_dead_order"}'
+        values: '0x26'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CheckoutInvariantViolation
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: CheckoutInvariantViolation
+        exp_alerts:
+          - exp_labels:
+              kind: captured_without_paid
+              severity: page
+            exp_annotations:
+              summary: 'Checkout invariant broken: captured_without_paid'
+              description: 'The invariant checker found 2 settled order(s) that disagree with a participant. It only reports and fixes nothing; each orderId is in the order-service logs at level error. RUNBOOK → The checkout saga → CheckoutInvariantViolation.'
+      - eval_time: 20m
+        alertname: CheckoutInvariantViolation
+        exp_alerts: []
+
+  # Every run errors from the start, so only `result="error"` exists while the order-service is
+  # scraped; the first completed run clears it.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="error"}'
+        values: '1+1x40'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
+        values: '_x30 1+1x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: &checker_silent
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'The checkout invariant checker is not completing runs'
+              description: 'The order-service is being scraped but the checker has not finished a run: every run is erroring, it never started, or it stopped being scheduled. Until it runs again an order that disagrees with its stock or payment goes unnoticed. RUNBOOK → The checkout saga → CheckoutInvariantCheckerSilent.'
+      - eval_time: 33m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+
+  # The checker completed runs, then only errors: ok and violations stay flat for 30 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x70'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
+        values: '0+1x20 20x50'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="violations"}'
+        values: '0x70'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="error"}'
+        values: '0x20 1+1x50'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: *checker_silent
+
+  # The order-service goes down and every one of its series goes with it: OrderScrapeDown owns that.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x20 0x60'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
+        values: '0+1x20 _x60'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="violations"}'
+        values: '0x20 _x60'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="error"}'
+        values: '0x20 _x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+
+  # Same, with the target gone from Prometheus entirely: no `up` series at all.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x20 _x60'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="ok"}'
+        values: '0+1x20 _x60'
+      - series: 'checkout_invariant_check_total{job="jcool-order", instance="order-service:3000", result="violations"}'
+        values: '0x20 _x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []
+
+  # A late authorization: its compensation counter is born already at 1. It must fire, name its
+  # kind, and age out of the 30m window. Compensations for other reasons are not late ones.
+  - interval: 1m
+    input_series:
+      - series: 'saga_compensation_total{job="jcool-order", instance="order-service:3000", kind="cancel_payment", reason="late_authorization"}'
+        values: '_x5 1x60'
+      - series: 'saga_compensation_total{job="jcool-order", instance="order-service:3000", kind="release_stock", reason="cancelled"}'
+        values: '_x2 1+1x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CheckoutLateAuthorization
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CheckoutLateAuthorization
+        exp_alerts: &late_authorization
+          - exp_labels:
+              kind: cancel_payment
+              severity: ticket
+            exp_annotations:
+              summary: 'A payment was authorized after its checkout had ended (cancel_payment)'
+              description: 'An authorization reached the saga after the order was already given up on, and a lateAuthorization run compensated it. One is handled; a steady stream means authorizations arrive later than the payment deadline allows. RUNBOOK → The checkout saga → CheckoutLateAuthorization.'
+      - eval_time: 30m
+        alertname: CheckoutLateAuthorization
+        exp_alerts: *late_authorization
+      - eval_time: 37m
+        alertname: CheckoutLateAuthorization
+        exp_alerts: []
+
+  # The wiring regression: both services are still scraped but their gauges went absent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x40'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x10 _x30'
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
+        values: '0x10 _x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Checkout saga metrics are missing from the order-service'
+              description: 'The order-service is being scraped but reports no checkout_saga_engine_up, so every saga alert is blind: the saga collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+      - eval_time: 20m
+        alertname: PaymentMetricsAbsent
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: PaymentMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Payment authorization metrics are missing from the payment-service'
+              description: 'The payment-service is being scraped but reports no payment_authorized_uncaptured_oldest_seconds, so PaymentAuthorizationUncaptured cannot fire: the payment collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+
+  # Both services are down: `up` reads 0 and every series of each app is gone.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x10 0x40'
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x10 0x40'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x10 _x40'
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
+        values: '0x10 _x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PaymentMetricsAbsent
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: PaymentMetricsAbsent
+        exp_alerts: []
+
+  # Present at 0 is reporting, not absent: Temporal unreachable and nothing authorized.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
+        values: '1x40'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
+        values: '0x40'
+      - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PaymentMetricsAbsent
+        exp_alerts: []
+
+  # A scraped order-service says nothing about the payment-service: never scraped, PaymentScrapeDown
+  # owns it.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PaymentMetricsAbsent
+        exp_alerts: []
+
+  # The api no longer records any saga or checker series, so its being scraped proves nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-api", instance="app:3000"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: CheckoutInvariantCheckerSilent
+        exp_alerts: []

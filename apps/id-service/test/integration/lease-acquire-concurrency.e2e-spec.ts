@@ -5,6 +5,9 @@ import { TestKeyspace } from '../setup/keyspaces';
 // The whole pool at once: every node handed out exactly once, and the 8-bit node field leaves no
 // room to contend with more claimants than there are nodes.
 const CLAIMANTS = LEASED_NODE_MAX - LEASED_NODE_MIN + 1;
+// The storm queues some 1.5k txns on one etcd, and a busy CI runner stalls one past the production
+// deadline now and then. Who gets which node is the subject here, not how fast.
+const STORM_CALL_DEADLINE_MS = 20_000;
 
 describe('lease acquire under contention', () => {
   let keyspace: TestKeyspace;
@@ -17,7 +20,9 @@ describe('lease acquire under contention', () => {
 
   it('hands every concurrent claimant a node of its own', async () => {
     const grants = await Promise.all(
-      Array.from({ length: CLAIMANTS }, (_, i) => keyspace.store().acquire({ holder: `claimant-${i}`, ttlMs: 60_000 })),
+      Array.from({ length: CLAIMANTS }, (_, i) =>
+        keyspace.store(STORM_CALL_DEADLINE_MS).acquire({ holder: `claimant-${i}`, ttlMs: 60_000 }),
+      ),
     );
 
     const nodeIds = grants.map((grant) => grant?.nodeId);

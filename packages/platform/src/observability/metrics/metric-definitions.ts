@@ -26,15 +26,13 @@ export const MESSAGING_CONSUME_TOTAL = 'messaging_consume_total';
 export const MESSAGING_CONSUME_RETRIES_TOTAL = 'messaging_consume_retries_total';
 export const MESSAGING_DLQ_TOTAL = 'messaging_dlq_total';
 
-// The steps are NOT nested — an order expired straight from its hold reaches finalize without ever
-// reaching payment_session — so read them as rates side by side; a subtraction can go negative.
+// Counted per attempt by the saga's activities, never by the workflow: workflow code replays.
 export const SAGA_STEP_TOTAL = 'saga_step_total';
 export const SAGA_COMPENSATION_TOTAL = 'saga_compensation_total';
-// Narrower than saga_compensation_total{trigger=ttl_expired}: only the orders the reservation sweep
-// itself claimed. The difference is what the gateway-driven reconcile expired first, so once
-// expiries are happening at all, the two rates converging means reconcile has stopped.
-export const RESERVATION_EXPIRY_TOTAL = 'reservation_expiry_total';
 export const PAYMENT_REFUND_OWED_TOTAL = 'payment_refund_owed_total';
+
+export const CHECKOUT_INVARIANT_VIOLATIONS = 'checkout_invariant_violations';
+export const CHECKOUT_INVARIANT_CHECK_TOTAL = 'checkout_invariant_check_total';
 
 // Sent after its transaction commits, so nothing retries it: every increment is one notification
 // the recipient will never receive.
@@ -49,6 +47,9 @@ export const RETENTION_SWEEP_FAILURES_TOTAL = 'retention_sweep_failures_total';
 export const MEDIA_BYTES_RECLAIMED_TOTAL = 'media_bytes_reclaimed_total';
 
 export const SESSION_EPOCH_LOOKUPS_TOTAL = 'session_epoch_lookups_total';
+
+export const TCC_BRANCH_TOTAL = 'tcc_branch_total';
+export const PAYMENT_CAPTURE_CONFLICT_TOTAL = 'payment_capture_conflict_total';
 
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
@@ -139,22 +140,28 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: SAGA_STEP_TOTAL,
-    help: 'Checkout saga steps, by step (reserve/payment_session/finalize) and outcome. A settlement that moved nothing — a duplicate, or one conflicting with an order already terminal — is not counted: it repeats a step rather than adding one. Only the repeats arriving over the queue also show up in messaging_consume_total; one from the payment webhook or the reconcile sweep is in neither, and the "conflicting finalize ignored" log is the only place it appears.',
+    help: 'Checkout saga participant calls, per attempt, by step (try_reserve/commit_stock/capture_payment/release_stock/restock/cancel_payment) and outcome (the participant answer lower-cased, or error when the call threw and will be retried). A retried step counts every attempt, so idempotent next to applied is a retry that found its work done; conflict on a compensation step is retried until a human resolves it.',
     labelNames: ['step', 'outcome'],
   }),
   makeCounterProvider({
     name: SAGA_COMPENSATION_TOTAL,
-    help: 'Orders that released their stock hold instead of committing it, by trigger (payment_failed/ttl_expired/cancelled).',
-    labelNames: ['trigger'],
-  }),
-  makeCounterProvider({
-    name: RESERVATION_EXPIRY_TOTAL,
-    help: 'Orders the reservation sweep expired because their hold had lapsed. Orders, not reservation rows: a multi-line order is one hold to the sweep.',
+    help: 'Compensations applied, once each, by kind (release_stock/restock/cancel_payment) and reason (try_failed/try_timeout/abandoned/expired/cancelled/commit_conflict/capture_failed/late_authorization). One saga can apply several kinds for the same reason.',
+    labelNames: ['kind', 'reason'],
   }),
   makeCounterProvider({
     name: PAYMENT_REFUND_OWED_TOTAL,
-    help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: expire_session = closing the checkout session found the money instead; webhook_direct and settlement_event = a successful payment landing on an order already cancelled or expired, seen by the in-process finalize and by its durable event. Observations, not refunds — one stranded payment normally raises two of these, so alert on the sum being non-zero and get the count from the database, never by summing this.',
+    help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: webhook_direct = a paid checkout session no payment header owns, so no saga will capture or void it. Observations, not refunds, so alert on any increase and get the count from the database, never by summing this.',
     labelNames: ['source'],
+  }),
+  makeGaugeProvider({
+    name: CHECKOUT_INVARIANT_VIOLATIONS,
+    help: 'Settled checkout orders whose participants disagree with them, by kind, as of the last complete invariant check. Every kind is written on each complete run, zeros included; a failed run leaves the previous values.',
+    labelNames: ['kind'],
+  }),
+  makeCounterProvider({
+    name: CHECKOUT_INVARIANT_CHECK_TOTAL,
+    help: 'Invariant checker runs, by result (ok/violations = complete, error = visibility or a participant failed and the gauge was left as it was).',
+    labelNames: ['result'],
   }),
   makeCounterProvider({
     name: MAIL_SEND_FAILURES_TOTAL,
@@ -185,6 +192,15 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
     name: SESSION_EPOCH_LOOKUPS_TOTAL,
     help: 'Session-epoch reads from Redis, by result (hit, or miss = read through to the user-service). Keys are never evicted, so a sustained miss rate means Redis lost data, not that it is cold.',
     labelNames: ['result'],
+  }),
+  makeCounterProvider({
+    name: TCC_BRANCH_TOTAL,
+    help: 'TCC participant commands, by participant (inventory/payment), op and outcome. Business outcomes such as conflict or idempotent are answers, not failures; error is a command that threw (timeout, DB or provider fault) and will be retried by its caller.',
+    labelNames: ['participant', 'op', 'outcome'],
+  }),
+  makeCounterProvider({
+    name: PAYMENT_CAPTURE_CONFLICT_TOTAL,
+    help: 'Captures that landed on a payment whose order had already been cancelled: the buyer was charged for an order that will not ship. Any increase needs a refund decision by a human.',
   }),
   makeHistogramProvider({
     name: CACHE_REBUILD_DURATION_SECONDS,

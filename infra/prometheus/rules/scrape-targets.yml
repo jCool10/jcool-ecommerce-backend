@@ -1,0 +1,42 @@
+# Alerts for Prometheus losing a service. Every absent-metrics alert goes quiet while its service is
+# not scraped, on purpose, so these own that case.
+groups:
+  - name: scrape-targets
+    rules:
+      # `absent()` as well as `== 0`: a job missing from the scrape config leaves no `up` series at
+      # all, and `== 0` alone would be silent.
+      - alert: ApiScrapeDown
+        expr: up{job="jcool-api"} == 0 or absent(up{job="jcool-api"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the api for 5 minutes'
+          description: 'The api is down, unreachable from Prometheus, or refusing the metrics token, and every api alert, the absent-metrics ones included, is blind until it is scraped again. RUNBOOK → The checkout saga → ApiScrapeDown.'
+
+      - alert: InventoryScrapeDown
+        expr: up{job="jcool-inventory"} == 0 or absent(up{job="jcool-inventory"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the inventory-service for 5 minutes'
+          description: 'The inventory-service is down, unreachable from Prometheus, or refusing the metrics token. Down, it stops every checkout from holding stock; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → InventoryScrapeDown.'
+
+      - alert: PaymentScrapeDown
+        expr: up{job="jcool-payment"} == 0 or absent(up{job="jcool-payment"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the payment-service for 5 minutes'
+          description: 'The payment-service is down, unreachable from Prometheus, or refusing the metrics token. Down, no checkout can open a payment session and no saga can capture or void one; in any case its own metrics are blind until it is scraped again. RUNBOOK → The checkout saga → PaymentScrapeDown.'
+
+      - alert: OrderScrapeDown
+        expr: up{job="jcool-order"} == 0 or absent(up{job="jcool-order"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Prometheus has not scraped the order-service for 5 minutes'
+          description: 'The order-service is down, unreachable from Prometheus, or refusing the metrics token. Down, no checkout starts or settles; in any case every saga and checker alert, the absent-metrics ones included, is blind until it is scraped again. RUNBOOK → The checkout saga → OrderScrapeDown.'

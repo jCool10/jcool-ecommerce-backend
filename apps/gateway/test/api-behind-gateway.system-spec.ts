@@ -27,21 +27,13 @@ const API_ENV = {
   INTERNAL_API_TOKEN: randomBytes(32).toString('hex'),
   // Nothing listens there either: no case here reaches a write.
   ID_SERVICE_URL: 'http://id-service.invalid',
-  PAYMENT_WEBHOOK_SECRET: randomBytes(16).toString('hex'),
-  SMTP_URL: 'smtp://smtp.invalid:587',
-  MAIL_FROM: 'system-test@example.invalid',
+  INTERNAL_CALLER_TOKEN_ORDER_SERVICE: randomBytes(32).toString('hex'),
   STORAGE_ENDPOINT: 'http://storage.invalid:9000',
   STORAGE_BUCKET: 'system-test',
   STORAGE_ACCESS_KEY_ID: 'system-test',
   STORAGE_SECRET_ACCESS_KEY: randomBytes(16).toString('hex'),
   LOG_LEVEL: 'warn',
 };
-
-const json = (body: unknown): RequestInit => ({
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify(body),
-});
 
 // The api's contract through the gateway, request by request, against the same api called directly.
 const SAMPLES: { name: string; path: string; init?: RequestInit }[] = [
@@ -50,15 +42,10 @@ const SAMPLES: { name: string; path: string; init?: RequestInit }[] = [
   { name: 'a product that does not exist', path: '/products/does-not-exist' },
   { name: 'an unknown route', path: '/nope' },
   { name: 'a route auth has moved away from', path: '/auth/me' },
-  { name: 'an admin route without a token', path: '/admin/orders' },
-  {
-    name: 'a webhook with a bad signature',
-    path: '/webhooks/payment',
-    init: { ...json({ id: 'evt_1' }), headers: { 'content-type': 'application/json', 'stripe-signature': 't=1,v1=0' } },
-  },
+  { name: 'an admin route without a token', path: '/admin/products', init: { method: 'POST' } },
   {
     name: 'a CORS preflight from the allowed origin',
-    path: '/orders',
+    path: '/cart/items',
     init: {
       method: 'OPTIONS',
       headers: {
@@ -141,6 +128,10 @@ describe('gateway: the api behind it', () => {
     gateway = await gatewayContainer(network, {
       // Railway's value: without tcp6/ the gateway dials IPv4 and the api believes none of it.
       API_UPSTREAM: `tcp6/api:${API_PORT}`,
+      // Required to boot; no case here reaches stock, payments or orders.
+      INVENTORY_UPSTREAM: 'inventory-service.invalid:3000',
+      PAYMENT_UPSTREAM: 'payment-service.invalid:3000',
+      ORDER_UPSTREAM: 'order-service.invalid:3000',
       TRUSTED_PROXY_CIDRS: `${edge.getIpAddress(network.getName())}/32`,
     })
       .withNetworkAliases('gateway')

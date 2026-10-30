@@ -16,7 +16,7 @@ const REDIS_IMAGE = 'redis:7-alpine';
 // Postgres 16 ships max_connections=100, which four workers can reach. No spec holds more than two
 // apps open at once (`queue-connection.e2e-spec.ts`; the identity-key-pin files boot apps one at a
 // time and close each in a `finally`), so the realistic peak is 2 apps × DB_POOL_MAX × workers plus
-// a handful of raw pools, around 100 at W=4. Raised to 300 so that peak sits well inside the limit
+// a handful of raw pools: 2 × 10 × 4 = 80 at W=4. Raised to 300 so that peak sits well inside the limit
 // and a file that boots more apps later fails on its own pool rather than on the server's global one.
 const MAX_CONNECTIONS = 300;
 
@@ -44,7 +44,7 @@ export default async function setup({
     throw new Error(
       `E2E_WORKERS=${workerCount()} exceeds Redis's ${MAX_REDIS_DB_INDEX + 1} logical databases. ` +
         `Cap it at ${MAX_REDIS_DB_INDEX}; beyond that, workers would share a Redis db and ` +
-        `cache/idempotency/throttle keys would collide silently.`,
+        `cache/throttle keys would collide silently.`,
     );
   }
 
@@ -58,11 +58,15 @@ export default async function setup({
     new RedisContainer(REDIS_IMAGE).withCommand(['redis-server', '--appendonly', 'yes']).start(),
   ]);
 
-  if (pgResult.status === 'rejected' || redisResult.status === 'rejected') {
+  const stopAll = async (): Promise<void> => {
     await Promise.allSettled([
       pgResult.status === 'fulfilled' ? pgResult.value.stop() : undefined,
       redisResult.status === 'fulfilled' ? redisResult.value.stop() : undefined,
     ]);
+  };
+
+  if (pgResult.status === 'rejected' || redisResult.status === 'rejected') {
+    await stopAll();
     if (pgResult.status === 'rejected') throw pgResult.reason;
     if (redisResult.status === 'rejected') throw redisResult.reason;
   }
@@ -76,14 +80,12 @@ export default async function setup({
     provide('PG_BASE_URL', baseUrl);
     provide('REDIS_BASE_URL', redis.getConnectionUrl());
   } catch (error) {
-    await Promise.allSettled([postgres.stop(), redis.stop()]);
+    await stopAll();
     throw error;
   }
 
-  return async () => {
-    // Dropping the container drops every worker database with it.
-    await Promise.allSettled([postgres.stop(), redis.stop()]);
-  };
+  // Dropping the container drops every worker database with it.
+  return stopAll;
 }
 
 /**

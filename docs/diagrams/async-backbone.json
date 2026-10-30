@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Outbox to inbox",
+    "description": "An event is a row committed with the change it describes, in the api's outbox or the payment-service's. Each relay adds unpublished rows to the BullMQ queue its route table names, order-events or api-events; the api's worker for that queue claims the message in the inbox and applies its effect in that same transaction, so at-least-once delivery becomes an exactly-once effect. Retries exhausted, a job lands in its queue's dead-letter queue, whose replay asks the inbox first.",
+    "visual_preset": "signal-flow",
+    "theme": "light"
+  },
+  "stages": [
+    { "id": "write", "label": "write tx", "order": 0 },
+    { "id": "relay", "label": "relay", "order": 1 },
+    { "id": "queue", "label": "BullMQ", "order": 2 },
+    { "id": "consume", "label": "consume", "order": 3 },
+    { "id": "effect", "label": "effect", "order": 4 }
+  ],
+  "nodes": [
+    { "id": "a-change", "label": "api write + outbox", "role": "source", "stage": "write", "description": "Order or catalog write and its event, one transaction. The writer refuses an event type with no route and captures the W3C traceparent." },
+    { "id": "p-change", "label": "payment write + outbox", "role": "source", "stage": "write", "description": "The payment-service records an authorization and its payment.authorized row in its own database, one transaction." },
+    { "id": "a-relay", "label": "api relay · SKIP LOCKED", "role": "transform", "stage": "relay", "description": "Polls published_at IS NULL with FOR UPDATE SKIP LOCKED, adds each row to the queue its route table names with that queue's job options, marks it published in one transaction. Safe on every replica." },
+    { "id": "p-relay", "label": "payment relay", "role": "transform", "stage": "relay", "description": "The same relay from @jcool/messaging. Its one route sends payment.authorized to order-events, on the long ladder the order-events contract sets." },
+    { "id": "q-api", "label": "api-events", "role": "store", "stage": "queue", "description": "Catalog events, on their own queue so search lag never holds back order work; catalog.* retries on the long ladder." },
+    { "id": "q-order", "label": "order-events", "role": "store", "stage": "queue", "description": "Order events and payment.authorized. 8 attempts by default; order.paid and payment.authorized retry on the capped long ladder (ORDER_PAID_CONSUMER_ATTEMPTS)." },
+    { "id": "dlq-api", "label": "api-events-dlq", "role": "sink", "stage": "consume", "description": "Retries exhausted or a permanent failure. Nothing consumes it automatically." },
+    { "id": "worker", "label": "worker · inbox claim", "role": "consumer", "stage": "consume", "description": "One api worker per queue, one dispatcher. Claims (consumer, message_id) in inbox; a redelivery loses the claim and does nothing." },
+    { "id": "dlq-order", "label": "order-events-dlq", "role": "sink", "stage": "consume", "description": "Retries exhausted or a permanent failure. Nothing consumes it automatically." },
+    { "id": "replay-api", "label": "replay · api-events", "role": "governance", "stage": "effect", "description": "pnpm queue:replay-dlq --queue api-events. Dry run by default; reads only that queue's DLQ and checks the inbox before re-publishing, so a landed effect is skipped." },
+    { "id": "effect", "label": "effect, same tx", "role": "store", "stage": "effect", "description": "Signal the checkout saga, index the catalog, send the paid mail at most once. A handler that throws takes its claim down with it." },
+    { "id": "replay-order", "label": "replay · order-events", "role": "governance", "stage": "effect", "description": "pnpm queue:replay-dlq --queue order-events. Dry run by default; reads only that queue's DLQ and checks the inbox before re-publishing, so a landed effect is skipped." }
+  ],
+  "flows": [
+    { "from": "a-change", "to": "a-relay", "label": "commit" },
+    { "from": "p-change", "to": "p-relay", "label": "commit" },
+    { "from": "a-relay", "to": "q-api", "label": "publish" },
+    { "from": "a-relay", "to": "q-order", "label": "publish" },
+    { "from": "p-relay", "to": "q-order", "label": "publish" },
+    { "from": "q-api", "to": "dlq-api", "label": "exhausted" },
+    { "from": "q-api", "to": "worker", "label": "deliver" },
+    { "from": "q-order", "to": "worker", "label": "deliver" },
+    { "from": "q-order", "to": "dlq-order", "label": "exhausted" },
+    { "from": "dlq-api", "to": "replay-api", "label": "inspect" },
+    { "from": "worker", "to": "effect", "label": "claim + apply" },
+    { "from": "dlq-order", "to": "replay-order", "label": "inspect" }
+  ]
+}

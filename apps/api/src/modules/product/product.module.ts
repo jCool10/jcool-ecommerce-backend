@@ -15,11 +15,6 @@ import { CatalogSkuQueryService } from './application/catalog/services/catalog-s
 import { ProductSearchSyncService } from './application/catalog/services/product-search-sync.service';
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from './application/catalog/use-cases';
 import { PRODUCT_SKU_QUERY } from './application/public/product-sku-query.port';
-import { PRODUCT_STOCK_RESERVATION } from './application/public/product-stock-reservation.port';
-import { StockAdminService } from './application/stock/stock-admin.service';
-import { STOCK_ADMIN } from './application/stock/ports/stock-admin.port';
-import { STOCK_REPOSITORY } from './application/stock/ports/stock-repository.port';
-import { ReserveStockUseCase } from './application/stock/reserve-stock.use-case';
 import {
   CachingCatalogAdminRepository,
   CachingProductRepository,
@@ -34,25 +29,17 @@ import {
   isSearchEngineFault,
   type SearchEngineCalls,
 } from './infrastructure/catalog';
-import { StockAdminRepository } from './infrastructure/stock/stock-admin.repository';
-import { StockRepository } from './infrastructure/stock/stock.repository';
 import { AdminCatalogController } from './interface/catalog/admin-catalog.controller';
 import { CatalogController } from './interface/catalog/catalog.controller';
+import { SkuViewsInternalController } from './interface/catalog/internal/sku-views.internal.controller';
 import { CategoryRenamedHandler } from './interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from './interface/catalog/queue/product-changed.handler';
-import { AdminInventoryController } from './interface/stock/admin-inventory.controller';
 
-/**
- * One module, two aggregate groups: catalog and stock reference each other only by `variantId`, and
- * no use case writes both in one transaction. Catalog's read and write ports resolve to cache-aside
- * decorators over the Drizzle adapters; a stock write must never bump the catalog cache generation.
- * STOCK_ADMIN stays unexported: setting stock outright is not something another context may do on a
- * buyer's behalf.
- */
+/** Catalog's read and write ports resolve to cache-aside decorators over the Drizzle adapters. */
 @Module({
   // MediaModule for `MEDIA_FACADE` only — image bytes and their lifecycle stay entirely over there.
   imports: [CacheModule, MediaModule, ResilienceModule],
-  controllers: [CatalogController, AdminCatalogController, AdminInventoryController],
+  controllers: [CatalogController, AdminCatalogController, SkuViewsInternalController],
   providers: [
     ListProductsUseCase,
     GetProductDetailUseCase,
@@ -84,18 +71,7 @@ import { AdminInventoryController } from './interface/stock/admin-inventory.cont
     ProductSearchSyncService,
     ProductChangedHandler,
     CategoryRenamedHandler,
-    ReserveStockUseCase,
-    StockAdminService,
-    { provide: STOCK_REPOSITORY, useClass: StockRepository },
-    { provide: STOCK_ADMIN, useClass: StockAdminRepository },
-    { provide: PRODUCT_STOCK_RESERVATION, useExisting: ReserveStockUseCase },
   ],
-  exports: [
-    PRODUCT_SKU_QUERY,
-    PRODUCT_STOCK_RESERVATION,
-    STOCK_REPOSITORY,
-    ProductChangedHandler,
-    CategoryRenamedHandler,
-  ],
+  exports: [PRODUCT_SKU_QUERY, ProductChangedHandler, CategoryRenamedHandler],
 })
 export class ProductModule {}

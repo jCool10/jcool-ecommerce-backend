@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CallerTokenGuard } from '@jcool/platform/internal-api';
 import { MailModule } from '@jcool/platform/mail';
 import { AccessTokenKeysModule } from './access-token-keys.module';
 import {
@@ -38,7 +39,6 @@ import {
 import { AuthLinkPagesController } from './interface/auth-link-pages/auth-link-pages.controller';
 import { AuthController } from './interface/auth.controller';
 import { InternalApiController } from './interface/internal/internal-api.controller';
-import { InternalApiTokenGuard } from './interface/internal/internal-api-token.guard';
 import { JwksController } from './interface/jwks.controller';
 import { AuthCookieService, CsrfGuard, CsrfTokenService } from './interface/security';
 import { SessionEpochReconcileScheduler } from './interface/session-epoch-reconcile.scheduler';
@@ -71,7 +71,8 @@ import { UserModule } from './user.module';
     AuthCookieService,
     CsrfTokenService,
     CsrfGuard,
-    InternalApiTokenGuard,
+    // A provider, not just a route guard, so a service with no caller token fails at boot.
+    CallerTokenGuard,
     { provide: REFRESH_TOKEN_REPOSITORY, useClass: DrizzleRefreshTokenRepository },
     { provide: EMAIL_VERIFICATION_TOKEN_REPOSITORY, useClass: DrizzleEmailVerificationTokenRepository },
     { provide: PASSWORD_RESET_TOKEN_REPOSITORY, useClass: DrizzlePasswordResetTokenRepository },

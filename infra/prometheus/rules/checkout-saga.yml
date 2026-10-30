@@ -1,0 +1,125 @@
+# Alerts for the checkout saga on Temporal. Prometheus does not scrape Temporal: the order-service
+# reads every saga gauge at scrape time, so a saga with no code running still reports, and an
+# order-service that cannot reach Temporal says so instead (engine_up 0, every other saga gauge
+# withdrawn rather than held).
+groups:
+  - name: checkout-saga
+    rules:
+      - alert: CheckoutSagaStuck
+        expr: max(checkout_saga_overdue) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Checkout sagas are running past their payment deadline'
+          description: '{{ $value }} saga(s) are still running past their deadline plus grace, so the deadline timer did not end them: a participant keeps failing, a compensation keeps conflicting, or a workflow task keeps failing. Their stock stays held and their payment may stay authorized. RUNBOOK → The checkout saga → CheckoutSagaStuck.'
+
+      # `min` because workflow and activity tasks are polled separately and either one without a
+      # poller stops every saga. The 5m hold keeps a deploy quiet: pollers read 0 while it restarts.
+      - alert: CheckoutSagaWorkerStalled
+        expr: min(checkout_saga_task_queue_pollers) == 0 or max(checkout_saga_task_queue_backlog_age_seconds) > 120
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Checkout saga tasks are not being picked up'
+          description: 'A checkout task queue has had no poller, or a task waiting over 2 minutes, for 5 minutes: Temporal answers but no worker is running the saga, so checkouts neither start nor settle. The order-service stays ready while a worker that is running polls nothing, so readiness does not catch this. If Temporal itself is unwell, RUNBOOK → Temporal down. RUNBOOK → The checkout saga → CheckoutSagaWorkerStalled.'
+
+      - alert: CheckoutSagaEngineDown
+        expr: max(checkout_saga_engine_up) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 'The order-service cannot read the checkout sagas from Temporal'
+          description: 'The saga collector has not read Temporal within 2s for 2 minutes, and every other saga gauge is withdrawn meanwhile. With Temporal down, checkout answers 503, no saga moves, and the order-service''s /health/ready is down too, so a deploy stops at it; the api, the gateway and a freeze flip are unaffected. With only its visibility store slow, checkout still works but every saga alert is blind. RUNBOOK → The checkout saga → CheckoutSagaEngineDown.'
+
+      - alert: CheckoutSagaClosedAbnormally
+        expr: max(checkout_saga_closed_abnormally) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: 'A checkout saga closed as Failed, Terminated, TimedOut or Canceled'
+          description: 'The saga never closes this way on its own, so this is a bug or an operator, and the run stopped where it was: its stock may still be held and its payment still authorized. The gauge counts the last hour, so this stays firing for an hour after the closure; it is not evidence that more runs closed. RUNBOOK → The checkout saga → CheckoutSagaClosedAbnormally.'
+
+      # The counter is born at its first conflict, already at 1, which increase() cannot see; the
+      # `unless … offset` arm catches that one and must come before `or` (see LokiDiscardingLines).
+      - alert: CheckoutCompensationConflict
+        expr: |
+          (
+            sum by (step) (saga_step_total{step=~"release_stock|restock|cancel_payment",outcome=~"conflict|captured_conflict"} unless saga_step_total{step=~"release_stock|restock|cancel_payment",outcome=~"conflict|captured_conflict"} offset 15m)
+            or
+            sum by (step) (increase(saga_step_total{step=~"release_stock|restock|cancel_payment",outcome=~"conflict|captured_conflict"}[15m]))
+          ) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: 'Checkout compensation {{ $labels.step }} hit a conflict'
+          description: 'A compensation found its participant in a state it cannot undo, such as stock already committed or a payment already captured, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
+
+      - alert: PaymentAuthorizationUncaptured
+        expr: max(payment_authorized_uncaptured_oldest_seconds) > 900
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'A payment has been authorized but not captured for over 15 minutes'
+          description: 'The oldest AUTHORIZED payment is {{ $value | humanizeDuration }} old. The money is held on the card while the saga neither captures nor cancels it, and left alone the authorization expires at the provider. RUNBOOK → The checkout saga → PaymentAuthorizationUncaptured.'
+
+      - alert: CheckoutInvariantViolation
+        expr: max by (kind) (checkout_invariant_violations) > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: 'Checkout invariant broken: {{ $labels.kind }}'
+          description: 'The invariant checker found {{ $value }} settled order(s) that disagree with a participant. It only reports and fixes nothing; each orderId is in the order-service logs at level error. RUNBOOK → The checkout saga → CheckoutInvariantViolation.'
+
+      # `error` is left out on both arms: a checker that errors on every run keeps no gauge fresh.
+      # The absent arm is joined to `up` like the absent alerts below. The flat arm needs no join: a
+      # dead order-service's counter ages out of the window, it does not sit flat in it for the whole
+      # hold.
+      - alert: CheckoutInvariantCheckerSilent
+        expr: (absent(checkout_invariant_check_total{result=~"ok|violations"}) and on() (count(up{job="jcool-order"} == 1) > 0)) or sum(increase(checkout_invariant_check_total{result=~"ok|violations"}[30m])) == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'The checkout invariant checker is not completing runs'
+          description: 'The order-service is being scraped but the checker has not finished a run: every run is erroring, it never started, or it stopped being scheduled. Until it runs again an order that disagrees with its stock or payment goes unnoticed. RUNBOOK → The checkout saga → CheckoutInvariantCheckerSilent.'
+
+      # Same shape as CheckoutCompensationConflict, over 30m.
+      - alert: CheckoutLateAuthorization
+        expr: |
+          (
+            sum by (kind) (saga_compensation_total{reason="late_authorization"} unless saga_compensation_total{reason="late_authorization"} offset 30m)
+            or
+            sum by (kind) (increase(saga_compensation_total{reason="late_authorization"}[30m]))
+          ) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'A payment was authorized after its checkout had ended ({{ $labels.kind }})'
+          description: 'An authorization reached the saga after the order was already given up on, and a lateAuthorization run compensated it. One is handled; a steady stream means authorizations arrive later than the payment deadline allows. RUNBOOK → The checkout saga → CheckoutLateAuthorization.'
+
+      # `up` is counted and joined `on()`: absent() invents a series with no labels while `up` carries
+      # job/instance, so `and up` alone never matches. Silent when the order-service is down:
+      # OrderScrapeDown owns that.
+      - alert: CheckoutSagaMetricsAbsent
+        expr: absent(checkout_saga_engine_up) and on() (count(up{job="jcool-order"} == 1) > 0)
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Checkout saga metrics are missing from the order-service'
+          description: 'The order-service is being scraped but reports no checkout_saga_engine_up, so every saga alert is blind: the saga collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+
+      # Joined to the payment-service's `up`, which owns the gauge; PaymentScrapeDown covers it down.
+      - alert: PaymentMetricsAbsent
+        expr: absent(payment_authorized_uncaptured_oldest_seconds) and on() (count(up{job="jcool-payment"} == 1) > 0)
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Payment authorization metrics are missing from the payment-service'
+          description: 'The payment-service is being scraped but reports no payment_authorized_uncaptured_oldest_seconds, so PaymentAuthorizationUncaptured cannot fire: the payment collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
