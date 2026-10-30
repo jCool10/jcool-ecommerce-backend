@@ -15,8 +15,8 @@ export default () => ({
   ...observabilityConfig({ serviceName: 'jcool-payment-service' }),
   ...databaseConfig(),
   ...redisConfig(),
-  // Producer side of order-events only. BullMQ stamps these at `add`, so they must match the api's
-  // values; the cross rule lives in RUNBOOK.md.
+  // Producer side of order-events only. BullMQ stamps these at `add`, so they must match the
+  // order-service's values; the cross rule lives in RUNBOOK.md.
   queue: {
     prefix: process.env.QUEUE_PREFIX ?? 'bull',
     consumerAttempts: parseIntOr(process.env.QUEUE_CONSUMER_ATTEMPTS, 8),
@@ -35,7 +35,7 @@ export default () => ({
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
   },
   internalApi: {
-    callers: callerTokensFromEnv(['api', 'order-service']),
+    callers: callerTokensFromEnv(['order-service']),
   },
   payment: {
     // Kept as a boot-time assertion: env validation rejects anything but 'stripe'.
@@ -49,6 +49,8 @@ export default () => ({
     // No default: an unset value trips the adapter's live-key check at boot.
     successUrl: process.env.STRIPE_SUCCESS_URL,
     cancelUrl: process.env.STRIPE_CANCEL_URL ?? 'http://localhost:3000/payments/cancel',
+    // Unset → the SDK's own api.stripe.com. Env validation allows another host for sk_test_ keys only.
+    apiAddress: stripeApiAddress(),
     // Stripe refuses a session living under 30 minutes on its own clock; the margin absorbs the hop.
     sessionMinTtlSec: parseIntOr(process.env.PAYMENT_SESSION_MIN_TTL_SEC, 1_800),
     sessionExpiryMarginSec: parseIntOr(process.env.PAYMENT_SESSION_EXPIRY_MARGIN_SEC, 120),
@@ -71,3 +73,11 @@ export default () => ({
   },
   ...resilienceConfig(),
 });
+
+function stripeApiAddress(): { host: string; port?: number; protocol?: 'http' | 'https' } | undefined {
+  const host = process.env.STRIPE_API_HOST;
+  if (!host) return undefined;
+  const port = process.env.STRIPE_API_PORT;
+  const protocol = process.env.STRIPE_API_PROTOCOL as 'http' | 'https' | undefined;
+  return { host, ...(port ? { port: Number(port) } : {}), ...(protocol ? { protocol } : {}) };
+}

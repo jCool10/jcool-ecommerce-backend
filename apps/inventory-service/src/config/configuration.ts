@@ -33,7 +33,7 @@ export default () => ({
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
   },
   internalApi: {
-    callers: callerTokensFromEnv(['api', 'order-service']),
+    callers: callerTokensFromEnv(['order-service']),
   },
   catalog: {
     publicUrl: process.env.CATALOG_PUBLIC_URL,
@@ -46,7 +46,7 @@ export default () => ({
     optimisticMaxRetries: parseIntOr(process.env.INVENTORY_OPTIMISTIC_MAX_RETRIES, 3),
     // Budget of a whole Try, counted from the moment it is entered: id minting, the pool wait and every
     // lock wait spend it. Commit/release/restock and the lapsed-hold sweep reuse it per tx. Must stay
-    // below the api's CHECKOUT_TRY_TIMEOUT_MS, which nothing here can check.
+    // below the order-service's CHECKOUT_TRY_TIMEOUT_MS, which nothing here can check.
     tryLockTimeoutMs: parseIntOr(process.env.INVENTORY_TRY_LOCK_TIMEOUT_MS, 2_000),
     holdSweep: {
       enabled: process.env.INVENTORY_HOLD_SWEEP_ENABLED !== 'false',

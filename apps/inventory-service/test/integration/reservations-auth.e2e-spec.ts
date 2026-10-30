@@ -9,14 +9,15 @@ import { ReservationsController } from '../../src/modules/inventory/interface/in
 import { authHeader } from '../setup/bearer.helper';
 import { seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
-import { E2E_API_CALLER_TOKEN } from '../setup/e2e-env';
+import { E2E_CALLER_TOKEN } from '../setup/e2e-env';
 import { closeAppAfterAll, internalPost, redisOf } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { createTestApp } from '../setup/test-app.factory';
 import { userServiceStub } from '../setup/user-service-stub';
 
-const PREVIOUS_API_TOKEN = 'e2e-api-caller-token-previous-not-a-secret-0';
-const ORDER_SERVICE_TOKEN = 'e2e-order-service-caller-token-not-a-secret-0';
+const PREVIOUS_TOKEN = 'e2e-order-service-caller-token-previous-0000';
+// What the api called with before checkout left it; Railway may still hold it until the next apply.
+const OLD_API_TOKEN = 'e2e-api-caller-token-not-a-real-secret-00000';
 
 const holdUntil = () => new Date(Date.now() + 3_600_000).toISOString();
 
@@ -35,8 +36,8 @@ describe('Internal and admin auth (integration)', () => {
 
   beforeAll(async () => {
     app = await createTestApp({
-      INTERNAL_CALLER_TOKEN_API_PREVIOUS: PREVIOUS_API_TOKEN,
-      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
+      INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS: PREVIOUS_TOKEN,
+      INTERNAL_CALLER_TOKEN_API: OLD_API_TOKEN,
     });
   });
   closeAppAfterAll(() => app);
@@ -57,36 +58,42 @@ describe('Internal and admin auth (integration)', () => {
       ];
     };
 
-    // A user's access token is no caller credential either: `@Public` lifts the user guard only.
-    it('refuses every route with no token, a wrong one or a user access token (401)', async () => {
-      const { accessToken } = await createTestAdminPrincipal(app);
-
+    const statusesWith = async (tokens: (string | null)[]) => {
       const statuses: string[] = [];
-      for (const token of [null, 'not-the-api-caller-token-but-just-as-long-0000', accessToken]) {
+      for (const token of tokens) {
         for (const { path, body } of everyRoute()) {
           statuses.push(`${path} ${(await internalPost(app, path, token).send(body)).status}`);
         }
       }
+      return statuses;
+    };
+
+    // A user's access token is no caller credential either: `@Public` lifts the user guard only.
+    it('refuses every route with no token, a wrong one or a user access token (401)', async () => {
+      const { accessToken } = await createTestAdminPrincipal(app);
+
+      const statuses = await statusesWith([null, 'not-the-caller-token-but-just-as-long-0000000', accessToken]);
 
       expect(statuses.filter((line) => !line.endsWith(' 401'))).toEqual([]);
     });
 
-    it('accepts the previous token while the api rolls over', async () => {
-      expect(await reserveOne(app, PREVIOUS_API_TOKEN)).toBe(201);
-      await internalPost(app, reservationRoutes.status, PREVIOUS_API_TOKEN)
-        .send({ orderIds: [testId()] })
-        .expect(200);
+    it('refuses the token the api called with, on every route (401)', async () => {
+      const statuses = await statusesWith([OLD_API_TOKEN]);
+
+      expect(statuses.filter((line) => !line.endsWith(' 401'))).toEqual([]);
     });
 
-    it('accepts the order-service, which takes checkout over from the api', async () => {
-      expect(await reserveOne(app, ORDER_SERVICE_TOKEN)).toBe(201);
-      await internalPost(app, reservationRoutes.status, ORDER_SERVICE_TOKEN)
-        .send({ orderIds: [testId()] })
-        .expect(200);
+    it('accepts the order-service, and its previous token while it rolls over', async () => {
+      for (const token of [E2E_CALLER_TOKEN, PREVIOUS_TOKEN]) {
+        expect(await reserveOne(app, token)).toBe(201);
+        await internalPost(app, reservationRoutes.status, token)
+          .send({ orderIds: [testId()] })
+          .expect(200);
+      }
     });
 
     // The guard refuses a route that names no caller, so a handler-level override could only narrow it.
-    it('admits the api and the order-service on every internal route', () => {
+    it('admits only the order-service on every internal route', () => {
       const reflector = app.get(Reflector);
       const handlers = ['tryReserve', 'commit', 'release', 'restock', 'status'] as const;
 
@@ -100,7 +107,7 @@ describe('Internal and admin auth (integration)', () => {
         ]),
       );
 
-      expect(callers).toEqual(handlers.map(() => ['api', 'order-service']));
+      expect(callers).toEqual(handlers.map(() => ['order-service']));
     });
   });
 
@@ -120,7 +127,7 @@ describe('Internal and admin auth (integration)', () => {
     });
 
     it('refuses the caller token, which grants the internal API only (401)', async () => {
-      await getStock(E2E_API_CALLER_TOKEN).expect(401);
+      await getStock(E2E_CALLER_TOKEN).expect(401);
     });
 
     it('refuses an admin whose session was revoked after the token was issued', async () => {
@@ -146,23 +153,9 @@ describe('Internal and admin auth (integration)', () => {
   });
 });
 
-// The api's token is dropped while this service still runs, so no single caller may be required.
-describe('Boot with caller tokens (integration)', () => {
-  it('starts with the order-service as its only caller', async () => {
-    const app = await createTestApp({
-      INTERNAL_CALLER_TOKEN_API: undefined,
-      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: ORDER_SERVICE_TOKEN,
-    });
-    try {
-      expect(await reserveOne(app, ORDER_SERVICE_TOKEN)).toBe(201);
-      expect(await reserveOne(app, E2E_API_CALLER_TOKEN)).toBe(401);
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('refuses to start with none, so the internal API is never left open', async () => {
-    await expect(createTestApp({ INTERNAL_CALLER_TOKEN_API: undefined })).rejects.toThrow(
+describe('Boot without a caller token (integration)', () => {
+  it('refuses to start, so the internal API is never left open', async () => {
+    await expect(createTestApp({ INTERNAL_CALLER_TOKEN_ORDER_SERVICE: undefined })).rejects.toThrow(
       'no internal caller token is set',
     );
   });

@@ -20,6 +20,9 @@ build
 .idea
 .vscode
 *.log
+# Local output that git ignores too; it would otherwise ride along in every image's `COPY . .`.
+assets
+tmp
 
 # Repo-only material not needed to build or run the app.
 .claude

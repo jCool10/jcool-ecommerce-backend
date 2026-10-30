@@ -190,7 +190,7 @@ services:
         condition: service_completed_successfully
       gateway:
         condition: service_started
-    # Probes with node (present in the image) because node:24-slim has no curl/wget.
+    # Probes with node, the one tool the image is sure to have.
     healthcheck:
       test:
         [
@@ -491,7 +491,6 @@ services:
       JWT_AUDIENCE: jcool-api
       USER_SERVICE_URL: http://user-service:3000
       USER_SERVICE_TOKEN: local-inventory-caller-token-not-a-secret-00
-      INTERNAL_CALLER_TOKEN_API: local-api-to-inventory-token-not-a-secret-00
       INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-inventory-token-not-a-secret
       CATALOG_PUBLIC_URL: http://gateway:8080
       # Taken from .env, like the app's, so infra/prometheus/secrets/metrics-token matches both.
@@ -573,7 +572,6 @@ services:
       # The shared Redis: payment.authorized goes onto the order-service's order-events queue.
       REDIS_URL: redis://redis:6379
       ID_SERVICE_URL: http://gateway:4000
-      INTERNAL_CALLER_TOKEN_API: local-api-to-payment-token-not-a-secret-0000
       INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-payment-token-not-a-secret-0
       # Taken from .env, where the app read them before payments moved here. NODE_ENV=production
       # refuses to boot without a real sk_test_ STRIPE_SECRET_KEY and STRIPE_SUCCESS_URL there.

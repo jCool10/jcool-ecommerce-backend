@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
 import {
   AppEnv,
   DatabaseEnv,
@@ -22,7 +22,7 @@ const PlatformEnv = RetentionEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(Databas
 
 const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
 
-/** Bounds only; defaults live in configuration.ts. The shared ones match the api's. */
+/** Bounds only; defaults live in configuration.ts. The shared ones match the other services'. */
 export class EnvironmentVariables extends PlatformEnv {
   // The gateway's internal load balancer, never a single replica.
   @IsUrl(HTTP_URL)
@@ -35,16 +35,6 @@ export class EnvironmentVariables extends PlatformEnv {
   ID_SERVICE_TIMEOUT_MS?: number;
 
   // Optional, like every caller token: the guard is what refuses a boot with none.
-  @IsOptional()
-  @IsString()
-  @MinLength(32)
-  INTERNAL_CALLER_TOKEN_API?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(32)
-  INTERNAL_CALLER_TOKEN_API_PREVIOUS?: string;
-
   @IsOptional()
   @IsString()
   @MinLength(32)
@@ -168,6 +158,23 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsString()
   STRIPE_CANCEL_URL?: string;
 
+  // For the system test's fake Stripe only; nothing deployed sets these.
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  STRIPE_API_HOST?: string;
+
+  @IsOptional()
+  @StrictInt()
+  @IsInt()
+  @Min(1)
+  @Max(65_535)
+  STRIPE_API_PORT?: number;
+
+  @IsOptional()
+  @IsIn(['http', 'https'])
+  STRIPE_API_PROTOCOL?: string;
+
   // Zero is legal: the production-mode system stack runs against a fake Stripe with no floor.
   @IsOptional()
   @StrictInt()
@@ -193,6 +200,13 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
   // Without a key the adapter fabricates sessions no buyer can pay, which only test and dev may run on.
   if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
     throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
+  }
+  // Whatever NODE_ENV says: a key that can move real money only ever talks to Stripe.
+  if (env.STRIPE_API_HOST !== undefined && !env.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {
+    throw new Error('Environment validation failed -> STRIPE_API_HOST: only with a sk_test_ STRIPE_SECRET_KEY');
+  }
+  if (env.STRIPE_API_PROTOCOL === 'http' && env.STRIPE_API_HOST === undefined) {
+    throw new Error('Environment validation failed -> STRIPE_API_PROTOCOL: http only towards a STRIPE_API_HOST');
   }
   return env;
 }

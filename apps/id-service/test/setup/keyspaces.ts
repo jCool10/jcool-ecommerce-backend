@@ -43,8 +43,8 @@ export class TestKeyspace {
   }
 
   /** A store of its own, as a separate process would have, over the shared client. */
-  store(): EtcdLeaseStore {
-    return new EtcdLeaseStore(this.etcd, { keyPrefix: this.prefix, requestTimeoutMs: REQUEST_TIMEOUT_MS });
+  store(requestTimeoutMs = REQUEST_TIMEOUT_MS): EtcdLeaseStore {
+    return new EtcdLeaseStore(this.etcd, { keyPrefix: this.prefix, requestTimeoutMs });
   }
 
   async owner(nodeId: number): Promise<IKeyValue | undefined> {

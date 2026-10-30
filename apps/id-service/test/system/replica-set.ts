@@ -43,9 +43,8 @@ export interface StackOptions {
   freeNodes?: number;
 }
 
-/** etcd given floors by the image's own pre-deploy command, `count` replicas, and the gateway in front. */
-export async function startStack(count = 3, { env = {}, freeNodes }: StackOptions = {}): Promise<Stack> {
-  const network = await new Network().start();
+/** etcd as `id-etcd`, given its floors by the image's own pre-deploy command. */
+export async function startIdEtcd(network: StartedNetwork): Promise<StartedEtcdContainer> {
   const etcd = await new EtcdContainer(ETCD_IMAGE).withNetwork(network).withNetworkAliases('id-etcd').start();
   await new GenericContainer(ID_SERVICE_IMAGE)
     .withNetwork(network)
@@ -53,6 +52,13 @@ export async function startStack(count = 3, { env = {}, freeNodes }: StackOption
     .withCommand(['node', 'dist/lease/lift-floors-cli.js', '--if-uninitialized'])
     .withWaitStrategy(Wait.forOneShotStartup())
     .start();
+  return etcd;
+}
+
+/** etcd with its floors, `count` replicas, and the gateway in front. */
+export async function startStack(count = 3, { env = {}, freeNodes }: StackOptions = {}): Promise<Stack> {
+  const network = await new Network().start();
+  const etcd = await startIdEtcd(network);
   if (freeNodes !== undefined) await reserveNodesAbove(etcd, freeNodes);
 
   const replicas = await startReplicas(network, count, env);

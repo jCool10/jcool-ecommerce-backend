@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeEach } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/database';
-import { E2E_API_CALLER_TOKEN } from './e2e-env';
+import { E2E_CALLER_TOKEN } from './e2e-env';
 import { resetDatabase } from './reset-database';
 import { createTestApp, type EnvOverrides, type ProviderOverride } from './test-app.factory';
 
@@ -28,8 +28,8 @@ export function redisOf(app: INestApplication): Redis {
   return app.get(RedisService).getClient();
 }
 
-/** A POST to the internal API as the api would send it. */
-export function internalPost(app: INestApplication, path: string, token: string | null = E2E_API_CALLER_TOKEN) {
+/** A POST to the internal API as the order-service would send it. */
+export function internalPost(app: INestApplication, path: string, token: string | null = E2E_CALLER_TOKEN) {
   const req = request(app.getHttpServer()).post(path);
   return token === null ? req : req.set('Authorization', `Bearer ${token}`);
 }

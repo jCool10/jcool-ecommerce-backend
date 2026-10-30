@@ -25,13 +25,10 @@ const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
-  // Set by hand at a service cut-over (RUNBOOK), unset otherwise. Read only by a rollback build now.
-  'CHECKOUT_INVARIANT_NOT_BEFORE',
   // The order-service's caller token, pair and rotation slot, for carts and SKU views.
   'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
   'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
   'LOG_LEVEL',
-  'MAIL_FROM',
   // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.
   'METRICS_TOKEN',
   'NODE_ENV',
@@ -41,7 +38,6 @@ const API_VARIABLES = [
   'POSTGRES_USER',
   'REDIS_HOST_PORT',
   'SEARCH_ENABLED',
-  'SMTP_URL',
   'STORAGE_ACCESS_KEY_ID',
   'STORAGE_BUCKET',
   'STORAGE_ENDPOINT',
@@ -81,19 +77,14 @@ const USER_SERVICE_VARIABLES = [
   'THROTTLE_ENABLED',
 ];
 
-// A caller token per caller, pair and rotation slot; each caller references the first one. The api's
-// stays until a rollback can no longer bring checkout back to it.
+// A caller token per caller, pair and rotation slot; each caller references the first one.
 const INVENTORY_SERVICE_VARIABLES = [
-  'INTERNAL_CALLER_TOKEN_API',
-  'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
   'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
   'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
 ];
 
 // The same pairs, plus the webhook secret and the provider's keys.
 const PAYMENT_SERVICE_VARIABLES = [
-  'INTERNAL_CALLER_TOKEN_API',
-  'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
   'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
   'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
   'PAYMENT_WEBHOOK_SECRET',
@@ -136,16 +127,10 @@ export default defineRailway(() => {
       REDIS_URL,
       // Railway keeps routing to the old deployment for a moment after SIGTERM, and kills it when
       // drainingSeconds runs out. The shutdown steps take at most this grace + one BullMQ close of
-      // 5000 + 1000 Redis quit = 11000. drainingSeconds stays at 30 for a rollback build, whose
-      // Temporal worker and second queue make it 5000 + 4000 + 4000 + 1000 + 2 × 5000 + 1000 = 25000
-      // ≤ 30 × 1000 − 1000. The outbox relay drain (5000, before the steps) and the telemetry flush
-      // (3000, after them) are not in either sum; RUNBOOK "The shutdown budget".
+      // 5000 + 1000 Redis quit = 11000 ≤ 30 × 1000 − 1000. The outbox relay drain (5000, before the
+      // steps) and the telemetry flush (3000, after them) are not in the sum; RUNBOOK "The shutdown
+      // budget".
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
-      // Unread since checkout moved to the order-service: kept so a rollback build boots with its
-      // saga worker and participants.
-      TEMPORAL_ADDRESS: `\${{temporal.RAILWAY_PRIVATE_DOMAIN}}:${TEMPORAL_PORT}`,
-      TEMPORAL_NAMESPACE,
-      TEMPORAL_TASK_QUEUE,
       // Every request depends on these: the api verifies what the user-service signed, and reads
       // an epoch or an address from it. Referenced, not preserved, so the two cannot drift.
       JWT_ISSUER: '${{user-service.JWT_ISSUER}}',
@@ -155,11 +140,6 @@ export default defineRailway(() => {
       AUTH_JWKS_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}/.well-known/jwks.json`,
       // Every row id is minted there, through the gateway's internal load balancer.
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
-      // The rollback build's participants, like the Temporal names above.
-      INVENTORY_SERVICE_URL: `http://\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
-      INVENTORY_SERVICE_TOKEN: '${{inventory-service.INTERNAL_CALLER_TOKEN_API}}',
-      PAYMENT_SERVICE_URL: `http://\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,
-      PAYMENT_SERVICE_TOKEN: '${{payment-service.INTERNAL_CALLER_TOKEN_API}}',
       LOKI_URL,
       // A user limited to products* (RUNBOOK); its password lives on the elasticsearch service.
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,

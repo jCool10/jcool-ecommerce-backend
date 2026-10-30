@@ -20,7 +20,7 @@ import { IdentityModule } from './modules/payment/identity.module';
 import { PaymentModule } from './modules/payment/payment.module';
 
 // ClsModule precedes the logger so its correlation middleware mounts before pino's. No throttler and
-// no user auth: Stripe and the api are the only callers, and each proves itself on its own route.
+// no user auth: Stripe and the order-service are the only callers, and each proves itself on its own route.
 @Module({
   imports: [
     // `node --env-file-if-exists` already loaded .env; reading it again here would let a stray file

@@ -35,6 +35,8 @@ export interface StripeGatewayOptions {
   sessionExpiryMarginSec: number;
   /** Bounds each capture, void, expire and authorization read; the SDK does not retry them. */
   captureTimeoutMs: number;
+  /** Somewhere other than api.stripe.com, which env validation allows for test keys only. */
+  apiAddress?: { host: string; port?: number; protocol?: 'http' | 'https' };
   // Test seam: inject a Stripe-shaped client so the live branch is covered without a key or network.
   stripeClient?: StripeClient;
 }
@@ -83,6 +85,7 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
             maxNetworkRetries: 2,
             timeout: 20_000,
             appInfo: { name: 'jcool-ecommerce-backend' },
+            ...options.apiAddress,
           })
         : undefined);
 

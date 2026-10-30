@@ -35,23 +35,35 @@ Where each environment runs, what owns each deploy target's config, and the rati
 
 | Question | Answered in |
 | --- | --- |
-| Why this deploy order (id-service → user-service → inventory-service → payment-service → order-service → api → gateway), and why the gateway goes last | [`.github/workflows/cd.yml`](../.github/workflows/cd.yml), above the deploy steps |
+| Why this deploy order, after the plan, the destructive-change review, the apply and the empty-plan check: id-service → user-service → inventory-service → payment-service → order-service → api → gateway, then the smoke of the public URL; and why the gateway goes last | [`.github/workflows/cd.yml`](../.github/workflows/cd.yml), above the deploy steps |
 | Why `railway up --ci` returning is not the success gate | [`scripts/railway-wait-for-rollout.sh`](../scripts/railway-wait-for-rollout.sh) |
 | Why hand-flipped variables must stay declared and `preserve()`d, and which ones | [`scripts/check-railway-flip-vars.mjs`](../scripts/check-railway-flip-vars.mjs), run by `ci.yml` |
 | How the gateway's drain window relates to Railway's `drainingSeconds` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile), global options |
 | Why the api's and the order-service's `drainingSeconds` are 30, as sums of their shutdown steps | [`.railway/railway.ts`](../.railway/railway.ts), in each service's `deploy` block |
 
-Five facts none of those files state:
+Facts none of those files state:
 
 - **id-service deploys first** because every service mints its row ids through it, and a dependency goes live before its dependents ([`README.md#known-limits`](../README.md#known-limits)).
 - **Every Node service runs a Railway `preDeployCommand`**, not just the api the README walks through: the api, the user-service, the order-service, the inventory-service and the payment-service migrate their own databases, and the id-service lifts its etcd floors if the keyspace is empty ([`lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts)); see each service's `deploy` block in [`.railway/railway.ts`](../.railway/railway.ts).
-- **The inventory-service seeds after it migrates**, in the same `preDeployCommand` and the same process ([`pre-deploy-cli.ts`](../apps/inventory-service/src/database/pre-deploy-cli.ts); Railway runs the command without a shell, so it cannot chain two with `&&`): every variant the public catalog lists gets a level of 1e9 if it has none, and an existing level is never touched. The seed runs best effort, so an unlistable catalog skips the seed rather than failing the rollout; it reads the catalog from the api through the gateway (`CATALOG_PUBLIC_URL`), so a new variant gets stock on the next inventory-service deploy or a hand-run seed ([RUNBOOK → Cut stock over to the inventory-service](../RUNBOOK.md#cut-stock-over-to-the-inventory-service)).
-- **`temporal` is deployed by hand**, outside `cd.yml`, like etcd and Elasticsearch: it has no repo source. CD does not deploy it, but it depends on it: the order-service's readiness includes Temporal, so with Temporal down CD stops at the order-service's healthcheck, before the api, and production keeps the code it runs. The api's and the gateway's readiness leave Temporal out, so a freeze or a rollback still deploys ([RUNBOOK → Temporal down](../RUNBOOK.md#temporal-down)).
+- **The inventory-service seeds after it migrates**, in the same `preDeployCommand` and the same process ([`pre-deploy-cli.ts`](../apps/inventory-service/src/database/pre-deploy-cli.ts); Railway runs the command without a shell, so it cannot chain two with `&&`): every variant the public catalog lists gets a level of 1e9 if it has none, and an existing level is never touched. The seed runs best effort, so an unlistable catalog skips the seed rather than failing the rollout; it reads the catalog from the api through the gateway (`CATALOG_PUBLIC_URL`), so a new variant gets stock on the next inventory-service deploy or a hand-run seed ([RUNBOOK → The inventory-service](../RUNBOOK.md#the-inventory-service)).
+- **CD deploys the seven services above and nothing else.** `temporal` and `prometheus` are the two a release can depend on: they are built from [`infra/temporal`](../infra/temporal) and [`infra/prometheus`](../infra/prometheus), declared in `.railway/railway.ts`, and take new code only when someone runs `railway up` for them, like etcd, Elasticsearch, Loki and Grafana. A change under `infra/prometheus/` (rules, scrape jobs) is live only after that manual deploy ([RUNBOOK → Redeploy Prometheus](../RUNBOOK.md#redeploy-prometheus)); Temporal's operation is in [RUNBOOK → Operate Temporal](../RUNBOOK.md#operate-temporal).
+- **CD depends on Temporal without deploying it.** The order-service's readiness includes Temporal, so with Temporal down CD stops at the order-service's healthcheck, before the api, and production keeps the code it runs. The api's and the gateway's readiness leave Temporal out, so a freeze or unfreeze still deploys ([RUNBOOK → Temporal down](../RUNBOOK.md#temporal-down)). A failed deploy is fixed forward, never rolled back into the api ([RUNBOOK → Rollback rules](../RUNBOOK.md#rollback-rules)).
 - **The order-service reads the cart and the catalog from the api** over the private network (`API_SERVICE_URL`, never the gateway, which answers `/internal/*` with 404), so the api is a synchronous dependency of `POST /orders`; with the api down checkout answers `503` ([RUNBOOK → The order-service](../RUNBOOK.md#the-order-service)).
 
 ## Production-required settings
 
-Settings the process refuses to boot without in production stay owned by [`README.md#configuration`](../README.md#configuration) (for example `TRUST_PROXY`), with the per-service auth variables in [`apps/user-service/README.md`](../apps/user-service/README.md), the checkout and Temporal ones in [`apps/order-service/README.md`](../apps/order-service/README.md#configuration), the stock ones in [`apps/inventory-service/README.md`](../apps/inventory-service/README.md#configuration) and the Stripe and webhook ones in [`apps/payment-service/README.md`](../apps/payment-service/README.md#configuration). Settings of two services meet in rules no validator can check: the inventory-service's `INVENTORY_TRY_LOCK_TIMEOUT_MS` stays below the order-service's `CHECKOUT_TRY_TIMEOUT_MS`, the payment-service's timeouts, session floor and `ORDER_PAID_CONSUMER_ATTEMPTS` line up with the order-service's, and the order-service's shutdown steps fit its `drainingSeconds` ([RUNBOOK → Cross-service settings](../RUNBOOK.md#cross-service-settings)).
+Each service's env validator is the final word on what it refuses to boot without ([`env.validation.ts`](./codebase-summary.md#env-schema-and-config) per service). What `NODE_ENV=production` adds on top of the variables that are required everywhere:
+
+| Service | Refuses to boot in production without | Reference |
+| --- | --- | --- |
+| api | `TRUST_PROXY` | [`README.md#configuration`](../README.md#configuration) |
+| user-service | `TRUST_PROXY`, `APP_PUBLIC_URL` (the default is localhost, which would go out in every mailed link) | [`apps/user-service/README.md`](../apps/user-service/README.md) |
+| inventory-service | `TRUST_PROXY` | [`apps/inventory-service/README.md`](../apps/inventory-service/README.md#configuration) |
+| payment-service | `STRIPE_SECRET_KEY` and `STRIPE_SUCCESS_URL` | [`apps/payment-service/README.md`](../apps/payment-service/README.md#configuration) |
+| order-service | `TRUST_PROXY`, `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE` | [`apps/order-service/README.md`](../apps/order-service/README.md#configuration) |
+| id-service | nothing beyond its everywhere-required set | [`apps/id-service/README.md`](../apps/id-service/README.md) |
+
+Each caller token is required too: a callee refuses to boot with no `INTERNAL_CALLER_TOKEN_<CALLER>` at all or with two callers sharing a value, and each caller's `*_SERVICE_TOKEN` must equal its callee's ([RUNBOOK → Per-caller internal tokens](../RUNBOOK.md#per-caller-internal-tokens)). Settings of two services meet in rules no validator can check: the inventory-service's `INVENTORY_TRY_LOCK_TIMEOUT_MS` stays below the order-service's `CHECKOUT_TRY_TIMEOUT_MS`, the payment-service's timeouts, session floor and `ORDER_PAID_CONSUMER_ATTEMPTS` line up with the order-service's, and the order-service's shutdown steps fit its `drainingSeconds` ([RUNBOOK → Cross-service settings](../RUNBOOK.md#cross-service-settings)).
 
 ## Runbook
 
@@ -62,8 +74,10 @@ Every manual operation is in [`RUNBOOK.md`](../RUNBOOK.md), indexed by its own c
 - a migration that must not wait for the next deploy → [Apply migrations out of band](../RUNBOOK.md#apply-migrations-out-of-band)
 - moving the public domain onto the gateway → [Put the gateway in front of the api](../RUNBOOK.md#put-the-gateway-in-front-of-the-api)
 - the order-service's worker cannot reach Temporal, or CD stopped at its healthcheck → [Temporal down](../RUNBOOK.md#temporal-down)
-- moving stock onto the inventory-service, or back → [Cut stock over to the inventory-service](../RUNBOOK.md#cut-stock-over-to-the-inventory-service)
-- moving payments onto the payment-service → [Cut payments over to the payment-service](../RUNBOOK.md#cut-payments-over-to-the-payment-service)
-- moving checkout onto the order-service, a merge that also deletes Railway variables, or back → [Cut checkout over to the order-service](../RUNBOOK.md#cut-checkout-over-to-the-order-service)
+- a merge that deletes Railway variables or drops tables, or a deploy that failed → [The contract step](../RUNBOOK.md#the-contract-step), [Rollback rules](../RUNBOOK.md#rollback-rules)
+- moving another participant out of a service the way checkout moved → [Cut checkout over to the order-service](../RUNBOOK.md#cut-checkout-over-to-the-order-service), kept as the skeleton
+- stopping checkout writes while something changes → [Freeze checkout](../RUNBOOK.md#freeze-checkout)
+- a Prometheus rule or scrape change → [Redeploy Prometheus](../RUNBOOK.md#redeploy-prometheus)
+- checking a saga change end to end before the merge → [Run the system test](../RUNBOOK.md#run-the-system-test)
 - a parked message, by the service that consumes its queue → [Dead-letter queues](../RUNBOOK.md#dead-letter-queues)
 - a caller answered `401` or `403` by an internal API → [Per-caller internal tokens](../RUNBOOK.md#per-caller-internal-tokens)

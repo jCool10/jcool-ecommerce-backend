@@ -62,16 +62,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @IsOptional()
   @IsString()
   @MinLength(32)
-  INTERNAL_CALLER_TOKEN_API?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(32)
-  INTERNAL_CALLER_TOKEN_API_PREVIOUS?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(32)
   INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
 
   @IsOptional()

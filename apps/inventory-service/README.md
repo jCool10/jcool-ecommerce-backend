@@ -18,7 +18,7 @@ Owns stock and the checkout's TCC holds, from its own Postgres (`inventory-postg
 
 A command answers `200 { outcome }` with `APPLIED` or `IDEMPOTENT` (the header was already where it leads), and `409 CONFLICT` from a state it cannot move from. Every route is idempotent per order through `reservation_orders`, so retrying after a lost answer is safe. Anything the participant throws is `503` with `Retry-After: 1` and writes nothing. When rows another transaction held outlasted `INVENTORY_TRY_LOCK_TIMEOUT_MS`, the body carries `code: "LOCK_BUDGET_EXHAUSTED"` and the line is logged at warn: that is contention on a hot SKU, not a fault, and the caller's breaker does not count it. A bare `503` (a database fault, say) is a fault.
 
-`/internal/*` takes `Authorization: Bearer <INTERNAL_CALLER_TOKEN_ORDER_SERVICE>` from the order-service, or `<INTERNAL_CALLER_TOKEN_API>` from the api, which keeps its routes for a rollback of the checkout cut-over; each `_PREVIOUS` is also accepted while rotating. It is unthrottled: every call comes from a private address. `/admin/*` takes an `ADMIN` access token signed by the user-service, checked against its JWKS, the denylist and the session epoch in Redis; an epoch missing from Redis is read from the user-service with `USER_SERVICE_TOKEN`.
+`/internal/*` takes `Authorization: Bearer <INTERNAL_CALLER_TOKEN_ORDER_SERVICE>` from the order-service, its only caller; `_PREVIOUS` is also accepted while rotating. It is unthrottled: every call comes from a private address. `/admin/*` takes an `ADMIN` access token signed by the user-service, checked against its JWKS, the denylist and the session epoch in Redis; an epoch missing from Redis is read from the user-service with `USER_SERVICE_TOKEN`.
 
 ## Stock
 
@@ -42,9 +42,8 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | `USER_SERVICE_URL` | required | For the epoch read only. |
 | `USER_SERVICE_TOKEN` | required | The user-service's `INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE`. At least 32 characters. |
 | `USER_SERVICE_TIMEOUT_MS` | `500` | |
-| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` | unset | The order-service's `INVENTORY_SERVICE_TOKEN`, at least 32 characters. |
-| `INTERNAL_CALLER_TOKEN_API` | unset | The api's caller token, at least 32 characters. With no caller token at all the service refuses to boot. |
-| `INTERNAL_CALLER_TOKEN_*_PREVIOUS` | unset | Also accepted, while that caller moves to a new token. |
+| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` | required | The order-service's `INVENTORY_SERVICE_TOKEN`, at least 32 characters. Optional to env validation, but the guard refuses to boot without it. |
+| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS` | unset | Also accepted, while the order-service moves to a new token. |
 | `CATALOG_PUBLIC_URL` | required | Public catalog the stock seed lists variants from. |
 | `INVENTORY_LOCK_STRATEGY` | `pessimistic` | Or `optimistic`. |
 | `INVENTORY_OPTIMISTIC_MAX_RETRIES` | `3` | 0 to 10. |

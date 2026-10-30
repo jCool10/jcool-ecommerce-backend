@@ -7,6 +7,10 @@ import { makeDeadlineBoundedRetryInterceptor } from './deadline-bounded-grpc-ret
 export const TEMPORAL_CONNECTION = Symbol('TEMPORAL_CONNECTION');
 export const TEMPORAL_CLIENT = Symbol('TEMPORAL_CLIENT');
 
+// grpc-js looks a name up again at most every 30s by default, so after Temporal comes back on a new
+// address every call keeps failing against the old one for up to that long.
+const DNS_REFRESH_MS = 1_000;
+
 /** Closes the client connection; the worker owns its own native one. */
 @Injectable()
 export class TemporalConnectionCloser implements OnApplicationShutdown {
@@ -26,6 +30,7 @@ export const temporalProviders: Provider[] = [
       Connection.lazy({
         address: config.getOrThrow<CheckoutSagaConfig>('checkoutSaga').temporal.address,
         interceptors: [makeDeadlineBoundedRetryInterceptor()],
+        channelArgs: { 'grpc.dns_min_time_between_resolutions_ms': DNS_REFRESH_MS },
       }),
   },
   {

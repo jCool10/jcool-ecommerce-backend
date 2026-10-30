@@ -80,14 +80,14 @@
 			}
 		}
 	}
-	# Checkout and every order read; the api only keeps the retired tables.
+	# Checkout and every order read belong to the order-service.
 	@orders path /orders /orders/* /admin/orders /admin/orders/*
 	handle @orders {
 		reverse_proxy {$ORDER_UPSTREAM} {
 			import upstream
 		}
 	}
-	# Stock is the inventory-service's; the api only keeps its retired tables.
+	# Stock is the inventory-service's.
 	@inventory path /admin/inventory /admin/inventory/*
 	handle @inventory {
 		reverse_proxy {$INVENTORY_UPSTREAM} {

@@ -17,7 +17,7 @@ Conventions used below:
 - [Rebuild the search index](#rebuild-the-search-index)
 - [Reconcile the bucket against `media_assets`](#reconcile-the-bucket-against-media_assets)
 - [Outbox relay is not draining](#outbox-relay-is-not-draining)
-- [Replay the dead-letter queue](#replay-the-dead-letter-queue)
+- [Replay the dead-letter queue](#replay-the-dead-letter-queue), with the [queue to service to command table](#dead-letter-queues)
 - [Retention sweeps](#retention-sweeps)
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
@@ -28,25 +28,23 @@ Conventions used below:
 - [Logs in Loki](#logs-in-loki)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
 - [The id-service's etcd](#the-id-services-etcd)
-- [Operate Temporal](#operate-temporal)
-- [The checkout saga](#the-checkout-saga)
-  - [Settle a payment by hand](#settle-a-payment-by-hand)
-  - [Its alerts](#its-alerts), one subsection each
-  - [Retention and the checker window](#retention-and-the-checker-window)
-  - [`CHECKOUT_INVARIANT_NOT_BEFORE`](#checkout_invariant_not_before)
-- [Temporal down](#temporal-down)
-- [Cut over checkout to the saga](#cut-over-checkout-to-the-saga)
+- [Checkout saga](#checkout-saga)
+  - [Operate Temporal](#operate-temporal), with [The shutdown budget](#the-shutdown-budget)
+  - [The checkout saga](#the-checkout-saga), with [Settle a payment by hand](#settle-a-payment-by-hand), [Its alerts](#its-alerts) (one subsection each), [Retention and the checker window](#retention-and-the-checker-window) and [`CHECKOUT_INVARIANT_NOT_BEFORE`](#checkout_invariant_not_before)
+  - [Temporal down](#temporal-down)
+  - [Cross-service settings](#cross-service-settings)
+  - [Per-caller internal tokens](#per-caller-internal-tokens)
+  - [Cut checkout over to the order-service](#cut-checkout-over-to-the-order-service)
+  - [The contract step](#the-contract-step)
+  - [Rollback rules](#rollback-rules)
+  - [Redeploy Prometheus](#redeploy-prometheus)
+  - [Run the system test](#run-the-system-test)
 - [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [The inventory-service](#the-inventory-service)
 - [The payment-service](#the-payment-service)
 - [The order-service](#the-order-service)
-- [Cross-service settings](#cross-service-settings)
-- [Per-caller internal tokens](#per-caller-internal-tokens)
-- [Cut stock over to the inventory-service](#cut-stock-over-to-the-inventory-service)
-- [Cut payments over to the payment-service](#cut-payments-over-to-the-payment-service)
-- [Cut checkout over to the order-service](#cut-checkout-over-to-the-order-service)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -113,7 +111,7 @@ ALTER TABLE node_leases ADD CONSTRAINT node_leases_node_id_range CHECK (node_id 
 
 ## Backup and restore
 
-Each service owns one database and is backed up on its own: the api's (catalog, cart, media, messaging, and the retired order tables nothing writes), the user-service's (accounts, tokens, the layout pin), the order-service's `order-postgres` (orders, idempotency keys, its outbox and inbox), the inventory-service's `inventory-postgres` (stock levels, holds and their per-order headers) and the payment-service's `payment-postgres` (payment headers, attempts, the webhook ledger and its outbox). They share no foreign keys, so a restore cannot break a constraint; but the order-service's orders and the two participants' headers describe the same checkouts, so restoring one to another point in time than the others shows up as [CheckoutInvariantViolation](#checkoutinvariantviolation) on the orders in between. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
+Each service owns one database and is backed up on its own: the api's (catalog, cart, media and messaging), the user-service's (accounts, tokens, the layout pin), the order-service's `order-postgres` (orders, idempotency keys, its outbox and inbox), the inventory-service's `inventory-postgres` (stock levels, holds and their per-order headers) and the payment-service's `payment-postgres` (payment headers, attempts, the webhook ledger and its outbox). They share no foreign keys, so a restore cannot break a constraint; but the order-service's orders and the two participants' headers describe the same checkouts, so restoring one to another point in time than the others shows up as [CheckoutInvariantViolation](#checkoutinvariantviolation) on the orders in between. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
 
 ### Back up
 
@@ -267,10 +265,10 @@ Each queue has one consumer and a dead-letter queue of its own. A message reache
 
 The `DeadLetterQueued` page names the service (`job`) and the event type (`messaging_dlq_total{event_type}`), which say which replay to run. Each service's CLI knows only its own queue, because the inbox it checks is in that service's database:
 
-| Event type | Queue | Dead-letter queue | Consumer (`job`) | Replay with |
-| ---------- | ----- | ----------------- | ---------------- | ----------- |
-| `order.placed`, `order.paid`, `order.failed`, `order.expired`, `order.cancelled`, `payment.authorized` | `order-events` | `order-events-dlq` | order-service (`jcool-order`) | `pnpm queue:replay-dlq:order --queue order-events` |
-| `catalog.product.changed`, `catalog.category.renamed` | `api-events` | `api-events-dlq` | api (`jcool-api`) | `pnpm queue:replay-dlq --queue api-events` |
+| Queue | Dead-letter queue | Producers | Consumer service (`job`) | Replay, local | Replay, container |
+| --- | --- | --- | --- | --- | --- |
+| `order-events` | `order-events-dlq` | order-service: `order.placed`, `order.paid`, `order.failed`, `order.expired`, `order.cancelled`; payment-service: `payment.authorized` | order-service (`jcool-order`) | `pnpm queue:replay-dlq:order --queue order-events` | `npm run queue:replay-dlq:prod -- --queue order-events` after `railway ssh --service order-service` |
+| `api-events` | `api-events-dlq` | api: `catalog.product.changed`, `catalog.category.renamed` | api (`jcool-api`) | `pnpm queue:replay-dlq --queue api-events` | `npm run queue:replay-dlq:prod -- --queue api-events` after `railway ssh --service jcool-ecommerce-backend` |
 
 `--queue` is required even though each CLI has one queue: a value for the other service's queue exits 1 instead of draining a DLQ against the wrong inbox. The payment-service publishes `payment.authorized` but never consumes it, so it has no DLQ: that job fails in the order-service's worker and lands in `order-events-dlq`, and the replay runs in the order-service. The order-service's CLI runs compiled even locally, so `pnpm --filter @jcool/order-service build` comes first.
 
@@ -529,7 +527,7 @@ Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, a
 
 ## Enable Stripe test mode on Railway
 
-The payment-service creates a Stripe Checkout Session when the order-service asks for one on `/pay`, and records the authorization from the webhook. Production refuses to boot without `STRIPE_SECRET_KEY` and `STRIPE_SUCCESS_URL`, so set all four variables on the `payment-service` before the deploy that needs them. All of them are declared `preserve()`d in `.railway/railway.ts`, so an apply never reverts them. The api's copies were deleted at the [checkout cut-over](#cut-checkout-over-to-the-order-service), which also ended the rollback of the [payment cut-over](#cut-payments-over-to-the-payment-service) that needed them.
+The payment-service creates a Stripe Checkout Session when the order-service asks for one on `/pay`, and records the authorization from the webhook. Production refuses to boot without `STRIPE_SECRET_KEY` and `STRIPE_SUCCESS_URL`, so set all four variables on the `payment-service` before the deploy that needs them. All of them are declared `preserve()`d in `.railway/railway.ts`, so an apply never reverts them. The api's copies were deleted at the [checkout cut-over](#cut-checkout-over-to-the-order-service).
 
 1. **Create the webhook endpoint** in the Stripe dashboard, in test mode: URL `https://<public domain>/webhooks/payment`, events `checkout.session.completed` and `checkout.session.expired`. The gateway routes that path to the payment-service. Copy its signing secret (`whsec_…`).
 2. **Set the payment-service variables**, the secret key last, each without a deploy of its own:
@@ -581,13 +579,9 @@ If the public domain does not point at the gateway yet, probe through the gatewa
 
 ## Deploy the monitoring stack
 
-`prometheus` and `grafana` are two ordinary Railway services declared in `.railway/railway.ts`, built
-from `infra/prometheus/Dockerfile` and `infra/grafana/Dockerfile`. Railway has no bind mounts, so
-each image **bakes** the config that compose mounts from the host; `.dockerignore` re-includes those
-files from the otherwise excluded `infra/` and keeps `infra/prometheus/secrets/` out.
+`prometheus` and `grafana` are two ordinary Railway services declared in `.railway/railway.ts`, built from `infra/prometheus/Dockerfile` and `infra/grafana/Dockerfile`. Railway has no bind mounts, so each image **bakes** the config that compose mounts from the host; `.dockerignore` re-includes those files from the otherwise excluded `infra/` and keeps `infra/prometheus/secrets/` out.
 
-Neither is in `cd.yml`, and neither has a repo source: they are deployed by hand, which is right for
-config that changes a few times a year.
+Neither is in `cd.yml`, and neither has a repo source: they are deployed by hand, which is right for config that changes a few times a year.
 
 First time, from an up-to-date `main`:
 
@@ -605,47 +599,28 @@ railway up --ci --service grafana
 railway domain --service grafana --port 3000
 ```
 
-Afterwards, a config change is `railway up --ci --service <prometheus|grafana>` on its own. The api
-needs a redeploy the first time `METRICS_TOKEN` is set: `MetricsTokenGuard` reads it at boot, and
-until then `/metrics` answers 404 and the target sits DOWN.
+Afterwards, a config change is `railway up --ci --service <prometheus|grafana>` on its own. The api needs a redeploy the first time `METRICS_TOKEN` is set: `MetricsTokenGuard` reads it at boot, and until then `/metrics` answers 404 and the target sits DOWN.
 
-The rule files are baked into the image too, so a change anywhere under `infra/prometheus/` is live only after `railway up --ci --service prometheus`, and CD never runs it. Redeploy after every such merge, then check in the container (`railway ssh --service prometheus`) that the rules loaded and every service's series arrive:
-
-```sh
-# container (prometheus)
-wget -qO- localhost:9090/api/v1/rules | grep -o '"file":"[^"]*"' | sort -u          # the seven files under rules/
-wget -qO- 'localhost:9090/api/v1/query?query=checkout_saga_engine_up'                # one series, job jcool-order, value 1
-wget -qO- 'localhost:9090/api/v1/query?query=up'                                     # jcool-api, jcool-order, jcool-inventory and jcool-payment all 1
-```
-
-The image refuses to start without `API_TARGET`, `ORDER_TARGET`, `INVENTORY_TARGET`, `PAYMENT_TARGET` and `LOKI_TARGET`, so a `railway up` from a `main` that scrapes a new target comes after the `railway config apply` that declares its variable.
+The rule files are baked into the image too, so a change anywhere under `infra/prometheus/` is live only after `railway up --ci --service prometheus`, and CD never runs it: [Redeploy Prometheus](#redeploy-prometheus) has the order and the checks.
 
 Three constraints this stack depends on:
 
 - **The SLIs select the public jobs.** The SLO recording rules in `infra/prometheus/rules/slo-burn-rate.yml` aggregate without `by (job)`, so each selects `job=~"jcool-api|jcool-order"`, the two services behind the storefront's routes, and leaves out `/internal/*` routes; a job added later stays out of the SLIs only if every new rule keeps that selector. `jcool-inventory` and `jcool-payment` are the other app jobs. The Grafana RED panels use the same selector. The `loki` job is safe only because its `metric_relabel_configs` keep nothing but the `loki_*` series `rules/loki.yml` reads.
-- **Prometheus binds `[::]`** (`infra/prometheus/railway-entrypoint.sh`). Railway's private network
-  is IPv6-only, and on the default `0.0.0.0` Grafana cannot reach it.
-- **Grafana is the only public surface**, and the only one with a login. Prometheus has no domain.
-  Grafana has no volume either: datasources and dashboards are provisioned from the image on every
-  start, so a redeploy loses only ad-hoc UI edits.
+- **Prometheus binds `[::]`** (`infra/prometheus/railway-entrypoint.sh`). Railway's private network is IPv6-only, and on the default `0.0.0.0` Grafana cannot reach it.
+- **Grafana is the only public surface**, and the only one with a login. Prometheus has no domain. Grafana has no volume either: datasources and dashboards are provisioned from the image on every start, so a redeploy loses only ad-hoc UI edits.
 
 ---
 
 ## Logs in Loki
 
-`loki` is a single-binary Loki (`infra/loki/`) with its chunks and index in the Railway Bucket
-`loki-chunks`, and its WAL and compactor state on the `loki-data` volume. It has no domain and no
-auth: only the private network reaches it. Grafana queries it through the provisioned `Loki`
-datasource.
+`loki` is a single-binary Loki (`infra/loki/`) with its chunks and index in the Railway Bucket `loki-chunks`, and its WAL and compactor state on the `loki-data` volume. It has no domain and no auth: only the private network reaches it. Grafana queries it through the provisioned `Loki` datasource.
 
-The api, user-service and id-service push every pino line to it when `LOKI_URL` is set, which
-`.railway/railway.ts` does for all three. stdout is unchanged, so Railway's log explorer still has
-every line for 30 days. The gateway's Caddy logs are not in Loki.
+Every Node service pushes every pino line to it when `LOKI_URL` is set, which `.railway/railway.ts` does for the api, the user-service, the inventory-service, the payment-service, the order-service and the id-service. stdout is unchanged, so Railway's log explorer still has every line for 30 days. The gateway's Caddy logs are not in Loki.
 
 First time, from an up-to-date `main`:
 
 ```bash
-railway config plan      # adds loki-chunks, loki-data, loki, LOKI_URL on three services, LOKI_TARGET
+railway config plan      # adds loki-chunks, loki-data, loki, LOKI_URL on every Node service, LOKI_TARGET
 railway config apply
 railway up --ci --service loki
 scripts/railway-wait-for-rollout.sh loki
@@ -653,10 +628,7 @@ railway up --ci --service prometheus   # scrapes loki
 railway up --ci --service grafana      # Loki datasource
 ```
 
-The apply redeploys every service whose variables it changed, so the three apps restart at once on
-the code they already run (the api rebuilds `main` from its GitHub source). They read `LOKI_URL` at
-boot, and each starts pushing once it runs code that knows the variable. Loki itself is deployed by
-hand, like Prometheus and Grafana: a config change is `railway up --ci --service loki`.
+The apply redeploys every service whose variables it changed, so the apps restart at once on the code they already run (the api rebuilds `main` from its GitHub source). They read `LOKI_URL` at boot, and each starts pushing once it runs code that knows the variable. Loki itself is deployed by hand, like Prometheus and Grafana: a config change is `railway up --ci --service loki`.
 
 Querying, in Grafana → Explore → Loki:
 
@@ -666,39 +638,18 @@ Querying, in Grafana → Explore → Loki:
 sum by (service) (count_over_time({env="production", level=~"error|critical"}[5m]))
 ```
 
-Labels are `service`, `env`, `level` and `hostname` (one per replica, new on each deploy). `level`
-is pino-loki's name, not pino's: `debug`, `info`, `warning`, `error`, `critical` — `level="warn"`
-matches nothing. Anything unbounded (`requestId`, `traceId`, `userId`) is a field in the JSON line,
-filtered with `| json`, never a label: every label value starts a new stream.
+Labels are `service`, `env`, `level` and `hostname` (one per replica, new on each deploy). `level` is pino-loki's name, not pino's: `debug`, `info`, `warning`, `error`, `critical` — `level="warn"` matches nothing. Anything unbounded (`requestId`, `traceId`, `userId`) is a field in the JSON line, filtered with `| json`, never a label: every label value starts a new stream.
 
-**Retention** is 30 days (`limits_config.retention_period` in `infra/loki/config.yaml`). The
-compactor is the only thing that deletes, since Railway Buckets have no lifecycle rules. The lines
-carry email and IP (the auth audit trail), so do not raise it without deciding that is acceptable.
-The delete API is disabled, because with auth off anything on the private network could call it.
+**Retention** is 30 days (`limits_config.retention_period` in `infra/loki/config.yaml`). The compactor is the only thing that deletes, since Railway Buckets have no lifecycle rules. The lines carry email and IP (the auth audit trail), so do not raise it without deciding that is acceptable. The delete API is disabled, because with auth off anything on the private network could call it.
 
-**When Loki is down or slow**, requests are unaffected: pino-loki runs in a worker thread and posts
-a batch every 5 seconds. A failed batch is dropped, not retried, and those lines exist only on
-stdout. Each failure also prints a multi-line `fetch failed` stack to stderr, every 5 seconds per
-process, so a Loki redeploy (which has downtime: a service with a volume never runs two
-deployments at once) leaves a few of these behind. A process holds at most 10,000 unsent lines,
-dropping the oldest. The batch in flight when a process stops is lost, so the last few seconds of
-every shutdown miss Loki. If the worker itself dies, the process prints `Loki transport failed` once
-and carries on with stdout only until its next restart.
+**When Loki is down or slow**, requests are unaffected: pino-loki runs in a worker thread and posts a batch every 5 seconds. A failed batch is dropped, not retried, and those lines exist only on stdout. Each failure also prints a multi-line `fetch failed` stack to stderr, every 5 seconds per process, so a Loki redeploy (which has downtime: a service with a volume never runs two deployments at once) leaves a few of these behind. A process holds at most 10,000 unsent lines, dropping the oldest. The batch in flight when a process stops is lost, so the last few seconds of every shutdown miss Loki. If the worker itself dies, the process prints `Loki transport failed` once and carries on with stdout only until its next restart.
 
-The rules in `infra/prometheus/rules/loki.yml` (`LokiDown`, `LokiPushFailing`,
-`LokiDiscardingLines`, `LokiChunkFlushFailing`) show in Prometheus and Grafana, but nothing delivers
-them: there is no Alertmanager or contact point. A bucket that breaks at boot fails Loki's
-healthcheck; one that breaks later shows only as `LokiChunkFlushFailing`, since pushes keep landing
-in memory and the WAL, and chunks flush after 30 minutes idle or 2 hours of age, so it can take
-hours to appear. To recover:
+The rules in `infra/prometheus/rules/loki.yml` (`LokiDown`, `LokiPushFailing`, `LokiDiscardingLines`, `LokiChunkFlushFailing`) show in Prometheus and Grafana, but nothing delivers them: there is no Alertmanager or contact point. A bucket that breaks at boot fails Loki's healthcheck; one that breaks later shows only as `LokiChunkFlushFailing`, since pushes keep landing in memory and the WAL, and chunks flush after 30 minutes idle or 2 hours of age, so it can take hours to appear. To recover:
 
-1. `railway logs --service loki` — a bucket error means the `LOKI_S3_*` references are wrong;
-   `no space left` means the volume is full.
-2. `railway redeploy --service loki`. On restart it replays the WAL, so nothing it had
-   acknowledged is lost.
+1. `railway logs --service loki` — a bucket error means the `LOKI_S3_*` references are wrong; `no space left` means the volume is full.
+2. `railway redeploy --service loki`. On restart it replays the WAL, so nothing it had acknowledged is lost.
 
-To stop shipping, remove `LOKI_URL` from the three services in `.railway/railway.ts` and apply.
-Each service goes back to stdout only on its next deploy.
+To stop shipping, remove `LOKI_URL` from the services in `.railway/railway.ts` and apply. Each service goes back to stdout only on its next deploy.
 
 ---
 
@@ -930,7 +881,28 @@ With the replicas stopped (`railway down --service id-service --yes`) the wait s
 
 ---
 
-## Operate Temporal
+## Checkout saga
+
+Checkout is a saga across five services, with its state in Temporal ([decision record](./docs/system-architecture.md#checkout-saga-orchestration-on-temporal-tcc-on-stock-and-payment)). The order-service orchestrates; the inventory-service and the payment-service are its two participants, each with a database of its own and a per-order header that fences a late command; the api and the user-service answer reads. The pivot is the capture, under Stripe manual capture: everything before it is undone by a release and a void, and after it the order is `PAID` and nothing undoes it. So money taken on an order that is not `PAID` is not a state the saga heals; it is [a refund owed](#a-refund-is-owed).
+
+This chapter is the operator's route through it:
+
+| When | Go to |
+| --- | --- |
+| An order or a saga is stuck, or an alert fired | [The checkout saga](#the-checkout-saga) |
+| Temporal is unreachable, or CD stopped at the order-service's healthcheck | [Temporal down](#temporal-down) |
+| The Temporal server itself needs care | [Operate Temporal](#operate-temporal) |
+| New orders must stop | [Freeze checkout](#freeze-checkout) |
+| A setting must agree with another service's | [Cross-service settings](#cross-service-settings) |
+| A caller is answered `401` or `403`, or a token rotates | [Per-caller internal tokens](#per-caller-internal-tokens) |
+| A message is parked | [Dead-letter queues](#dead-letter-queues) |
+| A merge deletes Railway variables, or someone asks for a rollback | [The contract step](#the-contract-step), [Rollback rules](#rollback-rules) |
+| A merge touches `infra/prometheus/` | [Redeploy Prometheus](#redeploy-prometheus) |
+| The whole system must be shown to hold under real faults | [Run the system test](#run-the-system-test) |
+| How checkout moved to the order-service | [Cut checkout over to the order-service](#cut-checkout-over-to-the-order-service) |
+| One service's wiring | [The order-service](#the-order-service), [The inventory-service](#the-inventory-service), [The payment-service](#the-payment-service) |
+
+### Operate Temporal
 
 `temporal` is a single Temporal server declared in `.railway/railway.ts`, built from `infra/temporal/` (`temporalio/server:1.32.1` plus the CLI and schema tools of `temporalio/admin-tools:1.32.1`). Its histories and visibility live in the `temporal-postgres` database, in the `temporal` and `temporal_visibility` databases. The order-service's `CheckoutSagaWorker` polls the task queue `checkout-saga` in the namespace `jcool`, with an identity of `order-service@<hostname>:<pid>`; the api polled the same queue before the [checkout cut-over](#cut-checkout-over-to-the-order-service) and runs no worker now. Every checkout starts a saga there ([The checkout saga](#the-checkout-saga)).
 
@@ -941,10 +913,11 @@ What it depends on:
 - **No public surface, ever.** The frontend speaks gRPC on 7233 with no auth and no TLS: anything on the private network can start, signal or terminate a workflow. So: no domain and no TCP proxy. The frontend's HTTP API (7243) is left out of the server config (`infra/temporal/config/config_template.yaml`), and `netstat -ltn` in the container must never list 7243. There is no healthcheck path either, because Railway's probe is HTTP.
 - **The entrypoint does the bootstrap** (`infra/temporal/entrypoint.sh`) on every boot, and each step is safe to repeat. It creates both databases, sets up and updates their schema, creates the namespace or resets its retention to `TEMPORAL_NAMESPACE_RETENTION` (7d), and creates the search attributes `CheckoutStep` (Keyword) and `CheckoutDeadlineAt` (Datetime). Each step has a time limit, and a failed step exits 1 so Railway restarts the container. A good boot logs `temporal-bootstrap: schema ready`, then `temporal-bootstrap: namespace jcool ready (retention 7d)`.
 - **It binds `::`.** Railway's private network is IPv6-only. The server refuses a wildcard bind without a broadcast address, so the entrypoint takes the first address of `hostname -i`.
+- **Back on a new address, matching serves about 45s after the rest.** `cluster_membership` still lists the previous address, so matching's ring join waits out `maxJoinDuration` (30s in `config_template.yaml`) before it retries without it. Meanwhile `cluster health` reads SERVING and the search attributes list, but every workflow call answers `Not enough hosts to serve the request`, and checkout answers 503. Temporal serves once `task-queue describe` (below) answers. Measured with the system test's image: about 1s back on the same address, 46s on a new one.
 - **`NUM_HISTORY_SHARDS` is 4 for the life of `temporal-postgres`.** The first boot records it in the database. Another value needs a new, empty database: drain first (below).
 - **Upgrades go one minor version at a time.** Bump `temporalio/server` and `temporalio/admin-tools` together in `infra/temporal/Dockerfile`, and back up first: the boot runs `update-schema`. Then compare the image's embedded config template with `config_template.yaml`, which is a copy of it without the frontend's `httpPort`.
 
-### Check it
+#### Check it
 
 In the service's shell (`railway ssh --service temporal`):
 
@@ -963,11 +936,11 @@ netstat -ltn                                                               # 723
 
 The image has busybox `netstat`, not `ss`.
 
-### Back up `temporal-postgres`
+#### Back up `temporal-postgres`
 
 It holds every open saga. Back it up before an upgrade, and before anything that replaces the database. Run [Back up](#back-up) twice against the database's connection URL (Variables tab of `temporal-postgres`), with the path set to `/temporal` and then to `/temporal_visibility`. A restore rewinds every open run to the dump, while the stock and payment headers have moved on since. So right after a restore, check each running saga's headers as in [Temporal down](#temporal-down).
 
-### Changing the workflow while runs are open
+#### Changing the workflow while runs are open
 
 A run replays its history on every worker that picks it up, so a change to `checkout-saga.workflow.ts` or to anything it imports must stay deterministic for the histories already recorded. `checkout-saga.replay.spec.ts` replays the ones in `replay-histories/` in the unit suite, and a change that breaks it would break every open run. To keep such a change:
 
@@ -976,21 +949,19 @@ A run replays its history on every worker that picks it up, so a change to `chec
 
 Then record the histories again, so the next change is checked against this one: `CHECKOUT_SAGA_HISTORY_OUT=src/modules/order/infrastructure/temporal/replay-histories pnpm -C apps/order-service test:e2e checkout-saga-workflow`.
 
-### The shutdown budget
+#### The shutdown budget
 
 The order-service holds the worker, so after SIGTERM it runs these steps on its `ShutdownService`, in order: readiness goes down, then it holds for `SHUTDOWN_GRACE_PERIOD_MS`, drains the Temporal worker (`TEMPORAL_WORKER_SHUTDOWN_GRACE_MS` + `TEMPORAL_WORKER_SHUTDOWN_FORCE_MS` + 1000), closes the `order-events` worker (two waits of 5000), and closes the Temporal client, the `NativeConnection` and the pools last. Those steps must end at least a second before its `drainingSeconds`: 5000 + 4000 + 4000 + 1000 + 2 × 5000 = 24000 ≤ 30 × 1000 − 1000. Raise `drainingSeconds` in `.railway/railway.ts` in the same change that raises any of those three variables. Past it, Railway kills the process mid-drain, and the BullMQ jobs it held stay active until stalled-job recovery picks them up. A `NativeConnection` that fails to close after a forced worker shutdown is only logged.
 
-The api has no worker now: readiness, the hold, the `api-events` worker and the pools, 5000 + 5000 + 1000 = 11000. Its `drainingSeconds` stays 30 because a rollback of the checkout cut-over puts the worker back in it, at 25000.
+The api has no worker: the hold, the `api-events` worker's close and the Redis quit take 5000 + 5000 + 1000 = 11000, well inside its `drainingSeconds` of 30.
 
 Two waits sit outside the steps and are not in that sum. Before them, the outbox relay waits up to 5000 for an open tick to commit. After them, the telemetry flush waits up to 3000, and then the Redis and pg pools close; the pg close also waits for a connection that an activity abandoned at the force deadline still holds, which only the participant's own timeouts (`PAYMENT_CAPTURE_TIMEOUT_MS` per gateway call) bound. When every bounded wait runs to its limit, the total is 33000, which is past the 30000 that `drainingSeconds` allows. That only happens when Postgres or Redis hangs during the deploy. The kill then lands in the telemetry flush, so the spans from the drain window are lost; an open transaction is rolled back with its connection, as with any kill.
 
----
-
-## The checkout saga
+### The checkout saga
 
 Every order past `DRAFT` has one workflow, `checkout-<order id>` (a `RESERVING` order whose start never reached Temporal gets it from the reaper), and that workflow is the only writer of the order's status ([decision record](./docs/system-architecture.md#checkout-saga-orchestration-on-temporal-tcc-on-stock-and-payment)). The order row says what the buyer sees; the workflow says where the saga is.
 
-### Read a saga
+#### Read a saga
 
 ```sh
 # container (temporal), with t() from Check it
@@ -1011,7 +982,7 @@ done
 
 A run that stays in one step is almost always an activity retrying against a participant, the inventory-service or the payment-service. Fix what it is failing on; the run then moves by itself.
 
-### Checkout answers 503 and the order stays `RESERVING`
+#### Checkout answers 503 and the order stays `RESERVING`
 
 tx B mints its outbox id before it opens, so an id-service or database outage makes it throw. The local activity retries it with backoff (`SAGA_RETRY_BASE_MS` to `SAGA_RETRY_CAP_MS`) while the buyer gets `503` after `CHECKOUT_RESERVE_WAIT_MS`. The order stays `RESERVING`, hidden from the buyer, with its stock `HELD`. Once the dependency is back, tx B commits: the order turns `PENDING` with exactly one `order.placed`, and a retry under the same `Idempotency-Key` answers `201` with that order.
 
@@ -1028,15 +999,15 @@ A `RESERVING` order with no hold and no workflow is one whose start never reache
 
 The reaper cannot hand back an order whose run has already closed, which only a terminated or timed-out run leaves behind. It logs `RESERVING order whose checkout saga has already closed` at error on every tick and moves on; the order keeps one of the buyer's three checkout slots, and fifty of them fill the reaper's batch so newer orphans wait. Close it by hand as in [Terminate a saga](#terminate-a-saga): clean up its inventory header first (in `inventory-postgres`), then, in `order-postgres`, `UPDATE orders SET status = 'REJECTED', finalized_at = now(), finalize_reason = 'ops:closed_saga' WHERE id = '<order id>' AND status = 'RESERVING';`.
 
-### A `payment.authorized` in the dead-letter queue
+#### A `payment.authorized` in the dead-letter queue
 
 Its consumer signals the order's saga, so the job rides the long ladder (`ORDER_PAID_CONSUMER_*`, about 33 minutes) to outlast a Temporal outage. The payment-service stamps the attempts when it publishes the job, so its `ORDER_PAID_CONSUMER_ATTEMPTS` must equal the order-service's ([Cross-service settings](#cross-service-settings)). Past the ladder it dead-letters into `order-events-dlq`. Once Temporal answers, replay it with `pnpm queue:replay-dlq:order --queue order-events` ([Dead-letter queues](#dead-letter-queues)): the saga takes one authorization per order and captures once, and an authorization arriving after the order closed is voided, not captured.
 
-### Terminate a saga
+#### Terminate a saga
 
 Only as in [Temporal down](#temporal-down): once Temporal answers, for a run that cannot finish by itself, and only after both participant headers have been cleaned up by hand. The terminated run then holds [CheckoutSagaClosedAbnormally](#checkoutsagaclosedabnormally) firing for an hour; that one is expected.
 
-### Settle a payment by hand
+#### Settle a payment by hand
 
 Only for an order with no running run ([Read a saga](#read-a-saga)). A void or capture made in the Stripe dashboard never reaches the database: the webhook handles only `checkout.session.*` events, so the payment rows keep reading `AUTHORIZED`, and the alerts and the invariant checker that read them keep firing. Settle it through the rows instead, which are the payment-service's, in `payment-postgres`:
 
@@ -1045,7 +1016,7 @@ Only for an order with no running run ([Read a saga](#read-a-saga)). A void or c
 
 Note down the order id and the PaymentIntent either way.
 
-### Its alerts
+#### Its alerts
 
 The saga's alerts are in `infra/prometheus/rules/checkout-saga.yml`, the queue's in `messaging.yml`, and `ApiScrapeDown`, `OrderScrapeDown`, `InventoryScrapeDown` and `PaymentScrapeDown` in `scrape-targets.yml`. Each alert's description names its subsection below. Nothing routes alerts anywhere yet, so read the firing ones in Grafana Explore with `ALERTS{alertstate="firing"}`, or with `wget -qO- localhost:9090/api/v1/alerts` in the Prometheus container.
 
@@ -1061,7 +1032,7 @@ ago() { date -u -d "@$(( $(date +%s) - $1 ))" +%Y-%m-%dT%H:%M:%SZ; }
 RUNS='WorkflowType="CheckoutSaga" AND TaskQueue="checkout-saga"'
 ```
 
-#### CheckoutSagaStuck
+##### CheckoutSagaStuck
 
 `checkout_saga_overdue` counts the runs still `Running` whose `CheckoutDeadlineAt` passed more than `SAGA_OVERDUE_GRACE_SEC` (300) ago. The deadline timer ends every saga on time, so each of these is held up by an activity that keeps failing (a participant, a compensation conflict) or by a workflow task that keeps failing, as a nondeterminism error after a deploy does. Their stock stays held and their payment may stay authorized meanwhile.
 
@@ -1073,7 +1044,7 @@ t workflow show --namespace jcool --workflow-id checkout-<order id>       # a Wo
 
 An activity failing: fix what it fails on, and the run moves by itself. A conflict is [CheckoutCompensationConflict](#checkoutcompensationconflict). A workflow task failing after a deploy: roll the deploy back, or ship the change behind `patched()` ([Changing the workflow while runs are open](#changing-the-workflow-while-runs-are-open)). Terminate only as in [Terminate a saga](#terminate-a-saga).
 
-#### CheckoutSagaWorkerStalled
+##### CheckoutSagaWorkerStalled
 
 Temporal answers, but checkout tasks are not being picked up: for 5 minutes the task queue has had no poller for workflow or for activity tasks, or a task has waited over 2 minutes. A deploy reads 0 pollers while the order-service restarts, which the 5 minutes cover. Between deploys this alert and [CheckoutSagaEngineDown](#checkoutsagaenginedown) are the only Temporal signals, since Railway reads the order-service's readiness only at deploy.
 
@@ -1081,12 +1052,12 @@ Temporal answers, but checkout tasks are not being picked up: for 5 minutes the 
 t task-queue describe --task-queue checkout-saga --namespace jcool   # pollers per task type, their identity, and when each last polled
 ```
 
-- **No poller.** The order-service's worker is not running. Check `TEMPORAL_WORKER_ENABLED` on the order-service, and its logs for `checkout saga worker unavailable; retrying with backoff` or `checkout saga worker cannot start without its bundle`. A poller whose identity is not `order-service@…` is a stray worker on the same queue, such as an order-service still deployed after a [rollback](#roll-back-the-checkout-cut-over).
+- **No poller.** The order-service's worker is not running. Check `TEMPORAL_WORKER_ENABLED` on the order-service, and its logs for `checkout saga worker unavailable; retrying with backoff` or `checkout saga worker cannot start without its bundle`. A poller whose identity does not start with `order-service@` is a stray worker on the same queue; stop it.
 - **Pollers, and a backlog.** The worker runs but its slots are full: activities hung on a participant (`describe` a few running sagas, as in [CheckoutSagaStuck](#checkoutsagastuck)), or more load than `SAGA_ACTIVITY_CONCURRENCY` allows.
 
 What it stops, and how to freeze checkout meanwhile: [Temporal down](#temporal-down).
 
-#### CheckoutSagaEngineDown
+##### CheckoutSagaEngineDown
 
 `checkout_saga_engine_up` has read 0 for 2 minutes: the order-service's reads from Temporal have not all answered within 2s. It logs `checkout saga scrape failed, saga gauges withdrawn` at most once a minute, with the error. Every other saga gauge is withdrawn meanwhile, the pollers included, so [CheckoutSagaStuck](#checkoutsagastuck), [CheckoutSagaWorkerStalled](#checkoutsagaworkerstalled) and the rest are blind until it clears. Its `/health/ready` reads Temporal too, so the next deploy of it stops at the healthcheck; the api, the gateway and a freeze are unaffected.
 
@@ -1096,7 +1067,7 @@ What it stops, and how to freeze checkout meanwhile: [Temporal down](#temporal-d
 - **`SERVING`, and the error is a connection failure (`UNAVAILABLE`).** The order-service cannot reach a healthy server: check its `TEMPORAL_ADDRESS`, and that Temporal still binds its private address ([Operate Temporal](#operate-temporal)).
 - **`SERVING`, and the error is `DEADLINE_EXCEEDED` on a count.** Visibility is slow: checkout still works, only the saga alerts are blind. Time `t workflow count --namespace jcool --query "$RUNS"` in the container; a count that takes seconds is the `temporal_visibility` database on `temporal-postgres`.
 
-#### CheckoutSagaClosedAbnormally
+##### CheckoutSagaClosedAbnormally
 
 The saga only ever completes. A run of the checkout task queue closed as `Failed`, `Terminated`, `TimedOut` or `Canceled` is a bug or an operator, and it stopped where it was, with no compensation. The gauge counts the last hour, so the alert keeps firing for an hour after a single closure.
 
@@ -1113,13 +1084,13 @@ For each one, read the order and both headers with the query in [Temporal down](
 
 A `Failed` run is a bug in the workflow: fix it before the next checkout trips over it.
 
-#### CheckoutCompensationConflict
+##### CheckoutCompensationConflict
 
 A compensation found its participant in a state it cannot undo: `release_stock` or `restock` on stock already committed, or `cancel_payment` on money already captured. The activity logs `saga participant conflict; retrying until resolved by hand` at error, with the order id, and retries without limit. The run stays `COMPENSATING` and becomes [CheckoutSagaStuck](#checkoutsagastuck) once its deadline passes.
 
 Read the order and both headers ([Temporal down](#temporal-down)) and decide which side is right. Put the participant right by hand (captured money is [a refund owed](#a-refund-is-owed); committed stock goes back on hand), note what you did, then terminate the run as in [Terminate a saga](#terminate-a-saga). Its retry would conflict forever otherwise. Neither fix changes the rows the invariant checker reads, so it keeps reporting the order until it leaves the checker's window ([CheckoutInvariantViolation](#checkoutinvariantviolation)).
 
-#### PaymentAuthorizationUncaptured
+##### PaymentAuthorizationUncaptured
 
 The oldest `AUTHORIZED` payment header is over 15 minutes old. The saga captures within seconds of an authorization reaching it and voids the hold when it gives up, so this money is held on a card and nothing is settling it. Stripe voids an authorization on its own after 7 days.
 
@@ -1138,7 +1109,7 @@ Then [read each saga](#read-a-saga):
 - **Order `CONFIRMING`, run in `CAPTURING`.** The capture keeps failing at the gateway; `describe` shows why.
 - **No running run.** Nothing will settle it. [Settle it by hand](#settle-a-payment-by-hand): capture if the order is `PAID`, void otherwise.
 
-#### CheckoutInvariantViolation
+##### CheckoutInvariantViolation
 
 Every `CHECKOUT_INVARIANT_INTERVAL_MS`, the checker reads the saga orders that settled between `CHECKOUT_INVARIANT_WINDOW_SEC` and `CHECKOUT_INVARIANT_SETTLE_SEC` ago, never before `CHECKOUT_INVARIANT_NOT_BEFORE`. It skips any whose run is still `Running`, and asks both participants how they stand. It fixes nothing. Each broken order is logged at error as `checkout invariant violated`, with `orderId`, `kind` and `status`, on every run. The gauge is the count from the last complete run. It clears once the rows the checker reads agree again, or once the order leaves the window. A fix made outside those rows, such as a refund or a stock correction, leaves its kind firing for up to `CHECKOUT_INVARIANT_WINDOW_SEC` (24h), and a second order of the same kind goes unseen behind it meanwhile: check the error log for new order ids.
 
@@ -1152,7 +1123,7 @@ Every `CHECKOUT_INVARIANT_INTERVAL_MS`, the checker reads the saga orders that s
 
 The same kind on several orders is a defect, not bad luck. Compare with the run's history (`t workflow show`), which retention keeps for longer than the checker looks back ([Retention and the checker window](#retention-and-the-checker-window)).
 
-#### CheckoutInvariantCheckerSilent
+##### CheckoutInvariantCheckerSilent
 
 The order-service is being scraped, but no checker run has finished as `ok` or `violations` for 30 minutes, so a broken order would go unnoticed. The order-service's logs say why:
 
@@ -1161,7 +1132,7 @@ The order-service is being scraped, but no checker run has finished as `ok` or `
 - **`previous invariant check still running, tick skipped`**: one run outlasts `CHECKOUT_INVARIANT_INTERVAL_MS`.
 - **None of these**: the scheduler never started; look for `checkout invariant checker scheduled` at boot.
 
-#### CheckoutLateAuthorization
+##### CheckoutLateAuthorization
 
 A payment was authorized after its saga had ended, and a `lateAuthorization` run voided it. Each one is handled, and costs the buyer only the wait for the void. A steady stream means authorizations arrive later than `CHECKOUT_PAYMENT_DEADLINE_SEC` + `SAGA_AUTH_GRACE_SEC` allows, or after a cancel: the queue lags ([MessagingQueueConsumerLagging](#messagingqueueconsumerlagging)), or buyers pay on sessions that outlive their order.
 
@@ -1173,14 +1144,14 @@ WHERE authorized_at IS NOT NULL ORDER BY authorized_at DESC LIMIT 20;
 SELECT id, status, finalized_at, finalize_reason FROM orders WHERE id IN ('<order id>', …) AND status <> 'PAID';
 ```
 
-#### MessagingQueueConsumerLagging
+##### MessagingQueueConsumerLagging
 
 The oldest job waiting on a queue (the alert's `queue` label) has waited over a minute, for 5 minutes. On `order-events` that holds back `payment.authorized` on its way to the saga, so paid checkouts run into their deadline and compensate; on `api-events` it is search that lags behind catalog writes. Nothing else shows it: the relays keep publishing, so the outboxes stay young and the DLQs stay empty. `messaging_queue_jobs{queue,state}` tells the cases apart:
 
 - **`active` at 0.** No consumer: that queue's BullMQ worker is not running (`QUEUE_WORKER_ENABLED` on its consumer, the order-service for `order-events` and the api for `api-events`) or cannot reach Redis.
 - **`active` steady and `wait` growing.** The consumer is saturated or a handler is slow; the handler's logs show what it waits on.
 
-#### Saga metrics absent
+##### Saga metrics absent
 
 `CheckoutSagaMetricsAbsent`, `PaymentMetricsAbsent` and `MessagingQueueMetricsAbsent` mean the service that owns a series is being scraped but its `/metrics` lacks it, so the alerts built on it cannot fire. The saga series and the `order-events` gauge come from the order-service and join its `up`; the `api-events` gauge comes from the api and joins the api's (`MessagingQueueMetricsAbsent` has one branch per queue, told apart by the `queue` label); `payment_authorized_uncaptured_oldest_seconds` comes from the payment-service, and `PaymentMetricsAbsent` joins that service's `up`. Each collector is a provider of its module and only reports from the process that owns the metrics registry. A series goes missing when that module is not in the app that serves `/metrics`, for example after it moved to another service. `observability-metrics.e2e-spec.ts` fails, in each of the three, on a build that drops one, so first check which build is deployed, then what the service serves:
 
@@ -1194,7 +1165,7 @@ wget -qO- --header "Authorization: Bearer $METRICS_TOKEN" "http://$PAYMENT_TARGE
   | grep -E '^payment_authorized_uncaptured_oldest_seconds'
 ```
 
-#### ApiScrapeDown
+##### ApiScrapeDown
 
 Prometheus has not scraped the api for 5 minutes, so every api alert, the absent-metrics ones included, is blind. Prometheus has no domain; its target page answers inside its container:
 
@@ -1206,7 +1177,7 @@ wget -qO- localhost:9090/api/v1/targets | grep -o '"lastError":"[^"]*"'
 - **Connection refused, or a timeout.** The api is down or restarting (its deploy logs), or the private network cannot reach it; `API_TARGET` on `prometheus` must name the api's private domain and port.
 - **404.** `/metrics` answers 404 both when the api has no `METRICS_TOKEN` and when the token Prometheus sends is not the api's. Set the same value on both services ([Deploy the monitoring stack](#deploy-the-monitoring-stack)), then redeploy the one that changed.
 
-#### InventoryScrapeDown
+##### InventoryScrapeDown
 
 Prometheus has not scraped the inventory-service (`job="jcool-inventory"`) for 5 minutes. Its own metrics are blind, and if it is down rather than unreachable from Prometheus, checkout is stopped too: the order-service's Try fails and checkout answers `503` with `Retry-After`, and once `BREAKER_ERROR_THRESHOLD_PCT` of the calls in the breaker's window have failed (with at least `BREAKER_VOLUME_THRESHOLD` made), the `inventory-service` breaker opens, `CircuitBreakerOpen{breaker="inventory-service"}` fires, and the order-service stops calling it until `BREAKER_RESET_TIMEOUT_MS` lets one through. Sagas past their Try wait in `COMMITTING_STOCK` or `COMPENSATING`, retrying, and move by themselves once it answers. Read the target the same way as for [ApiScrapeDown](#apiscrapedown):
 
@@ -1221,7 +1192,7 @@ wget -qO- localhost:9090/api/v1/targets | grep -o '"scrapeUrl":"[^"]*inventory[^
 
 While it is down, [freeze checkout](#freeze-checkout) if buyers should get the gateway's `503` instead of a wait.
 
-#### PaymentScrapeDown
+##### PaymentScrapeDown
 
 Prometheus has not scraped the payment-service (`job="jcool-payment"`) for 5 minutes. Its own metrics are blind, `payment_authorized_uncaptured_oldest_seconds` included, so `PaymentAuthorizationUncaptured` cannot fire; and if it is down rather than unreachable from Prometheus, payments are stopped too. `/pay` answers `502`, and once `BREAKER_ERROR_THRESHOLD_PCT` of the calls in the breaker's window have failed (with at least `BREAKER_VOLUME_THRESHOLD` made), the `payment-service` breaker opens, `CircuitBreakerOpen{breaker="payment-service"}` fires, and the order-service stops calling it until `BREAKER_RESET_TIMEOUT_MS` lets one through. Sagas past their authorization wait in `CAPTURING` or `COMPENSATING`, retrying, and move by themselves once it answers. Stripe's webhook cannot reach it either, so Stripe redelivers on its own schedule, and the reconcile sweep records any authorization the webhook missed once the service is back. Read the target the same way as for [ApiScrapeDown](#apiscrapedown):
 
@@ -1236,7 +1207,7 @@ wget -qO- localhost:9090/api/v1/targets | grep -o '"scrapeUrl":"[^"]*payment[^"]
 
 While it is down, [freeze checkout](#freeze-checkout) if buyers should get the gateway's `503` instead of a wait.
 
-#### OrderScrapeDown
+##### OrderScrapeDown
 
 Prometheus has not scraped the order-service (`job="jcool-order"`) for 5 minutes. Every saga, checker and `order-events` alert reads its series, and their absent-metrics alerts join its `up`, so all of them are blind and silent until it is scraped again. If it is down rather than unreachable from Prometheus, checkout is stopped too: the gateway's `/orders*` routes answer `502`, no saga moves (open runs wait in Temporal and resume once a worker polls again), and `payment.authorized` jobs wait on the long ladder. Read the target the same way as for [ApiScrapeDown](#apiscrapedown):
 
@@ -1247,17 +1218,16 @@ wget -qO- localhost:9090/api/v1/targets | grep -o '"scrapeUrl":"[^"]*order[^"]*"
 
 - **Connection refused, or a timeout.** Check the order-service's deploy logs and `/health/ready` from inside it (`railway ssh --service order-service`, then `node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"`): `503` names Postgres, Redis, Temporal or a drain. A crash at boot logs why, typically a `*_SERVICE_TOKEN` whose callee variable is unset (each is a reference, at least 32 characters), a missing `TEMPORAL_*` in production, or an unreachable `order-postgres`. `ORDER_TARGET` on `prometheus` must name its private domain and port.
 - **404.** The order-service has no `METRICS_TOKEN`, or another one than the api's: it references the api's in `.railway/railway.ts`, so a redeploy of it picks the current value up.
-- **Expected after a rollback** of the [checkout cut-over](#cut-checkout-over-to-the-order-service), until the forward fix: the order-service is taken down then, and the saga is watched through the api's `checkout_sagas_open` meanwhile.
 
 While it is down, [freeze checkout](#freeze-checkout) if buyers should get the gateway's `503` instead of a `502`.
 
-### Retention and the checker window
+#### Retention and the checker window
 
 `TEMPORAL_NAMESPACE_RETENTION` on `temporal` (7d) must stay above `CHECKOUT_INVARIANT_WINDOW_SEC` on the order-service (86400), which in turn must stay above `CHECKOUT_INVARIANT_SETTLE_SEC`. The order-service checks the second rule at boot. The first spans two services, so nothing checks it: keep it in mind when changing either. A shorter retention deletes a closed run's history while the checker can still flag its order, and the investigation loses its best evidence.
 
-### `CHECKOUT_INVARIANT_NOT_BEFORE`
+#### `CHECKOUT_INVARIANT_NOT_BEFORE`
 
-Unset, except around a cut-over that moves a participant into its own service, and that cut-over's rollback. Orders settled before the move keep their headers in the old database, where the new `statusOf` cannot see them, so each one would read as a violation. Set it to the UTC time the drain finished, and unset it once `CHECKOUT_INVARIANT_WINDOW_SEC` has passed. The checker runs in the order-service, so that is where it is set; each change redeploys it. The api keeps a value of its own only for a rollback build whose checker runs there again.
+Unset, except around a cut-over that moves a participant into its own service. Orders settled before the move keep their headers in the old database, where the new `statusOf` cannot see them, so each one would read as a violation. Set it to the UTC time the drain finished, and unset it once `CHECKOUT_INVARIANT_WINDOW_SEC` has passed. The checker runs in the order-service, so that is where it is set; each change redeploys it.
 
 ```bash
 railway variable set "CHECKOUT_INVARIANT_NOT_BEFORE=<drain end, e.g. 2026-11-02T09:30:00Z>" --service order-service
@@ -1266,9 +1236,7 @@ railway variable delete CHECKOUT_INVARIANT_NOT_BEFORE --service order-service
 
 The [checkout cut-over](#cut-checkout-over-to-the-order-service) needs none: `order-postgres` starts empty, so no order there settled under an older topology.
 
----
-
-## Temporal down
+### Temporal down
 
 **How it shows.**
 
@@ -1280,7 +1248,7 @@ The [checkout cut-over](#cut-checkout-over-to-the-order-service) needs none: `or
 - `POST /orders` and both cancel routes answer `503` with `Retry-After` after their wait (`CHECKOUT_RESERVE_WAIT_MS`, `CHECKOUT_CANCEL_WAIT_MS`), logged as `checkout saga engine unavailable` or `cancel got no answer from the checkout saga`.
 - A buyer who retries with a fresh `Idempotency-Key` each time leaves one hidden `RESERVING` order per attempt, and those count against the in-flight cap: the fourth such attempt answers `409 Too many pending orders` instead of `503`. Once Temporal is back the reaper rejects them, after `CHECKOUT_RESERVING_ORPHAN_SEC` and one `CHECKOUT_REAPER_INTERVAL_MS`. A retry under the same key adds no order.
 
-The order-service's `/health/ready` answers `503` naming `temporal`. Railway reads it only at deploy, so the running order-service keeps serving, but a deploy of it fails its healthcheck: CD stops at "Deploy order-service", before the api, and production keeps the code it runs. Bring Temporal back, then **Re-run all jobs**. The api's and the gateway's readiness leave Temporal out, so a freeze, a rollback and an api deploy all still go through.
+The order-service's `/health/ready` answers `503` naming `temporal`. Railway reads it only at deploy, so the running order-service keeps serving, but a deploy of it fails its healthcheck: CD stops at "Deploy order-service", before the api, and production keeps the code it runs. Bring Temporal back, then **Re-run all jobs**. The api's and the gateway's readiness leave Temporal out, so a freeze and an unfreeze still go through ([Rollback rules](#rollback-rules)).
 
 **What it stops.** Checkout and cancel: no new stock is held and no money is taken. Catalog, cart, `/pay` and the webhook keep serving, and a buyer who authorizes on an open session loses nothing: the webhook records the hold, and its `payment.authorized` job waits on the long ladder (about 33 minutes) before the dead-letter queue. Open runs wait where they are, since their state is in `temporal-postgres`. Once the server answers, the worker reconnects on its own (backoff up to 30s), and timers that fell due meanwhile fire at once.
 
@@ -1297,7 +1265,7 @@ SELECT status, count(*) FROM payment_orders WHERE status IN ('OPEN', 'AUTHORIZED
 SELECT status, count(*) FROM reservation_orders WHERE status = 'HELD' GROUP BY status;
 ```
 
-**Rollback** to the checkout before the saga is in [Roll back to the checkout before the saga](#roll-back-to-the-checkout-before-the-saga). Its deploy needs no Temporal, but closing the sagas still open does.
+**There is no rollback** that puts checkout back in the api or moves the worker there ([Rollback rules](#rollback-rules)): the way out of a Temporal outage is Temporal, and a freeze holds the line meanwhile.
 
 **Terminate only once Temporal answers again, and only a run that cannot finish on its own**, such as a compensation that keeps failing or a nondeterminism error after a bad deploy. Every other open run resumes and compensates or completes by itself. A terminated run stops where it is, with no compensation, so first read its order in `order-postgres`, its payment header in `payment-postgres` and its stock header in `inventory-postgres`:
 
@@ -1319,44 +1287,193 @@ t workflow terminate --namespace jcool --workflow-id checkout-<order id> --reaso
 t workflow terminate --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"' --reason "<why>"
 ```
 
----
+### Cross-service settings
 
-## Cut over checkout to the saga
+No process sees both values of a rule below, so nothing checks it at boot, with one exception noted in the table. Keep them when changing either side. Rules inside the order-service alone (the saga activity timeout against each command and breaker timeout, the reserve wait against the Try budget) are checked by its own env validation, [`checkout-saga.env.ts`](./apps/order-service/src/config/checkout-saga.env.ts).
 
-The one-time switch from the single-transaction checkout to the saga, kept as the record of how it was done and as the way back. Checkout is frozen, orders from the old path drain on their own (the old TTL and reconcile sweeps close them and their sessions; no SQL by hand), and the saga code merges behind the freeze. No step assumes Temporal is healthy: a freeze is a gateway redeploy, and the gateway's healthcheck goes through the api's `/health/ready`, which leaves Temporal out. If Temporal stops at any step, keep the freeze on (or turn it back on) and work through [Temporal down](#temporal-down).
+| Rule | Why |
+| --- | --- |
+| inventory-service `INVENTORY_TRY_LOCK_TIMEOUT_MS` (2000) < order-service `CHECKOUT_TRY_TIMEOUT_MS` (3000) | The order-service gives a Try that long over HTTP, then aborts it and fences the hold with a release. A lock budget at or above it turns contended Tries into `503`s the service would have answered |
+| 4 × payment-service `PAYMENT_CAPTURE_TIMEOUT_MS` (10000) + 1000 ≤ order-service `PAYMENT_COMMAND_TIMEOUT_MS` (45000) | A cancel there chains up to four Stripe calls, each bounded by `PAYMENT_CAPTURE_TIMEOUT_MS`. A command timeout under that sum aborts a cancel on the order-service's side while the payment-service is still carrying it out |
+| order-service `CHECKOUT_PAY_CUTOFF_SEC` (1980) ≥ payment-service `PAYMENT_SESSION_MIN_TTL_SEC` (1800) + `PAYMENT_SESSION_EXPIRY_MARGIN_SEC` (120) + 60 | `/pay` opens a session only while the cutoff of the payment window remains. A smaller cutoff lets `/pay` ask for a session that expires sooner than Stripe allows, which the payment-service refuses as `CLOSED` |
+| payment-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) = order-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) | BullMQ stamps the attempts on a job when it is added, so the payment-service's value is how many deliveries `payment.authorized` gets, while the order-service's worker alone decides the delays. Every relay onto `order-events` reads this variable: the payment-service adds `payment.authorized` and the order-service adds `order.*`. The order-service runs on its code default and `.railway/railway.ts` sets the payment-service's as a literal, so change one and you change the other |
+| `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` set on the order-service only | The cap is read by the consuming worker, not stamped on the job. The payment-service does not read it, so setting it there changes nothing; the api reads its own for the `catalog.*` ladder |
+| payment-service `QUEUE_PREFIX` = order-service `QUEUE_PREFIX` (`bull`) | A different prefix makes the relay write jobs under keys the order-service's worker never reads |
+| `N` × `QUEUE_WORKER_CONCURRENCY` + `SAGA_ACTIVITY_CONCURRENCY` + `SAGA_LOCAL_ACTIVITY_CONCURRENCY` + 5 ≤ `DB_POOL_MAX`, with `N` the number of queues the service consumes | Each job in flight and each activity slot can hold a connection while HTTP and the schedulers keep the 5 spare. The order-service consumes `order-events` and the api `api-events`, so `N` is 1 in both, and their env validation refuses a boot that breaks it (the api has no saga slots). The order-service's `DB_POOL_MAX` defaults to 16, above the platform's 10: 5 + 2 + 2 + 5 = 14. Raise `N` when a service takes a second queue |
+| order-service `SHUTDOWN_GRACE_PERIOD_MS` (5000) + `TEMPORAL_WORKER_SHUTDOWN_GRACE_MS` (4000) + `TEMPORAL_WORKER_SHUTDOWN_FORCE_MS` (4000) + 1000 + the BullMQ close (2 × 5000) = 24000 ≤ its `drainingSeconds` (30) × 1000 − 1000 | `drainingSeconds` lives in `.railway/railway.ts`, the rest in the environment, so nothing compares them. Past it, Railway kills the process mid-drain ([The shutdown budget](#the-shutdown-budget)). The 1000 is the Temporal worker's stop slack |
+| `TEMPORAL_NAMESPACE_RETENTION` on `temporal` (7d) > order-service `CHECKOUT_INVARIANT_WINDOW_SEC` (86400) | A shorter retention deletes a closed run's history while the checker can still flag its order ([Retention and the checker window](#retention-and-the-checker-window)). The order-service checks the window against its settle time, not against Temporal |
+| `METRICS_TOKEN` equal on the api, the order-service, the inventory-service and the payment-service | Prometheus sends one token to every target; the three services reference the api's |
 
-1. **Back up** the api's `Postgres`: a Railway snapshot, and a `pg_dump` through `railway connect Postgres` ([Back up](#back-up)).
-2. **Freeze** ([Freeze checkout](#freeze-checkout)), then probe both `POST /orders` and `POST /orders/1/pay` on the public domain: each must answer `503` with `Retry-After`. If not, unfreeze and stop.
-3. **Drain**, about 32 minutes. In `psql`, all four must reach zero rows:
+### Per-caller internal tokens
 
-   ```sql
-   SELECT count(*) FROM orders WHERE status = 'PENDING';
-   SELECT count(*) FROM payments WHERE status = 'PENDING';
-   SELECT count(*) FROM reservations r
-   WHERE r.status = 'HELD' AND NOT EXISTS (SELECT 1 FROM reservation_orders h WHERE h.order_id = r.order_id);
-   SELECT status, count(*) FROM orders WHERE status IN ('RESERVING', 'CONFIRMING') GROUP BY status;
+Every internal API admits each caller by a token of its own, and each route lists the callers it admits ([decision record](./docs/system-architecture.md#internal-apis-admit-callers-by-a-token-each)). A pair is one (caller, target), and it rotates alone:
+
+| Callee | Caller | Callee's variable | Caller's variable | Routes |
+| --- | --- | --- | --- | --- |
+| user-service | api | `INTERNAL_API_TOKEN` (+ `_PREVIOUS`) | `INTERNAL_API_TOKEN` (reference) | `sessions/:userId/epoch`, `cutover/digest` |
+| user-service | inventory-service | `INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE` (+ `_PREVIOUS`) | `USER_SERVICE_TOKEN` (reference) | `sessions/:userId/epoch` |
+| user-service | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `USER_SERVICE_TOKEN` (reference) | `sessions/:userId/epoch`, `users/:id/summary` |
+| api | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `API_SERVICE_TOKEN` (reference) | `/internal/v1/carts/:userId/lines`, `/internal/v1/catalog/sku-views` |
+| inventory-service | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `INVENTORY_SERVICE_TOKEN` (reference) | `/internal/v1/reservations/*` |
+| payment-service | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `PAYMENT_SERVICE_TOKEN` (reference) | `/internal/v1/payments/*` |
+
+The caller's variable is a reference to the callee's in `.railway/railway.ts`, so only the callee's is ever set by hand. A callee refuses to boot with no caller token at all, or with two callers sharing one. The inventory-service and the payment-service admit the order-service alone: they hold no token for the api, and a token the api once called with is answered `401`. The user-service's `users/:id/summary` admits the order-service alone, so the api's token on it is answered `403`; the api keeps `sessions/:userId/epoch` and `cutover/digest`.
+
+#### Set one
+
+Each value is generated on its own and goes in through stdin, so it is never on a command line or in history:
+
+```bash
+# local, after `railway link`
+openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE --stdin --service user-service --skip-deploys
+for s in jcool-ecommerce-backend inventory-service payment-service user-service; do
+  openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_ORDER_SERVICE --stdin --service "$s" --skip-deploys
+done
+```
+
+Then deploy the callee, then the caller, which reads the new value through its reference only once it redeploys.
+
+#### Rotate one
+
+Rotate one pair at a time, so a refusal names the pair that is behind. Take the order-service → payment-service pair; the callee is the payment-service and the caller is the order-service:
+
+1. On the callee, copy the current value into `_PREVIOUS`, then set a new current one, both without a deploy, and redeploy the callee. Both values are accepted:
+
+   ```bash
+   # local, after `railway link`; the value is piped, never printed
+   railway variable list --service payment-service --kv | sed -n 's/^INTERNAL_CALLER_TOKEN_ORDER_SERVICE=//p' | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS --stdin --service payment-service --skip-deploys
+   openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_ORDER_SERVICE --stdin --service payment-service --skip-deploys
    ```
 
-   Run the candidate query of [A refund is owed](#a-refund-is-owed) and keep its output; it does not block. Rows left after 45 minutes: stop and investigate, do not merge.
-4. **Check the plan and Temporal.** `railway config plan` from the rebased branch must be empty, since the cut-over adds no service. In `railway ssh --service temporal`, with `t()` from [Check it](#check-it), `t operator cluster health` answers `SERVING` and `t task-queue describe --task-queue checkout-saga --namespace jcool` lists the api's pollers. If either fails, do not merge: unfreeze (the old checkout needs no Temporal) and work through [Temporal down](#temporal-down).
-5. **Merge**, after probing the freeze once more. CI and CD apply migration 0032 in `preDeployCommand`, deploy the id-service, the api and the gateway, smoke `/health/ready`, then the user-service.
-6. **Check the deploy.** `/health/ready` answers 200, which says nothing about Temporal. `SELECT status, count(*) FROM orders WHERE status IN ('RESERVING', 'PENDING', 'CONFIRMING') GROUP BY status;` is empty. The task queue lists pollers and `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga"'` is 0.
-7. **Unfreeze**, then check out at once with a test account on the public domain: `POST /orders` answers `201`; the run is `Running` in `t workflow list --namespace jcool --query 'WorkflowId="checkout-<order id>"'` and `t workflow describe --namespace jcool --workflow-id checkout-<order id>` shows `CheckoutStep` `AWAITING_AUTH`; `POST /orders/<order id>/pay` answers `201`, and paying it with a Stripe test card takes the order to `PAID` within a minute and the run to `Completed` in the same list. A second order cancels with `200` and `quantity_reserved` returns to where it was. If any of this fails, freeze again and fix forward.
+2. Redeploy the caller: it now sends the new value. The order-service holds one reference per callee, so this redeploys it for its other three pairs too, which is harmless.
+3. Once no request carries the old one (the callee logs `internal caller token not recognized` for a value it does not know), unset `_PREVIOUS` as [Change Railway service config](#change-railway-service-config) removes a variable, and redeploy the callee. Never set it to an empty string: a `_PREVIOUS` under 32 characters stops the callee from booting.
 
-### Roll back to the checkout before the saga
+The api and the user-service pair on `INTERNAL_API_TOKEN` rotates the same way ([Rotate `INTERNAL_API_TOKEN`](#rotate-internal_api_token)). Each service holds one `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` of its own, as the callee, so rotating the order-service's pair with the payment-service never changes what the inventory-service, the api or the user-service holds.
 
-**Closed by the [checkout cut-over](#cut-checkout-over-to-the-order-service)**: the old checkout takes payments in the api, and that cut-over deleted the api's Stripe variables and dropped its payment tables. Kept as the record of how it was done.
+#### A caller answered `401` or `403`
 
-A forward commit that restores the old checkout's wiring. Keep `.railway/railway.ts`, every migration (0032 stays: the `(status, placed_at)` index from 0031 serves the old queries), `infra/temporal/` and the freeze matcher. Never run `--confirm-destructive` or approve a destroy. The rollback deploys without Temporal, but closing the open sagas needs it, because their state lives only there.
+The callee logs each refusal at warn as `request rejected`, with the reason in `cause` and never the token:
 
-1. **Freeze** and probe as in step 2 above; this works with Temporal down.
-2. **Close every saga.** Admin-cancel each `CheckoutSaga` running in `AWAITING_AUTH` (`POST /admin/orders/<id>/cancel`), then wait for `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` to reach 0. With Temporal down, admin cancel answers `503` and the CLI cannot connect:
-   - **Temporal is paused** (server or worker gone, `temporal-postgres` intact): take no shortcut. Keep the freeze, bring Temporal back ([Temporal down](#temporal-down)), then run this step as written. A buyer who pays on an open session meanwhile keeps the authorization, since its `payment.authorized` job waits on the long ladder. Track progress with the three queries in [Temporal down](#temporal-down), and do not merge the rollback while any saga order is not terminal.
-   - **Temporal lost its state** (`temporal-postgres` broken beyond restore): no run will ever continue, so cleaning up in SQL is safe. Void every `requires_capture` PaymentIntent of those orders in the Stripe dashboard; a `CONFIRMING` order whose charge was already captured is a refund owed ([A refund is owed](#a-refund-is-owed)). After a `pg_dump`, reset the `RESERVING`, `PENDING` and `CONFIRMING` orders the way demo data is reset. Their holds in `inventory-postgres` stay `HELD` until the inventory-service's sweep releases them past `hold_until`; nothing reads them once step 5 brings stock back to the api. The three queries must come back empty before the merge.
-3. **Settle the leftover authorizations**: for each `SELECT order_id FROM payment_orders WHERE status = 'AUTHORIZED';` (on `payment-postgres`), capture if the order is `PAID`, otherwise void it in the Stripe dashboard, and note it down.
-4. **Delete the `REJECTED` orders**, which the old code would show to their buyers: `DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status = 'REJECTED'); DELETE FROM orders WHERE status = 'REJECTED';`.
-5. **Commit** the old routes, use cases, consumers and config back (everything this cut-over removed, migrations and the kept files aside). The old checkout reserves stock in the api, so the same commit also brings stock back from the inventory-service: steps 1–3 of "Roll back" under [Cut stock over to the inventory-service](#cut-stock-over-to-the-inventory-service), `CHECKOUT_INVARIANT_NOT_BEFORE` included, and brings payments back from the payment-service in the same way ("Roll back" under [Cut payments over to the payment-service](#cut-payments-over-to-the-payment-service)). Then pass typecheck, `test:cov` and the old checkout's e2e suites, merge, and let CD deploy. Its `/health/ready` smoke passes with Temporal down; the old saga worker only logs connection errors.
-6. **Unfreeze**, and check out once through the old path, which needs no Temporal.
+- **`401`, `internal caller token not recognized`.** The caller sends a value the callee does not hold: the caller has not redeployed since a rotation, or the callee's variable was set without a redeploy. Redeploy the one that is behind. A caller that is no longer configured at all, such as the api on the inventory-service or the payment-service, reads the same way.
+- **`401`, `missing internal caller bearer token`.** The caller sends none; its `*_SERVICE_TOKEN` is empty.
+- **`403`, `internal caller <name> is not allowed on this route`.** The token is valid, but that caller is not on the route's list. That is a code change, not a variable: the route's `@InternalCallers(...)` decides.
+
+On the order-service's side a refused Try or cart read is a checkout `503`, a refused `/pay` is a `502`, a refused user-service read leaves `order.paid` on its ladder, and refused commands keep retrying in their saga until the token is put right.
+
+#### Check that no two tokens match
+
+Run on a local machine, never in CI: `--kv` prints raw values. Each line prints a 12-character fingerprint and nothing else; every fingerprint must differ.
+
+```bash
+# local, after `railway link`
+fp() { railway variable list --service "$1" --kv | grep "^$2=" | cut -d= -f2- | tr -d '\n' | shasum -a 256 | cut -c1-12; }
+for v in INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "api $v $(fp jcool-ecommerce-backend $v)"; done
+for s in inventory-service payment-service; do
+  for v in INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "$s $v $(fp $s $v)"; done
+done
+for v in INTERNAL_API_TOKEN INTERNAL_API_TOKEN_PREVIOUS INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "user-service $v $(fp user-service $v)"; done
+```
+
+An unset variable prints `e3b0c44298fc`, the fingerprint of nothing; that one may repeat. The caller-side variables are references to these, so they are not compared.
+
+### Cut checkout over to the order-service
+
+The one-time move of checkout and orders from the api to the order-service, kept as the record of how it was done and as the skeleton for moving another participant out: freeze, drain, apply from `main` behind a review, merge, check, unfreeze. The inventory-service and the payment-service moved out earlier the same way, except that their merges deleted no Railway variable, so their additions were applied from the branch before the merge. It needs the public domain on the gateway first ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)): after the merge only the gateway routes `/orders*` and `/admin/orders*` to the order-service. Orders already in the api's database do not move; Railway's data is demo data, so the order-service started empty, but the backup was taken anyway. The Temporal worker changed process, not namespace or task queue: the workflow code moved unchanged, so a history recorded by the api's worker replays on the order-service's. Each side's activities see only their own database, though, so the two workers must never poll the queue with a saga open: the drain below, under the freeze, ensures that.
+
+This merge both added and deleted Railway config: it added the order-service and its tokens, and deleted the api's four Stripe and webhook variables, which the payment-service had carried since its own move. So nothing was applied from the branch: merge, let CD stop for review, apply from `main` while it waits ([Review a destructive change](#review-a-destructive-change)), then approve.
+
+1. **Back up** the api's `Postgres`: a quick `pg_dump` ([Back up](#back-up)).
+2. **Freeze** ([Freeze checkout](#freeze-checkout)), then probe `POST /orders` and `POST /orders/1/pay` on the public domain: both must answer `503` with `Retry-After: 120`. If not, unfreeze and stop. A gateway redeploy needs only the api healthy, so this step and step 8 work while Temporal is down.
+3. **Drain**, and wait for all of these:
+   - To shorten it, list the `PENDING` orders with `GET /admin/orders?status=PENDING` and cancel each with `POST /admin/orders/<id>/cancel`; the admin routes are not frozen, and the saga compensates as for any cancel.
+   - `sum(checkout_sagas_open) == 0` in Prometheus, and `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` is 0 ([Read a saga](#read-a-saga)).
+   - `order-events` is empty: `sum(messaging_queue_jobs{queue="order-events",state=~"wait|prioritized|active|delayed"}) == 0`.
+   - In the api's database (`railway connect Postgres`), `SELECT count(*) FROM orders WHERE status = 'RESERVING'` returns 0.
+   - In the same database, `SELECT event_type, count(*) FROM outbox WHERE published_at IS NULL GROUP BY 1` lists no `order.*` row. After the merge the api's relay has no route for them: they are never delivered, `OutboxMessageStale` pages for good, and 100 of them fill every batch ahead of the catalog's events. The relay sends a row within a tick while Redis is up, so a row that stays is a stuck relay ([Outbox relay is not draining](#outbox-relay-is-not-draining)).
+   - In the api's container (`railway ssh --service jcool-ecommerce-backend`), `npm run queue:replay-dlq:prod -- --queue order-events` without `--apply` lists `order-events-dlq`. Replay what is there with this CLI before the merge, or note it and drop it (demo data): after the merge the api's CLI refuses that queue, and the order-service's inbox holds none of the api's claims.
+4. **Merge**, after probing the freeze once more. CD's plan job reports a destructive change and the run waits at `production-destructive`. **Do not approve yet.**
+5. **Apply by hand from a checkout of `main`** while the run waits:
+   - `railway config plan` must show exactly this move's additions (`order-postgres` and `order-service`; `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` and its `_PREVIOUS` on the api, the inventory-service, the payment-service and the user-service; `ORDER_UPSTREAM` on the gateway; `ORDER_TARGET` on prometheus) and exactly four destroys on the api: `PAYMENT_WEBHOOK_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`. Anything else: reject the run and stop.
+   - `railway config apply --confirm-destructive`. The order-service is created without a source, so it does not boot yet; every service whose config changed redeploys on the code it runs, which ignores the new names and never reads the four deleted ones. The freeze stays on, since `CHECKOUT_WRITE_FREEZE` is preserved.
+   - Set `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` on the api, the inventory-service, the payment-service and the user-service, four different values ([Set one](#set-one)). Leave each `_PREVIOUS` unset, not empty, until the first rotation.
+   - Copy the mail settings from the api to the order-service, never printing them:
+
+     ```bash
+     # local, after `railway link`
+     for n in SMTP_URL MAIL_FROM; do
+       v=$(railway variable list --service jcool-ecommerce-backend --kv | sed -n "s/^$n=//p")
+       [ -n "$v" ] && printf %s "$v" | railway variable set "$n" --stdin --service order-service --skip-deploys
+     done
+     ```
+
+   - [Check that no two tokens match](#check-that-no-two-tokens-match). The order-service's `*_SERVICE_TOKEN`s are references to these, so they are not compared.
+   - `railway config plan --detailed-exit-code` exits 0, then probe the freeze again (the apply redeployed the gateway).
+6. **Approve** the run. The deploy job plans again, finds nothing to change, skips the apply and deploys id-service → user-service → inventory-service → payment-service → order-service (migrate) → api (migrate, which drops its payment tables) → gateway → smoke. The user-service, whose allowlist now has `order-service`, is live before the order-service, so no session-epoch miss answers `503`. Between the new api going live and the new gateway going live, order reads answer `404` and writes stay frozen. Do not use `POST /admin/orders/<id>/cancel` until CD has finished.
+7. **Check the deploy.**
+   - The order-service and the api passed `/health/ready` in CD; the order-service's includes Temporal. `GET /orders` on the public domain with a buyer's token answers `200`.
+   - `t task-queue describe --task-queue checkout-saga --namespace jcool` lists pollers whose identity starts with `order-service@`; a poller of the api, if still listed, has a last access time that stopped when the old api shut down.
+   - [Redeploy Prometheus](#redeploy-prometheus); then in its container `up{job="jcool-order"}` is 1, `checkout_saga_engine_up` carries `job="jcool-order"`, `/api/v1/rules` lists `OrderScrapeDown`, and `http_requests_total{job="jcool-order"}` has `/orders` series for the SLO.
+8. **Unfreeze**, then check out at once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID`; the confirmation mail arrives, and `t workflow describe --namespace jcool --workflow-id checkout-<order id>` reads `Completed`. If anything fails, freeze again, wait until no `CheckoutSaga` is `Running`, and fix forward ([Rollback rules](#rollback-rules)).
+9. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations`, now scraped from `jcool-order`, reads 0 for every `kind`.
+
+A run left waiting at steps 4 and 5, or cancelled, breaks nothing: production still runs the previous code and the freeze stays on, and the apply only added names that code ignores and deleted four it never reads. After a cancel, **Re-run all jobs** once `railway config plan --detailed-exit-code` exits 0.
+
+**If Temporal stops during the window** (`CheckoutSagaEngineDown`, [Temporal down](#temporal-down)): the freeze still deploys, because the gateway's healthcheck goes to the api's readiness, which leaves Temporal out. Before the merge, the drain cannot be measured, so do not merge and do not unfreeze; bring Temporal back and continue from step 3. After the approval, CD stops at "Deploy order-service", whose readiness includes Temporal: production still runs the previous code and the freeze stays on. Bring Temporal back, then **Re-run all jobs**.
+
+The api's order tables, and with them the old checkout, were removed by the later [contract step](#the-contract-step); the move cannot be repeated or reversed.
+
+### The contract step
+
+The last change of the extraction deletes what the order-service made unnecessary. The api drops its order tables ([`0035_drop_retired_order_tables.sql`](./apps/api/src/shared/infrastructure/database/migrations/0035_drop_retired_order_tables.sql): `orders`, `order_items`, `idempotency_keys` and the `order_status` and `idempotency_status` enums), loses the variables of the saga, the participants and the mail, and goes back to the plain `node:24-alpine` image of the root `Dockerfile`, because it no longer carries Temporal's native core. The inventory-service and the payment-service admit the order-service alone, and the user-service's `users/:id/summary` admits it alone too. It needs no freeze, since checkout does not change owner and the running code reads none of what is deleted. It goes through CD like any destructive change:
+
+1. **Back up** the api's `Postgres` ([Back up](#back-up)): the migration drops tables.
+2. **Plan.** From the branch rebased on `main`, `railway config plan` must show destroys only, each of them one of these fourteen variables: on the api `INVENTORY_SERVICE_URL`, `INVENTORY_SERVICE_TOKEN`, `PAYMENT_SERVICE_URL`, `PAYMENT_SERVICE_TOKEN`, `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `CHECKOUT_INVARIANT_NOT_BEFORE`, `SMTP_URL` and `MAIL_FROM`; on the inventory-service and on the payment-service `INTERNAL_CALLER_TOKEN_API` and `INTERNAL_CALLER_TOKEN_API_PREVIOUS`. A name that was never set on its service has nothing to destroy and is missing from the plan, as an unused `_PREVIOUS` usually is. Any other destroy, or any addition or change: stop. There are no additions, so nothing is applied before the merge.
+3. **Merge.** CD stops at `production-destructive`. The reviewer compares the plan summary with the list above and approves only when every destroy is on it ([Review a destructive change](#review-a-destructive-change)).
+4. **Deploy.** CD applies the change set, which redeploys the api, the inventory-service and the payment-service on the code they already run, then deploys id-service → user-service → inventory-service → payment-service → order-service → api → gateway and smokes the public URL. The api's pre-deploy command runs `0035`.
+5. **Check.** Every service passed `/health/ready` in CD. Check out once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID` with its mail. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations` reads 0 for every `kind`, and `up{job="jcool-api"}` and `up{job="jcool-order"}` are 1. A token of the api's on an inventory-service or payment-service route is now answered `401`, and on `users/:id/summary` `403` ([A caller answered `401` or `403`](#a-caller-answered-401-or-403)).
+
+The change touches nothing under `infra/prometheus/`, so Prometheus is not redeployed. After this step the failure rules are those of [Rollback rules](#rollback-rules).
+
+### Rollback rules
+
+Nothing moves checkout back into the api. The contract step dropped the api's order tables, the participants admit only the order-service, the api carries no Temporal, participant or mail variable, and its image has no Temporal worker. A failure after that point is fixed forward: a commit that restores the behavior needed, shipped through CD.
+
+- **A deploy that fails its healthcheck changes nothing.** Railway gates the traffic switch on `/health/ready` and CD stops at that service, so production keeps the code it runs. Fix the cause and **Re-run all jobs**. With Temporal down the cause is Temporal ([Temporal down](#temporal-down)), because the order-service's readiness includes it.
+- **A rollback is a forward commit.** Keep `.railway/railway.ts`, every migration and `_journal.json`, `infra/prometheus` and the freeze matcher as merged, so CD's plan stays empty. A plan with a destroy means the commit is wrong: never run `--confirm-destructive` or approve a destroy for a rollback ([Review a destructive change](#review-a-destructive-change)).
+- **A variable deleted by mistake** comes back by adding its name to `.railway/railway.ts`, applying, and setting the value the way the procedure that created it did ([Per-caller internal tokens](#per-caller-internal-tokens) for the caller tokens, [Cut checkout over to the order-service](#cut-checkout-over-to-the-order-service) for the mail settings).
+- **Freeze and unfreeze do not depend on Temporal.** They redeploy the gateway, whose healthcheck goes to the api's readiness, and that leaves Temporal out. The same holds for deploying the api or the gateway by hand; only the order-service's own deploy needs Temporal.
+- **Open sagas ride through a release.** A change to the workflow must stay deterministic for the histories already recorded, or be drained first ([Changing the workflow while runs are open](#changing-the-workflow-while-runs-are-open)).
+- **Moving the public domain between the gateway and the api** has a rollback of its own ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)); it does not touch where checkout runs.
+
+### Redeploy Prometheus
+
+Prometheus is deployed by hand and bakes its rules and scrape config into its image, so CD never runs it ([Deploy the monitoring stack](#deploy-the-monitoring-stack)). After a merge that touches `infra/prometheus/`, redeploy it from the latest `main`. When the merge also adds a scrape target, `railway config apply` that declares the target variable comes first: the image refuses to start without `API_TARGET`, `ORDER_TARGET`, `INVENTORY_TARGET`, `PAYMENT_TARGET` and `LOKI_TARGET`.
+
+```bash
+railway up --ci --service prometheus
+scripts/railway-wait-for-rollout.sh prometheus
+```
+
+Then check in its container (`railway ssh --service prometheus`) that the rules loaded and every service's series arrive:
+
+```sh
+# container (prometheus)
+wget -qO- localhost:9090/api/v1/rules | grep -o '"file":"[^"]*"' | sort -u          # the seven files under rules/
+wget -qO- 'localhost:9090/api/v1/query?query=checkout_saga_engine_up'                # one series, job jcool-order, value 1
+wget -qO- 'localhost:9090/api/v1/query?query=up'                                     # jcool-api, jcool-order, jcool-inventory and jcool-payment all 1
+```
+
+### Run the system test
+
+`pnpm --filter @jcool/order-service run test:system` runs the whole system in containers and breaks it on purpose; `pnpm turbo run test:system --concurrency=1` reaches it too, with the gateway's and the id-service's system tests beside it, one at a time (in parallel, two of them would build the same `:system-test` images at once). It runs locally only: no CI job runs it, so run it before merging a change to the saga, a participant, the messaging path between them or the gateway's order routing. It needs Docker and several GB of free RAM, and the first run builds the images for several minutes. Run time: about 8 minutes with the images built (465–510s over three consecutive runs on an Apple M4, Docker with 10 CPUs and 8 GB), about 13 minutes when it builds them (808s).
+
+What it starts, all on one network ([`checkout-stack.ts`](./apps/order-service/test/system/checkout-stack.ts)): one Postgres with five databases (`api`, `users`, `inventory`, `payment`, `orders`), Redis, Mailpit, Temporal, etcd with an id-service, the gateway, every service built from its own `Dockerfile` and run with `NODE_ENV=production`, Toxiproxy on the order-service's paths to the inventory-service and the payment-service, and a stateful fake Stripe ([`fake-stripe.mjs`](./apps/order-service/test/system/fixtures/fake-stripe.mjs)) with idempotency keys, signed webhooks and injectable faults. Every secret is generated per run, and the stack's short deadlines pass the same env validation as production.
+
+What it does ([`checkout-fault.system-spec.ts`](./apps/order-service/test/system/checkout-fault.system-spec.ts)): kills or stops containers in the middle of a saga (the order-service at each step, the payment-service, the inventory-service, Temporal), delays or cuts the internal calls, makes Stripe hang, fail or apply and then fail, and delivers a webhook five times or after the order expired. After each scenario it checks the invariants across the three databases, the fake Stripe, Temporal's visibility and the checker's `/metrics` ([`checkout-invariants.ts`](./apps/order-service/test/system/checkout-invariants.ts)): no oversell, one capture at most, no authorization left on a dead order, every run closed `Completed`, no violation counted.
+
+The payment-service reaches the fake through `STRIPE_API_HOST`, `STRIPE_API_PORT` and `STRIPE_API_PROTOCOL`. They exist for this test alone: env validation refuses a host unless `STRIPE_SECRET_KEY` starts with `sk_test_`, in every `NODE_ENV`, and nothing in `.railway/railway.ts` sets them.
+
+Reading a failure: the message names the state the scenario waited for and the last value it saw (`<what>: still <value> after <ms>`). Append `-t '<part of the scenario name>'` to the command to run one scenario; the stack still boots in full. Prefix it with `DEBUG=testcontainers:containers` to stream the containers' logs, each line tagged with its container id. After every scenario the stack is put back (`restore()` in `checkout-stack.ts`: toxics cleared, the fake reset, every service up, the order-service ready and its saga worker polling both the workflow and the activity task queue), so a failure in that step names the service that did not come back, and the next scenario's failure is likely a consequence of it. Ryuk removes the containers when the run exits.
 
 ---
 
@@ -1449,7 +1566,7 @@ If the direct domain is already gone, create one with `railway domain --service 
 
 `apps/user-service` owns `/auth`, the user tables and the ES256 signing keys, on its own Postgres
 (`user-postgres`). The gateway routes `/auth`, `/auth/*` and `/.well-known/jwks.json` to it; it has
-no public domain of its own. CD deploys it right after the id-service, so its caller allowlist is out before the inventory-service that it admits.
+no public domain of its own. CD deploys it right after the id-service, so its caller allowlist is out before the inventory-service and the order-service that it admits.
 
 ### Redis durability
 
@@ -1560,6 +1677,8 @@ If the JWKS becomes unreachable, the api keeps verifying with the last set it lo
 endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that
 succeeds, not before.
 
+The api is also a callee: the order-service reads carts and SKU views from its `/internal/v1` routes with `INTERNAL_CALLER_TOKEN_ORDER_SERVICE`, so an api outage is a checkout `503` ([The order-service](#the-order-service)). The api reads nothing from the order-service: it holds no order tables and consumes no order event.
+
 The order-service and the inventory-service verify tokens the same way, with variables of their own ([The order-service](#the-order-service)).
 
 ---
@@ -1619,7 +1738,7 @@ It calls four services, each with a token of its own ([Per-caller internal token
 
 It verifies access tokens like the api (`AUTH_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`, the shared Redis's denylist and epochs). Its readiness covers Postgres, Redis and Temporal, and the worker's `RUNNING` state when `TEMPORAL_WORKER_ENABLED` is on ([Temporal down](#temporal-down)); its shutdown is in [The shutdown budget](#the-shutdown-budget).
 
-The api's database keeps `orders`, `order_items` and `idempotency_keys` from before the cut-over, under `schema/retired/`, for a rollback. Nothing reads or writes them, and an order placed on the order-service is not in them.
+The api's database holds no order tables: the [contract step](#the-contract-step) dropped them, and the orders that predate the move went with them (demo data).
 
 ### Checkout answers 503 with the api up
 
@@ -1645,243 +1764,6 @@ The order confirmation reads the buyer's address from the user-service before it
 A buyer the user-service does not know is retried until the event is `USER_DIRECTORY_NOT_FOUND_GRACE` (10m) old, since a freshly restored directory can miss the newest accounts. After that it is parked as permanent.
 
 Either way `DeadLetterQueued` pages for `jcool-order`. Once the user-service answers again, [replay `order-events`](#dead-letter-queues).
-
----
-
-## Cross-service settings
-
-No process sees both values, so nothing checks these at boot. Keep them when changing either side:
-
-| Rule | Why |
-| --- | --- |
-| inventory-service `INVENTORY_TRY_LOCK_TIMEOUT_MS` (2000) < order-service `CHECKOUT_TRY_TIMEOUT_MS` (3000) | The order-service gives a Try that long over HTTP, then aborts it and fences the hold with a release. A lock budget at or above it turns contended Tries into `503`s the service would have answered |
-| order-service `SAGA_ACTIVITY_TIMEOUT_MS` > `INVENTORY_COMMAND_TIMEOUT_MS` + 5000 | Checked by the order-service itself: a commit, release or restock gets its full timeout inside the activity's |
-| order-service `SAGA_ACTIVITY_TIMEOUT_MS` > `PAYMENT_COMMAND_TIMEOUT_MS` + 5000, and > each of its three breaker timeouts | Checked by the order-service itself: a payment command gets its full timeout inside the activity's. The breakers are built per callee, never from `BREAKER_TIMEOUT_MS`: `inventory-service` at `max(CHECKOUT_TRY_TIMEOUT_MS, INVENTORY_COMMAND_TIMEOUT_MS)` + 1000, `payment-service` at `PAYMENT_COMMAND_TIMEOUT_MS` + 1000, `api-internal` at `API_SERVICE_TIMEOUT_MS` + 1000 |
-| 4 × payment-service `PAYMENT_CAPTURE_TIMEOUT_MS` (10000) + 1000 ≤ order-service `PAYMENT_COMMAND_TIMEOUT_MS` (45000) | A cancel there chains up to four Stripe calls, each bounded by `PAYMENT_CAPTURE_TIMEOUT_MS`. A command timeout under that sum aborts a cancel on the order-service's side while the payment-service is still carrying it out |
-| order-service `CHECKOUT_PAY_CUTOFF_SEC` (1980) ≥ payment-service `PAYMENT_SESSION_MIN_TTL_SEC` (1800) + `PAYMENT_SESSION_EXPIRY_MARGIN_SEC` (120) + 60 | `/pay` opens a session only while the cutoff of the payment window remains. A smaller cutoff lets `/pay` ask for a session that expires sooner than Stripe allows, which the payment-service refuses as `CLOSED` |
-| payment-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) = order-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) | BullMQ stamps the attempts on a job when it is added, so the payment-service's value is how many deliveries `payment.authorized` gets, while only the order-service's worker reads `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS`. The order-service runs on its code default and `.railway/railway.ts` sets the payment-service's as a literal, so change one and you change the other |
-| payment-service `QUEUE_PREFIX` = order-service `QUEUE_PREFIX` (`bull`) | A different prefix makes the relay write jobs under keys the order-service's worker never reads |
-| order-service `SHUTDOWN_GRACE_PERIOD_MS` (5000) + `TEMPORAL_WORKER_SHUTDOWN_GRACE_MS` (4000) + `TEMPORAL_WORKER_SHUTDOWN_FORCE_MS` (4000) + 1000 + 2 × 5000 ≤ its `drainingSeconds` (30) × 1000 − 1000 | `drainingSeconds` lives in `.railway/railway.ts`, the rest in the environment, so nothing compares them. Past it, Railway kills the process mid-drain ([The shutdown budget](#the-shutdown-budget)) |
-| `METRICS_TOKEN` equal on the api, the order-service, the inventory-service and the payment-service | Prometheus sends one token to every target; the three services reference the api's |
-
----
-
-## Per-caller internal tokens
-
-Every internal API admits each caller by a token of its own, and each route lists the callers it admits ([decision record](./docs/system-architecture.md#internal-apis-admit-callers-by-a-token-each)):
-
-| Callee | Caller | Callee's variable | Caller's variable | Routes |
-| --- | --- | --- | --- | --- |
-| user-service | api | `INTERNAL_API_TOKEN` (+ `_PREVIOUS`) | `INTERNAL_API_TOKEN` (reference) | `sessions/:userId/epoch`, `users/:id/summary`, `cutover/digest` |
-| user-service | inventory-service | `INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE` (+ `_PREVIOUS`) | `USER_SERVICE_TOKEN` (reference) | `sessions/:userId/epoch` |
-| user-service | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `USER_SERVICE_TOKEN` (reference) | `sessions/:userId/epoch`, `users/:id/summary` |
-| api | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `API_SERVICE_TOKEN` (reference) | `/internal/v1/carts/:userId/lines`, `/internal/v1/catalog/sku-views` |
-| inventory-service | api | `INTERNAL_CALLER_TOKEN_API` (+ `_PREVIOUS`) | `INVENTORY_SERVICE_TOKEN` (reference) | `/internal/v1/reservations/*` |
-| inventory-service | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `INVENTORY_SERVICE_TOKEN` (reference) | `/internal/v1/reservations/*` |
-| payment-service | api | `INTERNAL_CALLER_TOKEN_API` (+ `_PREVIOUS`) | `PAYMENT_SERVICE_TOKEN` (reference) | `/internal/v1/payments/*` |
-| payment-service | order-service | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`) | `PAYMENT_SERVICE_TOKEN` (reference) | `/internal/v1/payments/*` |
-
-The caller's variable is a reference to the callee's in `.railway/railway.ts`, so only the callee's is ever set by hand. A callee refuses to boot with no caller token at all, or with two callers sharing one. Since the checkout cut-over the api calls neither participant; its rows stay, and its tokens set, for a rollback until the next contract step removes them.
-
-### Set one
-
-Each value is generated on its own and goes in through stdin, so it is never on a command line or in history:
-
-```bash
-# local, after `railway link`
-openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_API --stdin --service inventory-service --skip-deploys
-openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_API --stdin --service payment-service --skip-deploys
-openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE --stdin --service user-service --skip-deploys
-for s in jcool-ecommerce-backend inventory-service payment-service user-service; do
-  openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_ORDER_SERVICE --stdin --service "$s" --skip-deploys
-done
-```
-
-Then deploy the callee, then the caller, which reads the new value through its reference only once it redeploys.
-
-### Rotate one
-
-1. Copy the current value into `_PREVIOUS`, then set a new current one, both on the callee, and redeploy it. Both values are accepted.
-2. Redeploy the caller: it now sends the new value.
-3. Once no request carries the old one (the callee logs `internal caller token not recognized` for a value it does not know), unset `_PREVIOUS` as [Change Railway service config](#change-railway-service-config) removes a variable, and redeploy the callee. Never set it to an empty string: a `_PREVIOUS` under 32 characters stops the callee from booting.
-
-### A caller answered `401` or `403`
-
-The callee logs each refusal at warn as `request rejected`, with the reason in `cause` and never the token:
-
-- **`401`, `internal caller token not recognized`.** The caller sends a value the callee does not hold: the caller has not redeployed since a rotation, or the callee's variable was set without a redeploy. Redeploy the one that is behind.
-- **`401`, `missing internal caller bearer token`.** The caller sends none; its `*_SERVICE_TOKEN` is empty.
-- **`403`, `internal caller <name> is not allowed on this route`.** The token is valid, but that caller is not on the route's list. That is a code change, not a variable: the route's `@InternalCallers(...)` decides.
-
-On the order-service's side a refused Try or cart read is a checkout `503`, a refused `/pay` is a `502`, a refused user-service read leaves `order.paid` on its ladder, and refused commands keep retrying in their saga until the token is put right.
-
-### Check that no two tokens match
-
-Run on a local machine, never in CI: `--kv` prints raw values. Each line prints a 12-character fingerprint and nothing else; every fingerprint must differ.
-
-```bash
-# local, after `railway link`
-fp() { railway variable list --service "$1" --kv | grep "^$2=" | cut -d= -f2- | tr -d '\n' | shasum -a 256 | cut -c1-12; }
-for v in INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "api $v $(fp jcool-ecommerce-backend $v)"; done
-for s in inventory-service payment-service; do
-  for v in INTERNAL_CALLER_TOKEN_API INTERNAL_CALLER_TOKEN_API_PREVIOUS INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "$s $v $(fp $s $v)"; done
-done
-for v in INTERNAL_API_TOKEN INTERNAL_API_TOKEN_PREVIOUS INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE_PREVIOUS INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "user-service $v $(fp user-service $v)"; done
-```
-
-An unset variable prints `e3b0c44298fc`, the fingerprint of nothing; that one may repeat. The caller-side variables are references to these, so they are not compared.
-
----
-
-## Cut stock over to the inventory-service
-
-The one-time move of stock from the api's tables to the inventory-service. It needs the public domain on the gateway first ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)): after the merge only the gateway routes `/admin/inventory*` to the inventory-service. Railway's data is demo data and may be reset, but take the backup anyway. The merge deletes no Railway variable, so its additions are applied before it, from the head of the branch rebased onto `main`.
-
-1. **Back up** the api's `Postgres`: a snapshot, or a quick `pg_dump` ([Back up](#back-up)).
-2. **Freeze** ([Freeze checkout](#freeze-checkout)), then probe `POST /orders` and `POST /orders/1/pay` on the public domain: both must answer `503` with `Retry-After`. If not, unfreeze and stop.
-3. **Drain**: wait for `sum(checkout_sagas_open) == 0` in Prometheus. With the gauge absent, count with `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` ([Read a saga](#read-a-saga)).
-4. **Apply the additions**, from the rebased branch:
-   - `railway config plan` must only create `inventory-postgres` and `inventory-service`, and add `INVENTORY_SERVICE_URL` and `INVENTORY_SERVICE_TOKEN` (api), `INVENTORY_UPSTREAM` (gateway), `INVENTORY_TARGET` (prometheus), with no destroy. The `preserve()`d names nobody has set yet (`INTERNAL_CALLER_TOKEN_API*` on the inventory-service, `INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE*` on the user-service) may be listed as additions or not at all; either is fine. Then `railway config apply --yes`: the new service is created without a source, so it does not boot yet, and every service whose config changed redeploys on the code it runs, which ignores the new names. If the plan shows a destroy, do not apply from the branch; merge, and follow [Review a destructive change](#review-a-destructive-change) from a checkout of `main`, keeping the freeze on and merging nothing else while the run waits.
-   - Set `INTERNAL_CALLER_TOKEN_API` on the inventory-service and `INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE` on the user-service, as in [Set one](#set-one). Leave both `_PREVIOUS` unset, not empty, until the first rotation.
-   - `railway variable set "CHECKOUT_INVARIANT_NOT_BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --service jcool-ecommerce-backend --skip-deploys`: every order settled before it has its header in the api's retired table, where the checker no longer looks ([`CHECKOUT_INVARIANT_NOT_BEFORE`](#checkout_invariant_not_before)).
-   - [Check that no two tokens match](#check-that-no-two-tokens-match).
-   - `railway config plan --detailed-exit-code` exits 0.
-5. **Merge**, after probing the freeze once more (the apply redeployed the gateway). CD's plan is empty, so it only deploys: id-service → user-service → inventory-service (migrate, then the seed) → api → gateway → smoke.
-6. **Check the deploy.**
-   - The inventory-service's readiness from inside it: `railway ssh --service inventory-service`, then `node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"`.
-   - Its deploy log has `stock seed listed=<n>` with `n` above 0 and no `skipped`; otherwise run the seed by hand from `railway ssh --service inventory-service` and check its line ([Seed stock](#seed-stock)).
-   - `GET /admin/inventory/<variant id>` through the public domain, with an admin token, answers `quantityOnHand` 1000000000.
-   - From the latest `main`, `railway up --ci --service prometheus` and `scripts/railway-wait-for-rollout.sh prometheus`; then in its container `up{job="jcool-inventory"}` is 1, and `/api/v1/rules` lists the SLO group with its `job="jcool-api"` selectors and `InventoryScrapeDown` ([Deploy the monitoring stack](#deploy-the-monitoring-stack)).
-7. **Unfreeze**, then check out at once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID`; that variant's on-hand is one lower. If anything fails, freeze again, wait for `sum(checkout_sagas_open) == 0`, and fix forward or roll back (below).
-8. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations` reads 0 for every `kind`.
-
-A merge postponed after step 4 breaks nothing: the applied config only adds names the running code ignores. To run the cut-over again, set `CHECKOUT_INVARIANT_NOT_BEFORE` again once the drain is done.
-
-**If Temporal stops during the window** (`CheckoutSagaEngineDown`, [Temporal down](#temporal-down)): the freeze still deploys, because the gateway's healthcheck goes through the api's readiness and that leaves Temporal out. The drain can no longer be measured, though (`checkout_sagas_open` is withdrawn and the CLI cannot connect), so do not merge and do not unfreeze. Bring Temporal back, wait for `sum(checkout_sagas_open) == 0`, and continue from step 3.
-
-### Roll back
-
-Frozen, and only once `sum(checkout_sagas_open) == 0`: a hold in `inventory-postgres` does not exist in the api's tables. Order's inventory port has since moved to the order-service, so [roll back the checkout cut-over](#roll-back-the-checkout-cut-over) first. The rollback is a forward commit, never a `git revert` of the squash:
-
-1. **Restore the api's old wiring**: its in-process stock code and tests, the in-process binding of Order's inventory port, the stock schema back in its module with `schema/index.ts` pointing at it, and the api's stock config. Remove the `@inventory` route from `apps/gateway/Caddyfile` (the entrypoint still requires `INVENTORY_UPSTREAM`, which stays in the IaC) and the "Deploy inventory-service" step from `cd.yml`.
-2. **Keep as merged**: `.railway/railway.ts`, `scripts/check-railway-flip-vars.mjs`, every migration and `_journal.json`, `infra/prometheus`, the freeze matcher, `packages/internal-contracts`, `@jcool/auth-verifier/session-state`, `@jcool/platform/internal-api` and the user-service's guard. CD's plan is then empty, and the api ignores the variables it no longer reads. A plan with a destroy means the rollback commit is wrong; never approve a destroy for a rollback.
-3. **Before merging it**, set `CHECKOUT_INVARIANT_NOT_BEFORE` to the current UTC time, as in step 4: orders settled since the cut-over have their headers in `inventory-postgres`, and the restored checker would report each one.
-4. **Merge**, then unfreeze as in step 7. The inventory-service and `inventory-postgres` keep running their last deploy with no caller, and `jcool-inventory` stays up. Once the migration that drops the api's stock tables has run, the restored schema needs a migration that recreates them (`pnpm db:generate`); their old numbers are gone, which is enough for demo data.
-
-The rollback deploys without Temporal (the api's and the gateway's healthchecks leave it out), but its drain needs it: with Temporal down, keep the freeze, bring it back as in [Temporal down](#temporal-down), wait for `sum(checkout_sagas_open) == 0`, and only then merge. A saga still open would carry on in the in-process wiring and commit or release in the api's tables, where it has no hold.
-
----
-
-## Cut payments over to the payment-service
-
-The one-time move of payments from the api to the payment-service, together with the split of the api's one shared queue into `order-events` and `api-events`. It needs the public domain on the gateway first ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)): after the merge only the gateway routes `/webhooks/payment` to the payment-service. Railway's data is demo data and may be reset, but take the backup anyway. Tell the shop's admins not to edit the catalog during the window: a catalog event written to the old queue after its drain would have no consumer. If one slips through, [rebuild the search index](#rebuild-the-search-index) afterwards. The merge deletes no Railway variable (the api keeps its four Stripe and webhook variables), so its additions are applied before it, from the head of the branch rebased onto `main`.
-
-1. **Back up** the api's `Postgres`: a snapshot, or a quick `pg_dump` ([Back up](#back-up)).
-2. **Freeze** ([Freeze checkout](#freeze-checkout)), then probe `POST /orders` and `POST /orders/1/pay` on the public domain: both must answer `503` with `Retry-After`. If not, unfreeze and stop.
-3. **Drain**, and wait for all of these:
-   - `sum(checkout_sagas_open) == 0` in Prometheus. With the gauge absent, count with `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` ([Read a saga](#read-a-saga)).
-   - `max(payment_authorized_uncaptured_oldest_seconds) == 0`, and in the api's database (`railway connect Postgres`) `SELECT count(*) FROM payments WHERE status = 'AUTHORIZED'` returns 0. One that remains is settled by the next reconcile tick (`RECONCILE_INTERVAL_MS`), or by a void in the Stripe dashboard as in [PaymentAuthorizationUncaptured](#paymentauthorizationuncaptured).
-   - The queue the running api still uses is empty: `sum(messaging_queue_jobs{queue="domain-events",state=~"wait|prioritized|active|delayed"}) == 0`. Then, in the api's container (`railway ssh --service jcool-ecommerce-backend`), `npm run queue:replay-dlq:prod` without `--apply` lists its dead-letter queue, `domain-events-dlq`. Replay what is there with this CLI before the merge, or note it and drop it (demo data): after the merge nothing reads either old queue, and the new CLI does not know them.
-4. **Apply the additions**, from the rebased branch:
-   - `railway config plan` must only create `payment-postgres` and `payment-service`, and add `PAYMENT_SERVICE_URL` and `PAYMENT_SERVICE_TOKEN` (api), `PAYMENT_UPSTREAM` (gateway) and `PAYMENT_TARGET` (prometheus), with no destroy. Then `railway config apply --yes`: the new service is created without a source, so it does not boot yet, and every service whose config changed redeploys on the code it runs, which ignores the new names. If the plan shows a destroy, do not apply from the branch; merge, and follow [Review a destructive change](#review-a-destructive-change) from a checkout of `main`, keeping the freeze on and merging nothing else while the run waits.
-   - Copy the four Stripe and webhook variables from the api to the payment-service. The values are never printed:
-
-     ```bash
-     # local, after `railway link`
-     for n in STRIPE_SECRET_KEY STRIPE_SUCCESS_URL STRIPE_CANCEL_URL PAYMENT_WEBHOOK_SECRET; do
-       v=$(railway variable list --service jcool-ecommerce-backend --kv | sed -n "s/^$n=//p")
-       [ -n "$v" ] && printf %s "$v" | railway variable set "$n" --stdin --service payment-service --skip-deploys
-     done
-     ```
-
-     A variable the api never set (usually `STRIPE_CANCEL_URL`) is skipped, and the payment-service uses its default.
-   - Set `INTERNAL_CALLER_TOKEN_API` on the payment-service, as in [Set one](#set-one), with a value of its own. Leave `_PREVIOUS` unset, not empty, until the first rotation.
-   - `railway variable set "CHECKOUT_INVARIANT_NOT_BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --service jcool-ecommerce-backend --skip-deploys`: every order settled before it has its header in the api's retired payment tables, where the checker no longer looks ([`CHECKOUT_INVARIANT_NOT_BEFORE`](#checkout_invariant_not_before)).
-   - [Check that no two tokens match](#check-that-no-two-tokens-match).
-   - `railway config plan --detailed-exit-code` exits 0.
-5. **Merge**, after probing the freeze once more. CD's plan is empty, so it only deploys: id-service → user-service → inventory-service → payment-service (migrate) → api → gateway → smoke. Between the new api going live and the new gateway going live, a webhook that still reaches the api answers `404`; Stripe redelivers on its schedule and the next attempt reaches the payment-service. After the drain no session is open, so those webhooks carry no new authorization.
-6. **Check the deploy.**
-   - The payment-service's readiness from inside it: `railway ssh --service payment-service`, then `node -e "fetch('http://127.0.0.1:3000/health/ready').then(r => r.text()).then(console.log)"`. Its boot log has no Stripe guard error.
-   - From the latest `main`, `railway up --ci --service prometheus` and `scripts/railway-wait-for-rollout.sh prometheus`; then in its container `up{job="jcool-payment"}` is 1, `payment_authorized_uncaptured_oldest_seconds{job="jcool-payment"}` is present, and `/api/v1/rules` lists `PaymentScrapeDown` and the `MessagingQueueMetricsAbsent` branch of each queue ([Deploy the monitoring stack](#deploy-the-monitoring-stack)).
-7. **Unfreeze**, then check out at once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID`. In the Stripe dashboard the PaymentIntent reads `succeeded` (captured) and the webhook endpoint's latest delivery is `2xx`, which proves the gateway route and the copied secret. If anything fails, freeze again, wait for `sum(checkout_sagas_open) == 0`, and fix forward or roll back (below).
-8. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations` reads 0 for every `kind`.
-
-A merge postponed after step 4 breaks nothing: the applied config only adds names the running code ignores, and the payment-service has no source yet. To run the cut-over again, set `CHECKOUT_INVARIANT_NOT_BEFORE` again once the drain is done.
-
-**If Temporal stops during the window** (`CheckoutSagaEngineDown`, [Temporal down](#temporal-down)): the freeze still deploys, because the gateway's healthcheck goes through the api's readiness and that leaves Temporal out; the payment-service's readiness leaves it out too. The drain can no longer be measured, though (`checkout_sagas_open` is withdrawn and the CLI cannot connect), so do not merge and do not unfreeze. Bring Temporal back, wait for the conditions of step 3, and continue from there. A `payment.authorized` job produced meanwhile retries on the long ladder and reaches its saga if Temporal is back within about 33 minutes; past that it lands in `order-events-dlq`, and is replayed with `--queue order-events` once Temporal answers ([A `payment.authorized` in the dead-letter queue](#a-paymentauthorized-in-the-dead-letter-queue)).
-
-### Roll back
-
-**Closed by the [checkout cut-over](#cut-checkout-over-to-the-order-service)**, which deleted the api's four Stripe and webhook variables and dropped its payment tables (`0034_drop_retired_payment_tables.sql`); kept as the record of how it was done.
-
-Frozen, and only once `sum(checkout_sagas_open) == 0` and `payment-postgres` (`railway connect payment-postgres`) holds no `AUTHORIZED` header or attempt (`SELECT count(*) FROM payment_orders WHERE status = 'AUTHORIZED'`, and the same on `payments`). Wait for the payment-service's reconcile, or void it in the Stripe dashboard ([Settle a payment by hand](#settle-a-payment-by-hand)). The rollback is a forward commit, never a `git revert` of the squash:
-
-1. **Restore the api's payment wiring**: its payment module and tests, the in-process binding of Order's payment port, the line in the schema barrel that points back at the module, the Stripe config and boot guard, `rawBody: true` in `apps/api/src/main.ts` and `apps/api/test/setup/test-app.factory.ts` (the webhook signature is checked over the raw body), and the `stripe` and `uuid` dependencies in `apps/api/package.json`. Remove the `@payment` route from `apps/gateway/Caddyfile` (the entrypoint still requires `PAYMENT_UPSTREAM`, which stays in the IaC) and the "Deploy payment-service" step from `cd.yml`. The api's four Stripe and webhook variables are still set, so it boots at once.
-2. **Keep as merged**: `.railway/railway.ts`, every migration and `_journal.json`, `infra/prometheus`, `packages/messaging` and the queue split (the api's route table still sends `payment.authorized` to `order-events`), `packages/internal-contracts`. CD's plan is then empty, and the api ignores the variables it no longer reads. A plan with a destroy means the rollback commit is wrong; never approve a destroy for a rollback.
-3. **Before merging it**, set `CHECKOUT_INVARIANT_NOT_BEFORE` to the current UTC time, as in step 4: orders settled since the cut-over have their headers in `payment-postgres`, and the restored checker would report each one.
-4. **Merge**, then unfreeze as in step 7. The payment-service and `payment-postgres` keep running their last deploy, though no webhook reaches them any more, and `jcool-payment` stays up. Its reconcile sweep goes on voiding late authorizations of the orders it holds a header for.
-
-The rollback deploys without Temporal (the readiness of the api, the payment-service and the gateway leaves it out), but its drain needs it: with Temporal down, keep the freeze, bring it back as in [Temporal down](#temporal-down), wait for `sum(checkout_sagas_open) == 0` and for no `AUTHORIZED` on `payment-postgres`, and only then merge. A saga still open would carry on in the in-process wiring and capture or void in the api's payment tables, where it has no header.
-
----
-
-## Cut checkout over to the order-service
-
-The one-time move of checkout and orders from the api to the order-service. It needs the public domain on the gateway first ([Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)): after the merge only the gateway routes `/orders*` and `/admin/orders*` to the order-service. Orders already in the api's database do not move; Railway's data is demo data, so the order-service starts empty, but take the backup anyway. The Temporal worker changes process, not namespace or task queue: the workflow code moved unchanged, so a history recorded by the api's worker replays on the order-service's. Each side's activities see only their own database, though, so the two workers must never poll the queue with a saga open: the drain below, under the freeze, ensures that.
-
-Unlike the earlier cut-overs, this merge both adds and deletes Railway config: it adds the order-service and its tokens, and deletes the api's four Stripe and webhook variables, which the payment-service has carried since the [payment cut-over](#cut-payments-over-to-the-payment-service) and the running api no longer reads. So nothing is applied from the branch: merge, let CD stop for review, apply from `main` while it waits ([Review a destructive change](#review-a-destructive-change)), then approve.
-
-1. **Back up** the api's `Postgres`: a quick `pg_dump` ([Back up](#back-up)).
-2. **Freeze** ([Freeze checkout](#freeze-checkout)), then probe `POST /orders` and `POST /orders/1/pay` on the public domain: both must answer `503` with `Retry-After: 120`. If not, unfreeze and stop. A gateway redeploy needs only the api healthy, so this step and step 8 work while Temporal is down.
-3. **Drain**, and wait for all of these:
-   - To shorten it, list the `PENDING` orders with `GET /admin/orders?status=PENDING` and cancel each with `POST /admin/orders/<id>/cancel`; the admin routes are not frozen, and the saga compensates as for any cancel.
-   - `sum(checkout_sagas_open) == 0` in Prometheus, and `t workflow count --namespace jcool --query 'WorkflowType="CheckoutSaga" AND ExecutionStatus="Running"'` is 0 ([Read a saga](#read-a-saga)).
-   - `order-events` is empty: `sum(messaging_queue_jobs{queue="order-events",state=~"wait|prioritized|active|delayed"}) == 0`.
-   - In the api's database (`railway connect Postgres`), `SELECT count(*) FROM orders WHERE status = 'RESERVING'` returns 0.
-   - In the same database, `SELECT event_type, count(*) FROM outbox WHERE published_at IS NULL GROUP BY 1` lists no `order.*` row. After the merge the api's relay has no route for them: they are never delivered, `OutboxMessageStale` pages for good, and 100 of them fill every batch ahead of the catalog's events. The relay sends a row within a tick while Redis is up, so a row that stays is a stuck relay ([Outbox relay is not draining](#outbox-relay-is-not-draining)).
-   - In the api's container (`railway ssh --service jcool-ecommerce-backend`), `npm run queue:replay-dlq:prod -- --queue order-events` without `--apply` lists `order-events-dlq`. Replay what is there with this CLI before the merge, or note it and drop it (demo data): after the merge the api's CLI refuses that queue, and the order-service's inbox holds none of the api's claims.
-4. **Merge**, after probing the freeze once more. CD's plan job reports a destructive change and the run waits at `production-destructive`. **Do not approve yet.**
-5. **Apply by hand from a checkout of `main`** while the run waits:
-   - `railway config plan` must show exactly this phase's additions (`order-postgres` and `order-service`; `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` and its `_PREVIOUS` on the api, the inventory-service, the payment-service and the user-service; `ORDER_UPSTREAM` on the gateway; `ORDER_TARGET` on prometheus) and exactly four destroys on the api: `PAYMENT_WEBHOOK_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`. Anything else: reject the run and stop.
-   - `railway config apply --confirm-destructive`. The order-service is created without a source, so it does not boot yet; every service whose config changed redeploys on the code it runs, which ignores the new names and never reads the four deleted ones. The freeze stays on, since `CHECKOUT_WRITE_FREEZE` is preserved.
-   - Set `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` on the api, the inventory-service, the payment-service and the user-service, four different values ([Set one](#set-one)). Leave each `_PREVIOUS` unset, not empty, until the first rotation.
-   - Copy the mail settings from the api to the order-service, never printing them:
-
-     ```bash
-     # local, after `railway link`
-     for n in SMTP_URL MAIL_FROM; do
-       v=$(railway variable list --service jcool-ecommerce-backend --kv | sed -n "s/^$n=//p")
-       [ -n "$v" ] && printf %s "$v" | railway variable set "$n" --stdin --service order-service --skip-deploys
-     done
-     ```
-
-   - [Check that no two tokens match](#check-that-no-two-tokens-match). The order-service's `*_SERVICE_TOKEN`s are references to these, so they are not compared.
-   - `railway config plan --detailed-exit-code` exits 0, then probe the freeze again (the apply redeployed the gateway).
-6. **Approve** the run. The deploy job plans again, finds nothing to change, skips the apply and deploys id-service → user-service → inventory-service → payment-service → order-service (migrate) → api (migrate, which drops its payment tables) → gateway → smoke. The user-service, whose allowlist now has `order-service`, is live before the order-service, so no session-epoch miss answers `503`. Between the new api going live and the new gateway going live, order reads answer `404` and writes stay frozen. Do not use `POST /admin/orders/<id>/cancel` until CD has finished.
-7. **Check the deploy.**
-   - The order-service and the api passed `/health/ready` in CD; the order-service's includes Temporal. `GET /orders` on the public domain with a buyer's token answers `200`.
-   - `t task-queue describe --task-queue checkout-saga --namespace jcool` lists pollers whose identity starts with `order-service@`; a poller of the api, if still listed, has a last access time that stopped when the old api shut down.
-   - From the latest `main`, `railway up --ci --service prometheus` and `scripts/railway-wait-for-rollout.sh prometheus`; then in its container `up{job="jcool-order"}` is 1, `checkout_saga_engine_up` carries `job="jcool-order"`, `/api/v1/rules` lists `OrderScrapeDown`, and `http_requests_total{job="jcool-order"}` has `/orders` series for the SLO ([Deploy the monitoring stack](#deploy-the-monitoring-stack)).
-8. **Unfreeze**, then check out at once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID`; the confirmation mail arrives, and `t workflow describe --namespace jcool --workflow-id checkout-<order id>` reads `Completed`. If anything fails, freeze again, wait until no `CheckoutSaga` is `Running`, and fix forward or roll back (below).
-9. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations`, now scraped from `jcool-order`, reads 0 for every `kind`.
-
-A run left waiting at steps 4 and 5, or cancelled, breaks nothing: production still runs the previous code and the freeze stays on, and the apply only added names that code ignores and deleted four it never reads. After a cancel, **Re-run all jobs** once `railway config plan --detailed-exit-code` exits 0.
-
-**If Temporal stops during the window** (`CheckoutSagaEngineDown`, [Temporal down](#temporal-down)): the freeze still deploys, because the gateway's healthcheck goes to the api's readiness, which leaves Temporal out. Before the merge, the drain cannot be measured, so do not merge and do not unfreeze; bring Temporal back and continue from step 3. After the approval, CD stops at "Deploy order-service", whose readiness includes Temporal: production still runs the previous code and the freeze stays on. Bring Temporal back, then **Re-run all jobs**.
-
-### Roll back the checkout cut-over
-
-**If the order-service's deploy fails in CD**, before the api's, production still runs the previous code, which never reads the four deleted variables. Fix the order-service's variables (or bring Temporal back, as above) and **Re-run all jobs**; its plan has no destroy any more.
-
-**Once the order-service and the new api are live**, roll back frozen, with no `CheckoutSaga` `Running` and `order-events` empty (the conditions of step 3). The rollback is a forward commit, never a `git revert` of the squash:
-
-1. **Restore the api's previous wiring**: the order module, `shared/idempotency`, the `order-events` worker, the Temporal worker and client (the same workflow code and task queue; the api still has its `TEMPORAL_*` variables and its `node:24-slim` image), the in-process cart and catalog adapters with `CartModule`'s `CART_SNAPSHOT` export, the saga, participant and mail config with its env validation, the order retention sweeps, its `database.poolMax` override of 20 (10 + 2 + 2 + 5 = 19; without it env validation refuses to boot), and the shutdown steps with the Temporal worker. In `apps/api/package.json`, restore the `@temporalio/*` dependencies and the bundle step of `build` (`nest build && node dist/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.js`). Nothing in CI notices a missing bundle, since the e2e setup bundles on its own and the api's readiness has no Temporal check; in production the worker logs `checkout saga worker cannot start without its bundle` and never polls. Send `/orders*` and `/admin/orders*` back to the api in `apps/gateway/Caddyfile` and `entrypoint.sh`, drop the "Deploy order-service" step from `cd.yml`, and restore the tests.
-2. **Keep as merged**: `.railway/railway.ts` (`order-postgres`, `order-service`, the caller tokens, `ORDER_UPSTREAM`, `ORDER_TARGET`), every migration and `_journal.json`, `infra/prometheus`, and the freeze matcher. CD's plan is then empty. A plan with a destroy means the rollback commit is wrong; never approve a destroy for a rollback.
-3. **Merge.** The api's readiness registers no Temporal check, so CD deploys the rollback, and the gateway redeploys for the freeze, while Temporal is down; checkout answers `503` until it is back, with the freeze kept on. The api's `drainingSeconds` was never lowered, so its 25000 shutdown fits.
-4. **After CD and before unfreezing**, `railway down --service order-service` removes its running deployment and leaves the service, its variables and `order-postgres` alone. Then `t task-queue describe --task-queue checkout-saga --namespace jcool` must list a poller that is not `order-service@…` (the api's worker keeps the SDK's default identity, `<pid>@<hostname>`), and any `order-service@…` poller still listed must have its `lastAccessTime` stopped at the `railway down`. An empty list means the api's worker never started: stay frozen and read its logs. [OrderScrapeDown](#orderscrapedown) fires, as expected, until the forward fix; the saga alerts that join `up{job="jcool-order"}` stay silent meanwhile, so watch the saga through `checkout_sagas_open{job="jcool-api"}`.
-5. **Unfreeze**, and check out once.
-
-An order placed on the order-service, such as the test order of step 8, is not in the api's database; with demo data that is accepted.
 
 ---
 

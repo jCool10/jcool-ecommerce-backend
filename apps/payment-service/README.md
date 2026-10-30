@@ -15,7 +15,7 @@ Owns payments and the checkout's TCC payment branch, from its own Postgres (`pay
 
 Every command is idempotent per order through `payment_orders`, so retrying after a lost answer is safe. `400` is a malformed id or body. Anything the participant throws is `503` with `Retry-After: 1`; the caller repeats it, which is safe. When Stripe failed or its breaker is open, the body carries `code: "PROVIDER_UNAVAILABLE"`, so the caller's `payment-service` breaker does not count it: the service itself is up, and status reads and cancels that need no Stripe still answer.
 
-`/internal/*` takes `Authorization: Bearer <INTERNAL_CALLER_TOKEN_ORDER_SERVICE>` from the order-service, or `<INTERNAL_CALLER_TOKEN_API>` from the api, which keeps its routes for a rollback of the checkout cut-over; each `_PREVIOUS` is also accepted while rotating. Nothing is throttled: the callers call from private addresses, and Stripe only retries harder when refused.
+`/internal/*` takes `Authorization: Bearer <INTERNAL_CALLER_TOKEN_ORDER_SERVICE>` from the order-service, its only caller; `_PREVIOUS` is also accepted while rotating. Nothing is throttled: the caller calls from a private address, and Stripe only retries harder when refused.
 
 ## Events
 
@@ -33,9 +33,8 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | --- | --- | --- |
 | `ID_SERVICE_URL` | required | The gateway's internal listener, never a replica. |
 | `ID_SERVICE_TIMEOUT_MS` | `2000` | |
-| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` | unset | The order-service's `PAYMENT_SERVICE_TOKEN`, at least 32 characters. |
-| `INTERNAL_CALLER_TOKEN_API` | unset | The api's `PAYMENT_SERVICE_TOKEN`, at least 32 characters. With no caller token at all the service refuses to boot. |
-| `INTERNAL_CALLER_TOKEN_*_PREVIOUS` | unset | Also accepted, while that caller moves to a new token. |
+| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` | required | The order-service's `PAYMENT_SERVICE_TOKEN`, at least 32 characters. Optional to env validation, but the guard refuses to boot without it. |
+| `INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS` | unset | Also accepted, while the order-service moves to a new token. |
 | `QUEUE_PREFIX` | `bull` | Must equal the order-service's. |
 | `ORDER_PAID_CONSUMER_ATTEMPTS` | `15` | 1 to 30. Stamped on every `payment.authorized` job; keep it equal to the order-service's. |
 | `OUTBOX_RELAY_ENABLED`, `OUTBOX_POLL_MS`, `OUTBOX_BATCH_SIZE` | `true`, `1000`, `100` | |
@@ -43,6 +42,7 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | `PAYMENT_WEBHOOK_TOLERANCE_SEC` | `300` | |
 | `STRIPE_SECRET_KEY`, `STRIPE_SUCCESS_URL` | unset | Required in production. Unset in development and test, sessions are fabricated without calling Stripe and every capture or void fails closed. |
 | `STRIPE_CANCEL_URL` | `http://localhost:3000/payments/cancel` | |
+| `STRIPE_API_HOST`, `STRIPE_API_PORT`, `STRIPE_API_PROTOCOL` | unset | System test only: the fake Stripe the SDK talks to. A host is refused unless the key is `sk_test_`, in every `NODE_ENV`, and `http` needs a host. Nothing deployed sets them. |
 | `PAYMENT_SESSION_MIN_TTL_SEC`, `PAYMENT_SESSION_EXPIRY_MARGIN_SEC` | `1800`, `120` | Stripe refuses a session under 30 minutes. |
 | `PAYMENT_CAPTURE_TIMEOUT_MS` | `10000` | Per Stripe call; the SDK takes no abort signal. |
 | `RECONCILE_ENABLED`, `RECONCILE_INTERVAL_MS`, `RECONCILE_BATCH_SIZE`, `ORDER_STALE_THRESHOLD_SEC` | `true`, `60000`, `50`, `120` | Polls Stripe for sessions whose webhook never came. |

@@ -25,7 +25,7 @@ import { DrizzlePaymentOrderRepository } from './infrastructure/payment-order.re
 import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.repository';
 import { DrizzleTransactionRunner } from './infrastructure/drizzle-transaction-runner';
 import { PAYMENT_AUTHORIZATION_COLLECTOR_PROVIDERS } from './infrastructure/payment-authorization.collector';
-import { StripeGatewayAdapter } from './infrastructure/gateway/stripe-gateway.adapter';
+import { StripeGatewayAdapter, type StripeGatewayOptions } from './infrastructure/gateway/stripe-gateway.adapter';
 import { isStripeUnavailable } from './infrastructure/gateway/stripe-fault-classification';
 import {
   BreakerPaymentGateway,
@@ -50,6 +50,7 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     sessionMinTtlSec: config.getOrThrow<number>('payment.sessionMinTtlSec'),
     sessionExpiryMarginSec: config.getOrThrow<number>('payment.sessionExpiryMarginSec'),
     captureTimeoutMs,
+    apiAddress: config.get<StripeGatewayOptions['apiAddress']>('payment.apiAddress'),
   });
   const breaker = breakers.create(PAYMENT_GATEWAY_BREAKER, { isDownstreamFault: isStripeUnavailable });
   // A capture or void can spend up to 2T on the call plus its read-back; the shared 3s budget would
@@ -61,7 +62,7 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
   return new BreakerPaymentGateway(gateway, breaker, captureBreaker);
 }
 
-/** Knows nothing about orders: the api's checkout saga drives it through the internal API. */
+/** Knows nothing about orders: the order-service's checkout saga drives it through the internal API. */
 @Module({
   imports: [ResilienceModule, IdentityModule],
   controllers: [PaymentsController, WebhookController],

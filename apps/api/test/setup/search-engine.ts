@@ -29,7 +29,11 @@ export interface StartedSearchEngine {
 export async function startSearchEngine(): Promise<StartedSearchEngine> {
   const container = await new ElasticsearchContainer(SEARCH_IMAGE)
     .withPassword(SEARCH_PASSWORD)
-    .withEnvironment({ 'action.auto_create_index': 'false' })
+    .withEnvironment({
+      'action.auto_create_index': 'false',
+      // Past 90% of the Docker disk the node leaves every new index without a shard, so writes time out.
+      'cluster.routing.allocation.disk.threshold_enabled': 'false',
+    })
     .withCopyContentToContainer([{ content: '-Xms512m\n-Xmx512m\n', target: HEAP_OPTIONS_FILE }])
     .start();
 

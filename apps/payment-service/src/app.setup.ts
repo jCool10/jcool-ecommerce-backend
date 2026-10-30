@@ -13,7 +13,7 @@ export function configureApp(app: NestExpressApplication): void {
     app.set('trust proxy', trustProxy);
   }
 
-  // No browser calls this service: Stripe posts the webhook, the api calls the rest.
+  // No browser calls this service: Stripe posts the webhook, the order-service calls the rest.
   app.use(helmet());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
 }

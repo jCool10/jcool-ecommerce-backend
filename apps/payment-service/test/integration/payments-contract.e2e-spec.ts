@@ -9,7 +9,7 @@ import {
   runPaymentContractCase,
 } from '@jcool/internal-contracts/testing';
 import type { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { E2E_API_CALLER_TOKEN } from '../setup/e2e-env';
+import { E2E_CALLER_TOKEN } from '../setup/e2e-env';
 import { authorizeSession, readPayment } from '../setup/fixtures/payment.fixture';
 import { closeAppAfterAll, createTestAppWithFakeGateway, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
@@ -28,7 +28,7 @@ describe('Payment contract over the internal API (fake Stripe)', () => {
     const config = app.get(ConfigService);
     driver = paymentHttpContractDriver({
       baseUrl: await app.getUrl(),
-      token: E2E_API_CALLER_TOKEN,
+      token: E2E_CALLER_TOKEN,
       newId: testId,
       sessionFloorMs:
         (config.getOrThrow<number>('payment.sessionMinTtlSec') +

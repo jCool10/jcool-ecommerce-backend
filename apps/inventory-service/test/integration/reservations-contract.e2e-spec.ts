@@ -7,7 +7,7 @@ import {
   httpContractDriver,
   runContractCase,
 } from '@jcool/internal-contracts/testing';
-import { E2E_API_CALLER_TOKEN } from '../setup/e2e-env';
+import { E2E_CALLER_TOKEN } from '../setup/e2e-env';
 import { getStockView, holdRowLock, seedStock } from '../setup/fixtures/inventory.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
@@ -28,7 +28,7 @@ describe.each(['pessimistic', 'optimistic'])('Inventory contract over the intern
     }));
     driver = httpContractDriver({
       baseUrl: await app.getUrl(),
-      token: E2E_API_CALLER_TOKEN,
+      token: E2E_CALLER_TOKEN,
       newId: testId,
       seedStock: async (variantId, onHand) => void (await seedStock(app, variantId, onHand)),
       stockOf: async (variantId) => {

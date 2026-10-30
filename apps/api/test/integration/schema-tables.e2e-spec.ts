@@ -25,7 +25,7 @@ describe('The api database tables (integration)', () => {
     );
     const present = rows.map((row) => row.tablename);
 
-    expect(DECLARED).toContain('orders');
+    expect(DECLARED).toContain('products');
     expect(DECLARED.filter((name) => !present.includes(name))).toEqual([]);
   });
 });

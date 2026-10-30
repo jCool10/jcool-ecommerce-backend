@@ -4,8 +4,6 @@ import configuration from './configuration';
 describe('configuration', () => {
   const keys = [
     'STRIPE_SUCCESS_URL',
-    'INTERNAL_CALLER_TOKEN_API',
-    'INTERNAL_CALLER_TOKEN_API_PREVIOUS',
     'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
     'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
   ];
@@ -31,15 +29,10 @@ describe('configuration', () => {
     expect(configuration().payment.successUrl).toBeUndefined();
   });
 
-  it('accepts the api and the order-service as callers, each with a current and previous token', () => {
-    process.env.INTERNAL_CALLER_TOKEN_API = 'api-current';
-    process.env.INTERNAL_CALLER_TOKEN_API_PREVIOUS = 'api-previous';
+  it('accepts only the order-service as a caller, with a current and previous token', () => {
     process.env.INTERNAL_CALLER_TOKEN_ORDER_SERVICE = 'order-current';
     process.env.INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS = 'order-previous';
 
-    expect(configuration().internalApi.callers).toEqual({
-      api: ['api-current', 'api-previous'],
-      'order-service': ['order-current', 'order-previous'],
-    });
+    expect(configuration().internalApi.callers).toEqual({ 'order-service': ['order-current', 'order-previous'] });
   });
 });

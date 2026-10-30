@@ -28,7 +28,7 @@ export class InternalApiController {
   ) {}
 
   @Get('users/:id/summary')
-  @InternalCallers('api', 'order-service')
+  @InternalCallers('order-service')
   async userSummary(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<UserSummary> {
     const summary = await this.userFacade.getUserSummary(id);
     if (!summary) throw new NotFoundException();

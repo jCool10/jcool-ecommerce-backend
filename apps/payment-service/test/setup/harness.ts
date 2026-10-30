@@ -6,7 +6,7 @@ import { afterAll, beforeEach } from 'vitest';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../src/database';
 import { PAYMENT_GATEWAY } from '../../src/modules/payment/application/ports/payment-gateway.port';
 import { FakeSignerGatewayAdapter } from '../../src/modules/payment/infrastructure/gateway/fake-signer-gateway.adapter';
-import { E2E_API_CALLER_TOKEN } from './e2e-env';
+import { E2E_CALLER_TOKEN } from './e2e-env';
 import { resetDatabase } from './reset-database';
 import { createTestApp, type EnvOverrides, type ProviderOverride } from './test-app.factory';
 
@@ -45,8 +45,8 @@ export async function createTestAppWithFakeGateway(
   return { ...resources, gateway };
 }
 
-/** A POST to the internal API as the api would send it. */
-export function internalPost(app: INestApplication, path: string, token: string | null = E2E_API_CALLER_TOKEN) {
+/** A POST to the internal API as the order-service would send it. */
+export function internalPost(app: INestApplication, path: string, token: string | null = E2E_CALLER_TOKEN) {
   const req = request(app.getHttpServer()).post(path);
   return token === null ? req : req.set('Authorization', `Bearer ${token}`);
 }
