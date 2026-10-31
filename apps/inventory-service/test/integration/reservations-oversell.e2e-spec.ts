@@ -8,13 +8,19 @@ import { testId } from '../setup/id-service-stub';
 
 const CONTENDERS = 20;
 const LOSING = new Set(['409 OUT_OF_STOCK', '409 CONTENDED']);
+// The spec is about one winner, not the budget: under pessimistic locking every Try queues on one row
+// lock, and a busy runner stretches that queue past the 2s default.
+const BUDGET_MS = 10_000;
 
 describe.each(['pessimistic', 'optimistic'] as const)('Last unit over the internal API, %s locking', (strategy) => {
   let app: INestApplication;
   let pool: Pool;
 
   beforeAll(async () => {
-    ({ app, pool } = await createTestAppWithPool({ INVENTORY_LOCK_STRATEGY: strategy }));
+    ({ app, pool } = await createTestAppWithPool({
+      INVENTORY_LOCK_STRATEGY: strategy,
+      INVENTORY_TRY_LOCK_TIMEOUT_MS: String(BUDGET_MS),
+    }));
   });
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);

@@ -48,8 +48,8 @@ jobs:
       - run: pnpm alerts:test # and fire (and clear) on the timelines they claim to
 
   test:
-    name: Test (unit + integration · Testcontainers)
-    runs-on: ubuntu-latest # GitHub-hosted runner ships a Docker daemon → Testcontainers works
+    name: Test (unit · coverage)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -61,9 +61,40 @@ jobs:
       # Coverage, not a bare `test`: same unit run, plus the floor on domain/application
       # declared in vitest.config.mts. Running both would just run the suite twice.
       - run: pnpm turbo run test:cov # unit (Vitest) — fast, hermetic, no Docker; fails under the coverage floor
+
+  # Read from the workspace rather than listed by hand, so a new service's suite cannot be left out of CI.
+  e2e-suites:
+    name: Discover e2e suites
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.discover.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: discover
+        run: node scripts/list-e2e-packages.mjs
+
+  # One runner per suite: every suite boots its own containers and E2E_WORKERS forks, and Turbo running
+  # them side by side on one 4-vCPU runner starved the wall-clock budgets the specs assert on.
+  e2e:
+    name: E2E · ${{ matrix.package }}
+    needs: e2e-suites
+    runs-on: ubuntu-latest # GitHub-hosted runner ships a Docker daemon → Testcontainers works
+    strategy:
+      fail-fast: false # one suite failing must not cancel the others and hide their results
+      matrix:
+        package: ${{ fromJSON(needs.e2e-suites.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       # Turbo's strict env mode drops unlisted vars: a new one here also goes in turbo.json `passThroughEnv`.
-      - run: pnpm turbo run test:e2e # integration — Testcontainers spins real Postgres/Redis + programmatic migrate
+      - run: pnpm turbo run test:e2e --filter="$PACKAGE" # Testcontainers spins real Postgres/Redis + programmatic migrate
         env:
+          PACKAGE: ${{ matrix.package }}
           # Job is ephemeral (fresh runner, torn down after), so skip Ryuk's reaper
           # container. Trades auto-cleanup (unneeded here) for reliability on runners
           # that restrict spawning the reaper.
