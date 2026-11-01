@@ -22,6 +22,7 @@ Conventions used below:
 - [A refund is owed](#a-refund-is-owed)
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
+- [Published images](#published-images), with [Rebuild every image](#rebuild-every-image), [Delivery drift is red](#delivery-drift-is-red) and [The ephemeral stack or the rehearsal is red](#the-ephemeral-stack-or-the-rehearsal-is-red)
 - [Enable Stripe test mode on Railway](#enable-stripe-test-mode-on-railway)
 - [Freeze checkout](#freeze-checkout)
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
@@ -522,6 +523,39 @@ gh api -X POST repos/jCool10/jcool-ecommerce-backend/environments/production-des
 `prevent_self_review` stays `false` while one person both merges and approves.
 
 Never pass `--show-values` or `--decrypt-variables` in CI. The repo is public, and so are its Actions logs and run summaries.
+
+---
+
+## Published images
+
+After each green CI run on `main`, `.github/workflows/delivery.yml` builds the images in `docker-bake.hcl` whose inputs changed since the git tag `delivered/main` (`scripts/changed-images.sh`), publishes them to `ghcr.io/jcool10/jcool-<image>:sha-<commit>` and attests them. Then the job `rehearsal` runs the PR check's Compose stack and smoke on those digests, with the `main` digest of every image the run did not rebuild. Only when every image of the run is attested and the rehearsal is green does the `main` tag of each move and `delivered/main` move to the commit, so a failed run leaves both where they were and the next run rebuilds and rehearses everything since then. A run or re-run for a commit that `delivered/main` already contains moves no tag. Railway does not pull these images.
+
+### Rebuild every image
+
+```bash
+gh workflow run delivery.yml -f all=true
+```
+
+Use it to pick up a patched base image (the Dockerfiles pin a base tag, not a digest) or when change detection is suspected of missing an image. Every image gets a new digest, because the revision label carries the commit, so the next rollout restarts all of them.
+
+### Delivery drift is red
+
+`delivery-drift.yml` runs daily at 01:00 UTC and fails when `delivered/main` has trailed an image change on `main` for more than six hours. Its log names the images and lists the commits not yet delivered.
+
+- The newest Delivery run failed: open it, fix the cause, then **Re-run failed jobs**. A successful run covers every commit since `delivered/main`, so there is nothing to replay commit by commit.
+- CI on `main` is red, so Delivery never started: fix `main`.
+- `tag delivered/main does not exist`: no run has finished yet; rebuild every image (above).
+
+### The ephemeral stack or the rehearsal is red
+
+The PR check `Ephemeral stack / stack` and the job `rehearsal` of a Delivery run run the same steps through `scripts/ephemeral-stack.sh`: `up`, `seed`, `smoke`, then `down`.
+
+- Open the failed run's artifact `compose-logs`. It holds `ps.txt` (which container exited or never turned healthy) and one log per container.
+- `check-internal-auth.sh` naming a caller: that service's internal token does not match what the user-service accepts. Compare the caller's token in `docker-compose.yml` with the user-service's `INTERNAL_API_TOKEN` or `INTERNAL_CALLER_TOKEN_<CALLER>`.
+- To reproduce it locally, stop the dev stack and follow [README → Testing](./README.md#testing). For a rehearsal, put the run's digests in the images file (the step summary of `Resolve the image digests` lists them); the packages are public, so no login is needed.
+- A red rehearsal on `main`: fix it on `main`. The next run rebuilds and rehearses everything since `delivered/main`. **Re-run failed jobs** is only for a flake: once a newer run has delivered, a re-run of an older one rehearses nothing.
+- `Check the digests are this run's builds` failed: a later run of the same commit has rebuilt `sha-<commit>`, and that run rehearses its own build. Nothing to do here.
+- PR builds take far longer than the rehearsal: the package `jcool-build-cache` is private, so nothing comes from the cache. Make it public under Package settings → Change visibility.
 
 ---
 

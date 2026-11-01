@@ -25,15 +25,61 @@ env:
   RAILWAY_CLI_VERSION: 5.49.6
 
 jobs:
-  plan:
-    name: Plan Railway config
-    # `workflow_run` hands this job the repository's secrets, so the trigger is narrowed to a push
+  # Skips the deploy when every file changed since the last successful Railway deploy is under
+  # deploy/ or Markdown. The base is that deploy's commit, never HEAD^, so a code commit is never
+  # skipped; no base, a base off this history, an API error or a failure of this job all deploy.
+  changes:
+    # The name carries the commit this run deploys, and later runs read their base from it: the API
+    # reports a workflow_run run's head_sha as main's head when the run was created, not that commit.
+    name: Detect deployable changes (${{ github.event.workflow_run.head_sha }})
+    # `workflow_run` hands later jobs the repository's secrets, so the trigger is narrowed to a push
     # that landed on main in this repo. A pull_request-triggered CI run reports the fork's branch
     # and is excluded here.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      skip: ${{ steps.diff.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          base=""
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cd.yml/runs?branch=main&status=success&per_page=30" \
+            --jq '.workflow_runs[].id' || true)
+          for id in $runs; do
+            base=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --jq '
+              if any(.jobs[]; .name == "Deploy to Railway" and .conclusion == "success") then
+                [.jobs[].name | capture("^Detect deployable changes \\((?<sha>[0-9a-f]{40})\\)$").sha][0] // empty
+              else empty end' || true)
+            if [ -n "$base" ]; then break; fi
+          done
+          skip=false
+          if [ -n "$base" ] && git merge-base --is-ancestor "$base" "$HEAD_SHA" &&
+            scripts/is-deploy-or-docs-only.sh "$base" "$HEAD_SHA"; then
+            skip=true
+          fi
+          echo "skip=$skip (last Railway deploy: ${base:-none})" >> "$GITHUB_STEP_SUMMARY"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+  plan:
+    name: Plan Railway config
+    needs: changes
+    # changes runs only past the fork guard, so its failure still means a push on main.
+    if: >-
+      !cancelled() && (needs.changes.outputs.skip == 'false' || needs.changes.result == 'failure')
     runs-on: ubuntu-latest
     environment: production
     outputs:

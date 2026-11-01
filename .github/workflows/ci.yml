@@ -6,11 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-# Supersede in-flight runs on the same ref so a rapid push sequence doesn't queue
-# stale jobs (a new push cancels the previous run for that branch/PR).
+# A new push supersedes an in-flight PR run. A run on main is never cancelled mid-flight, because
+# delivery and CD start only from a green run of the commit.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: CI only reads the checkout. It needs no write scopes and no
 # secrets — the test DB is an ephemeral Testcontainers instance, not a shared one.

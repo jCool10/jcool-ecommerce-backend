@@ -1,0 +1,500 @@
+name: Delivery
+
+# Builds every image whose inputs changed since delivered/main, once per architecture on a native
+# runner, publishes it to GHCR by digest, attests it and rehearses the stack on those digests before
+# moving delivered/main. Chained off CI like cd.yml, so only a green push on main reaches a job that
+# can write packages.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      all:
+        description: Rebuild every image, not only the changed ones
+        type: boolean
+        default: false
+  # Temporary, for the branch spike (workflow_run only reads this file from main). Remove before merging.
+  push:
+    branches: [feat/cicd-gitops]
+    paths: [.github/workflows/delivery.yml, docker-bake.hcl, scripts/changed-images.sh]
+
+# Queued, never cancelled: a later run diffs from delivered/main, so it also covers a run GitHub drops
+# from the queue.
+concurrency:
+  group: delivery-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  changes:
+    name: Detect changed images
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      prefix: ${{ steps.detect.outputs.prefix }}
+      targets: ${{ steps.detect.outputs.targets }}
+      advance: ${{ steps.detect.outputs.advance }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a green CI run of this commit
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&status=success" \
+            --jq '.total_count')
+          if [ "$green" -eq 0 ]; then
+            echo "::error::CI has no green push run for $SHA; delivery publishes only verified commits"
+            exit 1
+          fi
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: corepack enable && pnpm install --frozen-lockfile --filter .
+      - id: detect
+        env:
+          ALL: ${{ inputs.all }}
+        run: |
+          prefix="ghcr.io/$(tr '[:upper:]' '[:lower:]' <<<"$GITHUB_REPOSITORY_OWNER")"
+          base=$(git rev-parse -q --verify 'refs/tags/delivered/main^{commit}' || true)
+          advance=true
+          if [ -n "$base" ] && [ "$base" != "$SHA" ] && git merge-base --is-ancestor "$SHA" "$base"; then
+            # A re-run of an older commit must not move delivered/main or the main tags backwards.
+            advance=false
+            targets='[]'
+          elif [ "$ALL" = true ]; then
+            targets=$(scripts/changed-images.sh "" "$SHA")
+          elif [ -n "$base" ] && scripts/is-deploy-or-docs-only.sh "$base" "$SHA"; then
+            targets='[]'
+          else
+            targets=$(scripts/changed-images.sh "$base" "$SHA")
+          fi
+          {
+            echo "prefix=$prefix"
+            echo "targets=$targets"
+            echo "advance=$advance"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Changed images"
+            echo "Base \`${base:-none}\`, head \`$SHA\`, advance delivered/main: $advance"
+            echo
+            jq -r 'if length == 0 then "No image to build." else .[] | "- `\(.image)` (`\(.dockerfile)`)" end' <<<"$targets"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.target.image }} (${{ matrix.platform.arch }})
+    needs: changes
+    if: needs.changes.outputs.targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.changes.outputs.targets) }}
+        platform:
+          - { runner: ubuntu-24.04, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.changes.outputs.prefix }}/jcool-${{ matrix.target.image }}
+      CACHE: ${{ needs.changes.outputs.prefix }}/jcool-build-cache:${{ matrix.target.image }}-${{ matrix.platform.arch }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      # Reproducible: a re-run of the same commit yields the same digest.
+      - run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.target.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true
+          cache-from: type=registry,ref=${{ env.CACHE }}
+          cache-to: type=registry,ref=${{ env.CACHE }},mode=max
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.target.image }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  merge:
+    name: Publish ${{ matrix.target.image }}
+    needs: [changes, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.changes.outputs.targets) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.changes.outputs.prefix }}/jcool-${{ matrix.target.image }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest-${{ matrix.target.image }}-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Create the multi-arch index
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          refs=()
+          for digest in *; do refs+=("$IMAGE@sha256:$digest"); done
+          if [ "${#refs[@]}" -ne 2 ]; then
+            echo "::error::expected one digest per architecture, found ${#refs[@]}"
+            exit 1
+          fi
+          docker buildx imagetools create -t "$IMAGE:sha-$SHA" \
+            --annotation "index:org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --annotation "index:org.opencontainers.image.revision=$SHA" \
+            "${refs[@]}"
+      - name: Record the published digests
+        env:
+          TARGET: ${{ matrix.target.image }}
+        run: |
+          index=$(docker buildx imagetools inspect "$IMAGE:sha-$SHA" --format '{{json .Manifest}}' | jq -er .digest)
+          platforms=$(docker buildx imagetools inspect "$IMAGE:sha-$SHA" --raw |
+            jq -r '.manifests[] | "\(.platform.os)/\(.platform.architecture)=\(.digest)"' | sort)
+          if [ "$(cut -d= -f1 <<<"$platforms" | paste -sd, -)" != "linux/amd64,linux/arm64" ]; then
+            echo "::error::$IMAGE:sha-$SHA must list exactly linux/amd64 and linux/arm64, got: $platforms"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/refs"
+          {
+            echo "image=$IMAGE"
+            echo "index=$index"
+            echo "${platforms//linux\//}"
+          } > "$RUNNER_TEMP/refs/$TARGET.env"
+          {
+            echo "### \`$IMAGE:sha-$SHA\`"
+            echo '```'
+            cat "$RUNNER_TEMP/refs/$TARGET.env"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: refs-${{ matrix.target.image }}
+          path: ${{ runner.temp }}/refs/${{ matrix.target.image }}.env
+          retention-days: 7
+          if-no-files-found: error
+
+  # Syft runs here, with read-only package access, so the job holding id-token runs only first-party
+  # actions. One SBOM per architecture: Syft on the index would describe only the runner's variant.
+  sbom:
+    name: SBOM ${{ matrix.target.image }} (${{ matrix.arch }})
+    needs: [changes, merge]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.changes.outputs.targets) }}
+        arch: [amd64, arm64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: refs-${{ matrix.target.image }}
+          path: ${{ runner.temp }}/refs
+      - id: ref
+        env:
+          TARGET: ${{ matrix.target.image }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          file="$RUNNER_TEMP/refs/$TARGET.env"
+          echo "image=$(sed -n 's/^image=//p' "$file")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(sed -n "s/^$ARCH=//p" "$file")" >> "$GITHUB_OUTPUT"
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          # The action itself prefixes `registry:` when registry-username is set.
+          image: ${{ steps.ref.outputs.image }}@${{ steps.ref.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ github.token }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ matrix.target.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/sbom.spdx.json
+          retention-days: 7
+          if-no-files-found: error
+
+  attest:
+    name: Attest ${{ matrix.target.image }}
+    needs: [changes, merge, sbom]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.changes.outputs.targets) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: refs-${{ matrix.target.image }}
+          path: ${{ runner.temp }}/refs
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: sbom-${{ matrix.target.image }}-*
+          path: ${{ runner.temp }}/sbom
+      - id: ref
+        env:
+          TARGET: ${{ matrix.target.image }}
+        run: grep -E '^(image|index|amd64|arm64)=' "$RUNNER_TEMP/refs/$TARGET.env" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      # Storage records exist only for organization-owned repositories.
+      - name: Attest provenance on the index
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.ref.outputs.image }}
+          subject-digest: ${{ steps.ref.outputs.index }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest the amd64 SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.ref.outputs.image }}
+          subject-digest: ${{ steps.ref.outputs.amd64 }}
+          sbom-path: ${{ runner.temp }}/sbom/sbom-${{ matrix.target.image }}-amd64/sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest the arm64 SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.ref.outputs.image }}
+          subject-digest: ${{ steps.ref.outputs.arm64 }}
+          sbom-path: ${{ runner.temp }}/sbom/sbom-${{ matrix.target.image }}-arm64/sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+  # The PR check's stack and smoke again, on the digests a promotion would ship: this run's images
+  # from sha-<sha>, the rest from `main`. Compose runs the eight images of the bake group `stack`; the
+  # infra images are only resolved into images.env, the input promotion reads, and first run on k3d.
+  rehearsal:
+    name: Rehearse the stack
+    needs: [changes, attest]
+    if: needs.changes.outputs.targets != '[]'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      # "Re-run failed jobs" on an older run would pair its images with a newer `main`: a stack that
+      # never existed, and an images artifact promotion must not read.
+      - id: freshness
+        run: |
+          current=$(git rev-parse -q --verify 'refs/tags/delivered/main^{commit}' || true)
+          if [ -n "$current" ] && [ "$current" != "$SHA" ] && git merge-base --is-ancestor "$SHA" "$current"; then
+            echo "::notice::delivered/main is already at $current, which contains $SHA; nothing to rehearse"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Log in to GHCR
+        if: steps.freshness.outputs.stale != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Resolve the image digests
+        id: images
+        if: steps.freshness.outputs.stale != 'true'
+        env:
+          PREFIX: ${{ needs.changes.outputs.prefix }}
+          TARGETS: ${{ needs.changes.outputs.targets }}
+        run: |
+          scripts/resolve-image-digests.sh "$PREFIX" "$SHA" "$TARGETS" > "$RUNNER_TEMP/images.env"
+          {
+            echo "### Rehearsed images"
+            echo '```'
+            cat "$RUNNER_TEMP/images.env"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: steps.freshness.outputs.stale != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: refs-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/refs
+      # mark-delivered moves `main` to the index this run built, so that is what has to pass here. A
+      # rebuild of the same commit can re-point sha-<sha>: the base images are not pinned by digest.
+      - name: Check the digests are this run's builds
+        if: steps.freshness.outputs.stale != 'true'
+        run: |
+          for file in "$RUNNER_TEMP"/refs/*.env; do
+            target=$(basename "$file" .env)
+            built="$target=$(sed -n 's/^image=//p' "$file")@$(sed -n 's/^index=//p' "$file")"
+            if ! grep -qxF "$built" "$RUNNER_TEMP/images.env"; then
+              echo "::error::sha-$SHA of $target no longer points at this run's build ($built); run the whole workflow again"
+              exit 1
+            fi
+          done
+      - name: Raise vm.max_map_count for Elasticsearch
+        if: steps.freshness.outputs.stale != 'true'
+        run: sudo sysctl -w vm.max_map_count=262144
+      - if: steps.freshness.outputs.stale != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.freshness.outputs.stale != 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - if: steps.freshness.outputs.stale != 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Start the stack
+        if: steps.freshness.outputs.stale != 'true'
+        run: scripts/ephemeral-stack.sh "$RUNNER_TEMP/images.env" up
+      - name: Seed the catalog and stock
+        if: steps.freshness.outputs.stale != 'true'
+        run: scripts/ephemeral-stack.sh "$RUNNER_TEMP/images.env" seed
+      - name: Smoke
+        if: steps.freshness.outputs.stale != 'true'
+        run: scripts/ephemeral-stack.sh "$RUNNER_TEMP/images.env" smoke
+      - if: steps.freshness.outputs.stale != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: images-${{ env.SHA }}
+          path: ${{ runner.temp }}/images.env
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+      - name: Collect logs
+        if: (failure() || cancelled()) && steps.images.outcome == 'success'
+        run: scripts/ephemeral-stack.sh "$RUNNER_TEMP/images.env" logs "$RUNNER_TEMP/compose-logs"
+      - if: (failure() || cancelled()) && steps.images.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-logs
+          path: ${{ runner.temp }}/compose-logs
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      # The runner is thrown away anyway; a hiccup here must not hold back a green rehearsal.
+      - name: Tear down
+        if: always() && steps.images.outcome == 'success'
+        continue-on-error: true
+        run: scripts/ephemeral-stack.sh "$RUNNER_TEMP/images.env" down
+
+  # All or nothing: a failed image or a red rehearsal keeps delivered/main and every main tag where
+  # they were, so the next run rebuilds and rehearses everything changed since then.
+  mark-delivered:
+    name: Mark delivered
+    needs: [changes, rehearsal]
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' &&
+      needs.changes.result == 'success' && needs.changes.outputs.advance == 'true' &&
+      (needs.rehearsal.result == 'success' || needs.changes.outputs.targets == '[]')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+      # Checked again here because "Re-run failed jobs" reuses the changes job of an older run.
+      - id: guard
+        run: |
+          current=$(git rev-parse -q --verify 'refs/tags/delivered/main^{commit}' || true)
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ -n "$current" ] && [ "$current" != "$SHA" ] && git merge-base --is-ancestor "$SHA" "$current"; then
+            echo "::notice::delivered/main is already at $current, which contains $SHA; leaving every tag alone"
+            echo "advance=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "advance=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.guard.outputs.advance == 'true' && needs.changes.outputs.targets != '[]'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: refs-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/refs
+      - name: Move the main tag of each built image
+        if: steps.guard.outputs.advance == 'true' && needs.changes.outputs.targets != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for file in "$RUNNER_TEMP"/refs/*.env; do
+            image=$(sed -n 's/^image=//p' "$file")
+            index=$(sed -n 's/^index=//p' "$file")
+            # Per image as well: a newer run can move some main tags and then fail before delivered/main.
+            holds=$(docker buildx imagetools inspect "$image:main" --raw 2>/dev/null |
+              jq -r '.annotations["org.opencontainers.image.revision"] // empty' || true)
+            if [ -n "$holds" ] && [ "$holds" != "$SHA" ] && git merge-base --is-ancestor "$SHA" "$holds"; then
+              echo "::notice::$image:main already holds $holds, which contains $SHA; left alone"
+              continue
+            fi
+            docker buildx imagetools create -t "$image:main" "$image@$index"
+            echo "- \`$image:main\` → \`$index\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+      # A tag pushed with GITHUB_TOKEN starts no workflow.
+      - name: Move delivered/main
+        if: steps.guard.outputs.advance == 'true'
+        env:
+          CURRENT: ${{ steps.guard.outputs.current }}
+        run: |
+          git push --force-with-lease="refs/tags/delivered/main:$CURRENT" origin "$SHA:refs/tags/delivered/main"
+          echo "delivered/main → \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"

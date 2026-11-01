@@ -1,0 +1,50 @@
+name: Delivery drift
+
+# Red when an image change on main has waited more than six hours without reaching delivered/main.
+# GitHub mails the repository owner when a scheduled run fails.
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Check delivered/main
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: corepack enable && pnpm install --frozen-lockfile --filter .
+      - name: Compare delivered/main with main
+        env:
+          MAX_AGE_SECONDS: 21600
+        run: |
+          if ! base=$(git rev-parse -q --verify 'refs/tags/delivered/main^{commit}'); then
+            echo "::error::tag delivered/main does not exist; run the Delivery workflow"
+            exit 1
+          fi
+          pending=$(scripts/changed-images.sh "$base" HEAD)
+          if [ "$pending" = '[]' ]; then
+            echo "delivered/main ($base) covers every image change on main"
+            exit 0
+          fi
+          # The oldest pending commit on main's own line: a newer commit must not hide a broken delivery.
+          paths=(-- . ':(exclude)deploy' ':(exclude)*.md')
+          oldest=$(git log --first-parent --format=%ct "$base..HEAD" "${paths[@]}" | tail -1)
+          age=$(( $(date +%s) - ${oldest:-0} ))
+          images=$(jq -r '[.[].image] | join(", ")' <<<"$pending")
+          if [ "$age" -le "$MAX_AGE_SECONDS" ]; then
+            echo "Pending for $((age / 60)) min, delivery may still be running: $images"
+            exit 0
+          fi
+          echo "::error::delivered/main ($base) has been behind main for $((age / 3600)) h: $images"
+          git log --first-parent --format='%h %ci %s' "$base..HEAD" "${paths[@]}"
+          exit 1

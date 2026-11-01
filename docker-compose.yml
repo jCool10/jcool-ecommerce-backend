@@ -405,6 +405,8 @@ services:
       REDIS_URL: redis://redis:6379
       SMTP_URL: smtp://mailpit:1025
       ID_SERVICE_URL: http://gateway:4000
+      # The app's INTERNAL_API_TOKEN above. Set here because the env_file's template value differs.
+      INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # The inventory-service's USER_SERVICE_TOKEN below; it may read session epochs only.
       INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE: local-inventory-caller-token-not-a-secret-00
       # The order-service's USER_SERVICE_TOKEN below: session epochs and the order.paid mail's summary.

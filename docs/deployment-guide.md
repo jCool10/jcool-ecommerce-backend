@@ -8,6 +8,8 @@ Where each environment runs, what owns each deploy target's config, and the rati
 | --- | --- | --- |
 | Local dev | Compose infrastructure (a Postgres per service, Redis, Elasticsearch, Mailpit, MinIO, Temporal with its own Postgres, etcd) and the gateway, in front of the api, the user-service, the order-service, the inventory-service, the payment-service and the id-service on the host under `pnpm dev` | [`README.md#quick-start`](../README.md#quick-start) |
 | Full stack, in Compose | Every service containerized, reached through the gateway; the user-service is opt-in via a Compose profile, the order-service, the inventory-service and the payment-service are not (the order-service and the payment-service run with `NODE_ENV=production`, so the payment-service needs a `sk_test_` key in the root `.env`) | [`README.md#quick-start`](../README.md#quick-start) |
+| Ephemeral (CI) | The full Compose stack on arm64, from images built out of the PR's source, through `docker-compose.ci.yml`: migrated, seeded, smoked, checked for internal-token agreement, then removed with its volumes | `ephemeral-stack.yml` on every PR; locally `scripts/ephemeral-stack.sh` ([`README.md#testing`](../README.md#testing)) |
+| Rehearsal (main) | The same stack and checks on the GHCR digests a delivery run just published, plus the `main` digest of every image it did not rebuild; must pass before `main` and `delivered/main` move | job `rehearsal` in `delivery.yml` |
 | Railway (production) | The service topology below, deployed by `cd.yml` | this document |
 
 ## Deploy targets and what owns their config
@@ -25,9 +27,14 @@ Where each environment runs, what owns each deploy target's config, and the rati
 | Temporal server image and its bootstrap (databases, schema, namespace, search attributes) | [`infra/temporal/Dockerfile`](../infra/temporal/Dockerfile), [`infra/temporal/entrypoint.sh`](../infra/temporal/entrypoint.sh) |
 | gateway routing — public site (the checkout freeze first, then `/auth` to the user-service, `/orders*` and `/admin/orders*` to the order-service, `/admin/inventory*` to the inventory-service, `/webhooks/payment` to the payment-service, the rest to the api) plus the private id-service load balancer | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) |
 | Prometheus scrape jobs (`jcool-api`, `jcool-order`, `jcool-inventory`, `jcool-payment`) and their Railway targets | [`infra/prometheus/prometheus.railway.yml`](../infra/prometheus/prometheus.railway.yml), [`infra/prometheus/railway-entrypoint.sh`](../infra/prometheus/railway-entrypoint.sh) |
-| Production deploy pipeline | [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) |
+| Production deploy pipeline, and which commits skip it (only `deploy/` or Markdown changed since the last successful deploy) | [`.github/workflows/cd.yml`](../.github/workflows/cd.yml), [`scripts/is-deploy-or-docs-only.sh`](../scripts/is-deploy-or-docs-only.sh) |
+| The images published to GHCR (target name, Dockerfile) | [`docker-bake.hcl`](../docker-bake.hcl) |
+| Which images a commit rebuilds | [`scripts/changed-images.sh`](../scripts/changed-images.sh) |
+| Image build, push by digest, attestation, and the `main` and `delivered/main` tags | [`.github/workflows/delivery.yml`](../.github/workflows/delivery.yml), with [`.github/workflows/delivery-drift.yml`](../.github/workflows/delivery-drift.yml) watching for a commit left undelivered |
 | Gate CD deploys from | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
 | Local / full-stack composition | [`docker-compose.yml`](../docker-compose.yml) |
+| PR stack and rehearsal: the Compose override, the steps, the smoke and the internal-token check | [`docker-compose.ci.yml`](../docker-compose.ci.yml), [`scripts/ephemeral-stack.sh`](../scripts/ephemeral-stack.sh), [`test/load/smoke/smoke.js`](../test/load/smoke/smoke.js), [`scripts/check-internal-auth.sh`](../scripts/check-internal-auth.sh), [`.github/workflows/ephemeral-stack.yml`](../.github/workflows/ephemeral-stack.yml) |
+| The digests a rehearsal runs on (`images.env`) | [`scripts/resolve-image-digests.sh`](../scripts/resolve-image-digests.sh) |
 
 ## Why the pipeline is shaped this way
 

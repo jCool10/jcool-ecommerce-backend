@@ -1,0 +1,134 @@
+# The full stack on prebuilt images, for the PR check and the rehearsal on main. Run it through
+# scripts/ephemeral-stack.sh, which exports JCOOL_IMAGE_* and JCOOL_CI_ENV_DIR and uses its own
+# project name, so it never touches the dev stack's containers or volumes.
+
+services:
+  postgres:
+    container_name: !reset null
+  redis:
+    container_name: !reset null
+  elasticsearch:
+    container_name: !reset null
+  mailpit:
+    container_name: !reset null
+  minio:
+    container_name: !reset null
+  minio-init:
+    container_name: !reset null
+  id-etcd:
+    container_name: !reset null
+  temporal-postgres:
+    container_name: !reset null
+  user-postgres:
+    container_name: !reset null
+  inventory-postgres:
+    container_name: !reset null
+  payment-postgres:
+    container_name: !reset null
+  order-postgres:
+    container_name: !reset null
+
+  app:
+    build: !reset null
+    image: ${JCOOL_IMAGE_API:?}
+    pull_policy: missing
+    container_name: !reset null
+    env_file: !override
+      - ${JCOOL_CI_ENV_DIR:?}/root.env
+    depends_on:
+      api-migrate:
+        condition: service_completed_successfully
+
+  # Railway runs this as the api's pre-deploy command; plain compose has no equivalent.
+  api-migrate:
+    image: ${JCOOL_IMAGE_API:?}
+    pull_policy: missing
+    command: ['node', 'dist/shared/infrastructure/database/migrate-cli.js']
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - jcool-net
+
+  id-floors:
+    build: !reset null
+    image: ${JCOOL_IMAGE_ID_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+  id-service:
+    image: ${JCOOL_IMAGE_ID_SERVICE:?}
+    pull_policy: missing
+
+  user-migrate:
+    build: !reset null
+    image: ${JCOOL_IMAGE_USER_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+  user-service:
+    image: ${JCOOL_IMAGE_USER_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+    env_file: !override
+      - ${JCOOL_CI_ENV_DIR:?}/user-service.env
+
+  inventory-migrate:
+    build: !reset null
+    image: ${JCOOL_IMAGE_INVENTORY_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+  inventory-service:
+    image: ${JCOOL_IMAGE_INVENTORY_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+
+  payment-migrate:
+    build: !reset null
+    image: ${JCOOL_IMAGE_PAYMENT_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+  payment-service:
+    image: ${JCOOL_IMAGE_PAYMENT_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+    # Production refuses to boot without a Stripe key, and CI has none. Without one the adapter stays
+    # offline, which only non-production allows. Not `development`: that loads pino-pretty, a dev
+    # dependency this image does not ship.
+    environment:
+      NODE_ENV: test
+      LOG_LEVEL: info
+      SWAGGER_ENABLED: "false"
+
+  order-migrate:
+    build: !reset null
+    image: ${JCOOL_IMAGE_ORDER_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+  order-service:
+    image: ${JCOOL_IMAGE_ORDER_SERVICE:?}
+    pull_policy: missing
+    container_name: !reset null
+
+  gateway:
+    build: !reset null
+    image: ${JCOOL_IMAGE_GATEWAY:?}
+    pull_policy: missing
+    container_name: !reset null
+
+  temporal:
+    build: !reset null
+    image: ${JCOOL_IMAGE_TEMPORAL:?}
+    pull_policy: missing
+    container_name: !reset null
+
+  smoke:
+    image: grafana/k6:2.3.0@sha256:2dd4756ec6e14e62778916e1eb850108e4b499304c02df56760fa0bdb0fba0b8
+    profiles: [smoke]
+    volumes:
+      - ./test/load:/scripts:ro
+    environment:
+      BASE_URL: http://gateway:8080
+    command: ['run', '/scripts/smoke/smoke.js']
+    networks:
+      - jcool-net
