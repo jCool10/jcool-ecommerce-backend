@@ -69,7 +69,8 @@ case "$cmd" in
     ;;
   seed)
     # The catalog seed is a tsx script left out of the api image, so it runs from the host.
-    pnpm turbo run build --filter=@jcool/id-codec --filter=@jcool/id-generator
+    # tsx resolves workspace packages through their dist exports, so build every api dependency.
+    pnpm turbo run build --filter='@jcool/api^...'
     DATABASE_URL="postgresql://$(env_value POSTGRES_USER jcool):$(env_value POSTGRES_PASSWORD '')@127.0.0.1:$(env_value POSTGRES_HOST_PORT 5433)/$(env_value POSTGRES_DB jcool_ecommerce)?schema=public" \
       pnpm --filter @jcool/api db:seed
     # Lists the catalog through the gateway, so it has to come after the catalog seed.

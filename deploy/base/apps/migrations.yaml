@@ -1,0 +1,190 @@
+# One Job per database, each from the image of the service that owns it, so a digest change moves
+# both. Jobs are immutable: deploy/scripts/local-cluster.sh deletes the old ones before applying.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: api-migrate
+  labels: {app.kubernetes.io/name: api-migrate, app.kubernetes.io/component: migration}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: api-migrate, app.kubernetes.io/component: migration}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: ghcr.io/jcool10/jcool-api
+          command: [node, dist/shared/infrastructure/database/migrate-cli.js]
+          env:
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: API_DB_PASSWORD}}
+            - {name: DATABASE_URL, value: "postgresql://jcool:$(DB_PASSWORD)@postgres:5432/jcool_ecommerce"}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: user-migrate
+  labels: {app.kubernetes.io/name: user-migrate, app.kubernetes.io/component: migration}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: user-migrate, app.kubernetes.io/component: migration}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: ghcr.io/jcool10/jcool-user-service
+          command: [node, dist/database/migrate-cli.js]
+          env:
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: USERS_DB_PASSWORD}}
+            - {name: DATABASE_URL, value: "postgresql://users:$(DB_PASSWORD)@postgres:5432/users"}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+---
+# Migrates, then tops up stock for variants that have none; the top-up gives up quietly while the
+# catalog is down, as it is on a first apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inventory-migrate
+  labels: {app.kubernetes.io/name: inventory-migrate, app.kubernetes.io/component: migration}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: inventory-migrate, app.kubernetes.io/component: migration}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: ghcr.io/jcool10/jcool-inventory-service
+          command: [node, dist/database/pre-deploy-cli.js]
+          env:
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: INVENTORY_DB_PASSWORD}}
+            - {name: DATABASE_URL, value: "postgresql://inventory:$(DB_PASSWORD)@postgres:5432/inventory"}
+            - {name: CATALOG_PUBLIC_URL, value: http://gateway:8080}
+            - {name: ID_SERVICE_URL, value: http://gateway:4000}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: payment-migrate
+  labels: {app.kubernetes.io/name: payment-migrate, app.kubernetes.io/component: migration}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: payment-migrate, app.kubernetes.io/component: migration}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: ghcr.io/jcool10/jcool-payment-service
+          command: [node, dist/database/migrate-cli.js]
+          env:
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: PAYMENT_DB_PASSWORD}}
+            - {name: DATABASE_URL, value: "postgresql://payment:$(DB_PASSWORD)@postgres:5432/payment"}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: order-migrate
+  labels: {app.kubernetes.io/name: order-migrate, app.kubernetes.io/component: migration}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: order-migrate, app.kubernetes.io/component: migration}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: ghcr.io/jcool10/jcool-order-service
+          command: [node, dist/database/migrate-cli.js]
+          env:
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: ORDER_DB_PASSWORD}}
+            - {name: DATABASE_URL, value: "postgresql://order:$(DB_PASSWORD)@postgres:5432/order"}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+---
+# A no-op once the keyspace has floors; on an empty one it lifts them before any replica mints.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: id-floors
+  labels: {app.kubernetes.io/name: id-floors, app.kubernetes.io/component: migration}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: id-floors, app.kubernetes.io/component: migration}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: floors
+          image: ghcr.io/jcool10/jcool-id-service
+          command: [node, dist/lease/lift-floors-cli.js, --if-uninitialized]
+          env:
+            - {name: ETCD_ENDPOINTS, value: http://id-etcd:2379}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}

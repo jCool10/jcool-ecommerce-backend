@@ -1,0 +1,100 @@
+# Stands in for R2 on a local cluster: same S3 API, same adapter. Images pinned like compose's.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  selector: {app.kubernetes.io/name: minio}
+  ports:
+    - {name: s3, port: 9000}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: minio}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: minio}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: minio
+          image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+          args: [server, /data, --console-address, ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: object-storage, key: STORAGE_ACCESS_KEY_ID}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: object-storage, key: STORAGE_SECRET_ACCESS_KEY}}
+          ports:
+            - {name: s3, containerPort: 9000}
+          readinessProbe:
+            exec: {command: [mc, ready, local]}
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: [mc, ready, local]}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 2Gi}
+---
+# The app never creates a bucket, so this does, once MinIO answers.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init
+  labels: {app.kubernetes.io/name: minio-init}
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: minio-init}
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: mc
+          image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
+          command:
+            - sh
+            - -c
+            - |
+              until mc alias set local http://minio:9000 "$STORAGE_ACCESS_KEY_ID" "$STORAGE_SECRET_ACCESS_KEY" >/dev/null; do sleep 2; done
+              mc mb --ignore-existing local/jcool-media
+          envFrom:
+            - secretRef: {name: object-storage}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {memory: 64Mi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: minio}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/name, operator: In, values: [api, api-worker, minio-init]}
+      ports:
+        - port: 9000

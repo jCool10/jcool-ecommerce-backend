@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jcool
+resources:
+  - ../../../base/apps
+components:
+  - ../../../components/search-apps
+  # Last: components only see what the ones above them added, so this one pins theirs too.
+  - ../../../images
+# example.invalid stands in for the domain until there is one; .invalid never resolves.
+configMapGenerator:
+  - name: apps-env
+    literals:
+      - JWT_ISSUER=https://example.invalid
+      - JWT_AUDIENCE=jcool-api
+      - APP_PUBLIC_URL=https://example.invalid
+      - MAIL_FROM=no-reply@example.invalid
+      - STRIPE_SUCCESS_URL=https://example.invalid/payments/success?session_id={CHECKOUT_SESSION_ID}
+      - STRIPE_CANCEL_URL=https://example.invalid/payments/cancel
+      - STORAGE_ENDPOINT=https://r2.example.invalid
+      - STORAGE_BUCKET=jcool-media
+  - name: gateway-env
+    literals:
+      - AUTH_WRITE_FREEZE=false
+      - CHECKOUT_WRITE_FREEZE=false
+      # cloudflared sits in front of Traefik, so only Cloudflare's header still names the client.
+      - GATEWAY_CLIENT_IP_HEADERS=Cf-Connecting-Ip
+generatorOptions:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/compare-options: IgnoreExtraneous

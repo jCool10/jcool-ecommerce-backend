@@ -9,7 +9,8 @@
 	servers :{$PORT:8080} {
 		# Only Railway's edge may name the client. From any other peer, the socket address is the client.
 		trusted_proxies static {$TRUSTED_PROXY_CIDRS}
-		client_ip_headers X-Real-IP
+		# Traefik sets X-Real-IP; behind cloudflared only Cf-Connecting-Ip still names the client.
+		client_ip_headers {$GATEWAY_CLIENT_IP_HEADERS:X-Real-IP}
 	}
 }
 

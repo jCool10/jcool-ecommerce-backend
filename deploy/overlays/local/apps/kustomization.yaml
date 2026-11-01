@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jcool
+resources:
+  - ../../../base/apps
+components:
+  - ../../../images
+# Per consumer, so flipping a gateway freeze rolls the gateway only. No secrets here: those are sealed.
+configMapGenerator:
+  - name: apps-env
+    literals:
+      - JWT_ISSUER=http://localhost
+      - JWT_AUDIENCE=jcool-api
+      - APP_PUBLIC_URL=http://localhost
+      - MAIL_FROM=no-reply@jcool.local
+      - STRIPE_SUCCESS_URL=http://localhost/payments/success?session_id={CHECKOUT_SESSION_ID}
+      - STRIPE_CANCEL_URL=http://localhost/payments/cancel
+      # Presigned URLs carry this host, which a browser outside the cluster cannot open; nothing local uploads.
+      - STORAGE_ENDPOINT=http://minio:9000
+      - STORAGE_BUCKET=jcool-media
+      - SEARCH_ENABLED=false
+  # Read at Caddy's parse time, hence a ConfigMap of its own (RUNBOOK "Freeze auth writes").
+  - name: gateway-env
+    literals:
+      - AUTH_WRITE_FREEZE=false
+      - CHECKOUT_WRITE_FREEZE=false
+      # Traefik writes the peer it saw into X-Real-Ip.
+      - GATEWAY_CLIENT_IP_HEADERS=X-Real-IP
+patches:
+  # Every local cluster starts on an empty database, so every first boot pins the id layout; once pinned
+  # it is only compared. A cluster whose database outlives it sets this for the first boot alone (RUNBOOK).
+  - target: {kind: Deployment, name: user-service}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: IDENTITY_PIN_BOOTSTRAP, value: "true"}
+# Pods of an old ReplicaSet keep their ConfigMap until someone deletes it (RUNBOOK).
+generatorOptions:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/compare-options: IgnoreExtraneous

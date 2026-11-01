@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - postgres.yaml
+  - redis.yaml
+  - id-etcd.yaml
+  - temporal.yaml
+configMapGenerator:
+  - name: postgres-init
+    files: [init-databases.sh=postgres-init.sh]
+generatorOptions:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/compare-options: IgnoreExtraneous
+patches:
+  # Service links would inject REDIS_PORT=tcp://… and the like over the values the images expect.
+  - target: { kind: Deployment|StatefulSet|Job }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/enableServiceLinks
+        value: false

@@ -1,0 +1,12 @@
+# Object storage (R2) and SMTP are external here, so no minio and no mailpit.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jcool
+resources:
+  - ../../../base/data
+  # Written by deploy/scripts/seal-secrets.sh vps seal, against the VPS cluster's certificate.
+  - secrets
+components:
+  - ../../../components/search-data
+  # Last: components only see what the ones above them added, so this one pins theirs too.
+  - ../../../images

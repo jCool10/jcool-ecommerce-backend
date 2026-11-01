@@ -1,0 +1,24 @@
+# The api's own Deployment under another name, so the two never drift apart in env or image. This
+# one keeps the background loops (queue workers, outbox relay, retention sweeps) that ../kustomization.yaml
+# turns off on the api, takes no traffic, and rolls by stopping the old pod before the new one starts,
+# so a sweep never runs twice at once.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../api
+nameSuffix: -worker
+patches:
+  - target: {kind: Deployment}
+    patch: |-
+      - op: replace
+        path: /metadata/labels/app.kubernetes.io~1name
+        value: api-worker
+      - op: replace
+        path: /spec/selector/matchLabels/app.kubernetes.io~1name
+        value: api-worker
+      - op: replace
+        path: /spec/template/metadata/labels/app.kubernetes.io~1name
+        value: api-worker
+      - op: add
+        path: /spec/strategy
+        value: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}

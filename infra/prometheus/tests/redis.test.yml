@@ -1,0 +1,36 @@
+# Rule unit tests for redis.yml. Run: promtool test rules infra/prometheus/tests/*.test.yml
+rule_files:
+  - ../rules/redis.yml
+
+evaluation_interval: 15s
+
+tests:
+  # 85% held long enough fires; 50% never does; an instance without maxmemory never does either.
+  - interval: 15s
+    input_series:
+      - series: 'redis_memory_used_bytes{job="redis", pod="redis-0"}'
+        values: '85x80'
+      - series: 'redis_memory_max_bytes{job="redis", pod="redis-0"}'
+        values: '100x80'
+      - series: 'redis_memory_used_bytes{job="redis", pod="redis-1"}'
+        values: '50x80'
+      - series: 'redis_memory_max_bytes{job="redis", pod="redis-1"}'
+        values: '100x80'
+      - series: 'redis_memory_used_bytes{job="redis", pod="unbounded-0"}'
+        values: '50x80'
+      - series: 'redis_memory_max_bytes{job="redis", pod="unbounded-0"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: RedisMemoryNearMaxmemory
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: RedisMemoryNearMaxmemory
+        exp_alerts:
+          - exp_labels:
+              job: redis
+              pod: redis-0
+              severity: ticket
+            exp_annotations:
+              summary: 'Redis has used more than 80% of maxmemory for 10 minutes'
+              description: 'At maxmemory Redis answers OOM to every write: queues, the outbox relay and rate limits fail together. Find what grew (`redis-cli --bigkeys`) before raising maxmemory and the pod limit.'

@@ -10,6 +10,7 @@ Where each environment runs, what owns each deploy target's config, and the rati
 | Full stack, in Compose | Every service containerized, reached through the gateway; the user-service is opt-in via a Compose profile, the order-service, the inventory-service and the payment-service are not (the order-service and the payment-service run with `NODE_ENV=production`, so the payment-service needs a `sk_test_` key in the root `.env`) | [`README.md#quick-start`](../README.md#quick-start) |
 | Ephemeral (CI) | The full Compose stack on arm64, from images built out of the PR's source, through `docker-compose.ci.yml`: migrated, seeded, smoked, checked for internal-token agreement, then removed with its volumes | `ephemeral-stack.yml` on every PR; locally `scripts/ephemeral-stack.sh` ([`README.md#testing`](../README.md#testing)) |
 | Rehearsal (main) | The same stack and checks on the GHCR digests a delivery run just published, plus the `main` digest of every image it did not rebuild; must pass before `main` and `delivered/main` move | job `rehearsal` in `delivery.yml` |
+| Local k3d | The full stack on a one-node k3d cluster, from the digests pinned in `deploy/images`: overlay `local` (shared Postgres, Redis with a password, MinIO, Mailpit, Prometheus), Sealed Secrets, NetworkPolicy default-deny, the api split into `api` and `api-worker`. Applied with `kubectl`, no Argo CD yet | `deploy/scripts/local-cluster.sh` ([`RUNBOOK.md#run-the-local-k3d-cluster`](../RUNBOOK.md#run-the-local-k3d-cluster)) |
 | Railway (production) | The service topology below, deployed by `cd.yml` | this document |
 
 ## Deploy targets and what owns their config
@@ -35,6 +36,12 @@ Where each environment runs, what owns each deploy target's config, and the rati
 | Local / full-stack composition | [`docker-compose.yml`](../docker-compose.yml) |
 | PR stack and rehearsal: the Compose override, the steps, the smoke and the internal-token check | [`docker-compose.ci.yml`](../docker-compose.ci.yml), [`scripts/ephemeral-stack.sh`](../scripts/ephemeral-stack.sh), [`test/load/smoke/smoke.js`](../test/load/smoke/smoke.js), [`scripts/check-internal-auth.sh`](../scripts/check-internal-auth.sh), [`.github/workflows/ephemeral-stack.yml`](../.github/workflows/ephemeral-stack.yml) |
 | The digests a rehearsal runs on (`images.env`) | [`scripts/resolve-image-digests.sh`](../scripts/resolve-image-digests.sh) |
+| Kubernetes manifests: base, components, overlays `local` and `vps` (a skeleton until the VPS exists), each in the groups `platform`, `data`, `apps`, `observability` | [`deploy/`](../deploy) |
+| The one digest per repo image that every overlay runs, and who may move it | [`deploy/images/kustomization.yaml`](../deploy/images/kustomization.yaml), [`deploy/scripts/set-images.sh`](../deploy/scripts/set-images.sh), [`deploy/scripts/verify-image-digests.sh`](../deploy/scripts/verify-image-digests.sh) |
+| Which Secret holds which key, and how the values are sealed | [`deploy/scripts/seal-secrets.sh`](../deploy/scripts/seal-secrets.sh) |
+| Local cluster lifecycle and apply order (platform, data, migration Jobs, apps, observability) | [`deploy/scripts/local-cluster.sh`](../deploy/scripts/local-cluster.sh) |
+| Manifest checks on PRs: schemas, digests, ConfigMap and Secret references, vendored checksums | [`.github/workflows/manifests.yml`](../.github/workflows/manifests.yml), [`deploy/scripts/validate-manifests.sh`](../deploy/scripts/validate-manifests.sh) |
+| Which pod may reach which (NetworkPolicy) | [`deploy/base/platform/network-policies.yaml`](../deploy/base/platform/network-policies.yaml), plus one per component |
 
 ## Why the pipeline is shaped this way
 

@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - api
+  - api-worker
+  - api-service.yaml
+  - gateway.yaml
+  - id-service.yaml
+  - user-service.yaml
+  - inventory-service.yaml
+  - payment-service.yaml
+  - order-service.yaml
+  - migrations.yaml
+  - ingress.yaml
+patches:
+  # Service links would inject ID_SERVICE_PORT=tcp://… and the like over the values the images expect.
+  - target: {kind: Deployment|StatefulSet|Job}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/enableServiceLinks
+        value: false
+  # The api serves HTTP only; api-worker runs these loops. By label: a name target would also match
+  # api-worker, which kustomize still knows as api.
+  - target: {kind: Deployment, labelSelector: app.kubernetes.io/name=api}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: QUEUE_WORKER_ENABLED, value: "false"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: OUTBOX_RELAY_ENABLED, value: "false"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: RETENTION_ENABLED, value: "false"}

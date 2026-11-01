@@ -23,6 +23,7 @@ Conventions used below:
 - [Apply migrations out of band](#apply-migrations-out-of-band)
 - [Change Railway service config](#change-railway-service-config)
 - [Published images](#published-images), with [Rebuild every image](#rebuild-every-image), [Delivery drift is red](#delivery-drift-is-red) and [The ephemeral stack or the rehearsal is red](#the-ephemeral-stack-or-the-rehearsal-is-red)
+- [Run the local k3d cluster](#run-the-local-k3d-cluster), with [Pin the images](#pin-the-images), [The sealing key](#the-sealing-key), [Change a secret](#change-a-secret) and [Add a database to the shared Postgres](#add-a-database-to-the-shared-postgres)
 - [Enable Stripe test mode on Railway](#enable-stripe-test-mode-on-railway)
 - [Freeze checkout](#freeze-checkout)
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
@@ -119,7 +120,12 @@ Each service owns one database and is backed up on its own: the api's (catalog, 
 ```bash
 # local — against whatever DATABASE_URL points at, one service at a time
 pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" > backup-$(date +%Y%m%d-%H%M).dump
+
+# k3d — one database of the shared Postgres (jcool_ecommerce, users, inventory, payment, order)
+kubectl --context k3d-jcool -n jcool exec sts/postgres -- pg_dump -U postgres --format=custom --no-owner --no-privileges users > backup-$(date +%Y%m%d-%H%M).dump
 ```
+
+On a k3d cluster also keep the sealing key, which is not data but without which no committed SealedSecret decrypts on a rebuilt cluster: [The sealing key](#the-sealing-key).
 
 ### Restore
 
@@ -556,6 +562,118 @@ The PR check `Ephemeral stack / stack` and the job `rehearsal` of a Delivery run
 - A red rehearsal on `main`: fix it on `main`. The next run rebuilds and rehearses everything since `delivered/main`. **Re-run failed jobs** is only for a flake: once a newer run has delivered, a re-run of an older one rehearses nothing.
 - `Check the digests are this run's builds` failed: a later run of the same commit has rebuilt `sha-<commit>`, and that run rehearses its own build. Nothing to do here.
 - PR builds take far longer than the rehearsal: the package `jcool-build-cache` is private, so nothing comes from the cache. Make it public under Package settings → Change visibility.
+
+---
+
+## Run the local k3d cluster
+
+`deploy/` runs the whole stack on a one-node k3d cluster from the published digests: four groups per overlay (`platform`, `data`, `apps`, `observability`), applied in that order. Every command below runs from the repo root, and every `kubectl` names `--context k3d-jcool`, because the current context may be another cluster. It needs k3d 5.9, kubectl, kustomize 5.8, kubeseal 0.41, yq 4, openssl, and OrbStack (or Docker Desktop) with a memory limit of 8 GiB. Secret values live in `~/.config/jcool/` (`JCOOL_CONFIG_DIR` moves it), never in the repo; the repo holds only SealedSecret ciphertext, which only this cluster's key decrypts.
+
+### Create it
+
+```bash
+deploy/scripts/local-cluster.sh create        # k3s v1.37.1, Traefik on localhost:80, the Sealed Secrets controller
+deploy/scripts/local-cluster.sh backup-key    # right away; keep a copy of the file in your password manager too
+deploy/scripts/seal-secrets.sh local init     # ~/.config/jcool/local.secrets.env, every token and password generated
+#   fill in STRIPE_SECRET_KEY (an sk_test_ key) and PAYMENT_WEBHOOK_SECRET (`stripe listen` prints it)
+deploy/scripts/seal-secrets.sh local seal     # overlays/local/data/secrets/*.sealed.yaml, commit them
+deploy/scripts/local-cluster.sh apply
+deploy/scripts/local-cluster.sh seed          # the demo catalog from the host, then stock for every variant
+```
+
+The site is then <http://localhost>. `apply` refuses to start while an image in the render has no digest. It applies `platform`, then `data`, and waits for the SealedSecrets to decrypt and for every StatefulSet and Deployment there to roll out. Then it deletes the six migration Jobs, re-creates them from the `apps` render and waits for all six (a failed one prints its log and stops the run). Last come the rest of `apps` and `observability`, each waited on. Run `apply` again to deploy a new digest or a manifest change. Stop the cluster with `k3d cluster stop jcool` and start it again with `k3d cluster start jcool`; the volumes survive both.
+
+### Pin the images
+
+`deploy/images/kustomization.yaml` holds the one digest per repo image that every overlay uses. To move it to what `main` delivered:
+
+```bash
+gh run download <delivery-run-id> -n images-<sha> -D /tmp/images     # or: scripts/resolve-image-digests.sh ghcr.io/jcool10 <sha> '[]' > /tmp/images/images.env
+deploy/scripts/set-images.sh /tmp/images/images.env
+deploy/scripts/verify-image-digests.sh                                # each digest attested by delivery.yml on main
+```
+
+`set-images.sh` checks every line before it writes any; a line for an image the Component does not list rejects the whole file. The check `Manifests` runs `verify-image-digests.sh` on every PR that moves a digest.
+
+Third-party images (Postgres, Redis and its exporter, etcd, MinIO and `mc`, Mailpit, the Sealed Secrets controller) are pinned as `tag@sha256:…` in the manifests themselves. To move one, take the index digest from `docker buildx imagetools inspect <image>:<tag>`, change the tag and the digest together, then run `deploy/scripts/validate-manifests.sh` and `apply`. A controller upgrade also replaces the vendored manifest: download the release's `controller.yaml` to `deploy/upstream/sealed-secrets/controller-v<version>.yaml`, point `deploy/upstream/sealed-secrets/kustomization.yaml` at it and regenerate `deploy/upstream/SHA256SUMS` (`cd deploy/upstream && shasum -a 256 sealed-secrets/controller-v*.yaml`). The k3s version is `k3s_image` in `deploy/scripts/local-cluster.sh` and takes a rebuild.
+
+The kubeconform schemas in `deploy/schemas/` hold only the kinds the overlays use: Kubernetes 1.37.1 from `yannh/kubernetes-json-schema` at commit `47163ead3738a996c3e30be9691bb37b8071d9d3` (`v1.37.1-standalone-strict/<kind>-<group>-<version>.json`), and the SealedSecret from `datreeio/CRDs-catalog` at commit `3eb90d47aba8d61919d4419dd38301536e32a94b` (`bitnami.com/sealedsecret_v1alpha1.json`, saved as `sealedsecret-bitnami-v1alpha1.json`). A manifest with a new kind fails the check until its schema is added from the same commits and `deploy/schemas/SHA256SUMS` is regenerated (`cd deploy/schemas && shasum -a 256 *.json`).
+
+### Delete and rebuild
+
+`deploy/scripts/local-cluster.sh delete` removes the cluster and every volume in it: the data is gone. To rebuild:
+
+```bash
+deploy/scripts/local-cluster.sh delete && deploy/scripts/local-cluster.sh create && deploy/scripts/local-cluster.sh apply && deploy/scripts/local-cluster.sh seed
+```
+
+`create` applies `~/.config/jcool/sealed-secrets-local.key.yaml`, when it exists, before the controller starts, so the controller adopts the old key and the committed SealedSecrets still decrypt. Measured on an M4 (OrbStack, 8 GiB), with the images pulled from a registry on the same machine: 2m48s in all (`delete` 6s, `create` 67s, `apply` 92s, `seed` 3s). From GHCR, the first `apply` also downloads the images (about 4.3 GB unpacked).
+
+### The sealing key
+
+Key renewal is off (`--key-renew-period=0`), so the one backup taken after `create` stays valid for the life of the cluster. Without it, a new cluster generates a new key, and every committed SealedSecret stays sealed: `apply` stops at the wait for them to decrypt. Seal again (`seal-secrets.sh local seal` reads the same values file), commit the new ciphertext, and take a new backup. To restore from the password manager, put the file back at `~/.config/jcool/sealed-secrets-local.key.yaml` before `create`.
+
+### Change a secret
+
+Edit `~/.config/jcool/local.secrets.env`, run `deploy/scripts/seal-secrets.sh local seal`, commit what it changed (the sealed files and `overlays/local/apps/kustomization.yaml`), then `apply`. A SealedSecret update restarts nothing, so `seal` writes the sha256 of the sealed files into the `jcool.dev/sealed-secrets-sha` annotation of every `apps` pod template. kubeseal encrypts with a fresh session key each time, so every seal changes it and every app pod rolls. `apply` waits for the decryption before it rolls the apps; an Argo CD sync does not, so check that a new pod has the new value. This compares fingerprints, never the value:
+
+```bash
+kubectl --context k3d-jcool -n jcool exec deploy/payment-service -- sh -c 'printf %s "$INTERNAL_CALLER_TOKEN_ORDER_SERVICE" | sha256sum | cut -c1-12'
+sed -n 's/^ORDER_TO_PAYMENT=//p' ~/.config/jcool/local.secrets.env | tr -d '\n' | shasum -a 256 | cut -c1-12
+```
+
+That covers the values only the apps read: the internal tokens, `METRICS_TOKEN`, the signing keys and `CSRF_SECRET`, Stripe, `SMTP_URL`. A data store's credential is different: the store took it once, at its first start or its init script, and nothing restarts it on a seal. Changing only the Secret leaves the apps rolling onto a value the store refuses.
+
+### Change a data store credential
+
+Edit the values file and seal as above, then, per credential:
+
+- **`REDIS_PASSWORD`.** Before `apply`, add the new password next to the old one, so pods of either value authenticate while the apps roll. After `apply`, restart Redis: it comes back with only the new password, and so does its exporter.
+
+  ```bash
+  sed -n 's/^REDIS_PASSWORD=//p' ~/.config/jcool/local.secrets.env |
+    kubectl --context k3d-jcool -n jcool exec -i sts/redis -c redis -- sh -c 'read -r new && redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ACL SETUSER default ">$new"'
+  deploy/scripts/local-cluster.sh apply
+  kubectl --context k3d-jcool -n jcool rollout restart statefulset/redis
+  ```
+
+- **`<NAME>_DB_PASSWORD`, `POSTGRES_PASSWORD`.** Before `apply`, set the role's new password (`jcool`, `users`, `inventory`, `payment`, `"order"`, `temporal`, or `postgres`). Open connections keep working; a new connection from a pod that still holds the old value fails until the roll replaces it. Temporal is not an app, so after `apply` restart it for `TEMPORAL_DB_PASSWORD` (`rollout restart deployment/temporal`).
+
+  ```bash
+  sed -n 's/^USERS_DB_PASSWORD=//p' ~/.config/jcool/local.secrets.env |
+    kubectl --context k3d-jcool -n jcool exec -i sts/postgres -- sh -c "read -r pw && echo \"ALTER ROLE users PASSWORD :'pw';\" | psql -U postgres -v ON_ERROR_STOP=1 -q -v pw=\"\$pw\""
+  deploy/scripts/local-cluster.sh apply
+  ```
+
+- **`STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY` (MinIO, local).** After `apply`, `kubectl --context k3d-jcool -n jcool rollout restart statefulset/minio`; the bucket and its objects survive. Uploads fail from the api roll until MinIO is back.
+
+Each value goes in on stdin, so it never reaches your shell history or the terminal. Done this way on a running cluster (Redis, the `users` role and MinIO at once): no pod restarted, and the smoke and the internal-token check stayed green.
+
+### Add a database to the shared Postgres
+
+`postgres-init.sh` runs only on an empty data directory. For a new service, add its `<NAME>_DB_PASSWORD` to the `postgres-credentials` line in `deploy/scripts/seal-secrets.sh` and to the values file, add the role and database to `deploy/base/data/postgres-init.sh` for the next new cluster, seal, `apply`, then restart Postgres so it reads the new key, and create both by hand:
+
+```bash
+kubectl --context k3d-jcool -n jcool rollout restart statefulset/postgres
+kubectl --context k3d-jcool -n jcool rollout status statefulset/postgres
+kubectl --context k3d-jcool -n jcool exec -i sts/postgres -- sh -c 'psql -U postgres -v ON_ERROR_STOP=1 -v pw="$NAME_DB_PASSWORD"' <<'SQL'
+CREATE ROLE name LOGIN PASSWORD :'pw';
+CREATE DATABASE name OWNER name;
+REVOKE CONNECT ON DATABASE name FROM PUBLIC;
+SQL
+```
+
+### Clean up old ConfigMaps
+
+Every change to a generated ConfigMap (`apps-env`, `gateway-env`, `postgres-init`, `prometheus-config`) creates a new one with a new hash suffix. Neither `apply` nor Argo CD deletes the old one, because the pods of an older ReplicaSet, a rollback target or a canary's stable side may still mount it. List the ones nothing references any more, then delete them:
+
+```bash
+used=$(kubectl --context k3d-jcool -n jcool get pods,replicasets,statefulsets,controllerrevisions,jobs -o json |
+  yq -p json -r '.. | (.configMapRef?, .configMapKeyRef?, .configMap?) | select(. != null) | .name' | sort -u)
+kubectl --context k3d-jcool -n jcool get configmap -o name | sed 's|^configmap/||' |
+  grep -E -- '-[a-z0-9]{10}$' | grep -vxF -e "$used"
+# kubectl --context k3d-jcool -n jcool delete configmap <name>...
+```
 
 ---
 
@@ -1383,6 +1501,16 @@ Rotate one pair at a time, so a refusal names the pair that is behind. Take the 
 3. Once no request carries the old one (the callee logs `internal caller token not recognized` for a value it does not know), unset `_PREVIOUS` as [Change Railway service config](#change-railway-service-config) removes a variable, and redeploy the callee. Never set it to an empty string: a `_PREVIOUS` under 32 characters stops the callee from booting.
 
 The api and the user-service pair on `INTERNAL_API_TOKEN` rotates the same way ([Rotate `INTERNAL_API_TOKEN`](#rotate-internal_api_token)). Each service holds one `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` of its own, as the callee, so rotating the order-service's pair with the payment-service never changes what the inventory-service, the api or the user-service holds.
+
+#### Rotate one in a k3d or k3s cluster
+
+Under `deploy/`, both ends of a pair read one key of the Secret `internal-tokens` (`ORDER_TO_PAYMENT` is the order-service's `PAYMENT_SERVICE_TOKEN` and the payment-service's `INTERNAL_CALLER_TOKEN_ORDER_SERVICE`; `ORDER_TO_PAYMENT_PREVIOUS` is the callee's `_PREVIOUS`), and every seal rolls every app pod at once. Three seals let the callee accept the new value before any caller sends it. Each one is an edit of `~/.config/jcool/<overlay>.secrets.env`, then [seal and apply](#change-a-secret):
+
+1. Set `ORDER_TO_PAYMENT_PREVIOUS` to a new value (`openssl rand -hex 32`). The callee accepts both values; callers still send the old one.
+2. Swap: `ORDER_TO_PAYMENT` gets the new value and `ORDER_TO_PAYMENT_PREVIOUS` the old one. Callers now send the new value, which callee pods of both steps accept.
+3. Once the callee logs no `internal caller token not recognized`, blank `ORDER_TO_PAYMENT_PREVIOUS`. `seal` leaves a blank slot out of the Secret, and the reference to it is optional.
+
+After each step, compare fingerprints as in [Change a secret](#change-a-secret).
 
 #### A caller answered `401` or `403`
 

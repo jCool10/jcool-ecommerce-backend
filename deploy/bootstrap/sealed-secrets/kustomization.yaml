@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../upstream/sealed-secrets
+patches:
+  - target: {kind: Deployment, name: sealed-secrets-controller}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: docker.io/bitnami/sealed-secrets-controller:0.41.2@sha256:e63ec6ec2b12a471bf781081bd370a93ca7b7b3999e5b9243341379aeb801d0b
+      # One key for the life of the cluster, so the one backup taken after create stays valid.
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value: [--key-renew-period=0]

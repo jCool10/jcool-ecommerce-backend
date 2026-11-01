@@ -1,0 +1,19 @@
+# The apps' half of search, for the group that includes search-data's engine. jcool_api is the user
+# limited to products* (RUNBOOK); the engine's own password never reaches the apps.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+configMapGenerator:
+  - name: apps-env
+    behavior: merge
+    literals:
+      - SEARCH_ENABLED=true
+      - SEARCH_URL=http://elasticsearch:9200
+      - SEARCH_USERNAME=jcool_api
+patches:
+  - target: {kind: Deployment, labelSelector: "app.kubernetes.io/name in (api,api-worker)"}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: SEARCH_PASSWORD
+          valueFrom: {secretKeyRef: {name: search, key: API_SEARCH_PASSWORD}}

@@ -1,0 +1,49 @@
+# One node, so chunks and index stay on the volume; infra/loki/config.yaml keeps Railway's bucket.
+# Bound to [::] like that file, which serves IPv4 too.
+auth_enabled: false
+
+server:
+  http_listen_address: '::'
+  http_listen_port: 3100
+  grpc_listen_address: '::'
+  grpc_listen_port: 9095
+  log_level: info
+
+common:
+  path_prefix: /loki
+  replication_factor: 1
+  instance_addr: 127.0.0.1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+schema_config:
+  configs:
+    - from: 2026-09-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+ingester:
+  wal:
+    dir: /loki/wal
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+limits_config:
+  # Same window and the same reason as infra/loki/config.yaml: the lines carry email and IP.
+  retention_period: 720h
+  deletion_mode: disabled
+
+analytics:
+  reporting_enabled: false

@@ -1,0 +1,86 @@
+name: Manifests
+
+# No paths filter: a filtered-out run never reports, which would block a required check forever.
+# The job decides for itself and skips its steps when deploy/ did not change.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A push run only diffs before..sha, so one replaced while pending would leave its commits unchecked:
+# pushes get a group each, PRs keep one per ref and cancel the stale run.
+concurrency:
+  group: manifests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  manifests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect what changed
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # A new branch, or a base this clone does not have: check everything rather than guess.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            printf 'deploy=true\nimages=true\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A PR is judged on its own commits, not on what main gained since it forked.
+          if [ "$EVENT" = pull_request ]; then range="$BASE_SHA...$HEAD_SHA"; else range="$BASE_SHA..$HEAD_SHA"; fi
+          changed=$(git diff --name-only "$range")
+          deploy=false images=false
+          if grep -qE '^(deploy/|\.github/workflows/manifests\.yml$)' <<<"$changed"; then deploy=true; fi
+          if grep -q '^deploy/images/' <<<"$changed"; then images=true; fi
+          printf 'deploy=%s\nimages=%s\n' "$deploy" "$images" >>"$GITHUB_OUTPUT"
+
+      - name: Install kustomize, kubeconform and yq
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin" && cd "$RUNNER_TEMP/bin"
+          curl -fsSLo kustomize.tar.gz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.3/kustomize_v5.8.3_linux_amd64.tar.gz
+          curl -fsSLo kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          curl -fsSLo yq https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
+          sha256sum -c <<'EOF'
+          cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61  kustomize.tar.gz
+          9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  kubeconform.tar.gz
+          8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f  yq
+          EOF
+          tar -xzf kustomize.tar.gz kustomize
+          tar -xzf kubeconform.tar.gz kubeconform
+          chmod +x yq
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: Check upstream manifests and schemas
+        if: steps.changes.outputs.deploy == 'true'
+        run: |
+          (cd deploy/upstream && sha256sum -c --quiet SHA256SUMS)
+          (cd deploy/schemas && sha256sum -c --quiet SHA256SUMS)
+          # No schemas for the controller's CRD and RBAC kinds, so the bootstrap only has to render.
+          kustomize build deploy/bootstrap/sealed-secrets >/dev/null
+
+      - name: Validate manifests
+        if: steps.changes.outputs.deploy == 'true'
+        run: deploy/scripts/validate-manifests.sh
+
+      - name: Verify image attestations
+        if: steps.changes.outputs.images == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: deploy/scripts/verify-image-digests.sh

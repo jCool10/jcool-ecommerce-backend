@@ -1,0 +1,71 @@
+# Derived from the api's Postgres and rebuildable from it (RUNBOOK "Rebuild the search index").
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+spec:
+  selector: {app.kubernetes.io/name: elasticsearch}
+  ports:
+    - {name: http, port: 9200}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: elasticsearch}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: elasticsearch}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: elasticsearch
+          # Starts as root to chown the volume, then drops to uid 1000 (its railway-entrypoint.sh).
+          image: ghcr.io/jcool10/jcool-elasticsearch
+          env:
+            - {name: ES_JAVA_OPTS, value: -Xms512m -Xmx512m}
+            - name: ELASTIC_PASSWORD
+              valueFrom: {secretKeyRef: {name: search, key: ELASTIC_PASSWORD}}
+          ports:
+            - {name: http, containerPort: 9200}
+          readinessProbe:
+            exec:
+              command: [sh, -c, 'curl -fs -u "elastic:$ELASTIC_PASSWORD" "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s"']
+            periodSeconds: 10
+            timeoutSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: http}
+            initialDelaySeconds: 90
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 1Gi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /usr/share/elasticsearch/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 5Gi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elasticsearch
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: elasticsearch}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/name, operator: In, values: [api, api-worker]}
+      ports:
+        - port: 9200

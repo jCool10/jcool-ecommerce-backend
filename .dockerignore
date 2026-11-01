@@ -36,6 +36,7 @@ Dockerfile
 .dockerignore
 docker-compose.yml
 docker-compose.ci.yml
+deploy
 
 # Local-stack material. `infra` matters most: it holds infra/prometheus/secrets/, which the
 # builder's `COPY . .` would otherwise bake into a layer. Compose reaches these by bind mount

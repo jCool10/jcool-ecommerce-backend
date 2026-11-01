@@ -49,3 +49,9 @@ docs/test-dedup-backlog.md
 *.txt
 
 bruno/
+
+# Secret values and the sealing key belong in ~/.config/jcool; never commit a stray copy. Nor a
+# pg_dump (RUNBOOK → Backup and restore) taken from the repo root.
+*.secrets.env
+sealed-secrets-*.key.yaml
+*.dump

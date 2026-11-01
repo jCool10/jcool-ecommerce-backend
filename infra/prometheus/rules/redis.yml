@@ -1,0 +1,15 @@
+# Redis in the cluster runs with maxmemory and noeviction, because BullMQ needs every key it writes.
+# Full therefore does not evict: it refuses writes. Only the k8s Prometheus scrapes redis_exporter;
+# elsewhere the series are absent and the alert stays quiet.
+groups:
+  - name: redis
+    rules:
+      # `> 0` drops an instance with no maxmemory, which would otherwise divide to +Inf.
+      - alert: RedisMemoryNearMaxmemory
+        expr: redis_memory_used_bytes / (redis_memory_max_bytes > 0) > 0.8
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Redis has used more than 80% of maxmemory for 10 minutes'
+          description: 'At maxmemory Redis answers OOM to every write: queues, the outbox relay and rate limits fail together. Find what grew (`redis-cli --bigkeys`) before raising maxmemory and the pod limit.'

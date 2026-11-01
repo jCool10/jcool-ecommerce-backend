@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jcool
+  annotations:
+    # Every PVC lives in here; a pruned or deleted Application must never take the namespace with it.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false

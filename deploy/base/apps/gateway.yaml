@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  selector: {app.kubernetes.io/name: gateway}
+  ports:
+    - {name: http, port: 8080}
+    - {name: id-lb, port: 4000}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: {app.kubernetes.io/name: gateway}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: gateway}
+    spec:
+      # Caddy's shutdown_delay (5s) plus grace_period (10s).
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: gateway
+          image: ghcr.io/jcool10/jcool-gateway
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: id-lb, containerPort: 4000}
+          envFrom:
+            - configMapRef: {name: gateway-env}
+          env:
+            - {name: PORT, value: "8080"}
+            - {name: API_UPSTREAM, value: "api:3000"}
+            - {name: AUTH_UPSTREAM, value: "user-service:3000"}
+            - {name: AUTH_UPSTREAM_REQUIRED, value: "true"}
+            - {name: INVENTORY_UPSTREAM, value: "inventory-service:3000"}
+            - {name: PAYMENT_UPSTREAM, value: "payment-service:3000"}
+            - {name: ORDER_UPSTREAM, value: "order-service:3000"}
+            - {name: ID_LB_PORT, value: "4000"}
+            # dynamic a needs one A record per replica, which only a headless Service gives.
+            - {name: ID_SERVICE_HOST, value: id-service-headless}
+            - {name: ID_SERVICE_PORT, value: "3000"}
+            - {name: ID_LB_IP_VERSIONS, value: ipv4}
+            # The pod CIDR: Traefik sits in front.
+            - {name: TRUSTED_PROXY_CIDRS, value: 10.42.0.0/16}
+          # Live, not ready, on purpose: readiness of the only gateway must not follow the api's, or
+          # one api blip takes /auth and the webhook down with it.
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 64Mi}
