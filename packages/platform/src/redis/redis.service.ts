@@ -5,6 +5,8 @@ import { PinoLogger } from 'nestjs-pino';
 import { toError } from '@jcool/kernel';
 
 const LOG_CONTEXT = 'RedisService';
+// No blocking commands run on this client (BullMQ has its own connection), so every reply is quick.
+const REDIS_COMMAND_TIMEOUT_MS = 1_000;
 
 @Injectable()
 export class RedisService implements OnApplicationShutdown {
@@ -20,6 +22,9 @@ export class RedisService implements OnApplicationShutdown {
       // reads fall through to Postgres rather than hanging.
       enableOfflineQueue: false,
       maxRetriesPerRequest: 1,
+      // The offline queue only covers a dropped connection. A connected Redis that stops answering
+      // must also fail the command, or every cache read and readiness probe hangs on it.
+      commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
     });
 
     // Without an 'error' listener a lost connection crashes the process; log and let ioredis

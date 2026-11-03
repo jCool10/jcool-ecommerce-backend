@@ -152,4 +152,16 @@ describe('ReconcileTccPaymentsUseCase', () => {
     await expect(useCase.execute(SWEEP)).resolves.toMatchObject({ scanned: 2, errors: 1, expired: 1 });
     expect(store.payment('8002').status).toBe(PaymentStatus.EXPIRED);
   });
+
+  it('moves a payment that keeps failing behind the rest so it cannot fill every batch', async () => {
+    const { store, useCase, retrieveAuthorization } = setup();
+    pendingUnderOpen(store, '7001', '8001');
+    pendingUnderOpen(store, '7002', '8002');
+    retrieveAuthorization.mockRejectedValue(new PaymentGatewayError('Stripe refused'));
+
+    await useCase.execute({ ...SWEEP, batchSize: 1 });
+
+    const queue = await store.paymentRepo.findStaleTcc({ updatedBefore: new Date(), limit: 2 });
+    expect(queue.map((p) => p.id)).toEqual(['8002', '8001']);
+  });
 });

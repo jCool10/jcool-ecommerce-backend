@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ArrayNotEmpty, IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { IsSnowflakeId } from '@jcool/platform/interface';
+import { NoNullByte } from './no-null-byte.decorator';
 
 // A display slot, not the int4 ceiling `product_images.position` could hold: an omitted position is
 // derived as `max(position) + 1`, so a slot at the column's own limit would overflow on the next
@@ -28,6 +29,7 @@ export class AttachProductImageDto {
   @IsOptional()
   @IsString()
   @MaxLength(300)
+  @NoNullByte()
   alt?: string;
 }
 

@@ -155,6 +155,13 @@ describe('Catalog (integration, real Postgres + Redis)', () => {
       await request(app.getHttpServer()).get(`/products/${ABSENT_ID}`).expect(404);
       await request(app.getHttpServer()).get('/products/no-such-slug').expect(404);
     });
+
+    it('answers a null byte in the path with 404 and in the query with 400, never 500', async () => {
+      await request(app.getHttpServer()).get('/products/%00').expect(404);
+      await request(app.getHttpServer()).get('/products/a%00b').expect(404);
+      await request(app.getHttpServer()).get('/products?q=%00').expect(400);
+      await request(app.getHttpServer()).get('/products?q=a%00b').expect(400);
+    });
   });
 
   describe('admin writes', () => {

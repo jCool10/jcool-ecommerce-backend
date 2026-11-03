@@ -12,8 +12,9 @@ export class FakeRefreshTokenRepository implements RefreshTokenRepositoryPort {
   owner: RefreshTokenOwner | null = null;
   outcome: RotateOutcome = { status: 'invalid' };
   readonly created: CreateRefreshTokenInput[] = [];
+  readonly lookedUp: string[] = [];
   readonly rotations: RotateRefreshTokenInput[] = [];
-  readonly revoked: Array<{ userId: string; tokenHash: string }> = [];
+  readonly revokedFamilies: Array<{ userId: string; familyId: string }> = [];
   readonly revokedAllFor: string[] = [];
 
   constructor(readonly log: string[] = []) {}
@@ -24,8 +25,9 @@ export class FakeRefreshTokenRepository implements RefreshTokenRepositoryPort {
     return Promise.resolve();
   }
 
-  findOwner(): Promise<RefreshTokenOwner | null> {
+  findOwner(tokenHash: string): Promise<RefreshTokenOwner | null> {
     this.log.push('findOwner');
+    this.lookedUp.push(tokenHash);
     return Promise.resolve(this.owner);
   }
 
@@ -33,12 +35,6 @@ export class FakeRefreshTokenRepository implements RefreshTokenRepositoryPort {
     this.log.push('rotate');
     this.rotations.push(input);
     return Promise.resolve(this.outcome);
-  }
-
-  revoke(userId: string, tokenHash: string): Promise<void> {
-    this.log.push('revoke');
-    this.revoked.push({ userId, tokenHash });
-    return Promise.resolve();
   }
 
   revokeAllForUser(userId: string): Promise<void> {
@@ -51,8 +47,10 @@ export class FakeRefreshTokenRepository implements RefreshTokenRepositoryPort {
     return Promise.resolve([]);
   }
 
-  revokeFamily(): Promise<boolean> {
-    return Promise.resolve(false);
+  revokeFamily(userId: string, familyId: string): Promise<boolean> {
+    this.log.push('revokeFamily');
+    this.revokedFamilies.push({ userId, familyId });
+    return Promise.resolve(true);
   }
 
   deleteCollectable(): Promise<number> {

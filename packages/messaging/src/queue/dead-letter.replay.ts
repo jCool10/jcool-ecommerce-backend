@@ -2,6 +2,8 @@ import type { Job, JobsOptions, Queue } from 'bullmq';
 import type { DeadLetterJob } from './dead-letter';
 import { envelopeFields, isWellFormedEnvelope, jobIdFor, type DomainEventJob } from './domain-event.job';
 
+const DRY_RUN_DETAIL = 'dry run';
+
 export interface ReplayOutcome {
   messageId: string;
   eventType: string;
@@ -22,6 +24,7 @@ export interface ReplaySummary {
 export type InboxClaimLookup = (messageId: string) => Promise<Date | null>;
 
 export interface ReplayOptions {
+  /** How many messages a run replays, or on a dry run lists as replayable. Skipped entries do not count against it. */
   limit?: number;
   dryRun?: boolean;
   /** Required, not optional — an optional guard is one that gets forgotten during an incident. */
@@ -57,22 +60,48 @@ export async function replayDeadLetters(
   dlq: Queue,
   { limit = 100, dryRun = true, inboxLookup, inboxRetentionMs, force = false, jobOptionsFor }: ReplayOptions,
 ): Promise<ReplaySummary> {
-  // Nothing consumes the DLQ, so every job it holds is waiting.
-  const jobs = await dlq.getJobs(['waiting', 'prioritized'], 0, limit - 1, true);
   const outcomes: ReplayOutcome[] = [];
+  const seen = new Set<string>();
+  // Entries a pass leaves in the DLQ (skipped, or only previewed) sit ahead of the next page, so the
+  // cursor steps over exactly those. Always reading from 0 would never get past the first `limit`
+  // skipped entries to the replayable ones behind them.
+  let cursor = 0;
+  let actionable = 0;
 
-  for (const job of jobs as Job<DeadLetterJob>[]) {
-    // Per job, never per batch: one unreadable entry must not cost the record of which others went back.
-    try {
-      outcomes.push(await replayOne(main, dlq, job, { dryRun, inboxLookup, inboxRetentionMs, force, jobOptionsFor }));
-    } catch (error) {
-      outcomes.push({
-        messageId: job.data?.outboxId ?? job.id ?? 'unknown',
-        eventType: job.data?.eventType ?? 'unknown',
-        status: 'skipped',
-        detail: error instanceof Error ? error.message : String(error),
-      });
+  while (actionable < limit) {
+    // Nothing consumes the DLQ, so every job it holds is waiting.
+    const page = (await dlq.getJobs(
+      ['waiting', 'prioritized'],
+      cursor,
+      cursor + limit - 1,
+      true,
+    )) as Job<DeadLetterJob>[];
+
+    const handledBefore = outcomes.length;
+    for (const job of page) {
+      if (actionable >= limit) break;
+      if (job.id !== undefined && seen.has(job.id)) continue;
+      if (job.id !== undefined) seen.add(job.id);
+      // Per job, never per batch: one unreadable entry must not cost the record of which others went back.
+      let outcome: ReplayOutcome;
+      try {
+        outcome = await replayOne(main, dlq, job, { dryRun, inboxLookup, inboxRetentionMs, force, jobOptionsFor });
+      } catch (error) {
+        outcome = {
+          messageId: job.data?.outboxId ?? job.id ?? 'unknown',
+          eventType: job.data?.eventType ?? 'unknown',
+          status: 'skipped',
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+      outcomes.push(outcome);
+      if (outcome.status === 'replayed') actionable += 1;
+      else {
+        cursor += 1;
+        if (outcome.detail?.startsWith(DRY_RUN_DETAIL)) actionable += 1;
+      }
     }
+    if (page.length < limit || outcomes.length === handledBefore) break;
   }
 
   return {
@@ -128,7 +157,8 @@ async function replayOne(
   }
 
   if (dryRun) {
-    outcome.detail = force && olderThanRetention ? 'dry run (would be forced past the retention horizon)' : 'dry run';
+    outcome.detail =
+      force && olderThanRetention ? `${DRY_RUN_DETAIL} (would be forced past the retention horizon)` : DRY_RUN_DETAIL;
     return outcome;
   }
 

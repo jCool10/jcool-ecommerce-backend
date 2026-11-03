@@ -488,6 +488,28 @@ describe('ElasticsearchCatalogSearch', () => {
       }
     });
 
+    it('escapes the text of a field the engine did not highlight', async () => {
+      const engine = await startEngine(() =>
+        searchReply(1, [
+          {
+            _id: 'p1',
+            _source: { ...DOC, name: '<img src=x onerror=alert(1)>', description: 'Tom & "Jerry"' },
+          },
+        ]),
+      );
+      try {
+        const { items } = await engine.adapter.search(QUERY);
+
+        expect(items[0].name).toBe('<img src=x onerror=alert(1)>');
+        expect(items[0].highlight).toEqual({
+          name: '&lt;img src=x onerror=alert(1)&gt;',
+          description: 'Tom &amp; &quot;Jerry&quot;',
+        });
+      } finally {
+        await engine.stop();
+      }
+    });
+
     it('clamps the last page to the window and asks only for a count past it', async () => {
       const engine = await startEngine(() => searchReply(SEARCH_MAX_TOTAL_HITS, []));
       try {
@@ -518,7 +540,7 @@ describe('ElasticsearchCatalogSearch', () => {
         track_total_hits: SEARCH_MAX_TOTAL_HITS,
         // Equal scores would otherwise tie by internal doc order, which a merge reshuffles between pages.
         sort: [{ _score: { order: 'desc' } }, { id: { order: 'asc' } }],
-        highlight: { fields: { name: {}, description: {} } },
+        highlight: { encoder: 'html', fields: { name: {}, description: {} } },
         query: { bool: { filter: [{ term: { status: 'ACTIVE' } }, { term: { categorySlug: 'tools' } }] } },
       });
       expect(Object.keys(bodies[3])).not.toContain('highlight');

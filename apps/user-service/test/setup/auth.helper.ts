@@ -1,5 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
+import type { Pool } from 'pg';
 import request from 'supertest';
+import { hashRefreshToken } from '../../src/modules/user/application/hash-refresh-token';
 import {
   CSRF_HEADER,
   CSRF_TOKEN_COOKIE,
@@ -71,4 +73,14 @@ export function sessionFrom(res: request.Response): Session {
     refreshToken: values[REFRESH_TOKEN_COOKIE],
     csrfToken: values[CSRF_TOKEN_COOKIE],
   };
+}
+
+/** Moves a rotation `ageMs` into the past: the reuse grace window is measured from the stored rotation time. */
+export async function ageRotation(pool: Pool, rotatedAway: Session, ageMs: number): Promise<void> {
+  const { rowCount } = await pool.query(
+    `UPDATE refresh_tokens SET revoked_at = now() - ($2 * interval '1 millisecond')
+      WHERE token_hash = $1 AND replaced_by_token_id IS NOT NULL`,
+    [hashRefreshToken(rotatedAway.refreshToken), ageMs],
+  );
+  if (rowCount !== 1) throw new Error('ageRotation: that token was never rotated away');
 }

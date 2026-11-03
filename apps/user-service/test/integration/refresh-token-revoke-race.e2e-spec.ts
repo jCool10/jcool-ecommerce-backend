@@ -85,6 +85,32 @@ describe('Revoking a user/family races a concurrent rotation (integration, real 
     await refresh(sessionFrom(rotateRes)).expect(401);
   });
 
+  it('logout also revokes the successor of a rotation that was in flight', async () => {
+    const session = await loginAs(app, { email, password });
+    const holder = await holdLeafRowLock(session);
+
+    const rotating = fire(refresh(session));
+    let loggingOut: Promise<request.Response>;
+    try {
+      await waitForLockWaiters(pool, 1);
+      loggingOut = fire(request(app.getHttpServer()).post('/auth/logout').set(sessionHeaders(session)));
+      await waitForLockWaiters(pool, 2); // parked behind the rotation's shared user lock
+    } finally {
+      await holder.query('COMMIT');
+      holder.release();
+    }
+
+    const [rotateRes, logoutRes] = await Promise.all([rotating, loggingOut]);
+
+    expect(rotateRes.status).toBe(200);
+    expect(logoutRes.status).toBe(204);
+
+    const rows = await familyRowsOf(session);
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.every((row) => row.revoked_at !== null)).toBe(true);
+    await refresh(sessionFrom(rotateRes)).expect(401);
+  });
+
   it('revokeFamily also revokes the successor of a rotation that was in flight, answering 204 not 404', async () => {
     const session = await loginAs(app, { email, password });
     const { rows: familyRows } = await pool.query<{ family_id: string }>(

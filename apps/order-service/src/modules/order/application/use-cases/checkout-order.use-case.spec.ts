@@ -110,6 +110,7 @@ describe('CheckoutOrderUseCase', () => {
       archived: { views: [skuView({ isActive: false })] },
       'one SKU gone': { lines: TWO_LINES, views: [skuView()] },
       'every SKU gone': { views: [] },
+      'line over the quantity cap': { lines: [{ skuId: SKU, quantity: 11 }] },
     };
 
     const outcomes = await Promise.all(
@@ -179,7 +180,30 @@ describe('CheckoutOrderUseCase', () => {
       currency: 'VND',
       placedAt: order.placedAt,
       deadlineAt: order.paymentDeadlineAt,
+      tryStartedAt: expect.any(Date) as Date,
     });
+  });
+
+  it('starts the Try budget after the order is written, not when the order was stamped', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-03-03T00:00:00.000Z') });
+    try {
+      const { useCase, spies } = build();
+      spies.createReserving.mockImplementationOnce(({ order }: { order: Order }) => {
+        vi.setSystemTime(new Date('2026-03-03T00:00:01.500Z'));
+        return Promise.resolve({
+          created: true,
+          order: Order.rehydrate({ ...order, id: 'order-1', items: [...order.items] }),
+        });
+      });
+
+      await useCase.execute('u1');
+
+      const [start] = spies.reserve.mock.calls[0] as unknown as [{ placedAt: Date; tryStartedAt: Date }];
+      expect(start.placedAt.toISOString()).toBe('2026-03-03T00:00:00.000Z');
+      expect(start.tryStartedAt.toISOString()).toBe('2026-03-03T00:00:01.500Z');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('answers a held order as PENDING and counts it as created', async () => {
@@ -241,6 +265,8 @@ describe('CheckoutOrderUseCase', () => {
 
     expect(view).toMatchObject({ id: 'order-earlier', status: OrderStatus.PENDING });
     expect(spies.reserve).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ orderId: 'order-earlier' }));
+    const [start] = spies.reserve.mock.calls[0] as unknown as [{ tryStartedAt?: Date }];
+    expect(start.tryStartedAt).toBeUndefined();
     expect(spies.markCompleted).toHaveBeenCalledExactlyOnceWith({
       scope: SCOPE,
       key: KEY,

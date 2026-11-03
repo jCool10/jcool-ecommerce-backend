@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
+import { NoNullByte } from './no-null-byte.decorator';
 
 // Every field here is part of the read cache's key fingerprint, so an unbounded field is an
 // unbounded number of cache keys as well as an unbounded query.
@@ -48,5 +49,6 @@ export class ListProductsQueryDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @NoNullByte()
   q?: string;
 }

@@ -304,6 +304,11 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
       'Environment validation failed -> TRUST_PROXY: required in production; set the proxies to trust (subnets or a hop count), or "false" when nothing proxies',
     );
   }
+  // The localhost default suits a developer's engine; in production it would boot "enabled" and
+  // quietly answer every search with nothing.
+  if (env.NODE_ENV === NodeEnv.Production && env.SEARCH_ENABLED === 'true' && env.SEARCH_URL === undefined) {
+    throw new Error('Environment validation failed -> SEARCH_URL: required in production when SEARCH_ENABLED is true');
+  }
   const concurrency = env.QUEUE_WORKER_CONCURRENCY ?? POOL_RULE_DEFAULTS.QUEUE_WORKER_CONCURRENCY;
   const poolMax = env.DB_POOL_MAX ?? POOL_RULE_DEFAULTS.DB_POOL_MAX;
   if (concurrency + POOL_SPARE > poolMax) {

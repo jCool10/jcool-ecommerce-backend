@@ -1,6 +1,7 @@
 import {
   commandOutcomeOf,
   isCommandResponse,
+  isIdServiceUnavailable,
   isLockBudgetExhausted,
   isStatusResponse,
   isTryReservationResponse,
@@ -8,7 +9,7 @@ import {
   tryOutcomeOf,
 } from './guards';
 import { COMMAND_OUTCOME_STATUS, TRY_OUTCOME_STATUS, reservationRoutes } from './routes';
-import { COMMAND_OUTCOMES, LOCK_BUDGET_EXHAUSTED, TRY_OUTCOMES } from './types';
+import { COMMAND_OUTCOMES, ID_SERVICE_UNAVAILABLE, LOCK_BUDGET_EXHAUSTED, TRY_OUTCOMES } from './types';
 
 describe('inventory response guards', () => {
   it.each(TRY_OUTCOMES)('accepts a Try answered %s', (outcome) => {
@@ -92,6 +93,15 @@ describe('outcome and status code', () => {
     expect(isLockBudgetExhausted(503, null)).toBe(false);
     expect(isLockBudgetExhausted(500, busy)).toBe(false);
     expect(isLockBudgetExhausted(409, busy)).toBe(false);
+  });
+
+  it('tells an id-service outage apart from busy rows by its code alone', () => {
+    const noIds = { statusCode: 503, code: ID_SERVICE_UNAVAILABLE, message: 'Service unavailable' };
+    expect(isIdServiceUnavailable(503, noIds)).toBe(true);
+    expect(isLockBudgetExhausted(503, noIds)).toBe(false);
+    expect(isIdServiceUnavailable(503, { code: LOCK_BUDGET_EXHAUSTED })).toBe(false);
+    expect(isIdServiceUnavailable(500, noIds)).toBe(false);
+    expect(isIdServiceUnavailable(503, null)).toBe(false);
   });
 });
 

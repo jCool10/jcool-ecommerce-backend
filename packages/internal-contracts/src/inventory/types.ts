@@ -12,6 +12,9 @@ export type CommandOutcome = (typeof COMMAND_OUTCOMES)[number];
 export const LOCK_BUDGET_EXHAUSTED = 'LOCK_BUDGET_EXHAUSTED';
 export type LockBudgetExhausted = typeof LOCK_BUDGET_EXHAUSTED;
 
+/** The `code` of a 503 for a Try whose ids the id-service could not mint: the inventory-service itself is fine. */
+export const ID_SERVICE_UNAVAILABLE = 'ID_SERVICE_UNAVAILABLE';
+
 export const RESERVATION_COMMANDS = ['commit', 'release', 'restock'] as const;
 export type ReservationCommand = (typeof RESERVATION_COMMANDS)[number];
 

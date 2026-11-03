@@ -1,7 +1,7 @@
 import { type IncomingHttpHeaders, type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ClsService } from 'nestjs-cls';
-import { LOCK_BUDGET_EXHAUSTED } from '@jcool/internal-contracts';
+import { ID_SERVICE_UNAVAILABLE, LOCK_BUDGET_EXHAUSTED } from '@jcool/internal-contracts';
 import { CircuitBreakerFactory, DownstreamUnavailableError, type OutboundCall } from '@jcool/platform/resilience';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { type FakeMetricsPort, fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
@@ -28,6 +28,10 @@ const SKU_ID = '137465797020397180';
 const BUSY_ROWS: Reply = {
   status: 503,
   body: { statusCode: 503, code: LOCK_BUDGET_EXHAUSTED, message: 'Service unavailable' },
+};
+const NO_IDS: Reply = {
+  status: 503,
+  body: { statusCode: 503, code: ID_SERVICE_UNAVAILABLE, message: 'Service unavailable' },
 };
 const TOKEN = 'api-to-inventory-token-api-to-inventory-token';
 const HOLD_UNTIL = new Date('2026-10-21T10:00:00.000Z');
@@ -194,8 +198,10 @@ describe('OrderInventoryParticipantHttpAdapter', () => {
 
   it.each<[string, Reply, string | undefined]>([
     ['a 503 coded for busy rows', BUSY_ROWS, LOCK_BUDGET_EXHAUSTED],
+    ['a 503 coded for an id-service outage', NO_IDS, ID_SERVICE_UNAVAILABLE],
     ['a bare 503', { status: 503 }, undefined],
     ['a 500 that borrows the code', { status: 500, body: { code: LOCK_BUDGET_EXHAUSTED } }, undefined],
+    ['a 500 that borrows the id-service code', { status: 500, body: { code: ID_SERVICE_UNAVAILABLE } }, undefined],
   ])('keeps the busy-rows code from %s only where the contract puts it', async (_case, reply, code) => {
     inventory.reply = () => reply;
 
@@ -213,6 +219,7 @@ describe('OrderInventoryParticipantHttpAdapter', () => {
     ['a 409 with no outcome', new InventoryServiceRejection(409, '/x'), false],
     ['a 429', new InventoryServiceRejection(429, '/x'), false],
     ['a 503 for busy rows', new InventoryServiceRejection(503, '/x', LOCK_BUDGET_EXHAUSTED), false],
+    ['a 503 for an id-service outage', new InventoryServiceRejection(503, '/x', ID_SERVICE_UNAVAILABLE), false],
     ['a 500', new InventoryServiceRejection(500, '/x'), true],
     ['a 503', new InventoryServiceRejection(503, '/x'), true],
     ['a refused connection', new TypeError('fetch failed'), true],
@@ -265,6 +272,20 @@ describe('OrderInventoryParticipantHttpAdapter', () => {
       const target = guarded();
       inventory.reply = () => BUSY_ROWS;
       for (let i = 0; i < 4; i++) await target.commit(ORDER_ID).catch(() => undefined);
+
+      inventory.reply = () => ({ status: 200, body: { outcome: 'APPLIED' } });
+      await expect(target.commit(ORDER_ID)).resolves.toBe('APPLIED');
+    });
+
+    // A Try that cannot mint ids says nothing about Commit and Release, which mint nothing.
+    it('keeps the circuit closed through an id-service outage seen by Try, so Commit and Release still go out', async () => {
+      const target = guarded();
+      inventory.reply = () => NO_IDS;
+      for (let i = 0; i < 4; i++) {
+        await target
+          .tryReserve({ orderId: ORDER_ID, lines: [{ skuId: SKU_ID, quantity: 1 }], holdUntil: HOLD_UNTIL })
+          .catch(() => undefined);
+      }
 
       inventory.reply = () => ({ status: 200, body: { outcome: 'APPLIED' } });
       await expect(target.commit(ORDER_ID)).resolves.toBe('APPLIED');

@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import { decodeProtectedHeader } from 'jose';
 import type { Pool } from 'pg';
 import request from 'supertest';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashRefreshToken } from '../../src/modules/user/application/hash-refresh-token';
 import {
   EMAIL_VERIFICATION_TOKEN_REPOSITORY,
@@ -13,12 +13,14 @@ import {
   PASSWORD_RESET_TOKEN_REPOSITORY,
   type PasswordResetTokenRepositoryPort,
 } from '../../src/modules/user/application/ports/password-reset-token-repository.port';
+import { AUTH_AUDIT, type AuthAuditPort } from '../../src/modules/user/application/ports';
 import { sha256Hex } from '../../src/modules/user/application/sha256-hex';
 import {
   CSRF_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,
 } from '../../src/modules/user/interface/security/auth-cookie.constants';
 import {
+  ageRotation,
   authHeader,
   cookieValueOf,
   loginAs,
@@ -33,6 +35,10 @@ import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from
 import { waitForLockWaiters } from '../setup/lock-waiters.helper';
 import { RbacProbeController } from '../setup/rbac-probe.controller';
 import { signHs256 } from '../setup/signing-keys';
+
+// The harness leaves REFRESH_REUSE_GRACE at its 20 s default.
+const GRACE_MS = 20_000;
+const PAST_GRACE_MS = GRACE_MS * 3;
 
 describe('Auth (integration, real Postgres + Redis)', () => {
   let app: INestApplication;
@@ -339,6 +345,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       const successorAccess = rotated.body.accessToken as string;
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(200);
 
+      await ageRotation(pool, first, PAST_GRACE_MS);
       await refresh(first).expect(401);
 
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(successorAccess)).expect(401);
@@ -347,6 +354,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
     it('does not bump the epoch or re-alert on a second replay of the same superseded token', async () => {
       const first = await loginAs(app, { email, password });
       await refresh(first).expect(200);
+      await ageRotation(pool, first, PAST_GRACE_MS);
 
       await refresh(first).expect(401); // first replay: still-live successor found and revoked
       const epochAfterFirstReplay = await tokenEpochOf(email);
@@ -356,7 +364,7 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(await tokenEpochOf(email)).toBe(epochAfterFirstReplay);
     });
 
-    it('lets one of two concurrent refreshes rotate and treats the other as reuse', async () => {
+    it('lets one of two concurrent refreshes rotate and refuses the other as a replay, revoking nothing', async () => {
       const first = await loginAs(app, { email, password });
 
       // Holding the row lets both requests pass the unlocked owner read and queue on the rotate lock.
@@ -378,10 +386,12 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(results.map((res) => res.status).sort()).toEqual([200, 401]);
       const family = await familyOf(first);
       expect(family).toHaveLength(2);
-      expect(family.every((token) => token.revoked_at !== null)).toBe(true);
+      // Only the token that was rotated away is retired; the winner's successor is still live.
+      expect(family.filter((token) => token.revoked_at === null)).toHaveLength(1);
+      expect(await tokenEpochOf(email)).toBe(0);
       const winner = results.find((res) => res.status === 200)!;
-      await refresh(sessionFrom(winner)).expect(401);
-      await request(app.getHttpServer()).get('/auth/me').set(authHeader(winner.body.accessToken)).expect(401);
+      await request(app.getHttpServer()).get('/auth/me').set(authHeader(winner.body.accessToken)).expect(200);
+      await refresh(sessionFrom(winner)).expect(200);
     });
 
     it('treats a replaced token that has also expired as reuse and revokes the family', async () => {
@@ -390,12 +400,55 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       await pool.query(`UPDATE refresh_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1`, [
         hashRefreshToken(first.refreshToken),
       ]);
+      await ageRotation(pool, first, PAST_GRACE_MS);
 
       await refresh(first).expect(401);
 
       expect((await familyOf(first)).every((token) => token.revoked_at !== null)).toBe(true);
       await refresh(sessionFrom(rotated)).expect(401);
       await request(app.getHttpServer()).get('/auth/me').set(authHeader(rotated.body.accessToken)).expect(401);
+    });
+
+    describe('reuse grace window', () => {
+      it('refuses a replay inside the window without revoking the family, bumping the epoch or alerting', async () => {
+        const first = await loginAs(app, { email, password });
+        const rotated = await refresh(first).expect(200);
+        const record = vi.spyOn(app.get<AuthAuditPort>(AUTH_AUDIT, { strict: false }), 'record');
+
+        await refresh(first).expect(401);
+
+        expect(await tokenEpochOf(email)).toBe(0);
+        expect(record).not.toHaveBeenCalled();
+        record.mockRestore();
+        expect((await familyOf(first)).filter((token) => token.revoked_at === null)).toHaveLength(1);
+        await request(app.getHttpServer()).get('/auth/me').set(authHeader(rotated.body.accessToken)).expect(200);
+        await refresh(sessionFrom(rotated)).expect(200);
+      });
+
+      it('measures the window from the stored rotation time, to the edge', async () => {
+        const first = await loginAs(app, { email, password });
+        const rotated = await refresh(first).expect(200);
+
+        await ageRotation(pool, first, GRACE_MS - 5_000);
+        await refresh(first).expect(401);
+        expect(await tokenEpochOf(email)).toBe(0);
+
+        await ageRotation(pool, first, GRACE_MS + 5_000);
+        await refresh(first).expect(401);
+        expect(await tokenEpochOf(email)).toBe(1);
+        expect((await familyOf(first)).every((token) => token.revoked_at !== null)).toBe(true);
+        await refresh(sessionFrom(rotated)).expect(401);
+      });
+
+      it('does not extend the window to a token that logout revoked', async () => {
+        const first = await loginAs(app, { email, password });
+        await request(app.getHttpServer()).post('/auth/logout').set(sessionHeaders(first)).expect(204);
+
+        await refresh(first).expect(401);
+
+        expect(await tokenEpochOf(email)).toBe(0);
+        expect((await familyOf(first)).every((token) => token.revoked_at !== null)).toBe(true);
+      });
     });
 
     it('rejects a refresh with no cookie at all with 403', async () => {
@@ -410,6 +463,23 @@ describe('Auth (integration, real Postgres + Redis)', () => {
 
     beforeEach(async () => {
       await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
+    });
+
+    // The cookie is Path=/auth, so a page elsewhere cannot read it: the body is its only way to the token.
+    it('returns the CSRF token in the login and refresh bodies, equal to the cookie it set', async () => {
+      const login = await request(app.getHttpServer()).post('/auth/login').send({ email, password }).expect(200);
+      expect(login.body.csrfToken).toBe(cookieValueOf(login, CSRF_TOKEN_COOKIE));
+
+      const session = sessionFrom(login);
+      const cookiesOnly = { Cookie: sessionHeaders(session).Cookie };
+      const refreshed = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set(cookiesOnly)
+        .set('x-csrf-token', login.body.csrfToken as string)
+        .expect(200);
+
+      expect(refreshed.body.csrfToken).toBe(cookieValueOf(refreshed, CSRF_TOKEN_COOKIE));
+      expect(refreshed.body.csrfToken).not.toBe(login.body.csrfToken);
     });
 
     it('rejects a refresh with the cookie but no CSRF header with 403', async () => {
@@ -468,7 +538,50 @@ describe('Auth (integration, real Postgres + Redis)', () => {
       expect(res.status).toBe(401);
     });
 
-    it('rejects a repeat logout with the now-revoked token (401 at the guard)', async () => {
+    it('ends the session from the refresh cookie and CSRF pair alone, once the access token is gone', async () => {
+      const session = await loginAs(app, { email, password });
+
+      await request(app.getHttpServer()).post('/auth/logout').set(sessionHeaders(session)).expect(204);
+
+      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session)).expect(401);
+    });
+
+    it('ignores an access token that is not live, and still ends the session', async () => {
+      const session = await loginAs(app, { email, password });
+
+      await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set(authHeader('not.a.token'))
+        .set(sessionHeaders(session))
+        .expect(204);
+
+      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session)).expect(401);
+    });
+
+    it('revokes every token of the session, including one already rotated in', async () => {
+      const first = await loginAs(app, { email, password });
+      const rotated = sessionFrom(await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)));
+
+      await request(app.getHttpServer()).post('/auth/logout').set(sessionHeaders(rotated)).expect(204);
+
+      const { rows } = await pool.query<{ revoked_at: Date | null }>(
+        `SELECT revoked_at FROM refresh_tokens WHERE family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = $1)`,
+        [hashRefreshToken(first.refreshToken)],
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows.every((row) => row.revoked_at !== null)).toBe(true);
+    });
+
+    it("leaves the user's other sessions alone", async () => {
+      const here = await loginAs(app, { email, password });
+      const elsewhere = await loginAs(app, { email, password });
+
+      await request(app.getHttpServer()).post('/auth/logout').set(sessionHeaders(here)).expect(204);
+
+      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(elsewhere)).expect(200);
+    });
+
+    it('answers a repeat logout with the same 204', async () => {
       const session = await loginAs(app, { email, password });
 
       await request(app.getHttpServer())
@@ -476,13 +589,23 @@ describe('Auth (integration, real Postgres + Redis)', () => {
         .set(authHeader(session.accessToken))
         .set(sessionHeaders(session))
         .expect(204);
+      await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set(authHeader(session.accessToken))
+        .set(sessionHeaders(session))
+        .expect(204);
+    });
 
-      // Denylisted, so the global JwtAuthGuard answers before the route's CsrfGuard.
+    it('refuses a logout without the CSRF header with 403', async () => {
+      const session = await loginAs(app, { email, password });
+
       const res = await request(app.getHttpServer())
         .post('/auth/logout')
         .set(authHeader(session.accessToken))
-        .set(sessionHeaders(session));
-      expect(res.status).toBe(401);
+        .set({ Cookie: sessionHeaders(session).Cookie });
+
+      expect(res.status).toBe(403);
+      await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session)).expect(200);
     });
   });
 

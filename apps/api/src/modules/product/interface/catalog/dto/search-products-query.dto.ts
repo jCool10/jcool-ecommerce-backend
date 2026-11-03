@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
+import { NoNullByte } from './no-null-byte.decorator';
 
 // `q` is required, unlike the list endpoint's optional substring filter: a relevance search with no
 // terms has nothing to rank by. `categorySlug` reaches the engine as an exact term, never parsed as
@@ -18,6 +19,7 @@ export class SearchProductsQueryDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(100)
+  @NoNullByte()
   q!: string;
 
   @ApiPropertyOptional({

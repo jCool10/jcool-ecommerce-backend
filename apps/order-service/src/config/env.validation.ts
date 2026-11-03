@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, Min, MinLength } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Matches, Max, Min, MinLength } from 'class-validator';
 import { MIN_INBOX_RETENTION_DAYS } from '@jcool/messaging';
 import {
   AppEnv,
@@ -20,6 +20,10 @@ import { CheckoutSagaEnv, assertCheckoutSagaEnv } from './checkout-saga.env';
 const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
 );
+
+// Same grammar as durationToMs, which throws on a bare number rather than guess its unit.
+const DURATION = /^\s*\d+(ms|s|m|h|d)\s*$/i;
+const DURATION_MESSAGE = '$property must be a number with a unit (ms, s, m, h or d), e.g. 10m';
 
 const HTTP_URL = { require_tld: false, require_protocol: true, protocols: ['http', 'https'] };
 
@@ -137,8 +141,7 @@ export class EnvironmentVariables extends CheckoutSagaEnv(PlatformEnv) {
   USER_SERVICE_TIMEOUT_MS?: number;
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
+  @Matches(DURATION, { message: DURATION_MESSAGE })
   USER_DIRECTORY_NOT_FOUND_GRACE?: string;
 
   @IsUrl(HTTP_URL)

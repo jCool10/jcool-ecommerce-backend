@@ -14,6 +14,7 @@ import {
   SearchHitDto,
   SearchProductsQueryDto,
 } from './dto';
+import { ParseProductIdOrSlugPipe } from './parse-product-id-or-slug.pipe';
 
 /** `@Public()` is applied per handler, so any future write handler here defaults to protected. */
 @ApiTags('catalog')
@@ -70,7 +71,7 @@ export class CatalogController {
   @ApiParam({ name: 'idOrSlug', description: 'Product id (decimal string) or slug' })
   @ApiOkResponse({ type: ProductResponseDto })
   @ApiNotFoundResponse({ description: 'Product not found or not ACTIVE' })
-  async detail(@Param('idOrSlug') idOrSlug: string): Promise<ProductResponseDto> {
+  async detail(@Param('idOrSlug', ParseProductIdOrSlugPipe) idOrSlug: string): Promise<ProductResponseDto> {
     const { product, imageUrls } = await this.getProductDetail.execute(idOrSlug);
     return ProductResponseDto.fromEntity(product, imageUrls);
   }

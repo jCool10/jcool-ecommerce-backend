@@ -1,9 +1,10 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { isCheckViolation } from '@jcool/platform/database';
 import { DRIZZLE, type DrizzleDB } from '../../../database';
 import { ID_GENERATOR, type IdGeneratorPort, mintOne } from '../application/ports/id-generator.port';
 import type { StockAdminPort, StockView } from '../application/ports/stock-admin.port';
+import { MAX_STOCK_ON_HAND } from '../domain/stock-limits';
 import { stockLevels } from './schema/stock.schema';
 
 // The two data-layer invariants an operator write can hit. Both come back as 409 rather than 500:
@@ -67,10 +68,21 @@ export class StockAdminRepository implements StockAdminPort {
           quantityOnHand: sql`${stockLevels.quantityOnHand} + ${delta}`,
           version: sql`${stockLevels.version} + 1`,
         })
-        .where(eq(stockLevels.variantId, variantId))
+        // The ceiling is in the statement, not a prior read, so concurrent adjustments cannot jointly pass it.
+        .where(
+          and(
+            eq(stockLevels.variantId, variantId),
+            sql`${stockLevels.quantityOnHand} + ${delta} <= ${MAX_STOCK_ON_HAND}`,
+          ),
+        )
         .returning({ onHand: stockLevels.quantityOnHand, reserved: stockLevels.quantityReserved }),
     );
-    return row ? toView(row) : null;
+    if (row) return toView(row);
+    // No row: either the level does not exist, or the ceiling refused the change.
+    if (await this.getLevel(variantId)) {
+      throw new ConflictException(`Stock level must stay at or below ${MAX_STOCK_ON_HAND}`);
+    }
+    return null;
   }
 
   private async guardChecks<T>(write: () => Promise<T>): Promise<T> {

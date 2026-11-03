@@ -38,6 +38,15 @@ describe('env validation', () => {
     expect(required.filter((name) => refusal({ ...BASE_ENV, [name]: undefined })?.includes(name))).toEqual(required);
   });
 
+  it('refuses the public .env.example webhook secret in production only', () => {
+    const placeholder = { PAYMENT_WEBHOOK_SECRET: 'whsec_dev_only_change_me_openssl_rand_hex_24' };
+    const production = { ...BASE_ENV, ...STRIPE_ENV, NODE_ENV: NodeEnv.Production };
+
+    expect(() => validate({ ...production, ...placeholder })).toThrow(/PAYMENT_WEBHOOK_SECRET/);
+    expect(() => validate({ ...production, PAYMENT_WEBHOOK_SECRET: 'whsec_a_real_secret_value_123' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, ...placeholder })).not.toThrow();
+  });
+
   it('refuses to boot in production without a Stripe key and success URL', () => {
     const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production };
 

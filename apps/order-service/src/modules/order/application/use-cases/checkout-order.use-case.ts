@@ -12,7 +12,7 @@ import { PinoLogger } from 'nestjs-pino';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import type { CheckoutSagaConfig } from '../../../../config/checkout-saga.config';
 import { getIdempotencyContext, type IdempotencyContext } from '../../../../shared/idempotency';
-import { MAX_PENDING_ORDERS_PER_USER } from '../../order.constants';
+import { MAX_PENDING_ORDERS_PER_USER, MAX_QUANTITY_PER_ORDER_LINE } from '../../order.constants';
 import type { ReserveOutcome } from '../../domain/checkout-saga';
 import { Order } from '../../domain/order.entity';
 import { OrderItem } from '../../domain/order-item.entity';
@@ -81,7 +81,9 @@ export class CheckoutOrderUseCase {
       return this.replay(order, idempotency);
     }
 
-    const outcome = await this.reserve(order);
+    // Stamped after the id mint and the per-user lock wait, which the Try's budget must not pay for.
+    // A reused order keeps its placedAt budget, so a stale one is still abandoned.
+    const outcome = await this.reserve(order, created ? new Date() : undefined);
     if (outcome === null) {
       return this.replayAfterClose(order.id as string, idempotency);
     }
@@ -127,9 +129,9 @@ export class CheckoutOrderUseCase {
   }
 
   /** null: the run has already closed, so only the order row can tell what happened. */
-  private async reserve(order: Order): Promise<ReserveOutcome | null> {
+  private async reserve(order: Order, tryStartedAt: Date | undefined): Promise<ReserveOutcome | null> {
     try {
-      return await this.engine.reserve(toCheckoutSagaStart(order, 'checkout'));
+      return await this.engine.reserve({ ...toCheckoutSagaStart(order, 'checkout'), tryStartedAt });
     } catch (error) {
       if (error instanceof CheckoutSagaClosedError) return null;
       if (error instanceof CheckoutEngineUnavailableError) {
@@ -195,6 +197,12 @@ export class CheckoutOrderUseCase {
       }
       if (skuView.unitPriceMinor == null) {
         throw new BadRequestException(`SKU is not purchasable (no price): ${line.skuId}`);
+      }
+      // Order.create guards this too; checked here so the buyer gets a 400, not the 422 of a reused key.
+      if (line.quantity > MAX_QUANTITY_PER_ORDER_LINE) {
+        throw new BadRequestException(
+          `Order line quantity must not exceed ${MAX_QUANTITY_PER_ORDER_LINE} per SKU: ${line.skuId}`,
+        );
       }
       if (skuView.currency !== currency) {
         throw new BadRequestException('Cart mixes currencies; cannot create a single-currency order');

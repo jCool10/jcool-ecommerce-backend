@@ -157,7 +157,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (exception instanceof DomainError) {
       return UNPROCESSABLE_ENTITY;
     }
-    return SERVER_ERROR_MIN;
+    return exposedClientError(exception)?.status ?? SERVER_ERROR_MIN;
   }
 
   private resolveMessage(exception: unknown, status: number): unknown {
@@ -182,7 +182,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       return exception.message;
     }
 
-    return 'Unexpected error';
+    return exposedClientError(exception)?.message ?? 'Unexpected error';
   }
 
   // Shape-based (not route/type) so a hand-thrown 5xx with a raw string is still masked.
@@ -209,6 +209,15 @@ function withoutQueryString(message: unknown, url: string): unknown {
   const query = url.slice(queryAt);
   const strip = (value: unknown): unknown => (typeof value === 'string' ? value.replaceAll(query, '') : value);
   return Array.isArray(message) ? message.map(strip) : strip(message);
+}
+
+// body-parser's own errors (413 too large, 415 charset/encoding) come from `http-errors`, not Nest:
+// `expose` marks a status and message meant for the client.
+function exposedClientError(exception: unknown): { status: number; message: string } | undefined {
+  if (!(exception instanceof Error)) return undefined;
+  const { expose, status } = exception as Error & { expose?: unknown; status?: unknown };
+  if (expose !== true || typeof status !== 'number' || status < 400 || status >= SERVER_ERROR_MIN) return undefined;
+  return { status, message: exception.message };
 }
 
 const MALFORMED_BODY_REASON = 'malformed request body';

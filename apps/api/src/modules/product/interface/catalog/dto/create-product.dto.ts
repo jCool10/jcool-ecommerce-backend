@@ -3,12 +3,14 @@ import { IsIn, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class
 import { IsSnowflakeId } from '@jcool/platform/interface';
 import { PRODUCT_STATUSES, type ProductStatus } from '../../../domain/catalog/entities';
 import { SLUG_MESSAGE, SLUG_PATTERN } from './create-category.dto';
+import { NoNullByte } from './no-null-byte.decorator';
 
 export class CreateProductDto {
   @ApiProperty({ example: 'Wireless Headphones', maxLength: 200 })
   @IsString()
   @MinLength(1)
   @MaxLength(200)
+  @NoNullByte()
   name!: string;
 
   @ApiProperty({ example: 'wireless-headphones', description: 'URL-safe unique slug' })
@@ -21,6 +23,7 @@ export class CreateProductDto {
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  @NoNullByte()
   description?: string;
 
   @ApiProperty({ example: '137465797020397179', description: 'Category id — must exist and be active' })

@@ -130,6 +130,37 @@ describe('Cart (integration, real Postgres + Redis)', () => {
     });
   });
 
+  describe('POST /cart/items with a SKU that is not on sale', () => {
+    it('answers 404 for a DRAFT product and for an archived one', async () => {
+      const token = await newPrincipalToken(app);
+      const draft = await createTestProduct(app, { status: 'DRAFT' });
+      const archived = await createTestProduct(app, { status: 'ARCHIVED' });
+
+      for (const { variantId } of [draft, archived]) {
+        const res = await request(server())
+          .post('/cart/items')
+          .set(authHeader(token))
+          .send({ skuId: variantId, quantity: 1 });
+        expect(res.status).toBe(404);
+      }
+    });
+  });
+
+  describe('writes by a user with no cart', () => {
+    it('create no cart row', async () => {
+      const token = await newPrincipalToken(app);
+
+      expect(
+        (await request(server()).patch(`/cart/items/${ABSENT_ID}`).set(authHeader(token)).send({ quantity: 2 })).status,
+      ).toBe(404);
+      expect((await request(server()).delete(`/cart/items/${ABSENT_ID}`).set(authHeader(token))).status).toBe(200);
+      expect((await request(server()).delete('/cart').set(authHeader(token))).status).toBe(200);
+
+      const { rows } = await pool.query('select count(*)::int as n from carts');
+      expect(rows[0].n).toBe(0);
+    });
+  });
+
   describe('PATCH /cart/items/:skuId', () => {
     it('sets a line to an absolute quantity', async () => {
       const token = await newPrincipalToken(app);

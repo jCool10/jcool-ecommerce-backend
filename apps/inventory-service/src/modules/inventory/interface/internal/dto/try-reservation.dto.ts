@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   ArrayUnique,
   IsArray,
@@ -11,6 +12,7 @@ import {
   type ValidationOptions,
 } from 'class-validator';
 import type { ReservationLineBody, TryReservationBody } from '@jcool/internal-contracts';
+import { MAX_RESERVATION_LINES } from '../../../domain/stock-limits';
 import { IsSnowflakeId } from '@jcool/platform/interface';
 
 function IsInTheFuture(options?: ValidationOptions): PropertyDecorator {
@@ -38,6 +40,7 @@ export class ReservationLineDto implements ReservationLineBody {
 export class TryReservationDto implements TryReservationBody {
   @IsArray()
   @ArrayNotEmpty()
+  @ArrayMaxSize(MAX_RESERVATION_LINES)
   // The participant holds a variant once per order, so a second line for it would be dropped silently.
   @ArrayUnique((line: ReservationLineDto | null) => line?.variantId, { message: 'lines must name each variant once' })
   @ValidateNested({ each: true })

@@ -1,5 +1,6 @@
 import { type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { type JWK, SignJWT, exportJWK, generateKeyPair, jwtVerify } from 'jose';
 import type { Mock } from 'vitest';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
@@ -88,6 +89,37 @@ describe('authVerifierOptions', () => {
 
       await expect(verify(await sign(key), options)).resolves.toMatchObject({ payload: { sub: 'user-1' } });
       expect(options).toMatchObject({ issuer: ISSUER, audience: AUDIENCE });
+    });
+
+    describe('before any key set has loaded', () => {
+      it.each([
+        ['answers an error status', (server: JwksServer) => (server.down = true)],
+        ['never answers', (server: JwksServer) => (server.hang = true)],
+      ])('fails with a 503, not a bad-credential error, when the endpoint %s', async (_name, breakIt) => {
+        const key = await signingKey('k1');
+        jwks.published = [key.jwk];
+        breakIt(jwks);
+
+        const failure = await verify(await sign(key)).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(ServiceUnavailableException);
+      });
+
+      it('still refuses a token whose key the loaded set does not hold as a bad credential', async () => {
+        const [known, unknown] = await Promise.all([signingKey('k1'), signingKey('k2')]);
+        jwks.published = [known.jwk];
+
+        const failure = await verify(await sign(unknown)).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+        expect(failure).not.toBeInstanceOf(ServiceUnavailableException);
+        expect(failure).toBeInstanceOf(Error);
+      });
     });
 
     describe('once the cache is stale', () => {

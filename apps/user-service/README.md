@@ -27,6 +27,16 @@ The three link pages are left out of the OpenAPI document, take the same throttl
 
 Header `{ alg: "ES256", kid, typ: "JWT" }`, claims `sub`, `role`, `epoch`, `jti`, `iss` (`JWT_ISSUER`), `aud` (`JWT_AUDIENCE`), `iat`, `exp`. `@jcool/auth-verifier` checks the signature, then the denylist, then the epoch. ES256 is its only verification path: any other `alg` is refused before its signature is looked at.
 
+### Refresh, logout and the CSRF token
+
+`POST /auth/login` and `POST /auth/refresh` answer `{ accessToken, expiresIn, csrfToken }`. `csrfToken` is the value of the `csrf_token` cookie, repeated in the body because that cookie is `Path=/auth`: a page served from anywhere else cannot read it, so a browser client keeps this one in memory and sends it as the `x-csrf-token` header on `POST /auth/refresh` and `POST /auth/logout`. The cookie stays the comparison half, and the pair must match and carry a valid signature. Each login and refresh issues a new token.
+
+`POST /auth/logout` is authorised by the refresh cookie and the CSRF pair, not by an access token, so a session can still be ended after its access token expired. It revokes the whole session (the token family) under the same per-user lock a rotation takes, so a refresh running at the same moment leaves no live successor. If an `Authorization: Bearer` header is sent and the token is a live one this service signed, its `jti` is denylisted as well; an expired or malformed one is ignored. It answers `204` for an unknown or already-ended session.
+
+Refresh tokens rotate, and a retired token that comes back is judged by when it was rotated away. Within `REFRESH_REUSE_GRACE` (default 20 s) of that moment it is a replay, which is what two tabs or a client retrying a lost response look like: the request answers `401`, and nothing is revoked, no epoch is bumped, and no `token.reuse_detected` is recorded, so the session the winning request created keeps working. The window is measured from the rotation time stored in `refresh_tokens.revoked_at`, never from anything the client sends, and it applies only to a token that was rotated; one revoked by logout, by a session revoke or by an earlier reuse is never given it. A retired token replayed after the window is reuse: the whole family is revoked, the session epoch is bumped, and the alert fires. `REFRESH_REUSE_GRACE=0s` restores strict detection. The trade-off is that a thief who replays a token within the window gets a `401` without the session being revoked, but still no new tokens.
+
+`POST /auth/change-password` is limited per account (5 per 15 minutes) as well as per IP, so a stolen session cannot guess the current password from many addresses.
+
 ## Published Language: Redis keys
 
 Both keys live in the api's Redis and are read by every verifier. Their names and values are a contract; change them only with every reader.
@@ -63,6 +73,7 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | `JWT_ACCESS_TTL` | `5m` | How long a revoked-but-unexpired token stays usable. |
 | `CSRF_SECRET` | required | Rotating it invalidates every CSRF cookie in circulation. |
 | `REFRESH_TOKEN_TTL`, `EMAIL_VERIFICATION_TTL`, `PASSWORD_RESET_TTL`, `AUTH_REQUIRE_VERIFIED_EMAIL`, `ARGON2_*` | `7d`, `24h`, `1h`, `false`, argon2id defaults | |
+| `REFRESH_REUSE_GRACE` | `20s` | How long after a refresh token was rotated away a replay of it is refused without revoking the session. `0s` turns it off. |
 | `ID_SERVICE_URL` | required | The gateway's internal listener, never a replica. |
 | `ID_SERVICE_TIMEOUT_MS` | `2000` | Covers the gateway's retries, not one attempt. |
 | `INTERNAL_API_TOKEN` | required | At least 32 characters. |
@@ -72,6 +83,8 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | `SESSION_EPOCH_RECONCILE_INTERVAL_MS` | `5000` | |
 | `RETENTION_AUTH_TOKEN_GRACE_DAYS` | `7` | |
 | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` | `30` | At least 30: a revoked token that comes back is the reuse signal. |
+
+Every duration (`JWT_ACCESS_TTL`, `REFRESH_TOKEN_TTL`, `EMAIL_VERIFICATION_TTL`, `PASSWORD_RESET_TTL`, `REFRESH_REUSE_GRACE`) is a number with a unit: `ms`, `s`, `m`, `h` or `d`. A bare `300` is refused at boot rather than read as milliseconds. The four TTLs must also be positive.
 
 Key and token rotation: [RUNBOOK.md](../../RUNBOOK.md#rotate-the-es256-signing-key).
 
@@ -84,6 +97,7 @@ Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`.
 | `db:seed:perf-user` | The verified load-test account; `--clean` removes it. Run before the api's `db:seed:perf`. |
 | `seed:users:bulk` | Synthetic users for the register-uniqueness benchmark; `--clean` removes them. |
 | `db:metrics:users` | Size, cache-hit and vacuum readings for `users`. |
+| `users:set-role <email> <ADMIN\|CUSTOMER>` | Sets a user's role and, in the same statement, bumps their session epoch, then raises `auth:epoch:{userId}` in Redis (needs `DATABASE_URL` and `REDIS_URL`). The role rides in the access token, so without the bump a demoted admin keeps the old token for up to `JWT_ACCESS_TTL`. Refresh tokens are kept, and the next refresh carries the new role. If Redis is unreachable the script exits non-zero after the database write, and the reconciler publishes the epoch within one interval. |
 
 ## Local
 

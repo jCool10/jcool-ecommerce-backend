@@ -5,7 +5,9 @@ import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { DrizzleTx } from '../../../database';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
+import { IdMintUnavailableError } from '../domain/errors/id-mint-unavailable.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
+import { ReservationDeadlineError } from '../domain/errors/reservation-deadline.error';
 import { ReservationTimeoutError } from '../domain/errors/reservation-timeout.error';
 import type { ReservationOrderStatus } from '../domain/reservation-order-status';
 import { FAKE_TX, fakeStockRepository } from '../testing/stock-port.doubles';
@@ -106,9 +108,9 @@ describe('InventoryParticipantService', () => {
       await expect(db.service.tryReserve({ orderId: ORDER, lines: LINES, holdUntil: HOLD_UNTIL })).rejects.toThrow(
         'connection terminated',
       );
-      await expect(ids.service.tryReserve({ orderId: ORDER, lines: LINES, holdUntil: HOLD_UNTIL })).rejects.toThrow(
-        'id service unavailable',
-      );
+      await expect(
+        ids.service.tryReserve({ orderId: ORDER, lines: LINES, holdUntil: HOLD_UNTIL }),
+      ).rejects.toBeInstanceOf(IdMintUnavailableError);
       expect(db.metrics.recordTccBranch).toHaveBeenCalledWith('inventory', 'try', 'error');
       expect(ids.metrics.recordTccBranch).toHaveBeenCalledWith('inventory', 'try', 'error');
     });
@@ -136,8 +138,20 @@ describe('InventoryParticipantService', () => {
       expect(mint).toHaveBeenCalledWith(LINES.length);
     });
 
-    // The budget covers the whole Try, so a slow mint eats into it rather than starting it over.
-    it('counts the deadline from the moment the command is entered', async () => {
+    it('keeps the id-service failure as the cause of the mint error', async () => {
+      const { service, mint } = build();
+      const cause = new Error('id service unavailable');
+      mint.mockRejectedValue(cause);
+
+      const error = await service
+        .tryReserve({ orderId: ORDER, lines: LINES, holdUntil: HOLD_UNTIL })
+        .catch((e: unknown) => e);
+
+      expect((error as IdMintUnavailableError).cause).toBe(cause);
+    });
+
+    // A slow id-service is not lock contention: the lock budget starts once the ids are in hand.
+    it('starts the lock budget after the mint, not before', async () => {
       const { service, mint, transaction } = build();
       mint.mockImplementation(() => {
         vi.advanceTimersByTime(1_500);
@@ -146,7 +160,7 @@ describe('InventoryParticipantService', () => {
 
       await service.tryReserve({ orderId: ORDER, lines: LINES, holdUntil: HOLD_UNTIL });
 
-      expect(transaction).toHaveBeenCalledWith(expect.any(Function), { deadline: NOW.getTime() + BUDGET_MS });
+      expect(transaction).toHaveBeenCalledWith(expect.any(Function), { deadline: NOW.getTime() + 1_500 + BUDGET_MS });
     });
 
     it('writes nothing when the transaction only starts after the deadline', async () => {
@@ -157,8 +171,9 @@ describe('InventoryParticipantService', () => {
         return work(FAKE_TX);
       });
 
+      // Spent waiting for a pooled connection, not on a lock: the caller must read it as a fault.
       await expect(service.tryReserve({ orderId: ORDER, lines: LINES, holdUntil: HOLD_UNTIL })).rejects.toBeInstanceOf(
-        ReservationTimeoutError,
+        ReservationDeadlineError,
       );
       expect(insertHeader).not.toHaveBeenCalled();
       expect(metrics.recordTccBranch).toHaveBeenCalledWith('inventory', 'try', 'error');

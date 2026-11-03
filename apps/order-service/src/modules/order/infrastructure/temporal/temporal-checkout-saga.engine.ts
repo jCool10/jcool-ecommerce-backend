@@ -161,6 +161,7 @@ export class TemporalCheckoutSagaEngine implements CheckoutSagaEnginePort {
       totalMinor: start.totalMinor,
       currency: start.currency,
       placedAt: start.placedAt.toISOString(),
+      ...(start.tryStartedAt && { tryStartedAt: start.tryStartedAt.toISOString() }),
       deadlineAt: start.deadlineAt.toISOString(),
       holdUntil: new Date(start.deadlineAt.getTime() + config.holdSafetySec * 1000).toISOString(),
       settings: {

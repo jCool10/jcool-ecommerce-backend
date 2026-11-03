@@ -27,6 +27,10 @@ export function etcdConfig() {
   };
 }
 
+export function leaseTtlMs(): number {
+  return msEnv(process.env.ID_LEASE_TTL_MS, 300_000);
+}
+
 export type EtcdConfig = ReturnType<typeof etcdConfig>;
 export type LeaseConfig = ReturnType<typeof configuration>['lease'];
 
@@ -38,7 +42,7 @@ export default function configuration() {
     etcd: etcdConfig(),
     lease: {
       holder: leaseHolder(),
-      ttlMs: msEnv(process.env.ID_LEASE_TTL_MS, 300_000),
+      ttlMs: leaseTtlMs(),
       renewEveryMs: msEnv(process.env.ID_LEASE_RENEW_EVERY_MS, 60_000),
       fenceMarginMs,
       maxFloorAheadMs: msEnv(process.env.ID_LEASE_MAX_FLOOR_AHEAD_MS, fenceMarginMs),

@@ -51,4 +51,31 @@ describe('Auth rate limiting (integration, real Redis)', () => {
     const bystanderLogin = await request(app.getHttpServer()).post('/auth/login').send({ email: bystander, password });
     expect(bystanderLogin.status).toBe(200);
   });
+
+  it('caps change-password guesses per account, not just per IP', async () => {
+    const stamp = Date.now();
+    const victim = `cp-victim-${stamp}@throttle.local`;
+    const bystander = `cp-bystander-${stamp}@throttle.local`;
+    const victimSession = await registerAndLogin(victim);
+    const bystanderSession = await registerAndLogin(bystander);
+    const change = (accessToken: string) =>
+      request(app.getHttpServer())
+        .post('/auth/change-password')
+        .set({ Authorization: `Bearer ${accessToken}` })
+        .send({ currentPassword: wrongPassword, newPassword: 'AnotherPassword1!' });
+
+    // 5 per account is well under the 30 per IP, so only the account tier can stop the sixth.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect((await change(victimSession)).status).toBe(401);
+    }
+    expect((await change(victimSession)).status).toBe(429);
+
+    expect((await change(bystanderSession)).status).toBe(401);
+  });
+
+  async function registerAndLogin(email: string): Promise<string> {
+    await request(app.getHttpServer()).post('/auth/register').send({ email, password }).expect(201);
+    const res = await request(app.getHttpServer()).post('/auth/login').send({ email, password }).expect(200);
+    return res.body.accessToken as string;
+  }
 });

@@ -39,7 +39,7 @@ describe('RefreshTokensUseCase', () => {
       },
     };
     refreshTokens = new FakeRefreshTokenRepository(log);
-    refreshTokens.owner = { userId: OWNER, rotatable: true };
+    refreshTokens.owner = { userId: OWNER, familyId: 'fam1', rotatable: true };
     signer = new EchoAccessTokenSigner();
     audit = new RecordingAuthAudit();
     epochs = new FakeSessionEpoch();
@@ -56,6 +56,7 @@ describe('RefreshTokensUseCase', () => {
       ),
       audit,
       epochs,
+      fakeConfigService({ 'auth.refreshReuseGrace': '20s' }),
       fakePinoLogger({ warn }),
     );
   });
@@ -72,6 +73,7 @@ describe('RefreshTokensUseCase', () => {
         successorId: 'successor',
         newTokenHash: hashRefreshToken(result.refreshToken),
         newExpiresAt: expect.any(Date) as Date,
+        reuseGraceMs: 20_000,
       },
     ]);
     expect(claimsOf(result.accessToken)).toMatchObject({ sub: OWNER, role: 'CUSTOMER', epoch: 3 });
@@ -94,7 +96,7 @@ describe('RefreshTokensUseCase', () => {
   });
 
   it('treats a replayed superseded token as theft and bumps the epoch', async () => {
-    refreshTokens.owner = { userId: OWNER, rotatable: false };
+    refreshTokens.owner = { userId: OWNER, familyId: 'fam1', rotatable: false };
     refreshTokens.outcome = { status: 'reuse', userId: OWNER, familyId: 'fam1', replaced: true };
 
     expect(await refused()).toBeInstanceOf(UnauthorizedException);
@@ -119,7 +121,7 @@ describe('RefreshTokensUseCase', () => {
   });
 
   it('ends a replay of a merely revoked token with 401 and no theft response', async () => {
-    refreshTokens.owner = { userId: OWNER, rotatable: false };
+    refreshTokens.owner = { userId: OWNER, familyId: 'fam1', rotatable: false };
     refreshTokens.outcome = { status: 'reuse', userId: OWNER, familyId: 'fam1', replaced: false };
 
     expect(await refused()).toBeInstanceOf(UnauthorizedException);
@@ -128,6 +130,19 @@ describe('RefreshTokensUseCase', () => {
     expect(epochs.epochs.has(OWNER)).toBe(false);
     expect(audit.records).toHaveLength(0);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a token replayed within the grace window without revoking, bumping or alerting', async () => {
+    refreshTokens.owner = { userId: OWNER, familyId: 'fam1', rotatable: false };
+    refreshTokens.outcome = { status: 'replayed' };
+
+    expect(await refused()).toBeInstanceOf(UnauthorizedException);
+
+    expect(epochs.epochs.has(OWNER)).toBe(false);
+    expect(audit.records).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
+    expect(signer.signed).toHaveLength(0);
+    expect(refreshTokens.rotations[0].successorId).toBeNull();
   });
 
   it('refuses an invalid token and a reused one with the same 401 message', async () => {

@@ -30,6 +30,15 @@ describe('env validation', () => {
     expect(() => validate(BASE_ENV)).not.toThrow();
   });
 
+  it('requires SEARCH_URL in production only when search is on', () => {
+    const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };
+
+    expect(() => validate(production)).not.toThrow();
+    expect(() => validate({ ...production, SEARCH_ENABLED: 'true' })).toThrow(/SEARCH_URL/);
+    expect(() => validate({ ...production, SEARCH_ENABLED: 'true', SEARCH_URL: 'http://es:9200' })).not.toThrow();
+    expect(() => validate({ ...BASE_ENV, SEARCH_ENABLED: 'true' })).not.toThrow();
+  });
+
   // Stripe lives in the payment-service now, along with its boot guard.
   it('boots in production with no Stripe setting at all', () => {
     const production = { ...BASE_ENV, NODE_ENV: NodeEnv.Production, TRUST_PROXY: 'false' };

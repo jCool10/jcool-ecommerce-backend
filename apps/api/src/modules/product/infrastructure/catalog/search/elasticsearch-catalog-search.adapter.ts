@@ -47,7 +47,9 @@ const TOMBSTONE_STATUS = 'INACTIVE';
 const SEARCH_FIELDS = ['name^4', 'skus^3', 'categoryName^2', 'description'];
 // The id tiebreak keeps equal scores in one order across pages; doc order shifts on every merge.
 const SORT: estypes.Sort = [{ _score: { order: 'desc' } }, { id: { order: 'asc' } }];
+// `html` makes the engine escape the surrounding text, so `<em>` is the only markup in a fragment.
 const HIGHLIGHT: estypes.SearchHighlight = {
+  encoder: 'html',
   number_of_fragments: 0,
   pre_tags: ['<em>'],
   post_tags: ['</em>'],
@@ -327,7 +329,21 @@ export class ElasticsearchCatalogSearch implements CatalogSearchPort, OnApplicat
   }
 }
 
-// The engine highlights only the fields that matched; the rest keep their plain text.
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#x27;',
+  '/': '&#x2F;',
+};
+
+// Same escaping the engine's `html` encoder applies, so a field it did not highlight reads alike.
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"'/]/g, (ch) => HTML_ESCAPES[ch]);
+}
+
+// The engine highlights only the fields that matched; the rest keep their text, escaped.
 function toSearchHit(source: SearchableProduct, highlight: Record<string, string[]> | undefined): SearchHit {
   return {
     id: source.id,
@@ -337,8 +353,8 @@ function toSearchHit(source: SearchableProduct, highlight: Record<string, string
     minPriceMinor: source.minPriceMinor,
     currency: source.currency,
     highlight: {
-      name: highlight?.name?.[0] ?? source.name,
-      description: highlight?.description?.[0] ?? source.description ?? undefined,
+      name: highlight?.name?.[0] ?? escapeHtml(source.name),
+      description: highlight?.description?.[0] ?? (source.description ? escapeHtml(source.description) : undefined),
     },
   };
 }

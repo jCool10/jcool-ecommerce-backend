@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Min, MinLength } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Matches, Min, MinLength } from 'class-validator';
 import {
   AppEnv,
   DatabaseEnv,
@@ -18,6 +18,11 @@ import {
 const PlatformEnv = RetentionEnv(
   MailEnv(ResilienceEnv(ObservabilityEnv(RedisEnv(DatabaseEnv(ThrottleEnv(AppEnv(EmptyEnv))))))),
 );
+
+// Same grammar as durationToMs, which throws on a bare number rather than guess its unit.
+const POSITIVE_DURATION = /^[1-9]\d*(ms|s|m|h|d)$/i;
+const ANY_DURATION = /^\d+(ms|s|m|h|d)$/i;
+const DURATION_MESSAGE = '$property must be a number with a unit (ms, s, m, h or d), e.g. 15m';
 
 /** Bounds only; defaults live in configuration.ts. */
 export class EnvironmentVariables extends PlatformEnv {
@@ -47,24 +52,26 @@ export class EnvironmentVariables extends PlatformEnv {
   CSRF_SECRET!: string;
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
+  @Matches(POSITIVE_DURATION, { message: DURATION_MESSAGE })
   JWT_ACCESS_TTL?: string;
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
+  @Matches(POSITIVE_DURATION, { message: DURATION_MESSAGE })
   REFRESH_TOKEN_TTL?: string;
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
+  @Matches(POSITIVE_DURATION, { message: DURATION_MESSAGE })
   EMAIL_VERIFICATION_TTL?: string;
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
+  @Matches(POSITIVE_DURATION, { message: DURATION_MESSAGE })
   PASSWORD_RESET_TTL?: string;
+
+  // How long a token that was just rotated away is refused without revoking its family. 0s turns
+  // the window off.
+  @IsOptional()
+  @Matches(ANY_DURATION, { message: DURATION_MESSAGE })
+  REFRESH_REUSE_GRACE?: string;
 
   @IsOptional()
   @IsStrictBoolean()

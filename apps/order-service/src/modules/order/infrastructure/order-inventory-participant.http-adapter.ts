@@ -1,9 +1,11 @@
 import type { ConfigService } from '@nestjs/config';
 import type { ClsService } from 'nestjs-cls';
 import {
+  ID_SERVICE_UNAVAILABLE,
   LOCK_BUDGET_EXHAUSTED,
   type ReservationCommand,
   commandOutcomeOf,
+  isIdServiceUnavailable,
   isLockBudgetExhausted,
   reservationRoutes,
   statusesOf,
@@ -51,13 +53,20 @@ function unparsedAsNull(error: unknown): null {
   throw error;
 }
 
+function unfaultedCodeOf(status: number, body: unknown): string | undefined {
+  if (isLockBudgetExhausted(status, body)) return LOCK_BUDGET_EXHAUSTED;
+  return isIdServiceUnavailable(status, body) ? ID_SERVICE_UNAVAILABLE : undefined;
+}
+
 /**
  * Only a 5xx or no answer at all says the service is unwell; a 409, a 429 or another 4xx is an answer.
- * So is a 503 for busy rows, or one hot SKU would open the circuit for every other.
+ * So is a 503 for busy rows, or one hot SKU would open the circuit for every other, and a 503 for an
+ * id-service outage, which only a Try can meet and which would cut off Commit and Release. A bare 503
+ * (pool, I/O, a slow statement) is a fault.
  */
 export function isInventoryServiceFault(error: unknown): boolean {
   if (!(error instanceof InventoryServiceRejection)) return true;
-  return error.status >= 500 && error.code !== LOCK_BUDGET_EXHAUSTED;
+  return error.status >= 500 && error.code !== LOCK_BUDGET_EXHAUSTED && error.code !== ID_SERVICE_UNAVAILABLE;
 }
 
 /**
@@ -132,8 +141,7 @@ export class OrderInventoryParticipantHttpAdapter implements OrderInventoryParti
       const parsed: unknown = await response.json().catch(unparsedAsNull);
       const answer = read(response.status, parsed);
       if (answer !== undefined) return answer;
-      const code = isLockBudgetExhausted(response.status, parsed) ? LOCK_BUDGET_EXHAUSTED : undefined;
-      throw new InventoryServiceRejection(response.status, path, code);
+      throw new InventoryServiceRejection(response.status, path, unfaultedCodeOf(response.status, parsed));
     });
   }
 }

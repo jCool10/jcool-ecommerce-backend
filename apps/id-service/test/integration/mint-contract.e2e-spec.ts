@@ -34,6 +34,9 @@ describe('POST /v1/ids', () => {
 
   it('rejects every malformed request body with 400', async () => {
     const malformed: [string, object][] = [
+      ['a null count', { count: null }],
+      ['an empty array body', []],
+      ['an array of requests', [{ count: 1 }]],
       ['a count of 0', { count: 0 }],
       ['a fractional count', { count: 1.5 }],
       ['a count sent as a string', { count: '1' }],

@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loginAs, sessionFrom, sessionHeaders } from '../setup/auth.helper';
+import { ageRotation, loginAs, sessionFrom, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser } from '../setup/fixtures/user.fixture';
 import { createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { createTestApp } from '../setup/test-app.factory';
@@ -81,6 +81,7 @@ describe('Id service unavailable (integration)', () => {
     const { user } = await createTestUser(seeder, { password });
     const first = await loginAs(seeder, { email: user.email, password });
     const rotated = await request(seeder.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(200);
+    await ageRotation(pool, first, 60_000);
 
     await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(first)).expect(401);
 

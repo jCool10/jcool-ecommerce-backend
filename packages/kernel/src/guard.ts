@@ -6,9 +6,10 @@ export function assertNonEmpty(value: string | null | undefined, label: string):
   }
 }
 
+// Safe range only: past 2^53 a number is no longer an exact count, so sums and products drift.
 export function assertInteger(value: number, label: string): void {
-  if (!Number.isInteger(value)) {
-    throw new DomainError(`${label} must be an integer`);
+  if (!Number.isSafeInteger(value)) {
+    throw new DomainError(`${label} must be a safe integer`);
   }
 }
 

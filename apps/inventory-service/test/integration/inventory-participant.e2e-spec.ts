@@ -16,6 +16,7 @@ import {
   reservationsFor,
   seedStock,
 } from '../setup/fixtures/inventory.fixture';
+import { INT4_MAX } from '../../src/modules/inventory/domain/stock-limits';
 import { closeAppAfterAll, createTestAppWithPool, internalPost, resetDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { metricsAuthHeader } from '../setup/metrics.helper';
@@ -228,6 +229,18 @@ describe('Inventory participant over the internal API (integration, real Postgre
       expect(await getStockView(app, sku)).toMatchObject({ onHand: 5, reserved: 0 });
       expect((await readReservationOrder(app, order))?.status).toBe('RESTOCKED');
       expect((await reservationsFor(app, order)).map((line) => line.status)).toEqual(['RESTOCKED']);
+    });
+
+    it('restocks onto a level at the column limit without failing, clamping instead of overflowing', async () => {
+      const [order, sku] = [testId(), testId()];
+      await seedStock(app, sku, 5);
+      await tryReserve(order, sku).expect(201);
+      await command(order, 'commit').expect(200);
+      await seedStock(app, sku, INT4_MAX - 1);
+
+      await command(order, 'restock').expect(200, { outcome: 'APPLIED' });
+
+      expect(await getStockView(app, sku)).toMatchObject({ onHand: INT4_MAX, reserved: 0 });
     });
 
     it('answers a busy-rows 503 with Retry-After for a stock row locked past the budget, leaving no header and no leaked connection', async () => {

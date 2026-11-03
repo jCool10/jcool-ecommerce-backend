@@ -6,6 +6,7 @@ import { callerLabel } from './caller-label';
 import { LeaseNotHeldFilter } from './lease-not-held.filter';
 import { ID_MINTED_TOTAL } from './mint.metrics';
 import { MintRequest, type MintResponse } from './mint.request';
+import { PlainObjectBodyPipe } from './plain-object-body.pipe';
 
 // No service token: the service is reachable only on the private network (see README).
 @Controller('v1/ids')
@@ -18,7 +19,10 @@ export class MintController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  mint(@Body() { count }: MintRequest, @Headers('x-caller') caller: string | undefined): MintResponse {
+  mint(
+    @Body(PlainObjectBodyPipe) { count }: MintRequest,
+    @Headers('x-caller') caller: string | undefined,
+  ): MintResponse {
     const ids = Array.from({ length: count }, () => this.nodeLease.generate());
     this.minted.inc({ caller: callerLabel(caller) }, count);
     return { ids };

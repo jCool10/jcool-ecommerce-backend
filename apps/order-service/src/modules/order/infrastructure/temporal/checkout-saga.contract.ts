@@ -59,6 +59,8 @@ export interface CheckoutSagaInput {
   totalMinor: number;
   currency: string;
   placedAt: string;
+  /** Optional: runs started before it existed replay with `placedAt`. */
+  tryStartedAt?: string;
   deadlineAt: string;
   holdUntil: string;
   settings: CheckoutSagaSettings;

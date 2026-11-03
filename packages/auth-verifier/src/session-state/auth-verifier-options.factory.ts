@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { type JSONWebKeySet, type JWTVerifyGetKey, createLocalJWKSet, createRemoteJWKSet, errors } from 'jose';
 import type { PinoLogger } from 'nestjs-pino';
@@ -28,7 +29,8 @@ export function authVerifierOptions(config: ConfigService, logger: PinoLogger): 
  * jose refetches once its 10-minute cache is stale and throws if that fails, which would refuse every
  * ES256 token for as long as the JWKS is unreachable. Falling back to the last set that loaded keeps
  * the keys already trusted; a key dropped from the set still stops verifying on the first fetch that
- * succeeds.
+ * succeeds. With no set ever loaded (the api booting while the user-service is down) there is nothing
+ * to fall back to, and the lookup fails with a 503.
  */
 function jwksServingStale(url: URL, timeoutMs: number, logger: PinoLogger): JWTVerifyGetKey {
   const remote = createRemoteJWKSet(url, { timeoutDuration: timeoutMs });
@@ -46,9 +48,14 @@ function jwksServingStale(url: URL, timeoutMs: number, logger: PinoLogger): JWTV
     try {
       return await remote(header, token);
     } catch (error) {
-      const stale = remote.jwks();
-      if (!stale || error instanceof errors.JWKSNoMatchingKey || error instanceof errors.JWKSMultipleMatchingKeys) {
+      if (error instanceof errors.JWKSNoMatchingKey || error instanceof errors.JWKSMultipleMatchingKeys) {
         throw error;
+      }
+      const stale = remote.jwks();
+      if (!stale) {
+        // Nothing was ever loaded, so no token could be judged: that is this service's outage, not
+        // a bad credential, and a 401 would send every client back through login.
+        throw new ServiceUnavailableException('Service unavailable', { cause: error });
       }
       // Concurrent callers share jose's one pending fetch, so a single failure lands here once per caller.
       const alreadyReported = Date.now() - failedAt < RETRY_AFTER_FAILURE_MS;

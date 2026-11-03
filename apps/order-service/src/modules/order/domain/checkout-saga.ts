@@ -105,12 +105,12 @@ export function initialCheckoutSagaState(mode: CheckoutSagaMode): CheckoutSagaSt
   };
 }
 
-/** The budget runs from placedAt, not from when the workflow got around to the Try. */
+/** The budget runs from `startedAt`, not from when the workflow got around to the Try. */
 export function planTry(
-  input: { placedAt: string; tryTimeoutMs: number },
+  input: { startedAt: string; tryTimeoutMs: number },
   nowMs: number,
 ): { abandon: true } | { abandon: false; timeoutMs: number } {
-  const remaining = Date.parse(input.placedAt) + input.tryTimeoutMs - nowMs;
+  const remaining = Date.parse(input.startedAt) + input.tryTimeoutMs - nowMs;
   return remaining > 0 ? { abandon: false, timeoutMs: remaining } : { abandon: true };
 }
 

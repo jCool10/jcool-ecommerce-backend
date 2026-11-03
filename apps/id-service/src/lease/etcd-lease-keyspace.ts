@@ -62,6 +62,11 @@ export class LeaseKeyspace {
     return this.key('initialized');
   }
 
+  /** Written by the first guarded lift to find the keyspace empty; cleared with the marker. */
+  get emptySince(): Buffer {
+    return this.key('empty-since');
+  }
+
   node(nodeId: number): IRangeRequest {
     return rangeOver(this.key(this.nodePath(nodeId)));
   }

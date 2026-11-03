@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { IsSnowflakeId } from '@jcool/platform/interface';
+import { NoNullByte } from './no-null-byte.decorator';
 
 // Shared by category and product slugs; uniqueness is enforced by the DB, not by this pattern.
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -11,6 +12,7 @@ export class CreateCategoryDto {
   @IsString()
   @MinLength(1)
   @MaxLength(120)
+  @NoNullByte()
   name!: string;
 
   @ApiProperty({ example: 'electronics', description: 'URL-safe unique slug' })

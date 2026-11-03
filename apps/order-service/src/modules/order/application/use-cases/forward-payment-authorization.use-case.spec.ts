@@ -5,6 +5,7 @@ import { Order } from '../../domain/order.entity';
 import { OrderItem } from '../../domain/order-item.entity';
 import { OrderStatus } from '../../domain/order-status';
 import { CheckoutEngineUnavailableError, type CheckoutSagaEnginePort } from '../ports/checkout-saga-engine.port';
+import type { OrderPaymentParticipantPort } from '../ports/order-payment-participant.port';
 import type { OrderRepositoryPort } from '../ports/order-repository.port';
 import { ForwardPaymentAuthorizationUseCase } from './forward-payment-authorization.use-case';
 
@@ -30,15 +31,17 @@ function order(paymentDeadlineAt: Date | null = DEADLINE): Order {
   });
 }
 
-function build(found: Order | null, engineError?: Error) {
+function build(found: Order | null, engineError?: Error, cancelError?: Error) {
   const notifyAuthorized = vi.fn(() => (engineError ? Promise.reject(engineError) : Promise.resolve()));
+  const cancel = vi.fn(() => (cancelError ? Promise.reject(cancelError) : Promise.resolve('CANCELLED' as const)));
   const logger = { warn: vi.fn(), error: vi.fn() };
   const useCase = new ForwardPaymentAuthorizationUseCase(
     { findById: vi.fn().mockResolvedValue(found) } as unknown as OrderRepositoryPort,
     { notifyAuthorized } as unknown as CheckoutSagaEnginePort,
+    { cancel } as unknown as OrderPaymentParticipantPort,
     fakePinoLogger(logger),
   );
-  return { useCase, notifyAuthorized, logger };
+  return { useCase, notifyAuthorized, cancel, logger };
 }
 
 describe('ForwardPaymentAuthorizationUseCase', () => {
@@ -63,13 +66,20 @@ describe('ForwardPaymentAuthorizationUseCase', () => {
     );
   });
 
-  it('acks an authorization for an order that does not exist', async () => {
-    const { useCase, notifyAuthorized, logger } = build(null);
+  it('voids, then acks, an authorization for an order that does not exist', async () => {
+    const { useCase, notifyAuthorized, cancel, logger } = build(null);
 
     await useCase.execute('order-1', AUTHORIZATION);
 
+    expect(cancel).toHaveBeenCalledExactlyOnceWith('order-1');
     expect(notifyAuthorized).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
+  it('lets a failed void through so the delivery is retried', async () => {
+    const { useCase } = build(null, undefined, new Error('payment down'));
+
+    await expect(useCase.execute('order-1', AUTHORIZATION)).rejects.toThrow('payment down');
   });
 
   it('acks, loudly, an authorization for an order no saga ever placed', async () => {

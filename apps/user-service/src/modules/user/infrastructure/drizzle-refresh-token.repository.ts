@@ -33,6 +33,7 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
     const [row] = await this.db
       .select({
         userId: refreshTokens.userId,
+        familyId: refreshTokens.familyId,
         revokedAt: refreshTokens.revokedAt,
         replacedByTokenId: refreshTokens.replacedByTokenId,
         expiresAt: refreshTokens.expiresAt,
@@ -43,6 +44,7 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
     if (!row) return null;
     return {
       userId: row.userId,
+      familyId: row.familyId,
       rotatable: row.revokedAt === null && row.replacedByTokenId === null && row.expiresAt.getTime() > Date.now(),
     };
   }
@@ -64,6 +66,17 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
 
       if (!record || record.userId !== input.expectedUserId) {
         return { status: 'invalid' };
+      }
+
+      // A rotation stamps `revokedAt` and `replacedByTokenId` together and nothing rewrites either,
+      // so for a replaced row `revokedAt` is the rotation time. A logout or reuse revoke never
+      // reaches a replaced row (it only touches rows with no `revokedAt`).
+      if (
+        record.replacedByTokenId !== null &&
+        record.revokedAt !== null &&
+        Date.now() - record.revokedAt.getTime() <= input.reuseGraceMs
+      ) {
+        return { status: 'replayed' };
       }
 
       // Retired token replayed → can't tell theft from a late replay, so revoke whatever in the
@@ -118,15 +131,6 @@ export class DrizzleRefreshTokenRepository implements RefreshTokenRepositoryPort
 
       return { status: 'rotated', userId: record.userId, role: owner.role, tokenEpoch: owner.tokenEpoch };
     });
-  }
-
-  async revoke(userId: string, tokenHash: string): Promise<void> {
-    await this.db
-      .update(refreshTokens)
-      .set({ revokedAt: new Date() })
-      .where(
-        and(eq(refreshTokens.tokenHash, tokenHash), eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)),
-      );
   }
 
   async revokeAllForUser(userId: string): Promise<void> {

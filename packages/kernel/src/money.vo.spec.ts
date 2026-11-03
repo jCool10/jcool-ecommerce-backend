@@ -24,6 +24,11 @@ describe('Money', () => {
     expect(() => Money.of(10.5, 'VND')).toThrow(DomainError);
   });
 
+  it('rejects an amount, or a product, past the safe-integer range', () => {
+    expect(() => Money.of(Number.MAX_SAFE_INTEGER + 1, 'VND')).toThrow(DomainError);
+    expect(() => Money.of(Number.MAX_SAFE_INTEGER, 'VND').multiply(2)).toThrow(DomainError);
+  });
+
   it('rejects an empty or wrong-length currency', () => {
     expect(() => Money.of(100, '')).toThrow(DomainError);
     expect(() => Money.of(100, 'DONG')).toThrow(DomainError);

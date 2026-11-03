@@ -26,15 +26,18 @@ import { CallerTokenGuard, InternalCallers } from '@jcool/platform/internal-api'
 import { Public } from '@jcool/platform/rbac';
 import { ACCOUNT_THROTTLER, DEFAULT_THROTTLER } from '@jcool/platform/throttler';
 import { INVENTORY_PARTICIPANT, type InventoryParticipant } from '../../application/public/inventory-participant.port';
+import { IdMintUnavailableError } from '../../domain/errors/id-mint-unavailable.error';
 import { ReservationTimeoutError } from '../../domain/errors/reservation-timeout.error';
 import { StatusDto, TryReservationDto } from './dto';
+import { IdServiceUnavailableFilter } from './id-service-unavailable.filter';
 import { LockBudgetExhaustedFilter, RETRY_AFTER_SEC } from './lock-budget-exhausted.filter';
 
 /**
  * The checkout saga's side of stock. Every route is idempotent per order through the
  * `reservation_orders` fence, so a retry after a lost answer is always safe. Business outcomes are a
  * 2xx or a 409 carrying `outcome`; anything the participant throws is a 503 to retry, coded
- * `LOCK_BUDGET_EXHAUSTED` when only busy rows stood in the way.
+ * `LOCK_BUDGET_EXHAUSTED` when only busy rows stood in the way and `ID_SERVICE_UNAVAILABLE` when a Try
+ * could not get its ids; any other fault is a bare 503.
  *
  * Unthrottled because every call comes from one private address. `@Public` only lifts the user-token
  * guard; the caller token replaces it.
@@ -43,7 +46,7 @@ import { LockBudgetExhaustedFilter, RETRY_AFTER_SEC } from './lock-budget-exhaus
 @Public()
 @SkipThrottle({ [DEFAULT_THROTTLER]: true, [ACCOUNT_THROTTLER]: true })
 @UseGuards(CallerTokenGuard)
-@UseFilters(LockBudgetExhaustedFilter)
+@UseFilters(LockBudgetExhaustedFilter, IdServiceUnavailableFilter)
 @InternalCallers('order-service')
 @Controller(RESERVATIONS_PREFIX)
 export class ReservationsController {
@@ -97,7 +100,7 @@ export class ReservationsController {
     try {
       return await run();
     } catch (error) {
-      if (error instanceof ReservationTimeoutError) throw error;
+      if (error instanceof ReservationTimeoutError || error instanceof IdMintUnavailableError) throw error;
       res.setHeader('Retry-After', RETRY_AFTER_SEC);
       throw new ServiceUnavailableException(undefined, { cause: error });
     }

@@ -6,7 +6,7 @@ Owns checkout and orders, from its own Postgres (`order-postgres`): `orders`, `o
 
 | Route | Answer |
 | --- | --- |
-| `POST /orders` | Checks out the buyer's cart. Requires `Idempotency-Key`; a retry under the same key replays the first answer. `201` with the order once stock is held, `400` for an empty or unpurchasable cart, `409` for a key still in progress, too many pending orders or missing stock, `422` for a key reused with another request, `503` with `Retry-After` when the saga gave no answer within `CHECKOUT_RESERVE_WAIT_MS` or the api could not be read. |
+| `POST /orders` | Checks out the buyer's cart. Requires `Idempotency-Key`; a retry under the same key replays the first answer. `201` with the order once stock is held, `400` for an empty or unpurchasable cart or a line above 10 units of one SKU, `409` for a key still in progress, too many pending orders or missing stock, `422` for a key reused with another request, `503` with `Retry-After` when the saga gave no answer within `CHECKOUT_RESERVE_WAIT_MS` or the api could not be read. |
 | `GET /orders`, `GET /orders/:id` | The buyer's own orders. A `REJECTED` order answers `404`. |
 | `POST /orders/:id/pay` | `201` with a Stripe Checkout Session, a new one or the one still open. `409` when the order is not `PENDING`, `502` when the payment-service failed. |
 | `POST /orders/:id/cancel` | `200` with the order, also for one already cancelled; `409` once it has settled; `503` with `Retry-After` when the saga gave no answer within `CHECKOUT_CANCEL_WAIT_MS`. |
@@ -22,7 +22,7 @@ Every route takes a bearer access token from the user-service. `POST /orders`, `
 3. The workflow is the only writer of the order's status from there: `PENDING` while it waits for `payment.authorized` or the payment deadline, then commit and capture, or compensation. The payment-service's relay puts `payment.authorized` on `order-events`, and this service's worker signals the saga with it.
 4. `order.paid` sends the confirmation mail, with the buyer's address read from the user-service.
 
-The reaper hands a `RESERVING` order whose start never reached Temporal back to its saga, and the invariant checker compares settled orders with both participants and only reports. A `lateAuthorization` run voids an authorization that arrives after its order closed; an order this database does not hold counts as not `PAID`, so such a run never captures.
+The reaper hands a `RESERVING` order whose start never reached Temporal back to its saga, and the invariant checker compares settled orders with both participants and only reports. A `lateAuthorization` run voids an authorization that arrives after its order closed; an order this database does not hold counts as not `PAID`, so such a run never captures; an authorization for an order the database does not hold at all is voided through the payment-service at once, since no saga exists to do it.
 
 ## Ids
 

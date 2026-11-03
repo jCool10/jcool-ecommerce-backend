@@ -7,4 +7,10 @@ export class AuthTokensResponseDto {
 
   @ApiProperty({ example: 900, description: 'Access-token lifetime in seconds.' })
   expiresIn!: number;
+
+  @ApiProperty({
+    description:
+      'CSRF token, the same value as the `csrf_token` cookie. Send it back as the `x-csrf-token` header on `/auth/refresh` and `/auth/logout`; the cookie (Path=/auth) is not readable by a page elsewhere.',
+  })
+  csrfToken!: string;
 }

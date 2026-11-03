@@ -64,10 +64,11 @@ export interface IdempotencyStorePort {
   markCompleted(input: MarkCompletedInput, tx?: DrizzleTx): Promise<void>;
 
   /**
-   * Remove an IN_PROGRESS row so the client can retry — called when the handler failed with an
-   * unexpected error (the deterministic result was never recorded).
+   * Remove the caller's own IN_PROGRESS claim so the client can retry — called when the handler failed
+   * with an unexpected error (the deterministic result was never recorded). Matched by the claim's id,
+   * not by (scope, key): a reclaimer may have replaced the row since, and its claim must survive.
    */
-  deleteInProgress(scope: string, key: string, tx?: DrizzleTx): Promise<void>;
+  deleteInProgress(claimId: string, tx?: DrizzleTx): Promise<void>;
 
   /**
    * Reclaim guard: delete an IN_PROGRESS row for (scope, key) ONLY if it was created before `cutoff`

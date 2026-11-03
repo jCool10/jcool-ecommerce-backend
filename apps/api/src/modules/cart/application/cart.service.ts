@@ -1,6 +1,7 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Money } from '@jcool/kernel';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
+import { MAX_CART_LINES } from '../cart.constants';
 import { Cart } from '../domain/cart.entity';
 import { CART_REPOSITORY, type CartRepositoryPort } from './ports/cart-repository.port';
 import { CATALOG_QUERY, type CartSkuView, type CatalogQueryPort } from './ports/catalog-query.port';
@@ -44,18 +45,24 @@ export class CartService {
 
   async addItem(userId: string, skuId: string, quantity: number): Promise<CartView> {
     const sku = await this.catalogQuery.getSkuView(skuId);
-    if (!sku) {
+    // A SKU that is not on sale is "unknown" here: answering for it would disclose an unpublished product's name.
+    if (!sku?.isActive) {
       throw new NotFoundException(`SKU not found: ${skuId}`);
     }
     const cartId = await this.cartRepo.ensureCartId(userId);
+    const lines = await this.cartRepo.findItems(cartId);
+    if (lines.length >= MAX_CART_LINES && !lines.some((line) => line.skuId === skuId)) {
+      throw new UnprocessableEntityException(`A cart holds at most ${MAX_CART_LINES} different items`);
+    }
     await this.cartRepo.addItem(cartId, skuId, quantity);
     this.metrics.recordCartOperation('add');
     return this.buildView(cartId);
   }
 
+  // The three writes below never create a cart: with none there is nothing to change.
   async setItemQuantity(userId: string, skuId: string, quantity: number): Promise<CartView> {
-    const cartId = await this.cartRepo.ensureCartId(userId);
-    const updated = await this.cartRepo.setItemQuantity(cartId, skuId, quantity);
+    const cartId = await this.cartRepo.findCartId(userId);
+    const updated = cartId !== null && (await this.cartRepo.setItemQuantity(cartId, skuId, quantity));
     if (!updated) {
       throw new NotFoundException(`Cart item not found: ${skuId}`);
     }
@@ -64,15 +71,19 @@ export class CartService {
   }
 
   async removeItem(userId: string, skuId: string): Promise<CartView> {
-    const cartId = await this.cartRepo.ensureCartId(userId);
-    await this.cartRepo.removeItem(cartId, skuId);
+    const cartId = await this.cartRepo.findCartId(userId);
+    if (cartId) {
+      await this.cartRepo.removeItem(cartId, skuId);
+    }
     this.metrics.recordCartOperation('remove');
     return this.buildView(cartId);
   }
 
   async clear(userId: string): Promise<CartView> {
-    const cartId = await this.cartRepo.ensureCartId(userId);
-    await this.cartRepo.clear(cartId);
+    const cartId = await this.cartRepo.findCartId(userId);
+    if (cartId) {
+      await this.cartRepo.clear(cartId);
+    }
     this.metrics.recordCartOperation('clear');
     return this.buildView(cartId);
   }

@@ -4,6 +4,7 @@ import {
   COMMAND_OUTCOMES,
   type CommandOutcome,
   type CommandResponse,
+  ID_SERVICE_UNAVAILABLE,
   LOCK_BUDGET_EXHAUSTED,
   RESERVATION_ORDER_STATUSES,
   type ReservationOrderStatus,
@@ -45,6 +46,11 @@ export function commandOutcomeOf(status: number, body: unknown): CommandOutcome 
 /** A bare 503 is the service unwell; only the code says the rows were busy. */
 export function isLockBudgetExhausted(status: number, body: unknown): boolean {
   return status === LOCK_BUDGET_EXHAUSTED_STATUS && isRecord(body) && body.code === LOCK_BUDGET_EXHAUSTED;
+}
+
+/** The same 503, told apart by its code. */
+export function isIdServiceUnavailable(status: number, body: unknown): boolean {
+  return status === LOCK_BUDGET_EXHAUSTED_STATUS && isRecord(body) && body.code === ID_SERVICE_UNAVAILABLE;
 }
 
 /** The statuses, or undefined when the body is malformed or leaves out an id that was asked for. */

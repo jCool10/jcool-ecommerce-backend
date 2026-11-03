@@ -47,6 +47,26 @@ describe('validate', () => {
     expect(refusal({ ...BASE, ID_SERVICE_TIMEOUT_MS: '2000' })).toBeNull();
   });
 
+  // durationToMs throws on a bare number rather than guess its unit; boot must fail first, by name.
+  it('refuses a duration without a unit, naming the variable', () => {
+    const durations = [
+      'JWT_ACCESS_TTL',
+      'REFRESH_TOKEN_TTL',
+      'EMAIL_VERIFICATION_TTL',
+      'PASSWORD_RESET_TTL',
+      'REFRESH_REUSE_GRACE',
+    ];
+
+    expect(durations.filter((name) => refusal({ ...BASE, [name]: '300' })?.includes(name))).toEqual(durations);
+    expect(durations.map((name) => refusal({ ...BASE, [name]: '300s' }))).toEqual(durations.map(() => null));
+    expect(refusal({ ...BASE, JWT_ACCESS_TTL: '300' })).toContain('unit');
+  });
+
+  it('refuses a zero token lifetime but lets the reuse grace window be switched off', () => {
+    expect(refusal({ ...BASE, JWT_ACCESS_TTL: '0s' })).toContain('JWT_ACCESS_TTL');
+    expect(refusal({ ...BASE, REFRESH_REUSE_GRACE: '0s' })).toBeNull();
+  });
+
   it('requires an http(s) ID_SERVICE_URL but no public TLD', () => {
     const urls = [
       'gateway:4000',

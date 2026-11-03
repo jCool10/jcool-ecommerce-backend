@@ -26,7 +26,7 @@ describe('AuthCookieService', () => {
   it('sets an httpOnly refresh cookie and a readable, valid CSRF cookie on /auth', () => {
     const { res, set } = recordingResponse();
 
-    new AuthCookieService(config, csrf).setSession(res, 'the-refresh-token');
+    const returned = new AuthCookieService(config, csrf).setSession(res, 'the-refresh-token');
 
     const shared = { secure: true, sameSite: 'strict', path: AUTH_COOKIE_PATH, maxAge: 7 * 24 * 60 * 60 * 1000 };
     expect(set.get(REFRESH_TOKEN_COOKIE)).toEqual({
@@ -36,6 +36,8 @@ describe('AuthCookieService', () => {
     expect(set.get(CSRF_TOKEN_COOKIE)?.options).toEqual({ ...shared, httpOnly: false });
     const csrfToken = set.get(CSRF_TOKEN_COOKIE)?.value;
     expect(csrf.verify(csrfToken, csrfToken)).toBe(true);
+    // The body copy is what a page outside /auth echoes back, so it must be the cookie's own value.
+    expect(returned).toBe(csrfToken);
   });
 
   // A browser keeps a cookie cleared under a different path.

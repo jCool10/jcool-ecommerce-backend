@@ -62,13 +62,13 @@ describe('checkout saga', () => {
       });
     });
 
-    it('gives the Try what is left of the budget counted from placedAt, and abandons it at zero', () => {
-      const placedAt = '2026-03-03T00:00:00.000Z';
-      const placedMs = Date.parse(placedAt);
+    it('gives the Try what is left of the budget counted from startedAt, and abandons it at zero', () => {
+      const startedAt = '2026-03-03T00:00:00.000Z';
+      const placedMs = Date.parse(startedAt);
 
-      expect(planTry({ placedAt, tryTimeoutMs: 3000 }, placedMs + 1000)).toEqual({ abandon: false, timeoutMs: 2000 });
-      expect(planTry({ placedAt, tryTimeoutMs: 3000 }, placedMs + 3000)).toEqual({ abandon: true });
-      expect(planTry({ placedAt, tryTimeoutMs: 3000 }, placedMs + 4000)).toEqual({ abandon: true });
+      expect(planTry({ startedAt, tryTimeoutMs: 3000 }, placedMs + 1000)).toEqual({ abandon: false, timeoutMs: 2000 });
+      expect(planTry({ startedAt, tryTimeoutMs: 3000 }, placedMs + 3000)).toEqual({ abandon: true });
+      expect(planTry({ startedAt, tryTimeoutMs: 3000 }, placedMs + 4000)).toEqual({ abandon: true });
     });
 
     it('reports a participant RESERVED as HELD and passes every other answer through', () => {

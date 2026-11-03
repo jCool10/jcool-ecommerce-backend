@@ -6,7 +6,8 @@ import { requireIntConfig } from '@jcool/platform/config';
 import type { DrizzleTx } from '../../../database';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
-import { ReservationTimeoutError } from '../domain/errors/reservation-timeout.error';
+import { IdMintUnavailableError } from '../domain/errors/id-mint-unavailable.error';
+import { ReservationDeadlineError } from '../domain/errors/reservation-deadline.error';
 import { decideReservationFence } from '../domain/reservation-order-fence';
 import type { ReservationOrderStatus } from '../domain/reservation-order-status';
 import { ID_GENERATOR, type IdGeneratorPort } from './ports/id-generator.port';
@@ -51,10 +52,11 @@ export class InventoryParticipantService implements InventoryParticipant {
   }
 
   tryReserve({ orderId, lines, holdUntil }: TryReserveInput): Promise<TryReserveOutcome> {
-    const deadline = Date.now() + this.budgetMs;
     return this.observe('try', async () => {
       // Outside the tx: no lock may be held across a network call.
-      const reservationIds = await this.idGenerator.mint(lines.length);
+      const reservationIds = await this.mintReservationIds(lines.length);
+      // Started after the mint, so a slow id-service cannot spend the lock budget.
+      const deadline = Date.now() + this.budgetMs;
       try {
         return await this.inTransaction(deadline, async (tx): Promise<TryReserveOutcome> => {
           if (await this.stockRepo.insertHeader(tx, { orderId, holdUntil })) {
@@ -85,6 +87,14 @@ export class InventoryParticipantService implements InventoryParticipant {
         throw error;
       }
     });
+  }
+
+  private async mintReservationIds(count: number): Promise<string[]> {
+    try {
+      return await this.idGenerator.mint(count);
+    } catch (error) {
+      throw new IdMintUnavailableError({ cause: error });
+    }
   }
 
   commit(orderId: string): Promise<ParticipantCommandOutcome> {
@@ -146,7 +156,7 @@ export class InventoryParticipantService implements InventoryParticipant {
       (tx) => {
         // Nothing cuts the wait for a pooled connection short, so check what it left before writing anything.
         if (Date.now() >= deadline) {
-          throw new ReservationTimeoutError();
+          throw new ReservationDeadlineError();
         }
         return work(tx);
       },

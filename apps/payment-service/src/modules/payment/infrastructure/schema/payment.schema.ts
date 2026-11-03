@@ -69,6 +69,9 @@ export const payments = pgTable(
     routableIdCheck('ck_payments_id_routable', t.id),
     routableIdCheck('ck_payments_order_id_routable', t.orderId),
     index('idx_payments_order').on(t.orderId),
+    // Webhook, capture and cancel resolve a payment by the gateway's session id. Not unique: nothing
+    // in the model forbids two rows sharing one, and the lookup takes whichever the query returns.
+    index('idx_payments_provider_session').on(t.providerSessionId),
     // At most one live payment per order — the DB backstop for "never double-charge". Partial so a
     // FAILED/EXPIRED attempt never blocks a legitimate retry. The app pre-checks too; this closes the
     // concurrent-double-submit race the check cannot. Written against the old enum values so the

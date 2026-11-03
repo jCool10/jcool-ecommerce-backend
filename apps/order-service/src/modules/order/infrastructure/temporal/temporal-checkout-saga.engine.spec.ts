@@ -202,6 +202,21 @@ describe('TemporalCheckoutSagaEngine', () => {
     expect(calledUnder).toEqual([NOW + 6000]);
   });
 
+  it('passes the Try start time to the run only when the caller has one', async () => {
+    const { engine, workflow } = build();
+
+    await engine.reserve(start({ tryStartedAt: new Date(NOW + 1500) }));
+    await engine.reserve(start());
+
+    const inputs = (workflow.executeUpdateWithStart.mock.calls as unknown as unknown[][]).map(
+      ([, options]) =>
+        (options as { startWorkflowOperation: WithStartWorkflowOperation<never> }).startWorkflowOperation.options
+          .args?.[0],
+    );
+    expect(inputs[0]).toMatchObject({ tryStartedAt: '2026-10-21T10:00:01.500Z' });
+    expect(inputs[1]).not.toHaveProperty('tryStartedAt');
+  });
+
   it('cancels through the fixed-id update on the order workflow, waiting at most the cancel budget', async () => {
     const { engine, workflow, handle, calledUnder } = build();
 

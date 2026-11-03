@@ -43,6 +43,8 @@ export interface CheckoutSagaStart {
   currency: string;
   placedAt: Date;
   deadlineAt: Date;
+  /** When the work behind the Try actually began, so the Try budget does not pay for the id mint or the lock wait. Falls back to `placedAt`. */
+  tryStartedAt?: Date;
 }
 
 /**

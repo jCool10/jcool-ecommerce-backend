@@ -122,6 +122,18 @@ describe('IdempotencyInterceptor', () => {
     await expect(interceptor.intercept(context(), handler)).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it('drops only its own claim when the handler fails', async () => {
+    const store = makeStore();
+    store.tryInsertInProgress.mockResolvedValue({ ...record(), id: 'claim-7' });
+    const { interceptor } = build(store);
+    const boom = new Error('boom');
+
+    const obs = await interceptor.intercept(context(), { handle: vi.fn(() => throwError(() => boom)) });
+
+    await expect(firstValueFrom(obs)).rejects.toBe(boom);
+    expect(store.deleteInProgress).toHaveBeenCalledExactlyOnceWith('claim-7');
+  });
+
   it('still propagates the original error when the IN_PROGRESS cleanup itself fails', async () => {
     const store = makeStore();
     store.tryInsertInProgress.mockResolvedValue(record());

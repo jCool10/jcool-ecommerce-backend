@@ -1,0 +1,1 @@
+CREATE INDEX "idx_payments_provider_session" ON "payments" USING btree ("provider_session_id");

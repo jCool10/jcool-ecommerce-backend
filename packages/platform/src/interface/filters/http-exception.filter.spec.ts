@@ -91,6 +91,34 @@ describe('HttpExceptionFilter', () => {
         expect.objectContaining({ statusCode: 422, message: 'Email is not a valid address' }),
       );
     });
+
+    // The shape `http-errors` gives body-parser's rejections, which Nest passes through unwrapped.
+    const bodyParserError = (status: number, message: string, expose = true): Error =>
+      Object.assign(new Error(message), { status, statusCode: status, expose, type: 'entity.too.large' });
+
+    it.each([
+      [413, 'request entity too large'],
+      [415, 'unsupported charset "UTF-7"'],
+    ])('answers an exposed body-parser %i as itself, unreported', (status, message) => {
+      const { host, response } = makeHost('POST', '/auth/register');
+
+      filter.catch(bodyParserError(status, message), host);
+
+      expect(response.status).toHaveBeenCalledWith(status);
+      expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: status, message }));
+      expect(captureException).not.toHaveBeenCalled();
+    });
+
+    it('keeps 500 for an error whose status is not marked for the client', () => {
+      const { host, response } = makeHost('POST', '/auth/register');
+
+      filter.catch(bodyParserError(400, 'internal detail', false), host);
+      filter.catch(bodyParserError(503, 'upstream detail'), host);
+
+      expect(response.status).toHaveBeenNthCalledWith(1, 500);
+      expect(response.status).toHaveBeenNthCalledWith(2, 500);
+      expect(captureException).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('log fields', () => {

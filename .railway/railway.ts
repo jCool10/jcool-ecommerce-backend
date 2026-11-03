@@ -168,8 +168,9 @@ export default defineRailway(() => {
     build: { builder: 'DOCKERFILE', dockerfilePath: 'apps/id-service/Dockerfile' },
     deploy: {
       numReplicas: 3,
-      // A no-op once the keyspace has floors; on an empty one it lifts them to now (RUNBOOK cut-over).
-      preDeployCommand: ['node dist/lease/lift-floors-cli.js --if-uninitialized'],
+      // A no-op once the keyspace has floors. On an empty one it waits a full lease TTL from when it first saw
+      // it empty, then lifts the floors: the wait the RUNBOOK asks of a human.
+      preDeployCommand: ['node dist/lease/lift-floors-cli.js --if-uninitialized --settle'],
       healthcheckPath: '/health/ready',
       healthcheckTimeout: 60,
       restartPolicyMaxRetries: 5,

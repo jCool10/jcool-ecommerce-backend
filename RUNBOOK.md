@@ -875,9 +875,9 @@ Nothing backs `id-etcd` up, and nothing should: its floors are rebuilt from the 
 A new volume, or a keyspace wiped by hand, has no `initialized` marker, and the replicas refuse to claim on it. Their renews find no owner, so each stops minting at its next renew, and every acquire then fails with `etcd keyspace /jcool/id-service/ has no floors recorded; run the floor lift before any replica mints`. Readiness stays false and the api answers 503 on writes until:
 
 1. **Wait `ID_LEASE_TTL_MS`** from the moment etcd came back empty. A replica that could not reach it since may still be minting on its old node, up to its ceiling, and the lift would hand that node to another replica below it.
-2. **Lift the floors** from a replica's shell: `node dist/lease/lift-floors-cli.js`. It refuses while any node is held, writes the marker last, and the replicas claim within a second of it.
+2. **Lift the floors** from a replica's shell: `node dist/lease/lift-floors-cli.js`. It refuses while any node is held, writes the marker last, and the replicas claim within a second of it. The manual command does not check the wait in step 1; keeping it is yours.
 
-With the replicas stopped (`railway down --service id-service --yes`) the wait still applies, and the next deploy's pre-deploy step does the lift.
+With the replicas stopped (`railway down --service id-service --yes`) the wait still applies, and the next deploy's pre-deploy step keeps it for you: `--settle` records when it first found the keyspace empty, waits until `ID_LEASE_TTL_MS` (5 minutes by default) has passed since, and then lifts. That deploy takes that much longer; if the platform kills the step first, the next deploy finds the recorded time and lifts without waiting again. A first-ever deploy of the id-service waits the same way, since an empty keyspace cannot tell a new volume from a lost one.
 
 ---
 
@@ -997,7 +997,7 @@ SELECT order_id, status, hold_until FROM reservation_orders WHERE order_id IN ('
 
 A `RESERVING` order with no hold and no workflow is one whose start never reached Temporal. The reaper hands it back to its saga once it is older than `CHECKOUT_RESERVING_ORPHAN_SEC`, every `CHECKOUT_REAPER_INTERVAL_MS`, and the saga rejects it because its Try budget is long spent. A reaper tick stops at the first order the engine cannot take, so a Temporal outage costs one failed call per tick.
 
-The reaper cannot hand back an order whose run has already closed, which only a terminated or timed-out run leaves behind. It logs `RESERVING order whose checkout saga has already closed` at error on every tick and moves on; the order keeps one of the buyer's three checkout slots, and fifty of them fill the reaper's batch so newer orphans wait. Close it by hand as in [Terminate a saga](#terminate-a-saga): clean up its inventory header first (in `inventory-postgres`), then, in `order-postgres`, `UPDATE orders SET status = 'REJECTED', finalized_at = now(), finalize_reason = 'ops:closed_saga' WHERE id = '<order id>' AND status = 'RESERVING';`.
+The reaper cannot hand back an order whose run has already closed, which only a terminated, timed-out, failed or cancelled run leaves behind. It logs `RESERVING order whose checkout saga has already closed` at error on every tick and moves on; the order keeps one of the buyer's three checkout slots, and fifty of them fill the reaper's batch so newer orphans wait. Close it by hand as in [Terminate a saga](#terminate-a-saga): clean up its inventory header first (in `inventory-postgres`), then, in `order-postgres`, `UPDATE orders SET status = 'REJECTED', finalized_at = now(), finalize_reason = 'ops:closed_saga' WHERE id = '<order id>' AND status = 'RESERVING';`.
 
 #### A `payment.authorized` in the dead-letter queue
 
@@ -1293,7 +1293,7 @@ No process sees both values of a rule below, so nothing checks it at boot, with 
 
 | Rule | Why |
 | --- | --- |
-| inventory-service `INVENTORY_TRY_LOCK_TIMEOUT_MS` (2000) < order-service `CHECKOUT_TRY_TIMEOUT_MS` (3000) | The order-service gives a Try that long over HTTP, then aborts it and fences the hold with a release. A lock budget at or above it turns contended Tries into `503`s the service would have answered |
+| inventory-service `INVENTORY_TRY_LOCK_TIMEOUT_MS` (2000) + 250 + the id mint < order-service `CHECKOUT_TRY_TIMEOUT_MS` (3000) | The order-service gives a Try that long over HTTP, then aborts it and fences the hold with a release. The inventory-service starts its lock budget after minting the hold ids, and lets each statement run 250 ms past it so that a lock wait surfaces as `LOCK_BUDGET_EXHAUSTED` rather than a slow statement. A budget that reaches the order-service's turns contended Tries into timeouts the service would have answered |
 | 4 × payment-service `PAYMENT_CAPTURE_TIMEOUT_MS` (10000) + 1000 ≤ order-service `PAYMENT_COMMAND_TIMEOUT_MS` (45000) | A cancel there chains up to four Stripe calls, each bounded by `PAYMENT_CAPTURE_TIMEOUT_MS`. A command timeout under that sum aborts a cancel on the order-service's side while the payment-service is still carrying it out |
 | order-service `CHECKOUT_PAY_CUTOFF_SEC` (1980) ≥ payment-service `PAYMENT_SESSION_MIN_TTL_SEC` (1800) + `PAYMENT_SESSION_EXPIRY_MARGIN_SEC` (120) + 60 | `/pay` opens a session only while the cutoff of the payment window remains. A smaller cutoff lets `/pay` ask for a session that expires sooner than Stripe allows, which the payment-service refuses as `CLOSED` |
 | payment-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) = order-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) | BullMQ stamps the attempts on a job when it is added, so the payment-service's value is how many deliveries `payment.authorized` gets, while the order-service's worker alone decides the delays. Every relay onto `order-events` reads this variable: the payment-service adds `payment.authorized` and the order-service adds `order.*`. The order-service runs on its code default and `.railway/railway.ts` sets the payment-service's as a literal, so change one and you change the other |
@@ -1596,6 +1596,10 @@ Doing it in this order matters: a Redis that restarts with AOF newly enabled and
 
 Locally, `docker-compose.yml` starts Redis with `--appendonly yes`. If the `redisdata` volume holds something you want to keep, run `docker exec jcool-redis redis-cli CONFIG SET appendonly yes` before recreating the container.
 
+### Change a user's role
+
+There is no admin route for roles. From a checkout, against the production database and Redis (their public URLs): `DATABASE_URL=… REDIS_URL=… pnpm --filter @jcool/user-service users:set-role <email> CUSTOMER` (or `ADMIN`). It sets the role and bumps the user's session epoch in one statement, then raises it in Redis, so every access token they hold stops working at once; their refresh token is kept, and the next refresh carries the new role. If it exits non-zero after the database write, Redis was unreachable and the reconciler publishes the epoch within one interval.
+
 ### Rebuilding the service from scratch
 
 `railway config plan && railway config apply --yes` creates `user-postgres` and `user-service`, but
@@ -1673,9 +1677,7 @@ Redis lost keys it should have kept; refill them from the database rather than t
 path, with `USER_DATABASE_URL=… REDIS_URL=… pnpm --filter @jcool/user-service epochs:prewarm`. It
 writes each epoch as a max, so a login racing it is never lowered back.
 
-If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the
-endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that
-succeeds, not before.
+If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that succeeds, not before. A service that has never loaded a set, one booted while the user-service is down, answers Bearer requests `503` rather than `401`, so clients retry instead of logging in again.
 
 The api is also a callee: the order-service reads carts and SKU views from its `/internal/v1` routes with `INTERNAL_CALLER_TOKEN_ORDER_SERVICE`, so an api outage is a checkout `503` ([The order-service](#the-order-service)). The api reads nothing from the order-service: it holds no order tables and consumes no order event.
 

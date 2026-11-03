@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { reservationRoutes } from '@jcool/internal-contracts';
+import { MAX_STOCK_ON_HAND } from '../../src/modules/inventory/domain/stock-limits';
 import { authHeader } from '../setup/bearer.helper';
 import { readStock, seedStock } from '../setup/fixtures/inventory.fixture';
 import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
@@ -91,6 +92,16 @@ describe('Admin inventory (integration, real Postgres)', () => {
         .send({ quantityOnHand: 5, quantityReserved: 99 })
         .expect(400);
     });
+
+    it('accepts the ceiling and rejects anything past it with 400, never reaching the column', async () => {
+      const variantId = testId();
+
+      await setStock(variantId, MAX_STOCK_ON_HAND).expect(200);
+      await setStock(variantId, MAX_STOCK_ON_HAND + 1).expect(400);
+      await setStock(variantId, 2 ** 31).expect(400);
+
+      expect(await readStock(app, variantId)).toMatchObject({ quantityOnHand: MAX_STOCK_ON_HAND });
+    });
   });
 
   describe('POST /admin/inventory/:variantId/adjust', () => {
@@ -121,6 +132,25 @@ describe('Admin inventory (integration, real Postgres)', () => {
       await adjustStock(variantId, -20).expect(409);
 
       expect(await readStock(app, variantId)).toMatchObject({ quantityOnHand: 10, quantityReserved: 4 });
+    });
+
+    it('refuses an adjustment past the ceiling with 409 and leaves the level alone', async () => {
+      const variantId = testId();
+      await seedStock(app, variantId, MAX_STOCK_ON_HAND - 5);
+
+      await adjustStock(variantId, 6).expect(409);
+      await adjustStock(variantId, 5).expect(200);
+
+      expect(await readStock(app, variantId)).toMatchObject({ quantityOnHand: MAX_STOCK_ON_HAND });
+    });
+
+    it('rejects a delta outside the ceiling in either direction with 400', async () => {
+      const variantId = testId();
+      await seedStock(app, variantId, 5);
+
+      await adjustStock(variantId, MAX_STOCK_ON_HAND + 1).expect(400);
+      await adjustStock(variantId, -MAX_STOCK_ON_HAND - 1).expect(400);
+      await adjustStock(variantId, 2 ** 31).expect(400);
     });
 
     it('rejects a zero delta with 400', async () => {

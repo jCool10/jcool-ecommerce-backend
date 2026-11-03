@@ -31,10 +31,16 @@ import {
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle, minutes } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
-import { LOGIN_THROTTLE, REFRESH_THROTTLE, REGISTER_THROTTLE } from '@jcool/platform/throttler';
+import {
+  LOGIN_THROTTLE,
+  REFRESH_THROTTLE,
+  REGISTER_THROTTLE,
+  USER_THROTTLER,
+  UserThrottlerGuard,
+} from '@jcool/platform/throttler';
 import { AUTH_AUDIT, type AuthAuditPort } from '../application/ports';
 import { EmailVerificationService, PasswordResetService, SessionService } from '../application/services';
 import {
@@ -62,6 +68,15 @@ import {
   VerifyEmailDto,
 } from './dto';
 import { AuthCookieService, CsrfGuard } from './security';
+
+const BEARER = /^bearer\s+(\S+)$/i;
+
+// Keyed by the account as well as the IP: a stolen session guessing the current password would
+// otherwise get a fresh budget from every address it rotates through.
+const CHANGE_PASSWORD_THROTTLE = {
+  ...REFRESH_THROTTLE,
+  [USER_THROTTLER]: { limit: 5, ttl: minutes(15), blockDuration: minutes(15) },
+};
 
 /**
  * The access token travels in the JSON body (Bearer, so CSRF-immune); the refresh token lives only
@@ -179,9 +194,9 @@ export class AuthController {
   ): Promise<AuthTokensResponseDto> {
     try {
       const tokens = await this.loginUser.execute({ email: dto.email, password: dto.password });
-      this.authCookieService.setSession(res, tokens.refreshToken);
+      const csrfToken = this.authCookieService.setSession(res, tokens.refreshToken);
       this.authAudit.record({ event: 'login.succeeded', outcome: 'success', email: dto.email, ip, userAgent });
-      return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
+      return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn, csrfToken };
     } catch (error) {
       // Audited as a brute-force signal, then rethrown unchanged so the response reveals nothing beyond status.
       this.authAudit.record({
@@ -207,7 +222,8 @@ export class AuthController {
 
   // Bearer-authenticated → CSRF-immune (a browser never auto-attaches the Authorization header cross-site).
   @Post('change-password')
-  @Throttle(REFRESH_THROTTLE)
+  @UseGuards(UserThrottlerGuard)
+  @Throttle(CHANGE_PASSWORD_THROTTLE)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth()
   @ApiNoContentResponse({ description: 'Password changed — every session revoked, re-login required' })
@@ -302,34 +318,38 @@ export class AuthController {
     if (!refreshToken) throw new UnauthorizedException('Invalid refresh token');
 
     const tokens = await this.refreshTokens.execute(refreshToken);
-    this.authCookieService.setSession(res, tokens.refreshToken);
+    const csrfToken = this.authCookieService.setSession(res, tokens.refreshToken);
     this.authAudit.record({ event: 'token.refreshed', outcome: 'success', userId: tokens.userId, ip, userAgent });
-    return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
+    return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn, csrfToken };
   }
 
+  // The refresh cookie plus the CSRF pair authorise this, not an access token: that expires in minutes,
+  // and a session must stay endable after it has.
+  @Public()
   @Post('logout')
   @UseGuards(CsrfGuard)
+  @Throttle(REFRESH_THROTTLE)
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiBearerAuth()
-  @ApiNoContentResponse({ description: 'Session revoked — access token denylisted + refresh token revoked' })
-  @ApiUnauthorizedResponse({ description: 'Missing, expired, revoked, or invalid access token' })
+  @ApiNoContentResponse({
+    description:
+      'Session ended — its refresh tokens revoked, and the access token denylisted if one was sent and is live',
+  })
   @ApiForbiddenResponse({ description: 'Missing or invalid CSRF token' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
   async logout(
-    @CurrentUser() current: AuthenticatedUser,
     @RefreshTokenCookie() refreshToken: string | undefined,
     @Res({ passthrough: true }) res: Response,
     @Ip() ip: string,
+    @Headers('authorization') authorization?: string,
     @Headers('user-agent') userAgent?: string,
   ): Promise<void> {
-    await this.logoutUser.execute({
-      userId: current.userId,
-      accessJti: current.jti,
-      accessExp: current.exp,
-      // No cookie is a no-op revoke; the access jti is still denylisted below.
+    const { userId } = await this.logoutUser.execute({
+      // No cookie is a no-op revoke; a live access token is still denylisted.
       rawRefreshToken: refreshToken ?? '',
+      rawAccessToken: BEARER.exec(authorization ?? '')?.[1],
     });
     this.authCookieService.clear(res);
-    this.authAudit.record({ event: 'logout', outcome: 'success', userId: current.userId, ip, userAgent });
+    this.authAudit.record({ event: 'logout', outcome: 'success', userId: userId ?? undefined, ip, userAgent });
   }
 }
 

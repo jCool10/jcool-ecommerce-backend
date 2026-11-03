@@ -1,8 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import type { SearchHit } from '../../../application/catalog/ports';
 
-// The matched text with `<em>` around the match, straight from the engine. A client rendering it as
-// HTML must escape everything but those tags, since the surrounding text is admin-authored content.
+// The matched text with `<em>` around the match. Everything else in it is HTML-escaped, so a client
+// can render it as HTML as it is; `name` and `description` beside it are the raw text.
 export class SearchHighlightDto {
   @ApiPropertyOptional({ example: 'Wireless <em>Headphones</em>' })
   name?: string;

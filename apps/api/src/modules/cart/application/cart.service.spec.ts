@@ -1,8 +1,10 @@
+import { NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { CartItem } from '../domain/cart-item.entity';
 import type { CartRepositoryPort } from './ports/cart-repository.port';
 import type { CartSkuView } from './ports/catalog-query.port';
+import { MAX_CART_LINES } from '../cart.constants';
 import { CartService } from './cart.service';
 
 const SKU = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -99,5 +101,52 @@ describe('CartService.view', () => {
       subtotalMinor: 0,
       currency: 'VND',
     });
+  });
+});
+
+function writable(opts: { cartId?: string | null; items?: CartItem[]; sku?: CartSkuView | null }) {
+  const repo = {
+    ensureCartId: vi.fn().mockResolvedValue('cart-1'),
+    findCartId: vi.fn().mockResolvedValue(opts.cartId === undefined ? 'cart-1' : opts.cartId),
+    findItems: vi.fn().mockResolvedValue(opts.items ?? []),
+    addItem: vi.fn(),
+    setItemQuantity: vi.fn().mockResolvedValue(true),
+    removeItem: vi.fn(),
+    clear: vi.fn(),
+  };
+  const catalog = {
+    getSkuView: vi.fn().mockResolvedValue(opts.sku === undefined ? skuView() : opts.sku),
+    getSkuViews: vi.fn().mockResolvedValue([]),
+  };
+  return { repo, service: new CartService(repo, catalog, fakeMetricsPort()) };
+}
+
+describe('CartService.addItem', () => {
+  it('refuses a SKU that is not on sale as unknown', async () => {
+    const { service, repo } = writable({ sku: skuView({ isActive: false }) });
+
+    await expect(service.addItem('u1', SKU, 1)).rejects.toBeInstanceOf(NotFoundException);
+    expect(repo.addItem).not.toHaveBeenCalled();
+  });
+
+  it('refuses a new line past the cap but still accumulates onto an existing one', async () => {
+    const full = Array.from({ length: MAX_CART_LINES }, (_, i) => CartItem.of(`sku-${i}`, 1));
+    const { service, repo } = writable({ items: full });
+
+    await expect(service.addItem('u1', SKU, 1)).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(repo.addItem).not.toHaveBeenCalled();
+
+    await expect(service.addItem('u1', 'sku-3', 1).then(() => 'ok')).resolves.toBe('ok');
+  });
+});
+
+describe('CartService writes on a user with no cart', () => {
+  it('never creates one', async () => {
+    const { service, repo } = writable({ cartId: null });
+
+    await expect(service.setItemQuantity('u1', SKU, 2)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.removeItem('u1', SKU)).resolves.toEqual({ items: [], subtotalMinor: 0, currency: 'VND' });
+    await expect(service.clear('u1')).resolves.toEqual({ items: [], subtotalMinor: 0, currency: 'VND' });
+    expect(repo.ensureCartId).not.toHaveBeenCalled();
   });
 });

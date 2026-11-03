@@ -13,6 +13,8 @@ export interface CreateRefreshTokenInput {
 
 export interface RefreshTokenOwner {
   userId: string;
+  /** The session the token belongs to; stays the same across every rotation. */
+  familyId: string;
   /** False for a revoked, replaced or expired token: rotating it cannot mint a successor. */
   rotatable: boolean;
 }
@@ -25,6 +27,8 @@ export interface RotateRefreshTokenInput {
   successorId: string | null;
   newTokenHash: string;
   newExpiresAt: Date;
+  /** A token rotated away this recently answers `replayed`, not `reuse`. */
+  reuseGraceMs: number;
 }
 
 /**
@@ -32,11 +36,14 @@ export interface RotateRefreshTokenInput {
  * token; `reuse` means a retired token was replayed and whatever was still live in the family got
  * revoked. `replaced` is true only when that revoke actually caught a live token — the theft signal —
  * so a repeat replay against an already-fully-revoked family reports `false` instead of re-alerting.
+ * `replayed` is a token rotated away within the grace window (two tabs, a retried request): refused,
+ * but nothing is revoked, because it is indistinguishable from a client that missed the response.
  */
 export type RotateOutcome =
   | { status: 'rotated'; userId: string; role: Role; tokenEpoch: number }
   | { status: 'invalid' }
-  | { status: 'reuse'; userId: string; familyId: string; replaced: boolean };
+  | { status: 'reuse'; userId: string; familyId: string; replaced: boolean }
+  | { status: 'replayed' };
 
 /** One session as shown to the account owner; `id` is the familyId. */
 export interface ActiveSession {
@@ -55,15 +62,15 @@ export interface RefreshTokenRepositoryPort {
   /** Row-locked, so concurrent rotations can't both win. */
   rotate(input: RotateRefreshTokenInput): Promise<RotateOutcome>;
 
-  /** No-op when the token does not belong to `userId`. */
-  revoke(userId: string, tokenHash: string): Promise<void>;
-
   revokeAllForUser(userId: string): Promise<void>;
 
   /** Newest first; `currentTokenHash` flags the caller's own. */
   listActiveSessions(userId: string, currentTokenHash: string | null): Promise<ActiveSession[]>;
 
-  /** False if the family is unknown or not theirs (so the caller can 404). */
+  /**
+   * Under the same user lock rotation takes, so a rotation in flight leaves no live successor.
+   * False if the family is unknown or not theirs (so the caller can 404).
+   */
   revokeFamily(userId: string, familyId: string): Promise<boolean>;
 
   /**

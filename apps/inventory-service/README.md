@@ -6,23 +6,23 @@ Owns stock and the checkout's TCC holds, from its own Postgres (`inventory-postg
 
 | Route | Answer |
 | --- | --- |
-| `POST /internal/v1/reservations/:orderId/try` | Body `{ lines: [{ variantId, quantity }], holdUntil }`, one line per variant, `holdUntil` an ISO timestamp in the future. `201 { outcome: "RESERVED" }`, also for a repeat on a `HELD` order. `409` with `OUT_OF_STOCK`, `CONTENDED` (optimistic retries ran out) or `CONFLICT` (the order is already past `HELD`). |
+| `POST /internal/v1/reservations/:orderId/try` | Body `{ lines: [{ variantId, quantity }], holdUntil }`, one line per variant and at most 100 lines, `holdUntil` an ISO timestamp in the future. `201 { outcome: "RESERVED" }`, also for a repeat on a `HELD` order. `409` with `OUT_OF_STOCK`, `CONTENDED` (optimistic retries ran out) or `CONFLICT` (the order is already past `HELD`). |
 | `POST /internal/v1/reservations/:orderId/commit` | `HELD` to `COMMITTED`: on-hand and reserved drop together. |
 | `POST /internal/v1/reservations/:orderId/release` | `HELD` to `RELEASED`. With no header it writes `FENCED`, so a Try that arrives later is refused. |
 | `POST /internal/v1/reservations/:orderId/restock` | `COMMITTED` to `RESTOCKED`: on-hand comes back. |
 | `POST /internal/v1/reservations/status` | Body `{ orderIds }`, 1 to 200 ids. `200 { statuses: { [orderId]: status or null } }`. |
 | `GET /admin/inventory/:variantId` | `{ variantId, quantityOnHand, quantityReserved, available }`, `404` with no level. |
-| `PUT /admin/inventory/:variantId` | Body `{ quantityOnHand }`. Creates or restates the level; `409` below what is reserved. |
-| `POST /admin/inventory/:variantId/adjust` | Body `{ delta }`, non-zero. `404` for a level never set, `409` when it would oversell or go below zero. |
+| `PUT /admin/inventory/:variantId` | Body `{ quantityOnHand }`, 0 to 1,000,000,000. Creates or restates the level; `409` below what is reserved. |
+| `POST /admin/inventory/:variantId/adjust` | Body `{ delta }`, non-zero and within 1,000,000,000 either way. `404` for a level never set, `409` when it would oversell, go below zero or pass 1,000,000,000. |
 | `GET /health/live`, `GET /health/ready`, `GET /metrics` | As in the api. |
 
-A command answers `200 { outcome }` with `APPLIED` or `IDEMPOTENT` (the header was already where it leads), and `409 CONFLICT` from a state it cannot move from. Every route is idempotent per order through `reservation_orders`, so retrying after a lost answer is safe. Anything the participant throws is `503` with `Retry-After: 1` and writes nothing. When rows another transaction held outlasted `INVENTORY_TRY_LOCK_TIMEOUT_MS`, the body carries `code: "LOCK_BUDGET_EXHAUSTED"` and the line is logged at warn: that is contention on a hot SKU, not a fault, and the caller's breaker does not count it. A bare `503` (a database fault, say) is a fault.
+A command answers `200 { outcome }` with `APPLIED` or `IDEMPOTENT` (the header was already where it leads), and `409 CONFLICT` from a state it cannot move from. Every route is idempotent per order through `reservation_orders`, so retrying after a lost answer is safe. Anything the participant throws is `503` with `Retry-After: 1` and writes nothing, and the `code` says whose fault it was. `LOCK_BUDGET_EXHAUSTED` means rows another transaction held outlasted `INVENTORY_TRY_LOCK_TIMEOUT_MS`: that is contention on a hot SKU, logged at warn, and the caller's breaker does not count it. `ID_SERVICE_UNAVAILABLE` means a Try could not get its ids from the id-service; only a Try mints, so the breaker that Commit and Release share does not count it either. A bare `503` (a database fault, a pool wait, a statement that ran long without waiting on a lock) is a fault and counts. The lock budget starts after the ids are minted, so a slow id-service cannot spend it.
 
 `/internal/*` takes `Authorization: Bearer <INTERNAL_CALLER_TOKEN_ORDER_SERVICE>` from the order-service, its only caller; `_PREVIOUS` is also accepted while rotating. It is unthrottled: every call comes from a private address. `/admin/*` takes an `ADMIN` access token signed by the user-service, checked against its JWKS, the denylist and the session epoch in Redis; an epoch missing from Redis is read from the user-service with `USER_SERVICE_TOKEN`.
 
 ## Stock
 
-The three CHECKs on `stock_levels` (`on_hand >= 0`, `reserved >= 0`, `reserved <= on_hand`) are the oversell guard; the code never trusts its own arithmetic. `INVENTORY_LOCK_STRATEGY=pessimistic` holds row locks; `optimistic` compares a `version` and retries up to `INVENTORY_OPTIMISTIC_MAX_RETRIES` before answering `CONTENDED`. Either way one Try spends a single `INVENTORY_TRY_LOCK_TIMEOUT_MS` across every lock wait.
+The three CHECKs on `stock_levels` (`on_hand >= 0`, `reserved >= 0`, `reserved <= on_hand`) are the oversell guard; the code never trusts its own arithmetic. `INVENTORY_LOCK_STRATEGY=pessimistic` holds row locks; `optimistic` compares a `version` and retries up to `INVENTORY_OPTIMISTIC_MAX_RETRIES` before answering `CONTENDED`. Either way one Try spends a single `INVENTORY_TRY_LOCK_TIMEOUT_MS` across every lock wait. Each statement gets `lock_timeout` of what is left of it and a `statement_timeout` 250 ms longer, so a lock wait always ends as the lock error and only a slow statement hits the statement one. A restock sums as bigint and clamps at the column's limit, so a high level cannot make it fail.
 
 A sweep releases `HELD` headers whose `hold_until` passed, every `INVENTORY_HOLD_SWEEP_INTERVAL_MS`. It only gives stock back; whether the order is over stays the order-service's call.
 

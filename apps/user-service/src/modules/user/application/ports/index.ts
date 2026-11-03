@@ -1,4 +1,5 @@
 export { SESSION_EPOCH, type SessionEpochPort, TOKEN_DENYLIST, type TokenDenylistPort } from '@jcool/auth-verifier';
+export * from './access-token-reader.port';
 export * from './access-token-signer.port';
 export * from './auth-audit.port';
 export * from './email-verification-token-repository.port';

@@ -1,4 +1,4 @@
-import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { type JWTPayload, type JWTVerifyResult, decodeProtectedHeader, jwtVerify } from 'jose';
 import { isRoutableId } from '@jcool/id-codec';
 import { type AuthenticatedUser, ROLES, type Role } from '@jcool/platform/rbac';
@@ -48,6 +48,8 @@ export class AccessTokenVerifier {
     try {
       ({ payload } = await this.verifySignature(token));
     } catch (error) {
+      // The key source being down is not the token's fault.
+      if (error instanceof ServiceUnavailableException) throw error;
       throw refused(error);
     }
     const claims = toClaims(payload);

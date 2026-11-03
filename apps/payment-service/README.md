@@ -38,7 +38,7 @@ Besides the platform variables (`NODE_ENV`, `PORT`, `DATABASE_URL`, `DB_*`, `RED
 | `QUEUE_PREFIX` | `bull` | Must equal the order-service's. |
 | `ORDER_PAID_CONSUMER_ATTEMPTS` | `15` | 1 to 30. Stamped on every `payment.authorized` job; keep it equal to the order-service's. |
 | `OUTBOX_RELAY_ENABLED`, `OUTBOX_POLL_MS`, `OUTBOX_BATCH_SIZE` | `true`, `1000`, `100` | |
-| `PAYMENT_WEBHOOK_SECRET` | required | At least 16 characters. |
+| `PAYMENT_WEBHOOK_SECRET` | required | At least 16 characters. Production refuses the placeholder from `.env.example`, since anyone could sign a webhook with it. |
 | `PAYMENT_WEBHOOK_TOLERANCE_SEC` | `300` | |
 | `STRIPE_SECRET_KEY`, `STRIPE_SUCCESS_URL` | unset | Required in production. Unset in development and test, sessions are fabricated without calling Stripe and every capture or void fails closed. |
 | `STRIPE_CANCEL_URL` | `http://localhost:3000/payments/cancel` | |

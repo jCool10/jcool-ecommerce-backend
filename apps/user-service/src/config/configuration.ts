@@ -22,6 +22,7 @@ export default () => ({
     refreshTokenTtl: process.env.REFRESH_TOKEN_TTL ?? '7d',
     emailVerificationTtl: process.env.EMAIL_VERIFICATION_TTL ?? '24h',
     passwordResetTtl: process.env.PASSWORD_RESET_TTL ?? '1h',
+    refreshReuseGrace: process.env.REFRESH_REUSE_GRACE ?? '20s',
     requireVerifiedEmail: process.env.AUTH_REQUIRE_VERIFIED_EMAIL === 'true',
     csrfSecret: process.env.CSRF_SECRET,
     es256PrivateKeys: process.env.JWT_ES256_PRIVATE_KEYS,

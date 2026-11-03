@@ -32,6 +32,7 @@ const TOKENS: AuthTokens = { accessToken: 'access', refreshToken: 'refresh', exp
 // Routes behind a bearer token audit the caller; the rest audit whoever the service answers with.
 const CURRENT: AuthenticatedUser = { userId: 'u1', role: 'CUSTOMER', jti: 'jti-1', exp: 9999999999 };
 const ANSWERED_ID = 'u9';
+const CSRF_TOKEN = 'csrf-token';
 const res = {} as Response;
 
 const stub = <T>(methods: Partial<Record<keyof T, unknown>>): T => methods as unknown as T;
@@ -46,8 +47,14 @@ function controllerWith(overrides: { login?: () => Promise<AuthTokens>; revokeSe
     stub<LoginUserUseCase>({ execute: overrides.login ?? (() => Promise.resolve(TOKENS)) }),
     stub<GetProfileUseCase>({}),
     stub<RefreshTokensUseCase>({ execute: () => Promise.resolve({ ...TOKENS, userId: ANSWERED_ID }) }),
-    stub<LogoutUserUseCase>({ execute: () => Promise.resolve() }),
-    stub<AuthCookieService>({ setSession: () => cookies.push('set'), clear: () => cookies.push('clear') }),
+    stub<LogoutUserUseCase>({ execute: () => Promise.resolve({ userId: ANSWERED_ID }) }),
+    stub<AuthCookieService>({
+      setSession: () => {
+        cookies.push('set');
+        return CSRF_TOKEN;
+      },
+      clear: () => cookies.push('clear'),
+    }),
     audit,
     stub<EmailVerificationService>({ verify: () => Promise.resolve({ userId: ANSWERED_ID }) }),
     stub<ResendVerificationUseCase>({}),
@@ -75,7 +82,7 @@ describe('AuthController audit trail', () => {
       changePassword: (c) =>
         c.changePasswordRequest(CURRENT, { currentPassword: 'old-pw', newPassword: 'new-password' }, res, IP, UA),
       logoutAll: (c) => c.logoutAll(CURRENT, res, IP, UA),
-      logout: (c) => c.logout(CURRENT, 'refresh', res, IP, UA),
+      logout: (c) => c.logout('refresh', res, IP, 'Bearer access', UA),
     };
 
     const outcomes: Record<string, { audit: AuthAuditRecord[]; cookies: string[] }> = {};
@@ -98,8 +105,18 @@ describe('AuthController audit trail', () => {
       refresh: { audit: [{ event: 'token.refreshed', ...success, userId: ANSWERED_ID }], cookies: ['set'] },
       changePassword: { audit: [{ event: 'password.changed', ...success, userId: 'u1' }], cookies: ['clear'] },
       logoutAll: { audit: [{ event: 'logout.all', ...success, userId: 'u1' }], cookies: ['clear'] },
-      logout: { audit: [{ event: 'logout', ...success, userId: 'u1' }], cookies: ['clear'] },
+      logout: { audit: [{ event: 'logout', ...success, userId: ANSWERED_ID }], cookies: ['clear'] },
     });
+  });
+
+  it('hands the CSRF token it set back in the login and refresh bodies', async () => {
+    const { controller } = controllerWith();
+
+    const login = await controller.login({ email: EMAIL, password: 'pw' }, res, IP, UA);
+    const refreshed = await controller.refresh('refresh', res, IP, UA);
+
+    expect(login).toEqual({ accessToken: 'access', expiresIn: 300, csrfToken: CSRF_TOKEN });
+    expect(refreshed).toEqual({ accessToken: 'access', expiresIn: 300, csrfToken: CSRF_TOKEN });
   });
 
   it('audits a failed login by its cause and rethrows it unchanged, with no cookie', async () => {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { UnauthorizedException } from '@nestjs/common';
+import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import {
   type CryptoKey,
   type JWK,
@@ -218,6 +218,18 @@ describe('AccessTokenVerifier', () => {
       message: 'Session has been revoked',
       cause: 'no session epoch for the subject',
     });
+  });
+
+  it('answers 503, not 401, when the key source itself is unavailable', async () => {
+    const unavailable = new ServiceUnavailableException('Service unavailable');
+    const options: AuthVerifierOptions = {
+      es256: { keys: () => Promise.reject(unavailable), issuer: ISSUER, audience: AUDIENCE },
+    };
+
+    await expect(new AccessTokenVerifier(options, epochs, denylist).verify(await es256(current))).rejects.toBe(
+      unavailable,
+    );
+    expect(denylist.isDenylisted).not.toHaveBeenCalled();
   });
 
   it('checks no revocation state for a token it refused on signature', async () => {

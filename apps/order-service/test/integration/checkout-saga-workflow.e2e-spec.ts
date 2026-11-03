@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { Client, Connection, WithStartWorkflowOperation, WorkflowUpdateFailedError } from '@temporalio/client';
+import {
+  Client,
+  Connection,
+  WithStartWorkflowOperation,
+  WorkflowFailedError,
+  WorkflowUpdateFailedError,
+} from '@temporalio/client';
+import { ApplicationFailure, CancelledFailure } from '@temporalio/common';
 import { historyToJSON } from '@temporalio/common/lib/proto-utils';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { afterAll, afterEach, beforeAll, describe, expect, inject, it } from 'vitest';
@@ -328,6 +335,17 @@ describe('CheckoutSaga workflow (dev server, stub activities)', () => {
       expect(inputsOf(input.orderId, 'releaseStock')).toEqual([{ orderId: input.orderId, reason: 'ABANDONED' }]);
     });
 
+    it('counts the Try budget from the time the caller gives, not from the order stamp', async () => {
+      const input = script(
+        { ...sagaInput({ placedAgoMs: SETTINGS.tryTimeoutMs + 500 }), tryStartedAt: new Date().toISOString() },
+        {},
+      );
+
+      await expect(reserve(input)).resolves.toBe('HELD');
+
+      expect(inputsOf(input.orderId, 'tryReserve')).toHaveLength(1);
+    });
+
     it('answers a repeated reserve with the recorded outcome, running the Try once', async () => {
       const input = script(sagaInput(), { tryReserve: () => Promise.resolve('OUT_OF_STOCK') });
 
@@ -606,6 +624,35 @@ describe('CheckoutSaga workflow (dev server, stub activities)', () => {
       await expect(resultOf(input.orderId)).resolves.toBe('COMPENSATED');
       expect(namesOf(input.orderId)).not.toContain('commitStock');
       expect(inputsOf(input.orderId, 'applyOrderChange')).toHaveLength(1);
+    });
+  });
+
+  describe('failure', () => {
+    it('fails the run when a command fails for good, instead of failing every workflow task', async () => {
+      const input = script(sagaInput(), {
+        tryReserve: () => Promise.resolve('OUT_OF_STOCK'),
+        releaseStock: () => Promise.reject(ApplicationFailure.nonRetryable('stock gone for good', 'Fatal')),
+      });
+
+      await reserve(input);
+
+      await expect(resultOf(input.orderId)).rejects.toBeInstanceOf(WorkflowFailedError);
+      expect((await handleOf(input.orderId).describe()).status.name).toBe('FAILED');
+    });
+
+    it('closes the run as cancelled when it is cancelled with a verification in flight', async () => {
+      const verifyGate = hold('VERIFIED');
+      const input = script(sagaInput(), { verifyAuthorization: verifyGate.impl });
+      await reserve(input);
+      await authorize(input.orderId, authorization());
+      await verifyGate.started;
+
+      await handleOf(input.orderId).cancel();
+
+      const failure = await resultOf(input.orderId).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(WorkflowFailedError);
+      expect((failure as WorkflowFailedError).cause).toBeInstanceOf(CancelledFailure);
+      expect((await handleOf(input.orderId).describe()).status.name).toBe('CANCELLED');
     });
   });
 

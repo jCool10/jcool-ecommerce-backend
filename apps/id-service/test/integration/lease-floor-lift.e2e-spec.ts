@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LEASED_NODE_MAX, LEASED_NODE_MIN } from '@jcool/id-generator';
 import { LeaseKeyspaceUninitializedError } from '../../src/lease/etcd-lease-store';
-import { liftFloors } from '../../src/lease/lift-floors';
+import { liftFloors, LiftSettlingError } from '../../src/lease/lift-floors';
 import { TestKeyspace } from '../setup/keyspaces';
 
 const CLAIM = { holder: 'claimant', ttlMs: 60_000 };
@@ -44,6 +44,39 @@ describe('lifting the floors of a keyspace', () => {
     const grant = await keyspace.store().acquire(CLAIM);
 
     await expect(lift(Date.now())).rejects.toThrow(new RegExp(`nodes still held \\(${grant?.nodeId}\\)`));
+  });
+
+  describe('when asked to settle', () => {
+    const SETTLE_MS = 300_000;
+    const settled = (nowMs: number) =>
+      liftFloors(keyspace.etcd, {
+        keyPrefix: keyspace.prefix,
+        requestTimeoutMs: 2_000,
+        nowMs,
+        onlyIfUninitialized: true,
+        settleMs: SETTLE_MS,
+      });
+
+    it('records the first sighting of the empty keyspace and lifts nothing', async () => {
+      await expect(settled(1_000_000)).rejects.toBeInstanceOf(LiftSettlingError);
+
+      await expect(keyspace.store().acquire(CLAIM)).rejects.toThrow(LeaseKeyspaceUninitializedError);
+    });
+
+    it('keeps refusing until a full TTL has passed since the first sighting', async () => {
+      await expect(settled(1_000_000)).rejects.toBeInstanceOf(LiftSettlingError);
+
+      await expect(settled(1_000_000 + SETTLE_MS - 1)).rejects.toMatchObject({ remainingMs: 1 });
+      await expect(settled(1_000_000 + SETTLE_MS)).resolves.toEqual({ kind: 'lifted', floorMs: 1_000_000 + SETTLE_MS });
+    });
+
+    it('clears the record with the marker, so a later wipe starts its wait afresh', async () => {
+      await expect(settled(1_000_000)).rejects.toBeInstanceOf(LiftSettlingError);
+      await settled(1_000_000 + SETTLE_MS);
+
+      const { kvs } = await keyspace.etcd.kv.range({ key: keyspace.keys.emptySince });
+      expect(kvs).toHaveLength(0);
+    });
   });
 
   it('leaves an initialized keyspace alone when asked to lift only an uninitialized one', async () => {

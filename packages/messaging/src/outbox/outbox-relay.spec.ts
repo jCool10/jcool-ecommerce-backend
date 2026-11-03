@@ -38,11 +38,22 @@ function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
 
 function build(rows: OutboxRow[]) {
   const sets: Record<string, unknown>[] = [];
+  const limits: number[] = [];
+  // The relay asks for routed rows first, then for the rest with what room is left.
+  const isRouted = (r: OutboxRow) => Object.hasOwn(ROUTES, r.eventType);
   const tx = {
     select: () => ({
       from: () => ({
         where: () => ({
-          orderBy: () => ({ limit: (n: number) => ({ for: () => Promise.resolve(rows.slice(0, n)) }) }),
+          orderBy: () => ({
+            limit: (n: number) => ({
+              for: () => {
+                limits.push(n);
+                const wanted = limits.length === 1;
+                return Promise.resolve(rows.filter((r) => isRouted(r) === wanted).slice(0, n));
+              },
+            }),
+          }),
         }),
       }),
     }),
@@ -81,7 +92,7 @@ function build(rows: OutboxRow[]) {
   );
 
   const traceparents = () => add.mock.calls.map(([, job]) => (job as DomainEventJob).traceparent);
-  return { relay, add, queued, sets, recordEventPublished, error, traceparents };
+  return { relay, add, queued, sets, limits, recordEventPublished, error, traceparents };
 }
 
 describe('OutboxRelay', () => {
@@ -163,6 +174,26 @@ describe('OutboxRelay', () => {
     expect(t.sets.filter((values) => 'attempts' in values)).toHaveLength(4);
     expect(t.recordEventPublished).toHaveBeenCalledWith('unregistered', 'refused');
     expect(t.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes routed rows even when a batch-size pile of unrouted rows is older', async () => {
+    const unrouted = Array.from({ length: 3 }, () => row({ eventType: 'order.shipped' }));
+    const t = build([...unrouted, row()]);
+
+    const summary = await t.relay.runOnce(3);
+
+    expect(summary).toEqual({ published: 1, failed: 2 });
+    expect(t.queued).toEqual([['orders', 'order.placed']]);
+    expect(t.limits).toEqual([3, 2]);
+  });
+
+  it('leaves unrouted rows unread while routed rows fill the batch', async () => {
+    const t = build([row({ eventType: 'order.shipped' }), row(), row()]);
+
+    const summary = await t.relay.runOnce(2);
+
+    expect(summary).toEqual({ published: 2, failed: 0 });
+    expect(t.limits).toEqual([2]);
   });
 
   // Each refusal can cost a full command timeout while the batch's row locks stay held.

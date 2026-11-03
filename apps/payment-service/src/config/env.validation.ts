@@ -195,11 +195,19 @@ export class EnvironmentVariables extends PlatformEnv {
   PAYMENT_CAPTURE_TIMEOUT_MS?: number;
 }
 
+const EXAMPLE_WEBHOOK_SECRET = 'whsec_dev_only_change_me_openssl_rand_hex_24';
+
 export function validate(config: Record<string, unknown>): EnvironmentVariables {
   const env = validateEnv(EnvironmentVariables, config);
   // Without a key the adapter fabricates sessions no buyer can pay, which only test and dev may run on.
   if (env.NODE_ENV === NodeEnv.Production && (!env.STRIPE_SECRET_KEY || !env.STRIPE_SUCCESS_URL)) {
     throw new Error('Environment validation failed -> STRIPE_SECRET_KEY/STRIPE_SUCCESS_URL: required in production');
+  }
+  // The committed .env.example value is public, so anyone could sign a webhook it accepts.
+  if (env.NODE_ENV === NodeEnv.Production && env.PAYMENT_WEBHOOK_SECRET === EXAMPLE_WEBHOOK_SECRET) {
+    throw new Error(
+      'Environment validation failed -> PAYMENT_WEBHOOK_SECRET: the .env.example placeholder is not allowed in production',
+    );
   }
   // Whatever NODE_ENV says: a key that can move real money only ever talks to Stripe.
   if (env.STRIPE_API_HOST !== undefined && !env.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {

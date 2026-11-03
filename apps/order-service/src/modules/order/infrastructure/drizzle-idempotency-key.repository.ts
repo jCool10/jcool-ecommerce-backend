@@ -58,13 +58,11 @@ export class DrizzleIdempotencyKeyRepository implements IdempotencyStorePort {
       .where(and(eq(idempotencyKeys.scope, input.scope), eq(idempotencyKeys.key, input.key)));
   }
 
-  async deleteInProgress(scope: string, key: string, tx?: DrizzleTx): Promise<void> {
+  async deleteInProgress(claimId: string, tx?: DrizzleTx): Promise<void> {
     const exec = tx ?? this.db;
     await exec
       .delete(idempotencyKeys)
-      .where(
-        and(eq(idempotencyKeys.scope, scope), eq(idempotencyKeys.key, key), eq(idempotencyKeys.status, 'IN_PROGRESS')),
-      );
+      .where(and(eq(idempotencyKeys.id, claimId), eq(idempotencyKeys.status, 'IN_PROGRESS')));
   }
 
   async deleteExpiredInProgress(scope: string, key: string, cutoff: Date): Promise<number> {

@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, Max, Min, ValidateIf } from 'class-validator';
 import { SEQUENCE_COUNT } from '@jcool/id-codec';
 
 /**
@@ -9,7 +9,8 @@ import { SEQUENCE_COUNT } from '@jcool/id-codec';
 export const MAX_IDS_PER_REQUEST = SEQUENCE_COUNT;
 
 export class MintRequest {
-  @IsOptional()
+  // Absent means the default; an explicit null is a malformed count, not an omitted one.
+  @ValidateIf((_, value) => value !== undefined)
   @IsInt()
   @Min(1)
   @Max(MAX_IDS_PER_REQUEST)

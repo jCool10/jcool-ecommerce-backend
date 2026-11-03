@@ -114,6 +114,16 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
   });
 
+  it('refuses a user-directory grace without a unit, which the loader would throw on later', () => {
+    expect(() => validate({ ...BASE_ENV, USER_DIRECTORY_NOT_FOUND_GRACE: '600' })).toThrow(
+      /USER_DIRECTORY_NOT_FOUND_GRACE must be a number with a unit/,
+    );
+    expect(() => validate({ ...BASE_ENV, USER_DIRECTORY_NOT_FOUND_GRACE: '' })).toThrow(
+      /USER_DIRECTORY_NOT_FOUND_GRACE/,
+    );
+    expect(() => validate({ ...BASE_ENV, USER_DIRECTORY_NOT_FOUND_GRACE: '10m' })).not.toThrow();
+  });
+
   it('keeps a rejected order at least a day', () => {
     expect(() => validate({ ...BASE_ENV, RETENTION_REJECTED_ORDER_DAYS: '0' })).toThrow(
       /RETENTION_REJECTED_ORDER_DAYS/,

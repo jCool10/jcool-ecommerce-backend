@@ -89,15 +89,29 @@ describe('Idempotency-key store (integration, real Postgres)', () => {
   });
 
   it('deleteInProgress removes only an IN_PROGRESS row', async () => {
-    await repo.tryInsertInProgress(insertInput());
+    const claim = await repo.tryInsertInProgress(insertInput());
 
-    await repo.deleteInProgress(scopeOf(USER_A), KEY);
+    await repo.deleteInProgress(claim!.id);
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), KEY)).toBeNull();
 
-    await repo.tryInsertInProgress(insertInput({ key: 'k2' }));
+    const done = await repo.tryInsertInProgress(insertInput({ key: 'k2' }));
     await repo.markCompleted({ scope: scopeOf(USER_A), key: 'k2', responseStatus: 201, responseBody: { ok: true } });
-    await repo.deleteInProgress(scopeOf(USER_A), 'k2');
+    await repo.deleteInProgress(done!.id);
     expect(await repo.findByScopeAndKey(scopeOf(USER_A), 'k2')).not.toBeNull();
+  });
+
+  it('deleteInProgress leaves a row another claim holds for the same key', async () => {
+    const original = await repo.tryInsertInProgress(insertInput());
+    await db
+      .update(schema.idempotencyKeys)
+      .set({ createdAt: new Date(Date.now() - 60_000) })
+      .where(eq(schema.idempotencyKeys.id, original!.id));
+    await repo.deleteExpiredInProgress(scopeOf(USER_A), KEY, new Date(Date.now() - 30_000));
+    const reclaimer = await repo.tryInsertInProgress(insertInput());
+
+    await repo.deleteInProgress(original!.id);
+
+    expect(await repo.findByScopeAndKey(scopeOf(USER_A), KEY)).toMatchObject({ id: reclaimer!.id });
   });
 
   it('deleteExpired reclaims past-TTL rows and keeps live ones', async () => {

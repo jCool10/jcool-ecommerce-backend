@@ -1,6 +1,7 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PinoLogger } from 'nestjs-pino';
-import { hashRefreshToken } from '..';
+import { durationToMs, hashRefreshToken } from '..';
 import {
   AUTH_AUDIT,
   type AuthAuditPort,
@@ -18,15 +19,19 @@ const LOG_CONTEXT = 'RefreshTokens';
 
 @Injectable()
 export class RefreshTokensUseCase {
+  private readonly reuseGraceMs: number;
+
   constructor(
     @Inject(REFRESH_TOKEN_REPOSITORY) private readonly refreshTokenRepo: RefreshTokenRepositoryPort,
     private readonly idGeneratorService: IdGeneratorService,
     private readonly authTokensService: AuthTokensService,
     @Inject(AUTH_AUDIT) private readonly authAudit: AuthAuditPort,
     @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochPort,
+    config: ConfigService,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(LOG_CONTEXT);
+    this.reuseGraceMs = durationToMs(config.getOrThrow<string>('auth.refreshReuseGrace'));
   }
 
   // Cookie-authenticated, so no request.user carries the userId the caller's audit line needs.
@@ -47,7 +52,14 @@ export class RefreshTokensUseCase {
       successorId,
       newTokenHash: successor.hash,
       newExpiresAt: successor.expiresAt,
+      reuseGraceMs: this.reuseGraceMs,
     });
+
+    if (outcome.status === 'replayed') {
+      // A second tab or a retried request, not evidence of theft: nothing is revoked, bumped or alerted.
+      this.logger.debug({ userId: owner.userId, familyId: owner.familyId }, 'refresh token replayed within grace');
+      throw new UnauthorizedException(INVALID_REFRESH_TOKEN);
+    }
 
     if (outcome.status === 'reuse') {
       // Family already revoked in the transaction; the client always gets a generic 401.

@@ -24,6 +24,7 @@ describe('MintRequest', () => {
   it.each([
     [{ count: MAX_IDS_PER_REQUEST + 1 }, 'count'],
     [{ count: 0 }, 'count'],
+    [{ count: null }, 'count'],
   ])('refuses %o', (body, property) => {
     expect(parse(body).errors).toEqual([property]);
   });

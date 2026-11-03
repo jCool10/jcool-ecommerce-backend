@@ -66,6 +66,12 @@ export async function CheckoutSaga(input: CheckoutSagaInput): Promise<CheckoutSt
   let state = initialCheckoutSagaState(input.mode);
   let inFlight = 0;
   let tryRun: Promise<ReserveOutcome> | undefined;
+  // Work nobody awaits (commands, verifications) reports its failure here. Left to reject unobserved,
+  // a non-retryable failure or a cancellation would fail every workflow task and the run never closes.
+  let fail!: (error: unknown) => void;
+  const faulted = new Promise<never>((_, reject) => {
+    fail = reject;
+  });
 
   const apply = (transition: Transition): void => {
     const before = state.step;
@@ -78,6 +84,8 @@ export async function CheckoutSaga(input: CheckoutSagaInput): Promise<CheckoutSt
     inFlight += 1;
     try {
       await work;
+    } catch (error) {
+      fail(error);
     } finally {
       inFlight -= 1;
     }
@@ -147,7 +155,10 @@ export async function CheckoutSaga(input: CheckoutSagaInput): Promise<CheckoutSt
   };
 
   const attemptTry = async (): Promise<ReserveOutcome> => {
-    const plan = planTry({ placedAt: input.placedAt, tryTimeoutMs: settings.tryTimeoutMs }, Date.now());
+    const plan = planTry(
+      { startedAt: input.tryStartedAt ?? input.placedAt, tryTimeoutMs: settings.tryTimeoutMs },
+      Date.now(),
+    );
     if (plan.abandon) return 'ABANDONED';
     // One attempt: a resent Try could reserve where the first one was refused.
     const { tryReserve } = proxyLocalActivities<CheckoutSagaActivityFunctions>({
@@ -198,19 +209,25 @@ export async function CheckoutSaga(input: CheckoutSagaInput): Promise<CheckoutSt
 
   setHandler(stateQuery, () => viewOf(state, input.deadlineAt));
 
-  if (input.mode === 'lateAuthorization') {
-    const orderStatus = await activities.loadLateAuthorizationContext({ orderId });
-    apply(onLateAuthorizationContext(state, orderStatus));
-  } else {
-    await runTry();
-    const expiresInMs = Date.parse(input.deadlineAt) + settings.authGraceMs - Date.now();
-    const settledInTime =
-      expiresInMs > 0 && (await condition(() => state.step !== CheckoutStep.AWAITING_AUTH, expiresInMs));
-    if (!settledInTime) apply(onDeadline(state));
-  }
+  const run = async (): Promise<CheckoutStep> => {
+    if (input.mode === 'lateAuthorization') {
+      const orderStatus = await activities.loadLateAuthorizationContext({ orderId });
+      apply(onLateAuthorizationContext(state, orderStatus));
+    } else {
+      await runTry();
+      const expiresInMs = Date.parse(input.deadlineAt) + settings.authGraceMs - Date.now();
+      const settledInTime =
+        expiresInMs > 0 && (await condition(() => state.step !== CheckoutStep.AWAITING_AUTH, expiresInMs));
+      if (!settledInTime) apply(onDeadline(state));
+    }
 
-  await condition(() => SETTLED_STEPS.has(state.step) && inFlight === 0 && allHandlersFinished());
-  return state.step;
+    await condition(() => SETTLED_STEPS.has(state.step) && inFlight === 0 && allHandlersFinished());
+    return state.step;
+  };
+
+  // The first failure from either side ends the run: a cancellation closes it as cancelled, anything
+  // else as failed.
+  return await Promise.race([run(), faulted]);
 }
 
 function viewOf(state: CheckoutSagaState, deadlineAt: string): CheckoutSagaView {

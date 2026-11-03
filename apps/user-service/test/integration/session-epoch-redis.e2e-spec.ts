@@ -15,7 +15,7 @@ import {
 import { SessionEpochReconciler } from '../../src/modules/user/application/services/session-epoch-reconciler';
 import { sha256Hex } from '../../src/modules/user/application/sha256-hex';
 import { RedisSessionEpochPublisher } from '../../src/modules/user/infrastructure/redis-session-epoch.publisher';
-import { authHeader, loginAs, sessionHeaders } from '../setup/auth.helper';
+import { ageRotation, authHeader, loginAs, sessionHeaders } from '../setup/auth.helper';
 import { createTestUser, type TestUser } from '../setup/fixtures/user.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { publishedEpoch, storedEpoch } from '../setup/session-epoch.helper';
@@ -115,6 +115,7 @@ describe('Session epoch publication to Redis (integration)', () => {
       async ({ user, password }) => {
         const session = await loginAs(app, { email: user.email, password });
         await request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session)).expect(200);
+        await ageRotation(pool, session, 60_000);
         return request(app.getHttpServer()).post('/auth/refresh').set(sessionHeaders(session));
       },
       401,

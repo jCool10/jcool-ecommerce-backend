@@ -57,9 +57,20 @@ export class ReconcileTccPaymentsUseCase {
       } catch (error) {
         summary.errors++;
         this.logger.warn({ orderId: payment.orderId, paymentId: payment.id, err: toError(error) }, 'reconcile failed');
+        await this.sendToBackOfQueue(payment);
       }
     }
     return summary;
+  }
+
+  // A payment that keeps failing would otherwise stay at the head of the oldest-first queue and,
+  // with enough of them, fill every batch so younger payments are never reached.
+  private async sendToBackOfQueue(payment: Payment): Promise<void> {
+    try {
+      await this.payments.bumpUpdatedAt(payment.id as string, payment.status);
+    } catch (error) {
+      this.logger.warn({ paymentId: payment.id, err: toError(error) }, 'could not move a failed payment back');
+    }
   }
 
   private async reconcile(payment: Payment): Promise<PaymentOutcome> {

@@ -64,7 +64,10 @@ function build({
     add,
   } as unknown as Queue;
   const dlq = {
-    getJobs: vi.fn().mockResolvedValue(entries),
+    // Honours the range and forgets what a replay removed, as the real queue does.
+    getJobs: vi.fn((_types: string[], start: number, end: number) =>
+      Promise.resolve(entries.filter((e) => e.remove.mock.calls.length === 0).slice(start, end + 1)),
+    ),
     getJob: vi.fn((id: string) => Promise.resolve(dlqNow ? dlqNow(id) : entries.find((e) => e.id === id))),
   } as unknown as Queue;
 
@@ -168,6 +171,33 @@ describe('replayDeadLetters', () => {
   });
 
   // A dry run that ignored the guard would promise a replay the apply run then refuses.
+  it('reaches replayable entries behind a page of skipped ones', async () => {
+    const applied = [sampleId(20), sampleId(21)];
+    const replayable = [sampleId(22), sampleId(23)];
+    const entries = [...applied, ...replayable].map((id) => entry(dead({ outboxId: id })));
+    const { main, dlq, add } = build({ entries });
+
+    const summary = await replayDeadLetters(main, dlq, {
+      ...guards,
+      inboxLookup: (id) => Promise.resolve(applied.includes(id) ? new Date() : null),
+      dryRun: false,
+      limit: 2,
+    });
+
+    expect(summary).toMatchObject({ replayed: 2, skipped: 2 });
+    expect(add).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops after the limit of replayable entries on a dry run, stepping over what it previews', async () => {
+    const entries = [sampleId(20), sampleId(21), sampleId(22)].map((id) => entry(dead({ outboxId: id })));
+    const { main, dlq, add } = build({ entries });
+
+    const summary = await replayDeadLetters(main, dlq, { ...guards, limit: 2 });
+
+    expect(summary.outcomes.map((o) => o.messageId)).toEqual([sampleId(20), sampleId(21)]);
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it('runs the inbox guard on a dry run too', async () => {
     const claimed = entry(dead());
     const forced = entry(dead({ outboxId: ID_B, occurredAt: ago(31 * DAY_MS) }));

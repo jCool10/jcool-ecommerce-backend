@@ -83,7 +83,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     if (!existing) {
       const inserted = await this.idempotencyStore.tryInsertInProgress(insertInput);
       if (inserted) {
-        return this.runHandler(scope, key, next);
+        return this.runHandler(inserted, next);
       }
       existing = await this.idempotencyStore.findByScopeAndKey(scope, key);
     }
@@ -116,10 +116,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
       // Another request reclaimed first — treat as in-progress.
       throw new ConflictException('A request with this Idempotency-Key is already in progress');
     }
-    return this.runHandler(scope, key, next);
+    return this.runHandler(reclaimed, next);
   }
 
-  private runHandler(scope: string, key: string, next: CallHandler): Observable<unknown> {
+  private runHandler(claim: IdempotencyRecord, next: CallHandler): Observable<unknown> {
+    const { scope, key } = claim;
     // Handed over CLS because the transaction that moves the order to PENDING also flips this row to
     // COMPLETED; on success this interceptor does nothing more.
     setIdempotencyContext(this.cls, { scope, key });
@@ -127,9 +128,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return next.handle().pipe(
       // Handler failure (business 4xx or unexpected 5xx): the row was never marked COMPLETED. Drop the
       // IN_PROGRESS row so the client can retry; an order left RESERVING carries the key itself, so
-      // the retry finds it again. Cleanup failure must not mask the original error.
+      // the retry finds it again. Only this request's own claim is dropped: a reclaimer may hold the key
+      // by now. Cleanup failure must not mask the original error.
       catchError((err: unknown) =>
-        from(this.idempotencyStore.deleteInProgress(scope, key)).pipe(
+        from(this.idempotencyStore.deleteInProgress(claim.id)).pipe(
           catchError((cleanupErr: unknown) => {
             // Every retry now 409s until IDEMPOTENCY_TTL_MS reclaims the row.
             this.logger.warn(

@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { MAX_STATUS_BATCH } from '@jcool/internal-contracts';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
 import type { InventoryParticipant } from '../../application/public/inventory-participant.port';
+import { MAX_RESERVATION_LINES } from '../../domain/stock-limits';
+import { IdMintUnavailableError } from '../../domain/errors/id-mint-unavailable.error';
+import { ReservationDeadlineError } from '../../domain/errors/reservation-deadline.error';
 import { ReservationTimeoutError } from '../../domain/errors/reservation-timeout.error';
 import { StatusDto, TryReservationDto } from './dto';
 import { ReservationsController } from './reservations.controller';
@@ -77,6 +80,19 @@ describe('ReservationsController validation', () => {
     ['an unknown field', { reason: 'checkout' }],
   ])('refuses a Try with %s', async (_case, overrides) => {
     expect(await isRefused(() => validated(TryReservationDto, tryBody(overrides)))).toBe(true);
+  });
+
+  it('takes up to the line cap and refuses a Try with more', async () => {
+    const linesOf = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ variantId: String(BigInt(VARIANT_A) + BigInt(i)), quantity: 1 }));
+
+    const answers = await Promise.all(
+      [linesOf(MAX_RESERVATION_LINES), linesOf(MAX_RESERVATION_LINES + 1)].map((lines) =>
+        isRefused(() => validated(TryReservationDto, tryBody({ lines }))),
+      ),
+    );
+
+    expect(answers).toEqual([false, true]);
   });
 
   it('accepts two lines for different variants', async () => {
@@ -192,6 +208,30 @@ describe('ReservationsController answers', () => {
       expect(res.json).not.toHaveBeenCalled();
     },
   );
+
+  it('leaves a Try whose ids could not be minted to the filter that codes it', async () => {
+    const unminted = new IdMintUnavailableError();
+    const { controller } = build({ tryReserve: () => Promise.reject(unminted) });
+    const res = fakeResponse();
+    const body = await validated(TryReservationDto, {
+      lines: [{ variantId: VARIANT_A, quantity: 1 }],
+      holdUntil: inAnHour(),
+    });
+
+    await expect(controller.tryReserve(ORDER_ID, body, res as unknown as Response)).rejects.toBe(unminted);
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('answers a slow statement as a bare 503, which the caller counts as a fault', async () => {
+    const slow = new ReservationDeadlineError();
+    const { controller } = build({ release: () => Promise.reject(slow) });
+    const res = fakeResponse();
+
+    const error = await controller.release(ORDER_ID, res as unknown as Response).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).cause).toBe(slow);
+  });
 
   it.each(['tryReserve', 'release'] as const)(
     'leaves a %s that ran out of its lock budget to the filter that answers busy rows',

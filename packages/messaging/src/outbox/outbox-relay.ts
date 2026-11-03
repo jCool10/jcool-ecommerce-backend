@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { context } from '@opentelemetry/api';
 import type { Queue } from 'bullmq';
-import { asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, notInArray, type SQL } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { PinoLogger } from 'nestjs-pino';
 import { toError } from '@jcool/kernel';
@@ -59,16 +59,22 @@ export class OutboxRelay {
     if (!this.isConnected()) return { published: 0, failed: 0 };
 
     return this.db.transaction(async (tx) => {
-      const rows = await tx
-        .select()
-        .from(outbox)
-        .where(isNull(outbox.publishedAt))
-        // The id breaks `created_at` ties, which are routine.
-        .orderBy(asc(outbox.createdAt), asc(outbox.id))
-        .limit(batchSize)
-        // Rows another instance holds are skipped, not waited on: multi-instance safety and
-        // throughput without leader election, paid for in global ordering.
-        .for('update', { skipLocked: true });
+      // Routed rows are selected apart from the rest: unrouted rows are never published and never
+      // leave the table, so in one query a batch-size pile of them would fill every batch.
+      const routedTypes = Object.keys(this.options.routes);
+      const routed =
+        routedTypes.length === 0
+          ? []
+          : await this.lockUnpublished(tx, inArray(outbox.eventType, routedTypes), batchSize);
+      const stray =
+        routed.length < batchSize
+          ? await this.lockUnpublished(
+              tx,
+              routedTypes.length === 0 ? undefined : notInArray(outbox.eventType, routedTypes),
+              batchSize - routed.length,
+            )
+          : [];
+      const rows = [...routed, ...stray];
 
       const refused: OutboxRow[] = [];
       const unrouted: OutboxRow[] = [];
@@ -125,6 +131,21 @@ export class OutboxRelay {
 
       return { published, failed: refused.length + unrouted.length };
     });
+  }
+
+  private lockUnpublished(tx: OutboxTxOf, scope: SQL | undefined, limit: number): Promise<OutboxRow[]> {
+    return (
+      tx
+        .select()
+        .from(outbox)
+        .where(and(isNull(outbox.publishedAt), scope))
+        // The id breaks `created_at` ties, which are routine.
+        .orderBy(asc(outbox.createdAt), asc(outbox.id))
+        .limit(limit)
+        // Rows another instance holds are skipped, not waited on: multi-instance safety and
+        // throughput without leader election, paid for in global ordering.
+        .for('update', { skipLocked: true })
+    );
   }
 
   private isConnected(): boolean {

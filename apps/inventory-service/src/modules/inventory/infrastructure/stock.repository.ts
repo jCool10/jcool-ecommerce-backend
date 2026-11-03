@@ -4,6 +4,7 @@ import { and, asc, eq, lt, notExists, sql, type SQL } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '../../../database';
 import { InsufficientStockError } from '../domain/errors/insufficient-stock.error';
 import { ReservationConflictError } from '../domain/errors/reservation-conflict.error';
+import { INT4_MAX } from '../domain/stock-limits';
 import { ReservationOrderStatus } from '../domain/reservation-order-status';
 import { ReservationStatus } from '../domain/reservation-status';
 import type {
@@ -28,7 +29,10 @@ const STOCK_DELTA: Record<LineTransition['to'], (quantity: number) => Record<str
     quantityReserved: sql`${stockLevels.quantityReserved} - ${quantity}`,
   }),
   RELEASED: (quantity) => ({ quantityReserved: sql`${stockLevels.quantityReserved} - ${quantity}` }),
-  RESTOCKED: (quantity) => ({ quantityOnHand: sql`${stockLevels.quantityOnHand} + ${quantity}` }),
+  // Summed as bigint and clamped, so a level near the column's limit cannot make the restock fail and be retried forever.
+  RESTOCKED: (quantity) => ({
+    quantityOnHand: sql`LEAST(${stockLevels.quantityOnHand}::bigint + ${quantity}, ${INT4_MAX})`,
+  }),
 };
 
 @Injectable()

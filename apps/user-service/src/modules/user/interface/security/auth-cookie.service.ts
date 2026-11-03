@@ -18,9 +18,15 @@ export class AuthCookieService {
     this.maxAgeMs = durationToMs(config.getOrThrow<string>('auth.refreshTokenTtl'));
   }
 
-  setSession(res: Response, refreshToken: string): void {
+  /**
+   * Returns the CSRF token it set, for the response body: the cookie is `Path=/auth`, so a page
+   * served from anywhere else cannot read it back to echo in the header.
+   */
+  setSession(res: Response, refreshToken: string): string {
+    const csrfToken = this.csrfTokenService.issue();
     res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, this.cookieOptions(true));
-    res.cookie(CSRF_TOKEN_COOKIE, this.csrfTokenService.issue(), this.cookieOptions(false));
+    res.cookie(CSRF_TOKEN_COOKIE, csrfToken, this.cookieOptions(false));
+    return csrfToken;
   }
 
   /** The attributes must match the ones they were set with, or the browser keeps the cookies. */
