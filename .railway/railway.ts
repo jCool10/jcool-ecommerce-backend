@@ -19,6 +19,10 @@ const TEMPORAL_PORT = '7233';
 const TEMPORAL_NAMESPACE = 'jcool';
 const TEMPORAL_TASK_QUEUE = 'checkout-saga';
 
+// A database's tag must stay the major version that initialised its volume: changed in place, Postgres
+// refuses the data directory. Railway created these on 18 although 16 was declared; user-postgres is on 16.
+const CHECKOUT_POSTGRES_IMAGE = 'ghcr.io/railwayapp-templates/postgres-ssl:18';
+
 // Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
 const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 
@@ -257,7 +261,7 @@ export default defineRailway(() => {
   });
 
   const inventoryPostgres = database('inventory-postgres', 'postgres', {
-    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    image: CHECKOUT_POSTGRES_IMAGE,
     defaultMountPath: '/var/lib/postgresql/data',
   });
 
@@ -300,7 +304,7 @@ export default defineRailway(() => {
   });
 
   const paymentPostgres = database('payment-postgres', 'postgres', {
-    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    image: CHECKOUT_POSTGRES_IMAGE,
     defaultMountPath: '/var/lib/postgresql/data',
   });
 
@@ -337,7 +341,7 @@ export default defineRailway(() => {
   });
 
   const orderPostgres = database('order-postgres', 'postgres', {
-    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    image: CHECKOUT_POSTGRES_IMAGE,
     defaultMountPath: '/var/lib/postgresql/data',
   });
 
@@ -391,7 +395,7 @@ export default defineRailway(() => {
 
   // Workflow histories and visibility. Losing it loses every open saga (RUNBOOK: Operate Temporal).
   const temporalPostgres = database('temporal-postgres', 'postgres', {
-    image: 'ghcr.io/railwayapp-templates/postgres-ssl:16',
+    image: CHECKOUT_POSTGRES_IMAGE,
     defaultMountPath: '/var/lib/postgresql/data',
   });
 
