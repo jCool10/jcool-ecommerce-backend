@@ -6,14 +6,25 @@ Owns checkout and orders, from its own Postgres (`order-postgres`): `orders`, `o
 
 | Route | Answer |
 | --- | --- |
-| `POST /orders` | Checks out the buyer's cart. Requires `Idempotency-Key`; a retry under the same key replays the first answer. `201` with the order once stock is held, `400` for an empty or unpurchasable cart or a line above 10 units of one SKU, `409` for a key still in progress, too many pending orders or missing stock, `422` for a key reused with another request, `503` with `Retry-After` when the saga gave no answer within `CHECKOUT_RESERVE_WAIT_MS` or the api could not be read. |
-| `GET /orders`, `GET /orders/:id` | The buyer's own orders. A `REJECTED` order answers `404`. |
-| `POST /orders/:id/pay` | `201` with a Stripe Checkout Session, a new one or the one still open. `409` when the order is not `PENDING`, `502` when the payment-service failed. |
-| `POST /orders/:id/cancel` | `200` with the order, also for one already cancelled; `409` once it has settled; `503` with `Retry-After` when the saga gave no answer within `CHECKOUT_CANCEL_WAIT_MS`. |
-| `GET /admin/orders`, `GET /admin/orders/:id`, `POST /admin/orders/:id/cancel` | The same for an admin, over every buyer; the list filters by `status`. |
+| `POST /orders` | Checks out the buyer's cart. Requires `Idempotency-Key`; a retry under the same key replays the first answer. `201` with the order once stock is held, `400` for a missing key, an empty or unpurchasable cart or a line above 10 units of one SKU (the cart's clamp means only a defensive path reaches the last), `409` for a key still in progress, 3 orders already in flight or missing stock (the available count is never disclosed), `422` for a key reused with another request, `503` with `Retry-After` when the saga gave no answer within `CHECKOUT_RESERVE_WAIT_MS` or the api could not be read (retry with the same key). |
+| `GET /orders`, `GET /orders/:id` | The buyer's own orders, paginated with `pageSize ≤ 100`. Another buyer's order and a `REJECTED` one answer `404`. |
+| `POST /orders/:id/pay` | `201` with a manual-capture Stripe Checkout Session that dies at the order's payment deadline: a new one, or the one still open. `409` when the order is not `PENDING`, too little of its payment window is left, or it is no longer payable; `502` when the payment-service or Stripe failed. |
+| `POST /orders/:id/cancel` | Cancels a `PENDING` order: the saga releases its stock and closes the session or voids the card hold before the `200`. `200` with the order, also for one already cancelled, so no idempotency key is needed; `409` once payment is being taken or the order has settled otherwise; `503` with `Retry-After` when the saga gave no answer within `CHECKOUT_CANCEL_WAIT_MS`. |
+| `GET /admin/orders`, `GET /admin/orders/:id`, `POST /admin/orders/:id/cancel` | The same for an admin, over every buyer; the list filters by `status`. A force-cancel runs the identical use case, so an admin cannot reach an outcome a buyer's own cancel could not — only the audit reason differs (`admin:cancel` vs `user:cancel`). |
 | `GET /health/live`, `GET /health/ready`, `GET /metrics` | As in the api, except that readiness also needs Temporal, and the saga worker `RUNNING` when it is enabled. |
 
 Every route takes a bearer access token from the user-service. `POST /orders`, `/pay` and both cancels are throttled per IP (30 a minute) and per user (10 a minute); the rest share the default tier. Swagger is at `/docs` when `SWAGGER_ENABLED` is on.
+
+## Order lifecycle
+
+There is no separate "place" call: `POST /orders` takes the order `DRAFT → RESERVING` and waits for the saga's stock Try, which moves it `RESERVING → PENDING` (stock held) or `RESERVING → REJECTED`. From `PENDING` the saga moves it to `CONFIRMING` once a card hold is verified, then `CONFIRMING → PAID` after stock commits and the charge is captured, or `CONFIRMING → FAILED`; `PENDING → EXPIRED` at the payment deadline and `PENDING → CANCELLED` on cancel. `DRAFT → CANCELLED` discards a draft. `PAID`, `FAILED`, `EXPIRED`, `CANCELLED` and `REJECTED` are terminal, and every edge past `DRAFT` is written by the saga alone, under the order row lock with a from-status guard. A buyer never sees a `RESERVING` or `REJECTED` order. Legal edges live in one table; a use case translates a refused transition into `409` at its boundary.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/order-lifecycle-dark.svg">
+  <img alt="Order lifecycle: POST /orders moves DRAFT to RESERVING, or a discarded draft goes to CANCELLED; the checkout saga writes every later edge: RESERVING to PENDING once the stock Try holds, else REJECTED, hidden from the buyer; PENDING to CONFIRMING on an authorized payment, EXPIRED at the deadline, or CANCELLED; CONFIRMING to PAID once stock commits and the payment captures, else FAILED" src="../../docs/diagrams/order-lifecycle.svg">
+</picture>
+
+The whole checkout saga is drawn in [engineering-highlights.md → Distributed systems](../../docs/engineering-highlights.md#distributed-systems), and the decision behind it is in [system-architecture.md](../../docs/system-architecture.md#checkout-saga-orchestration-on-temporal-tcc-on-stock-and-payment).
 
 ## How a checkout runs
 

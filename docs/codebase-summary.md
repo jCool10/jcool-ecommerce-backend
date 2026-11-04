@@ -1,6 +1,60 @@
 # Codebase summary
 
-Navigation only — "where to look for X". For what each context owns, the layering contract and the full directory tree, see [`README.md#project-layout`](../README.md#project-layout) and [`README.md#bounded-contexts`](../README.md#bounded-contexts). Nothing here repeats those. Counts of files, tables, migrations, routes and tests are deliberately absent: use the discovery commands at the end.
+Navigation only — "where to look for X". For what each context owns and the layering contract, see [`system-architecture.md#bounded-contexts`](./system-architecture.md#bounded-contexts) and [`system-architecture.md#layering`](./system-architecture.md#layering). Nothing here repeats those. Counts of files, tables, migrations, routes and tests are deliberately absent: use the discovery commands at the end.
+
+## Project layout
+
+pnpm workspace, tasks run through Turborepo ([how it builds](./local-development.md#how-the-workspace-builds)). Each service's README says what it owns.
+
+```
+apps/api/
+├── src/
+│   ├── main.ts              # bootstrap: helmet, CORS, ValidationPipe, Swagger, shutdown hooks
+│   ├── instrumentation.ts   # OTel + Sentry, preloaded via `node --import` before Nest boots
+│   ├── app.module.ts
+│   ├── modules/             # bounded contexts — each: domain / application / infrastructure / interface
+│   │   ├── cart/  media/  product/   # product: <layer>/catalog/
+│   └── shared/
+│       ├── config/          # the api's env schema (platform fragments + its own keys) + config factory
+│       ├── messaging/       # the api's route table, queue handlers and DLQ replay CLI over @jcool/messaging
+│       ├── infrastructure/  # Drizzle schema + migrations, the api's DrizzleDB alias, object storage
+│       ├── cache/           # stale-while-revalidate cache + single-flight rebuild lock
+│       ├── identity/        # ID_GENERATOR port + module: every row id comes from the id-service
+│       ├── idempotency/     # request fingerprint + CLS carrier
+│       ├── interface/       # debug controller
+│       └── testing/         # unit-test doubles (id generator, Redis)
+├── test/
+│   ├── integration/         # e2e suites on real infrastructure (Testcontainers)
+│   ├── setup/               # global setup, app factory, fixtures, per-suite side containers
+│   ├── mocks/               # deterministic uuid double for the unit tier
+│   └── vitest-e2e.config.mts
+└── scripts/                 # perf-seed (catalog + cart for the load tests), trace harness
+apps/id-service/             # POST /v1/ids; node lease (etcd), N replicas; unit / e2e / system tests
+apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e tests
+apps/inventory-service/      # stock levels, TCC holds and the per-order fence (own Postgres); /internal/v1/reservations, /admin/inventory; stock seed
+apps/payment-service/        # payments, the per-order fence, Stripe and the webhook (own Postgres); /internal/v1/payments, /webhooks/payment; publishes payment.authorized
+apps/order-service/          # orders, checkout idempotency, the CheckoutSaga workflow and worker (own Postgres); /orders, /admin/orders; consumes order-events; unit / e2e / system tests
+apps/gateway/                # Caddyfile: public site routing /auth, /admin/inventory, /webhooks/payment and the order paths, private LB over the id-service replicas
+packages/
+├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, ValueObject, DomainError, Result)
+├── id-codec/                # @jcool/id-codec — 63-bit snowflake layout
+├── id-generator/            # @jcool/id-generator — monotonic snowflake generator, node lease, node ids
+├── auth-verifier/           # @jcool/auth-verifier — the access-token check every service runs: ES256, then denylist and session epoch;
+│                            #   /session-state: the Redis readers and the user-service client behind them
+├── internal-contracts/      # @jcool/internal-contracts — paths, bodies and outcomes of the internal APIs, the order-events queue contract and the payment.authorized event; /testing: the shared contract cases
+├── messaging/               # @jcool/messaging — outbox, relay, BullMQ queue, inbox, DLQ replay and the route table type, wired by each service's own routes
+├── metrics-port/            # @jcool/metrics-port — the metrics seam domain and application code depend on
+├── platform/                # @jcool/platform — Nest infrastructure: env fragments, pg + Drizzle, Redis, observability, metrics,
+│                            #   error tracking, health, throttler, rbac, mail, resilience, retention, identity, interface, internal-api;
+│                            #   one subpath export each
+└── testing/                 # @jcool/testing — test doubles, source-only, dev dependency only
+test/load/  k6/              # k6 mixes
+infra/                       # Prometheus rules + promtool tests, Grafana dashboard, OTel Collector; Railway images for Prometheus, Loki, Grafana, Elasticsearch, etcd, Temporal
+scripts/                     # repo tooling: CI's Railway flip-variable check, rollout wait, perf capture, OpenAPI and doc diagram tooling
+docs/                        # standards, architecture decisions, deployment
+.railway/railway.ts          # Railway deploy config (infrastructure as code)
+turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflows/  RUNBOOK.md
+```
 
 ## Entry points
 
@@ -15,7 +69,7 @@ Navigation only — "where to look for X". For what each context owns, the layer
 | `order-service` | [`apps/order-service/src/main.ts`](../apps/order-service/src/main.ts) |
 | `gateway` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) (not a Node process) |
 
-CLIs (the api's migrate, DLQ replay, search reindex and storage verify, and the order-service's DLQ replay, also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`README.md#scripts`](../README.md#scripts) for the `pnpm` names):
+CLIs (the api's migrate, DLQ replay, search reindex and storage verify, and the order-service's DLQ replay, also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`local-development.md#scripts`](./local-development.md#scripts) for the `pnpm` names):
 
 | CLI | File |
 | --- | --- |
@@ -36,7 +90,7 @@ CLIs (the api's migrate, DLQ replay, search reindex and storage verify, and the 
 
 ## Bounded contexts
 
-Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `media`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer keeps its code under `catalog/`, with the published port in `application/public/`. The other contexts left the api, each as a service with the same four layers in one module: stock is [`apps/inventory-service/src/modules/inventory`](../apps/inventory-service/src/modules/inventory), payment is [`apps/payment-service/src/modules/payment`](../apps/payment-service/src/modules/payment), and order is [`apps/order-service/src/modules/order`](../apps/order-service/src/modules/order). The order-service reaches stock through [`order-inventory-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-inventory-participant.http-adapter.ts), payment through [`order-payment-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-payment-participant.http-adapter.ts), and the api's cart and catalog through [`cart-snapshot.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/cart-snapshot.http-adapter.ts) and [`catalog-query.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/catalog-query.http-adapter.ts). What each context owns and publishes is the README's [bounded-context table](../README.md#bounded-contexts); this is only the path to open.
+Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `media`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer keeps its code under `catalog/`, with the published port in `application/public/`. The other contexts left the api, each as a service with the same four layers in one module: stock is [`apps/inventory-service/src/modules/inventory`](../apps/inventory-service/src/modules/inventory), payment is [`apps/payment-service/src/modules/payment`](../apps/payment-service/src/modules/payment), and order is [`apps/order-service/src/modules/order`](../apps/order-service/src/modules/order). The order-service reaches stock through [`order-inventory-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-inventory-participant.http-adapter.ts), payment through [`order-payment-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-payment-participant.http-adapter.ts), and the api's cart and catalog through [`cart-snapshot.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/cart-snapshot.http-adapter.ts) and [`catalog-query.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/catalog-query.http-adapter.ts). What each context owns and publishes is the [bounded-context table](./system-architecture.md#bounded-contexts); this is only the path to open.
 
 ## Checkout saga
 
@@ -53,7 +107,7 @@ The saga's decisions are pure domain code in [`apps/order-service/src/modules/or
 
 ## Shared / messaging
 
-The outbox, relay, BullMQ queue, inbox and dead-letter replay are the package [`packages/messaging`](../packages/messaging/src). What each service adds is its route table, which says which queue an event goes to: the api's in [`apps/api/src/shared/messaging/event-routes.ts`](../apps/api/src/shared/messaging/event-routes.ts) (which also holds the consumed queue, `api-events`, with the handlers beside it), the payment-service's in [`apps/payment-service/src/messaging/event-routes.ts`](../apps/payment-service/src/messaging/event-routes.ts), and the order-service's in [`apps/order-service/src/shared/messaging/order-events.routes.ts`](../apps/order-service/src/shared/messaging/order-events.routes.ts) (which also holds the consumed queue, `order-events`, with [`order-events.handlers.ts`](../apps/order-service/src/shared/messaging/order-events.handlers.ts) beside it). The `order-events` queue and the `payment.authorized` event, which cross a process boundary, are in [`packages/internal-contracts/src/queues`](../packages/internal-contracts/src/queues) and [`events`](../packages/internal-contracts/src/events). The api's `shared/messaging` is one of the two composition roots allowed to import across contexts ([`README.md#layering`](../README.md#layering)).
+The outbox, relay, BullMQ queue, inbox and dead-letter replay are the package [`packages/messaging`](../packages/messaging/src). What each service adds is its route table, which says which queue an event goes to: the api's in [`apps/api/src/shared/messaging/event-routes.ts`](../apps/api/src/shared/messaging/event-routes.ts) (which also holds the consumed queue, `api-events`, with the handlers beside it), the payment-service's in [`apps/payment-service/src/messaging/event-routes.ts`](../apps/payment-service/src/messaging/event-routes.ts), and the order-service's in [`apps/order-service/src/shared/messaging/order-events.routes.ts`](../apps/order-service/src/shared/messaging/order-events.routes.ts) (which also holds the consumed queue, `order-events`, with [`order-events.handlers.ts`](../apps/order-service/src/shared/messaging/order-events.handlers.ts) beside it). The `order-events` queue and the `payment.authorized` event, which cross a process boundary, are in [`packages/internal-contracts/src/queues`](../packages/internal-contracts/src/queues) and [`events`](../packages/internal-contracts/src/events). The api's `shared/messaging` is one of the two composition roots allowed to import across contexts ([`system-architecture.md#layering`](./system-architecture.md#layering)).
 
 ## Schema and migrations
 
@@ -80,7 +134,7 @@ The outbox and inbox tables come from `@jcool/messaging/schema`, which the payme
 | payment-service | [`apps/payment-service/src/config/env.validation.ts`](../apps/payment-service/src/config/env.validation.ts), [`configuration.ts`](../apps/payment-service/src/config/configuration.ts) |
 | order-service | [`apps/order-service/src/config/env.validation.ts`](../apps/order-service/src/config/env.validation.ts), [`configuration.ts`](../apps/order-service/src/config/configuration.ts), and the saga's own settings in [`checkout-saga.env.ts`](../apps/order-service/src/config/checkout-saga.env.ts) and [`checkout-saga.config.ts`](../apps/order-service/src/config/checkout-saga.config.ts) |
 
-Every service composes its env schema from shared fragments in [`packages/platform/src/config`](../packages/platform/src/config) (parsers and strict decorators every app's validator builds on). The commented variable references are [`.env.example`](../.env.example) for the api, [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service, [`apps/inventory-service/.env.example`](../apps/inventory-service/.env.example) for the inventory-service [`apps/payment-service/.env.example`](../apps/payment-service/.env.example) for the payment-service and [`apps/order-service/.env.example`](../apps/order-service/.env.example) for the order-service; see [`README.md#configuration`](../README.md#configuration) for which ones have no default.
+Every service composes its env schema from shared fragments in [`packages/platform/src/config`](../packages/platform/src/config) (parsers and strict decorators every app's validator builds on). The commented variable references are [`.env.example`](../.env.example) for the api, [`apps/user-service/.env.example`](../apps/user-service/.env.example) for the user-service, [`apps/inventory-service/.env.example`](../apps/inventory-service/.env.example) for the inventory-service [`apps/payment-service/.env.example`](../apps/payment-service/.env.example) for the payment-service and [`apps/order-service/.env.example`](../apps/order-service/.env.example) for the order-service; see [`apps/api/README.md#configuration`](../apps/api/README.md#configuration) for which of the api's have no default.
 
 ## Test tiers
 
@@ -92,7 +146,7 @@ Every service composes its env schema from shared fragments in [`packages/platfo
 | System | `*.system-spec.ts` under `apps/gateway/test/`, `apps/id-service/test/system/` and `apps/order-service/test/system/` — real images on a Docker network, run by `pnpm turbo run test:system --concurrency=1`; the order-service's alone, with a fake Stripe and fault injection, by `pnpm --filter @jcool/order-service run test:system` ([RUNBOOK → Run the system test](../RUNBOOK.md#run-the-system-test)). Local only |
 | Load/performance | [`test/load/`](../test/load) (k6 mixes with Prometheus as the authority) and [`k6/`](../k6) |
 
-Discover the current suite rather than trusting a count: `find apps -name '*.e2e-spec.ts'` for integration specs, `find apps -name '*.system-spec.ts'` for system specs. Tier boundaries and coverage-floor rationale are in [`README.md#testing`](../README.md#testing).
+Discover the current suite rather than trusting a count: `find apps -name '*.e2e-spec.ts'` for integration specs, `find apps -name '*.system-spec.ts'` for system specs. Tier boundaries and coverage-floor rationale are in [`code-standards.md#tests`](./code-standards.md#tests); running the tiers in [`local-development.md#tests`](./local-development.md#tests).
 
 ## Infra as code
 
@@ -115,7 +169,7 @@ Discover the current suite rather than trusting a count: `find apps -name '*.e2e
 
 ## Docs diagrams
 
-[`docs/diagrams/`](./diagrams) holds the SVG pairs (light and dark) the README and `system-architecture.md` embed. The topology and the checkout sequence are Mermaid blocks in the README instead, so they change with the text. The compiler named in [`docs/README.md`](./README.md) is not in the repository: a remaining SVG changes by editing the file, and one that no document embeds any more can be deleted.
+[`docs/diagrams/`](./diagrams) holds the SVG pairs (light and dark) that `system-architecture.md`, `engineering-highlights.md` and the order-service's README embed. The topology (in the README) and the checkout sequence (in `engineering-highlights.md`) are Mermaid blocks instead, so they change with the text. The compiler named in [`docs/README.md`](./README.md) is not in the repository: a remaining SVG changes by editing the file, and one that no document embeds any more can be deleted.
 
 ## CI/CD and deploy config
 
