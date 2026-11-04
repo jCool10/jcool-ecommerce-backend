@@ -170,6 +170,107 @@ describe('SwrCacheService', () => {
     expect(opsOf(lockFails.metrics)).toEqual(['error_fallthrough']);
   });
 
+  describe('read-through without Redis', () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (reason: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    it('shares one source read per key between lookups that arrive while it runs', async () => {
+      ctx.cache.read.mockResolvedValue({ status: 'error' });
+      const pending = deferred<{ id: string }>();
+      const rebuild = vi.fn(() => pending.promise);
+      const other = vi.fn().mockResolvedValue({ id: 'p2' });
+
+      const lookups = [
+        ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY }),
+        ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY }),
+        ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY }),
+        ctx.swr.readThroughSwr('k2', other, { policy: POLICY }),
+      ];
+      await flushBackgroundWork();
+      pending.resolve({ id: 'p1' });
+
+      await expect(Promise.all(lookups)).resolves.toEqual([{ id: 'p1' }, { id: 'p1' }, { id: 'p1' }, { id: 'p2' }]);
+      expect(rebuild).toHaveBeenCalledTimes(1);
+      expect(other).toHaveBeenCalledTimes(1);
+      expect(opsOf(ctx.metrics)).toEqual(Array(4).fill('error_fallthrough'));
+    });
+
+    it('reads the source again once the shared read has settled', async () => {
+      ctx.cache.read.mockResolvedValue({ status: 'error' });
+      const rebuild = vi.fn().mockResolvedValueOnce({ id: 'v1' }).mockResolvedValueOnce({ id: 'v2' });
+
+      await expect(ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'v1' });
+      await expect(ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'v2' });
+      expect(rebuild).toHaveBeenCalledTimes(2);
+    });
+
+    it('hands a failed shared read to every lookup waiting on it and keeps none of it', async () => {
+      ctx.cache.read.mockResolvedValue({ status: 'miss' });
+      ctx.lock.acquire.mockResolvedValue({ status: 'error' });
+      const pending = deferred<{ id: string }>();
+      const rebuild = vi.fn(() => pending.promise);
+
+      const lookups = [
+        ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY }),
+        ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY }),
+      ];
+      await flushBackgroundWork();
+      pending.reject(new Error('postgres down'));
+
+      const settled = await Promise.allSettled(lookups);
+      expect(settled.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+      expect(rebuild).toHaveBeenCalledTimes(1);
+
+      rebuild.mockResolvedValueOnce({ id: 'p1' });
+      await expect(ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY })).resolves.toEqual({ id: 'p1' });
+      expect(rebuild).toHaveBeenCalledTimes(2);
+    });
+
+    it('shares the read-through of waiters whose lock holder outlived the wait budget', async () => {
+      ctx.cache.read.mockResolvedValue({ status: 'miss' });
+      ctx.lock.acquire.mockResolvedValue({ status: 'held' });
+      const pending = deferred<{ id: string }>();
+      const rebuild = vi.fn(() => pending.promise);
+
+      const lookups = [
+        ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY }),
+        ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY }),
+      ];
+      // Both waiters past POLICY.waitMs, so both have given up on the holder before the read lands.
+      await new Promise((resolve) => setTimeout(resolve, POLICY.waitMs * 2));
+      pending.resolve({ id: 'p1' });
+
+      await expect(Promise.all(lookups)).resolves.toEqual([{ id: 'p1' }, { id: 'p1' }]);
+      expect(rebuild).toHaveBeenCalledTimes(1);
+      expect(opsOf(ctx.metrics).filter((op) => op === 'lock_timeout')).toHaveLength(2);
+    });
+
+    it('joins a waiter that outlived the wait budget to the rebuild its own process holds', async () => {
+      ctx.cache.read.mockResolvedValue({ status: 'miss' });
+      ctx.lock.acquire
+        .mockResolvedValueOnce({ status: 'acquired', token: 't' })
+        .mockResolvedValueOnce({ status: 'held' });
+      const pending = deferred<{ id: string }>();
+      const rebuild = vi.fn(() => pending.promise);
+
+      const holder = ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY });
+      const waiter = ctx.swr.readThroughSwr('k', rebuild, { policy: POLICY });
+      await new Promise((resolve) => setTimeout(resolve, POLICY.waitMs * 2));
+      pending.resolve({ id: 'p1' });
+
+      await expect(Promise.all([holder, waiter])).resolves.toEqual([{ id: 'p1' }, { id: 'p1' }]);
+      expect(rebuild).toHaveBeenCalledTimes(1);
+      expect(opsOf(ctx.metrics)).toContain('lock_timeout');
+    });
+  });
+
   it('treats a payload written under an older shape as a miss', async () => {
     ctx.cache.read.mockResolvedValue({ status: 'hit', value: { id: 'p1' } });
     ctx.lock.acquire.mockResolvedValue({ status: 'acquired', token: 't' });

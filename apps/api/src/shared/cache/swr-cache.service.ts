@@ -45,12 +45,14 @@ interface ResolvedOptions<T> {
  * Three mechanisms, each covering what the others cannot: a single-flight lock so one expiring key
  * costs one rebuild rather than one per request, stale-while-revalidate so nobody waits on that
  * rebuild, and TTL jitter so keys written together do not expire together. Redis is never
- * load-bearing here either: any failure degrades to reading through to `rebuild`.
+ * load-bearing here either: any failure degrades to reading through to `rebuild`, once per key per
+ * process at a time, so an outage multiplies source reads by the replica count, not by the traffic.
  */
 @Injectable()
 export class SwrCacheService {
   readonly defaultPolicy: TtlPolicy;
   private readonly shouldLog = createLogSampler(LOG_SAMPLE_WINDOW_MS);
+  private readonly localReads = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly cache: CacheService,
@@ -84,7 +86,7 @@ export class SwrCacheService {
     if (read.status === 'error') {
       // Redis is unreachable, so the lock would be too: skip the single-flight dance entirely.
       this.metrics.recordCatalogCacheOperation('error_fallthrough');
-      return rebuild();
+      return this.readThroughShared(key, rebuild);
     }
 
     const envelope = read.status === 'hit' ? this.toEnvelope<T>(key, read.value, resolved) : null;
@@ -109,7 +111,7 @@ export class SwrCacheService {
     const attempt = await this.singleFlightLock.acquire(lockKeyFor(key), options.policy.leaseMs);
     if (attempt.status === 'error') {
       this.metrics.recordCatalogCacheOperation('error_fallthrough');
-      return rebuild();
+      return this.readThroughShared(key, rebuild);
     }
 
     // Recorded here rather than at the read, so exactly one of hit_fresh/hit_stale/miss/
@@ -122,7 +124,10 @@ export class SwrCacheService {
         const filled = await this.readFreshEnvelope(key, options);
         // The previous holder finished between this caller's read and its acquire: the lock is free
         // because the value is already there. Rebuilding again is the herd this whole class prevents.
-        return filled ? filled.data : await this.rebuildAndStore(key, rebuild, options, 'miss');
+        // Shared, so a waiter in this process that outlasts its budget joins this read.
+        return filled
+          ? filled.data
+          : await this.rebuildAndStore(key, () => this.readThroughShared(key, rebuild), options, 'miss');
       } finally {
         await this.singleFlightLock.release(lockKeyFor(key), attempt.token);
       }
@@ -149,7 +154,23 @@ export class SwrCacheService {
         'cache rebuild lock timed out, reading through',
       );
     }
-    return rebuild();
+    return this.readThroughShared(key, rebuild);
+  }
+
+  /**
+   * The read-through for every path that cannot use Redis: the bypasses above, and a caller that
+   * could not even build its key. Callers that arrive while one is running share its result, success
+   * or failure; nothing is kept once it settles, so the next lookup reads the source again rather
+   * than a value this process never stored.
+   */
+  readThroughShared<T>(key: string, rebuild: () => Promise<T>): Promise<T> {
+    const running = this.localReads.get(key) as Promise<T> | undefined;
+    if (running) {
+      return running;
+    }
+    const read = (async () => rebuild())().finally(() => this.localReads.delete(key));
+    this.localReads.set(key, read);
+    return read;
   }
 
   /**

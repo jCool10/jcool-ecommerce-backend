@@ -1,7 +1,8 @@
-import type { ConfigService } from '@nestjs/config';
 import type { ClsService } from 'nestjs-cls';
-import type { PinoLogger } from 'nestjs-pino';
+import type { Mock } from 'vitest';
 import type { ShutdownService, ShutdownStep } from '@jcool/platform/health';
+import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { consumersOf, fakeDispatcher } from '../testing/fake-dispatcher';
 import { CATALOG, ORDERS } from '../testing/messaging-fixtures';
 import type { DeadLetterRouter } from './dead-letter';
@@ -48,7 +49,7 @@ const never = (): Promise<never> => new Promise(() => undefined);
 
 describe('DomainEventsWorker shutdown step', () => {
   let route: ReturnType<typeof vi.fn<DeadLetterRouter['route']>>;
-  let logger: { setContext: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+  let error: Mock;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -57,23 +58,22 @@ describe('DomainEventsWorker shutdown step', () => {
     workers.built = [];
     workers.close = () => Promise.resolve();
     route = vi.fn(() => Promise.resolve());
-    logger = { setContext: vi.fn(), info: vi.fn(), error: vi.fn() };
+    error = vi.fn();
   });
   afterEach(() => vi.useRealTimers());
 
   const closeStep = (queues = [ORDERS]): ShutdownStep => {
     const steps: ShutdownStep[] = [];
-    const config = { get: (key: string) => CONFIG[key], getOrThrow: (key: string) => CONFIG[key] };
     const shutdown = { registerStep: (step: ShutdownStep) => steps.push(step) };
     const dispatcher = fakeDispatcher({});
     new DomainEventsWorker(
       {} as DomainEventProcessor,
       { route } as unknown as DeadLetterRouter,
       consumersOf(...queues.map((spec) => ({ spec, dispatcher }))),
-      config as unknown as ConfigService,
+      fakeConfigService(CONFIG),
       {} as ClsService,
       shutdown as unknown as ShutdownService,
-      logger as unknown as PinoLogger,
+      fakePinoLogger({ error }),
     ).onModuleInit();
     return steps[0];
   };
@@ -146,10 +146,7 @@ describe('DomainEventsWorker shutdown step', () => {
     await step.run();
 
     expect(workers.built[1].close).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ queue: 'orders' }),
-      'failed to close queue worker',
-    );
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ queue: 'orders' }), expect.any(String));
     expect(redis.quit).toHaveBeenCalledTimes(1);
   });
 

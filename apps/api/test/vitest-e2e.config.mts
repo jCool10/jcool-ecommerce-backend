@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
+import { coverageScope } from '../vitest.config.mjs';
 import { workerCount } from './setup/worker-count.js';
 
 // e2e config (HTTP via supertest + Testcontainers). Kept separate from the unit
@@ -11,7 +12,7 @@ export default defineConfig({
     environment: 'node',
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['test/**/*.e2e-spec.ts'],
-    passWithNoTests: true,
+    coverage: { ...coverageScope, reportsDirectory: './coverage/e2e' },
     env: {
       NODE_ENV: 'test',
       LOG_LEVEL: 'warn',

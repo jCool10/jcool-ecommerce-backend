@@ -39,4 +39,8 @@ describe('Money', () => {
     expect(Money.of(100, 'vnd').equals(Money.of(100, 'VND'))).toBe(true);
     expect(Money.of(100, 'VND').equals(Money.of(200, 'VND'))).toBe(false);
   });
+
+  it('is not equal to nothing', () => {
+    expect(Money.of(100, 'VND').equals(undefined)).toBe(false);
+  });
 });

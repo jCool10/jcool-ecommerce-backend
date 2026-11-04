@@ -26,6 +26,20 @@ export function productDetailKey(version: number, idOrSlug: string): string {
 }
 
 export function productListKey(version: number, criteria: FindManyActiveCriteria): string {
+  return `${NAMESPACE}:${version}:list:${listDigestOf(criteria)}`;
+}
+
+// Name a source read, never a Redis entry: with the generation unreadable there is no key to cache
+// under, only an in-flight read for concurrent callers in this process to share.
+export function productDetailReadKey(idOrSlug: string): string {
+  return `${NAMESPACE}:unversioned:product:${digestOf(idOrSlug)}`;
+}
+
+export function productListReadKey(criteria: FindManyActiveCriteria): string {
+  return `${NAMESPACE}:unversioned:list:${listDigestOf(criteria)}`;
+}
+
+function listDigestOf(criteria: FindManyActiveCriteria): string {
   // `satisfies Required<...>` is the point of the literal: adding a field to the criteria (a sort
   // order, say) fails to compile here instead of silently serving one cached page for every value
   // of the new field. Built in one place, so its key order — and the digest — is stable.
@@ -39,7 +53,7 @@ export function productListKey(version: number, criteria: FindManyActiveCriteria
 
   // Hashed, not interpolated: `q` is free-form user text, so it is unbounded in length and can
   // carry the `:` that shapes the key.
-  return `${NAMESPACE}:${version}:list:${digestOf(JSON.stringify(fingerprint))}`;
+  return digestOf(JSON.stringify(fingerprint));
 }
 
 function digestOf(input: string): string {

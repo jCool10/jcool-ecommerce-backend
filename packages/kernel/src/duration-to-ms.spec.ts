@@ -22,4 +22,12 @@ describe('durationToMs', () => {
       expect(() => durationToMs(input), input).toThrow(/Invalid duration/);
     }
   });
+
+  // Past 2^53 the result is no longer the exact count of milliseconds asked for.
+  it('refuses a duration whose milliseconds are past the safe-integer range', () => {
+    expect(durationToMs(`${Number.MAX_SAFE_INTEGER}ms`)).toBe(Number.MAX_SAFE_INTEGER);
+    for (const input of ['9007199254740993ms', '999999999999d']) {
+      expect(() => durationToMs(input), input).toThrow(/Invalid duration/);
+    }
+  });
 });

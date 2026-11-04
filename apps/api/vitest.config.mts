@@ -2,6 +2,32 @@ import { fileURLToPath } from 'node:url';
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
+// Shared with test/vitest-e2e.config.mts: the merge keeps only files both runs admit.
+export const coverageScope = {
+  provider: 'v8' as const,
+  include: ['src/**/*.ts'],
+  exclude: [
+    'src/**/*.spec.ts',
+    // Test doubles run in every spec that imports them; counting them inflates coverage.
+    'src/**/testing/**',
+    // Wiring and declarations: no logic to measure.
+    'src/**/*.module.ts',
+    'src/main.ts',
+    'src/instrumentation.ts',
+    'src/**/index.ts',
+    'src/**/schema/**',
+    // Run in globalSetup or as a process of their own, outside the measured workers.
+    'src/shared/infrastructure/database/{migrate,migrate-cli,seed}.ts',
+    'src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
+  ],
+};
+
+// Applied only by test/vitest-coverage-merge.config.mts, over the merged unit and e2e maps.
+export const mergedThresholds = {
+  'src/**/infrastructure/**': { statements: 85, branches: 79, functions: 91, lines: 85 },
+  'src/**/interface/**': { statements: 92, branches: 80, functions: 93, lines: 94 },
+};
+
 // Transform is SWC, not Vitest's default esbuild: esbuild does NOT emit `emitDecoratorMetadata`,
 // which NestJS DI needs. SWC with `decoratorMetadata: true` does, so Test.createTestingModule()
 // works zero-plugin at the app layer.
@@ -33,19 +59,10 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
     coverage: {
-      provider: 'v8',
-      reportsDirectory: './coverage',
-      include: ['src/**/*.ts'],
-      // `testing/` holds test doubles: they run in every spec that imports them, so counting them
-      // would inflate coverage with lines no production path executes.
-      exclude: [
-        'src/**/*.spec.ts',
-        'src/**/*.module.ts',
-        'src/main.ts',
-        'src/modules/*/testing/**',
-      ],
-      // Glob-scoped, not global: `test:cov` runs the unit tier only, and repositories, adapters and
-      // controllers are covered by the e2e tier. Measured minus two.
+      ...coverageScope,
+      reportsDirectory: './coverage/unit',
+      // Unit floors cover domain/application; infrastructure and interface are floored on the merged
+      // unit and e2e report (`test:e2e:cov`). Measured minus two.
       thresholds: {
         'src/**/{domain,application}/**': {
           statements: 75,

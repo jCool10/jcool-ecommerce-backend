@@ -25,4 +25,24 @@ describe('MetricsTokenGuard', () => {
     const guard = new MetricsTokenGuard(configFor(undefined, 'production'));
     expect(() => guard.canActivate(contextWithAuth())).toThrow(NotFoundException);
   });
+
+  describe('with a token configured in production', () => {
+    const TOKEN = 'scrape-token-0123456789';
+    const guard = new MetricsTokenGuard(configFor(TOKEN, 'production'));
+
+    it.each([`Bearer ${TOKEN}`, `bearer ${TOKEN}`])('lets %s scrape', (authorization) => {
+      expect(guard.canActivate(contextWithAuth(authorization))).toBe(true);
+    });
+
+    // A length mismatch must answer 404 too: `timingSafeEqual` throws a RangeError on unequal lengths.
+    it.each([
+      ['a wrong token of the same length', `Bearer ${'x'.repeat(TOKEN.length)}`],
+      ['no header', undefined],
+      ['the Basic scheme', `Basic ${TOKEN}`],
+      ['a shorter token', `Bearer ${TOKEN.slice(1)}`],
+      ['a longer token', `Bearer ${TOKEN}x`],
+    ])('hides the endpoint from %s', (_case, authorization) => {
+      expect(() => guard.canActivate(contextWithAuth(authorization))).toThrow(NotFoundException);
+    });
+  });
 });

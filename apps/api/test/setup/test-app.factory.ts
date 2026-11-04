@@ -9,6 +9,7 @@ import { expect } from 'vitest';
 import { AppModule } from '../../src/app.module';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { RedisService } from '@jcool/platform/redis';
+import { LoadSheddingMiddleware } from '@jcool/platform/resilience';
 import { idServiceStub } from './id-service-stub';
 import { waitForRedisReady } from './redis-ready';
 import { userServiceStub } from './user-service-stub';
@@ -100,6 +101,7 @@ export async function createTestApp(
       methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
     });
+    app.use(app.get(LoadSheddingMiddleware).handle);
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     try {
       // HttpExceptionFilter is wired via APP_FILTER in AppModule (needs CLS injection).

@@ -123,6 +123,28 @@ describe('CachingProductRepository', () => {
     expect(ctx.cache.writeMs).not.toHaveBeenCalled();
   });
 
+  it('shares one source read per lookup among concurrent callers while the counter is unreachable', async () => {
+    const product = buildProduct();
+    const page = { items: [], total: 0 };
+    let resolveDetail!: (value: Product) => void;
+    let resolveList!: (value: typeof page) => void;
+    ctx.cache.readCounter.mockResolvedValue(null);
+    ctx.source.findActiveByIdOrSlug.mockReturnValue(new Promise<Product>((resolve) => (resolveDetail = resolve)));
+    ctx.source.findManyActive.mockReturnValue(new Promise<typeof page>((resolve) => (resolveList = resolve)));
+
+    const details = Promise.all([1, 2, 3].map(() => ctx.repo.findActiveByIdOrSlug('headphones')));
+    const lists = Promise.all([1, 2].map(() => ctx.repo.findManyActive({ page: 1, pageSize: 20 })));
+    await vi.waitFor(() => expect(ctx.recordCatalogCacheOperation).toHaveBeenCalledTimes(5));
+    resolveDetail(product);
+    resolveList(page);
+
+    await expect(details).resolves.toEqual([product, product, product]);
+    await expect(lists).resolves.toEqual([page, page]);
+    expect(ctx.source.findActiveByIdOrSlug).toHaveBeenCalledTimes(1);
+    expect(ctx.source.findManyActive).toHaveBeenCalledTimes(1);
+    expect(ctx.cache.read).not.toHaveBeenCalled();
+  });
+
   // The dangerous drift is the one that still decodes: a Product with an undefined field.
   it('discards a snapshot missing a field the entity never validates', async () => {
     const product = buildProduct();

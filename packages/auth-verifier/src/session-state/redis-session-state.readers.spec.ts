@@ -6,7 +6,7 @@ import { RedisSessionEpochReader, RedisTokenDenylistReader } from './redis-sessi
 
 const redisServiceWith = (client: object): RedisService => ({ getClient: () => client }) as unknown as RedisService;
 
-const USER_ID = '0199a3b2-7c4d-8e5f-9a0b-1c2d3e4f5a6b';
+const USER_ID = '137465797020397179';
 
 describe('RedisSessionEpochReader', () => {
   // NaN compares false against every epoch claim, so passing it on would accept revoked tokens.
@@ -68,5 +68,13 @@ describe('RedisTokenDenylistReader', () => {
     await expect(reader.isDenylisted('jti-1')).resolves.toBe(true);
     await expect(reader.isDenylisted('jti-2')).resolves.toBe(false);
     expect(exists).toHaveBeenNthCalledWith(1, TOKEN_DENYLIST_KEY_PREFIX + 'jti-1');
+  });
+
+  // Answering false here would accept every revoked token for as long as Redis is down.
+  it('rejects with the Redis failure rather than answering not denylisted', async () => {
+    const outage = new Error('Connection is closed.');
+    const reader = new RedisTokenDenylistReader(redisServiceWith({ exists: () => Promise.reject(outage) }));
+
+    await expect(reader.isDenylisted('jti-1')).rejects.toBe(outage);
   });
 });

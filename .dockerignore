@@ -5,6 +5,7 @@ npm-debug.log*
 **/dist
 build
 **/coverage
+**/.vitest
 .nyc_output
 **/.turbo
 

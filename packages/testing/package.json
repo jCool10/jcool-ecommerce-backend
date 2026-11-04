@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "lint:check": "eslint \"src/**/*.ts\"",
-    "arch:check": "depcruise --config .dependency-cruiser.cjs src"
+    "arch:check": "depcruise --config .dependency-cruiser.cjs src",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage"
   },
   "dependencies": {
     "@jcool/metrics-port": "workspace:*"
@@ -25,6 +27,7 @@
     "@eslint/js": "^10.0.1",
     "@nestjs/config": "^4.0.4",
     "@types/node": "^24.19.1",
+    "@vitest/coverage-v8": "^5.0.3",
     "dependency-cruiser": "^18.5.0",
     "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.0.1",

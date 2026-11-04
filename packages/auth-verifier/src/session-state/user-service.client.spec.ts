@@ -21,7 +21,7 @@ interface Received {
 
 type Reply = { status: number; body: unknown } | 'hang';
 
-const USER_ID = '0199a3b2-7c4d-8e5f-9a0b-1c2d3e4f5a6b';
+const USER_ID = '137465797020397179';
 const TOKEN = 'internal-token-internal-token-internal';
 const SUMMARY = { id: USER_ID, email: 'buyer@example.com', role: 'CUSTOMER' };
 
@@ -96,6 +96,14 @@ describe('UserServiceClient', () => {
     userService.reply = () => ({ status: 200, body: { ...SUMMARY, role: 'SUPPORT' } });
 
     await expect(client().userSummary(USER_ID)).resolves.toMatchObject({ email: SUMMARY.email });
+  });
+
+  it('gives up on a user-service that never answers once its timeout passes', async () => {
+    userService.reply = () => 'hang';
+    const started = Date.now();
+
+    await expect(client(50).userSummary(USER_ID)).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('answers null for a user the service does not have', async () => {

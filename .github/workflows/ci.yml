@@ -58,9 +58,55 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Coverage, not a bare `test`: same unit run, plus the floor on domain/application
-      # declared in vitest.config.mts. Running both would just run the suite twice.
+      # Coverage, not a bare `test`: same unit run, plus the unit floors declared in vitest.config.mts
+      # (domain/application in the apps). The merged unit+e2e floors run in the e2e jobs.
       - run: pnpm turbo run test:cov # unit (Vitest) — fast, hermetic, no Docker; fails under the coverage floor
+
+  # A job, not a workflow-level `paths` filter: CD chains off this workflow, so a red gateway run must
+  # live here to block a deploy, and `paths` cannot scope a single job.
+  gateway-changes:
+    name: Detect gateway changes
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        # Pushes to main always run it: diffing against the previous push would skip a gateway change whose
+        # own run went red or was cancelled, and CD would then ship it. On a PR an unknown base counts as changed.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || ! git diff --quiet "$BASE" HEAD -- apps/gateway .github/workflows/ci.yml .dockerignore \
+              package.json pnpm-lock.yaml pnpm-workspace.yaml; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The api-behind-gateway spec needs the api image and a dual-stack network, so it runs in the nightly tier.
+  gateway:
+    name: Gateway · image and fixture specs
+    needs: gateway-changes
+    if: needs.gateway-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Fails fast, with Caddy's own message, on a Caddyfile that does not validate.
+      - run: docker build -f apps/gateway/Dockerfile -t jcool-gateway:system-test .
+      # pnpm, not turbo: the gateway has no workspace dependencies for `^build` to build.
+      - run: pnpm --filter @jcool/gateway run test:system:fixtures
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
 
   # Read from the workspace rather than listed by hand, so a new service's suite cannot be left out of CI.
   e2e-suites:
@@ -92,7 +138,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Turbo's strict env mode drops unlisted vars: a new one here also goes in turbo.json `passThroughEnv`.
-      - run: pnpm turbo run test:e2e --filter="$PACKAGE" # Testcontainers spins real Postgres/Redis + programmatic migrate
+      # Unit and e2e under coverage, merged, against the infrastructure/interface floors in vitest.config.mts.
+      - run: pnpm turbo run test:e2e:cov --filter="$PACKAGE" # Testcontainers spins real Postgres/Redis + programmatic migrate
         env:
           PACKAGE: ${{ matrix.package }}
           # Job is ephemeral (fresh runner, torn down after), so skip Ryuk's reaper
@@ -103,3 +150,18 @@ jobs:
           # ubuntu-latest is 4 vCPU, and the boot cost the parallelism hides is CPU-bound, so more
           # workers than cores buys contention rather than wall clock.
           E2E_WORKERS: '4'
+      - id: artifact
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          echo "dir=$(pnpm --filter "$PACKAGE" exec pwd)" >> "$GITHUB_OUTPUT"
+          echo "name=coverage-$(echo "$PACKAGE" | tr -d '@' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+      # The merged report of main and of a PR are the two sides of a test deletion's proof (scripts/coverage-diff.mjs).
+      # Also kept when a floor fails, which is when it is wanted; a run that failed before the merge has none.
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.dir }}/coverage/merged/coverage-final.json
+          if-no-files-found: warn
+          retention-days: 14

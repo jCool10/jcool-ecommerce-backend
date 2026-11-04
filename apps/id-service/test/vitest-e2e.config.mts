@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
+import { coverageScope } from '../vitest.config.mjs';
 
 export default defineConfig({
   test: {
@@ -8,6 +9,7 @@ export default defineConfig({
     environment: 'node',
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['test/integration/**/*.e2e-spec.ts'],
+    coverage: { ...coverageScope, reportsDirectory: './coverage/e2e' },
     env: {
       NODE_ENV: 'test',
       LOG_LEVEL: 'warn',

@@ -9,7 +9,13 @@ import type {
   ProductRepositoryPort,
 } from '../../application/catalog/ports';
 import type { SkuView } from '../../application/public/product-sku-query.port';
-import { CATALOG_CACHE_VERSION_KEY, productDetailKey, productListKey } from './catalog-cache.keys';
+import {
+  CATALOG_CACHE_VERSION_KEY,
+  productDetailKey,
+  productDetailReadKey,
+  productListKey,
+  productListReadKey,
+} from './catalog-cache.keys';
 import { DrizzleProductRepository } from './drizzle-product.repository';
 import {
   fromProductListSnapshot,
@@ -56,7 +62,9 @@ export class CachingProductRepository implements ProductRepositoryPort {
     const version = await this.cache.readCounter(CATALOG_CACHE_VERSION_KEY);
     if (version === null) {
       this.metrics.recordCatalogCacheOperation('error');
-      return this.source.findManyActive(criteria);
+      return this.swrCacheService.readThroughShared(productListReadKey(criteria), () =>
+        this.source.findManyActive(criteria),
+      );
     }
 
     return this.swrCacheService.readThroughSwr(
@@ -74,7 +82,9 @@ export class CachingProductRepository implements ProductRepositoryPort {
     const version = await this.cache.readCounter(CATALOG_CACHE_VERSION_KEY);
     if (version === null) {
       this.metrics.recordCatalogCacheOperation('error');
-      return this.source.findActiveByIdOrSlug(idOrSlug);
+      return this.swrCacheService.readThroughShared(productDetailReadKey(idOrSlug), () =>
+        this.source.findActiveByIdOrSlug(idOrSlug),
+      );
     }
 
     return this.swrCacheService.readThroughSwr(

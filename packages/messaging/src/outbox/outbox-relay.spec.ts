@@ -5,8 +5,8 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '
 import type { JobsOptions, Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@jcool/metrics-port';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { MessagingDb } from '../messaging.database';
 import { type DomainEventJob, jobIdFor } from '../queue/domain-event.job';
@@ -36,7 +36,7 @@ function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
   };
 }
 
-function build(rows: OutboxRow[]) {
+function build(rows: OutboxRow[], { status = 'ready' }: { status?: string } = {}) {
   const sets: Record<string, unknown>[] = [];
   const limits: number[] = [];
   // The relay asks for routed rows first, then for the rest with what room is left.
@@ -74,25 +74,33 @@ function build(rows: OutboxRow[]) {
         return add(...args) as Promise<unknown>;
       },
     }) as unknown as Queue;
-  const recordEventPublished = vi.fn();
+  const transaction = vi.fn((run: (t: unknown) => unknown) => run(tx));
+  const metrics = fakeMetricsPort();
   const error = vi.fn();
-  const logger = fakePinoLogger({ error });
+  const warn = vi.fn();
+  const logger = fakePinoLogger({ error, warn });
 
   const relay = new OutboxRelay(
-    { transaction: (run: (t: unknown) => unknown) => run(tx) } as unknown as MessagingDb,
+    { transaction } as unknown as MessagingDb,
     new Map([
       ['orders', queue('orders')],
       ['catalog', queue('catalog')],
     ]),
-    { status: 'ready' } as unknown as Redis,
-    { recordEventPublished } as unknown as MetricsPort,
+    { status } as unknown as Redis,
+    metrics,
     { routes: ROUTES },
     fakeConfigService({ 'queue.orderPaidAttempts': 15 }),
     logger,
   );
 
   const traceparents = () => add.mock.calls.map(([, job]) => (job as DomainEventJob).traceparent);
-  return { relay, add, queued, sets, limits, recordEventPublished, error, traceparents };
+  const charged = () => sets.filter((values) => 'attempts' in values);
+  const marked = () => sets.filter((values) => 'publishedAt' in values);
+  const refuse = (...ids: string[]) =>
+    add.mockImplementation((_name: string, job: DomainEventJob) =>
+      ids.includes(job.outboxId) ? Promise.reject(new Error('Command timed out')) : Promise.resolve(undefined),
+    );
+  return { relay, add, queued, sets, limits, metrics, error, warn, transaction, traceparents, charged, marked, refuse };
 }
 
 describe('OutboxRelay', () => {
@@ -131,20 +139,11 @@ describe('OutboxRelay', () => {
   });
 
   // BullMQ takes attempts from the producer, so the relay is where the long ladder is set.
-  it('adds a payment.authorized job on the long ladder the config sizes', async () => {
-    const t = build([row({ aggregateType: 'Payment', eventType: 'payment.authorized' }), row()]);
-
-    await t.relay.runOnce(10);
-
-    const [[, , authorized], [, , placed]] = t.add.mock.calls as [unknown, unknown, JobsOptions][];
-    expect(authorized).toMatchObject({ attempts: 15, backoff: { type: 'order-paid' } });
-    expect(placed.attempts).toBeUndefined();
-  });
-
   it('adds each row to the queue its route names, with that queue job options', async () => {
     const t = build([
       row({ eventType: 'catalog.product.changed', aggregateType: 'Product' }),
       row({ eventType: 'order.paid' }),
+      row({ eventType: 'payment.authorized', aggregateType: 'Payment' }),
       row(),
     ]);
 
@@ -153,12 +152,13 @@ describe('OutboxRelay', () => {
     expect(t.queued).toEqual([
       ['catalog', 'catalog.product.changed'],
       ['orders', 'order.paid'],
+      ['orders', 'payment.authorized'],
       ['orders', 'order.placed'],
     ]);
     const options = t.add.mock.calls.map(([, , opts]) => opts as JobsOptions);
     expect(options[0]).toMatchObject({ attempts: 15, backoff: { type: 'order-paid' } });
-    expect(options[0]).not.toHaveProperty('priority');
-    expect(options[2].attempts).toBeUndefined();
+    expect(options[2]).toMatchObject({ attempts: 15, backoff: { type: 'order-paid' } });
+    expect(options[3].attempts).toBeUndefined();
   });
 
   // Only a row written before a deploy dropped its route can get here; it would wait in no queue.
@@ -171,8 +171,8 @@ describe('OutboxRelay', () => {
 
     expect(summary).toEqual({ published: 1, failed: 4 });
     expect(t.queued).toEqual([['orders', 'order.placed']]);
-    expect(t.sets.filter((values) => 'attempts' in values)).toHaveLength(4);
-    expect(t.recordEventPublished).toHaveBeenCalledWith('unregistered', 'refused');
+    expect(t.charged()).toHaveLength(4);
+    expect(t.metrics.recordEventPublished).toHaveBeenCalledWith('unregistered', 'refused');
     expect(t.error).toHaveBeenCalledTimes(1);
   });
 
@@ -204,6 +204,57 @@ describe('OutboxRelay', () => {
     await t.relay.runOnce(20);
 
     expect(t.add).toHaveBeenCalledTimes(3);
+  });
+
+  // A queue refusing everything is an outage, not three bad rows; charging it would let one outage
+  // dead-letter a healthy backlog.
+  it('charges no attempt when every publish in the batch is refused', async () => {
+    const rows = [row(), row()];
+    const t = build(rows);
+    t.refuse(...rows.map((r) => r.id));
+
+    const summary = await t.relay.runOnce(10);
+
+    expect(summary).toEqual({ published: 0, failed: 2 });
+    expect(t.charged()).toEqual([]);
+    expect(t.marked()).toEqual([]);
+    expect(t.warn).toHaveBeenCalledWith(expect.objectContaining({ refused: 2, charged: false }), expect.any(String));
+  });
+
+  it('charges only the refused row once another row in the batch got through', async () => {
+    const delivered = row();
+    const rejected = row({ attempts: 4 });
+    const t = build([delivered, rejected]);
+    t.refuse(rejected.id);
+
+    const summary = await t.relay.runOnce(10);
+
+    expect(summary).toEqual({ published: 1, failed: 1 });
+    expect(t.charged()).toEqual([{ attempts: 5 }]);
+    expect(t.marked()).toEqual([{ publishedAt: expect.any(Date) as unknown }]);
+    expect(t.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ refused: 1, charged: true, outboxId: rejected.id }),
+      expect.any(String),
+    );
+  });
+
+  it('marks every published row published', async () => {
+    const t = build([row(), row(), row()]);
+
+    await t.relay.runOnce(10);
+
+    expect(t.marked()).toHaveLength(3);
+    expect(t.charged()).toEqual([]);
+  });
+
+  it('opens no transaction and publishes nothing while the queue connection is not ready', async () => {
+    const t = build([row()], { status: 'reconnecting' });
+
+    const summary = await t.relay.runOnce(10);
+
+    expect(summary).toEqual({ published: 0, failed: 0 });
+    expect(t.transaction).not.toHaveBeenCalled();
+    expect(t.add).not.toHaveBeenCalled();
   });
 
   it('continues the producer trace under a fresh span, keeping its sampling flag', async () => {

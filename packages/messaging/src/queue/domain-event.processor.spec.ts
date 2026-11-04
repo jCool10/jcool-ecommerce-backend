@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@jcool/metrics-port';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { UnhandledEventError } from '../errors';
 import type { InboxEntry, InboxStore } from '../inbox/inbox.store';
@@ -55,17 +55,18 @@ function build({ handlers = {}, alreadyClaimed = false, trace = [] }: BuildOptio
     trace.push('commit');
     return value;
   };
-  const recordEventConsumed = vi.fn();
+  const metrics = fakeMetricsPort();
+  const error = vi.fn();
   const dispatcher = fakeDispatcher({ ...DEFAULT_HANDLERS, ...handlers });
 
   const processor = new DomainEventProcessor(
     { transaction } as unknown as MessagingDb,
-    { recordEventConsumed } as unknown as MetricsPort,
+    metrics,
     inbox as InboxStore,
     consumersOf({ spec: ORDERS, dispatcher }, { spec: CATALOG, consumer: 'catalog-sync', dispatcher }),
-    fakePinoLogger(),
+    fakePinoLogger({ error }),
   );
-  return { processor, claims, claimed, recordEventConsumed };
+  return { processor, claims, claimed, recordEventConsumed: metrics.recordEventConsumed, error };
 }
 
 describe('DomainEventProcessor', () => {
@@ -86,6 +87,31 @@ describe('DomainEventProcessor', () => {
     await expect(processor.process(job(), 'orders')).resolves.toBe('processed');
 
     expect(trace).toEqual(['prepare', 'begin', 'commit', 'effect']);
+  });
+
+  // The claim is committed by now, so a redelivery could only find it and do nothing.
+  it('keeps a consume processed when its post-commit effect fails', async () => {
+    const failure = new Error('smtp refused');
+    const { processor, recordEventConsumed, error } = build({
+      handlers: { 'order.paid': inTransaction(undefined, () => Promise.reject(failure)) },
+    });
+
+    await expect(processor.process(job(), 'orders')).resolves.toBe('processed');
+
+    expect(error).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: MESSAGE_ID, err: failure }),
+      expect.any(String),
+    );
+    expect(recordEventConsumed.mock.calls).toEqual([['order.paid', 'processed']]);
+  });
+
+  it('counts a redelivery as a duplicate', async () => {
+    const { processor, recordEventConsumed } = build({ alreadyClaimed: true });
+
+    await expect(processor.process(job(), 'orders')).resolves.toBe('duplicate');
+
+    expect(recordEventConsumed.mock.calls).toEqual([['order.paid', 'duplicate']]);
   });
 
   // Retrying an applied message would spend the whole ladder, then dead-letter it.

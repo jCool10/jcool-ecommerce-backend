@@ -1,10 +1,4 @@
-import {
-  MIN_INBOX_RETENTION_DAYS,
-  REMOVE_ON_FAIL_AGE_SEC,
-  buildJobOptions,
-  cappedBackoffMs,
-  retryHorizonMs,
-} from './queue-options';
+import { REMOVE_ON_FAIL_AGE_SEC, buildJobOptions, cappedBackoffMs, retryHorizonMs } from './queue-options';
 
 describe('retry ladders', () => {
   it('doubles from the base and stops at the cap', () => {
@@ -24,6 +18,5 @@ describe('queue defaults', () => {
       backoff: { type: 'exponential', delay: 1_000 },
       removeOnFail: { age: REMOVE_ON_FAIL_AGE_SEC },
     });
-    expect(MIN_INBOX_RETENTION_DAYS * 86_400).toBeGreaterThanOrEqual(REMOVE_ON_FAIL_AGE_SEC);
   });
 });

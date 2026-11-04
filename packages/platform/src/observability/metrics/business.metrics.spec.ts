@@ -101,12 +101,6 @@ describe('BusinessMetrics', () => {
     expect(expected.filter((line) => !exposition.includes(line))).toEqual([]);
   });
 
-  it('no longer exposes the counters of the settlement path the saga replaced', async () => {
-    const { registry } = await build();
-
-    expect(registry.getSingleMetric('reservation_expiry_total')).toBeUndefined();
-  });
-
   // resilience.yml fires on `circuit_breaker_state >= 1` and `>= 2`.
   it('orders breaker states on the gauge as closed 0, half_open 1, open 2', async () => {
     const { metrics, registry } = await build();

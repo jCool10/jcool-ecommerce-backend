@@ -12,5 +12,9 @@ export function durationToMs(value: string): number {
   if (!match) {
     throw new Error(`Invalid duration string: "${value}" (expected a number with a unit: ms, s, m, h or d)`);
   }
-  return Number(match[1]) * UNIT_TO_MS[match[2].toLowerCase()];
+  const ms = Number(match[1]) * UNIT_TO_MS[match[2].toLowerCase()];
+  if (!Number.isSafeInteger(ms)) {
+    throw new Error(`Invalid duration string: "${value}" (past ${Number.MAX_SAFE_INTEGER} ms)`);
+  }
+  return ms;
 }

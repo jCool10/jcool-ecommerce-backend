@@ -48,6 +48,19 @@ export function ResilienceEnv<TBase extends EnvBase>(Base: TBase) {
     @IsInt()
     @Min(1)
     BREAKER_VOLUME_THRESHOLD?: number;
+
+    // 0 turns shedding off.
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(0)
+    HTTP_MAX_IN_FLIGHT?: number;
+
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1)
+    HTTP_SHED_RETRY_AFTER_SEC?: number;
   }
   return ResilienceEnv;
 }
@@ -71,6 +84,12 @@ export const resilienceConfig = () => ({
       // Calls the window must hold before the share means anything, so one failure on a quiet route
       // cannot read as 100% and open the circuit. The flip side: below this rate it never opens.
       volumeThreshold: parseIntOr(process.env.BREAKER_VOLUME_THRESHOLD, 5),
+    },
+    loadShedding: {
+      // Below the gateway's connection cap per upstream, so a shedding process still has free
+      // connections to answer the excess on instead of leaving it queued at the gateway.
+      maxInFlight: parseIntOr(process.env.HTTP_MAX_IN_FLIGHT, 48),
+      retryAfterSec: parseIntOr(process.env.HTTP_SHED_RETRY_AFTER_SEC, 1),
     },
   },
 });

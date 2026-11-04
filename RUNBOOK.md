@@ -39,7 +39,7 @@ Conventions used below:
   - [Rollback rules](#rollback-rules)
   - [Redeploy Prometheus](#redeploy-prometheus)
   - [Run the system test](#run-the-system-test)
-- [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api)
+- [Put the gateway in front of the api](#put-the-gateway-in-front-of-the-api), with [Overload: the api answers 503, or requests wait at the gateway](#overload-the-api-answers-503-or-requests-wait-at-the-gateway)
 - [The user-service](#the-user-service)
 - [The api depends on the user-service](#the-api-depends-on-the-user-service)
 - [The inventory-service](#the-inventory-service)
@@ -1559,6 +1559,21 @@ If the direct domain is already gone, create one with `railway domain --service 
 - `AUTH_UPSTREAM_REQUIRED=true` is on: the gateway refuses to start without `AUTH_UPSTREAM`, so losing the variable fails the deploy instead of routing auth to an api that answers 404.
 - `AUTH_WRITE_FREEZE=true` answers every write under `/auth` with `503` and `Retry-After: 120`, reads untouched. Use it while a migration must not race a login or a password change, and unset it after. It is off unless set.
 - All three are set by hand and kept across every apply.
+
+### Overload: the api answers 503, or requests wait at the gateway
+
+Two limits sit in front of the api's one event loop. The gateway holds at most `UPSTREAM_MAX_CONNS` (64) connections to each upstream and queues the rest, with no deadline of its own. The api admits `HTTP_MAX_IN_FLIGHT` (48) requests at once and answers the rest `503` with `Retry-After: HTTP_SHED_RETRY_AFTER_SEC` (1) and `"message": "Service is overloaded, retry later"`, before any guard runs. Keep the second below the first, or the excess waits at the gateway instead of being refused.
+
+**Shed requests are not in `http_requests_total`**, so the burn-rate SLOs and the 5xx panels do not see them. Read them directly:
+
+```promql
+sum(rate(http_requests_shed_total{job="jcool-api"}[5m]))   # refused per second
+max_over_time(http_requests_in_flight{job="jcool-api"}[5m]) # at the limit means it is shedding
+```
+
+**A shed rate that holds** means the api is short of CPU: add a replica, or find what made requests slower (`nodejs_eventloop_lag_p99_seconds`, `cache_rebuild_duration_seconds`). Raising `HTTP_MAX_IN_FLIGHT` only moves the queue into the process. `0` turns shedding off.
+
+**Slow responses with no shedding and an idle api** mean requests are queued at the gateway: the api is not reading them fast enough to refuse them (its event loop is saturated), or an upstream holds its connections on long requests (checkout waits up to `CHECKOUT_RESERVE_WAIT_MS`). The cap is per dial address: an upstream scaled to several replicas behind one private domain shares one cap, so raise `UPSTREAM_MAX_CONNS` with the replica count.
 
 ---
 

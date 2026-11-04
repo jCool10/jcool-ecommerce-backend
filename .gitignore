@@ -10,6 +10,7 @@ build/
 # Coverage / test artifacts
 coverage/
 .nyc_output/
+.vitest/
 
 # Environment (never commit real secrets; .env.example is the committed template)
 .env

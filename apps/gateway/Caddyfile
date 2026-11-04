@@ -21,6 +21,12 @@
 	transport http {
 		# Below Node's 5s keepAliveTimeout, so a connection is never reused just as the app closes it.
 		keepalive 4s
+		# Unbounded, an overload makes a connection per waiting request: the gateway runs out of
+		# ephemeral ports or memory long before the upstream catches up. Bounded, the excess queues
+		# here. Per dial address, so replicas behind one name share it. Keep the api's
+		# HTTP_MAX_IN_FLIGHT below it, so a shedding api has free connections to refuse on.
+		max_conns_per_host {$UPSTREAM_MAX_CONNS:64}
+		keepalive_idle_conns_per_host {$UPSTREAM_IDLE_CONNS:64}
 	}
 }
 

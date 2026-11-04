@@ -1,4 +1,11 @@
-import { ArgumentsHost, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  BadRequestException,
+  InternalServerErrorException,
+  NotFoundException,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as Sentry from '@sentry/nestjs';
 import { ClockStalledError } from '@jcool/id-generator/errors';
 import { DomainError } from '@jcool/kernel';
@@ -15,7 +22,8 @@ const captureException = vi.mocked(Sentry.captureException);
 const cls = { isActive: () => true, getId: () => 'req-1', get: () => undefined } as unknown as ClsService;
 const config = fakeConfigService({ 'app.env': 'test' });
 const logWarn = vi.fn();
-const logger = fakePinoLogger({ warn: logWarn });
+const logError = vi.fn();
+const logger = fakePinoLogger({ warn: logWarn, error: logError });
 const rejection = (): Record<string, unknown> => logWarn.mock.calls[0][0] as Record<string, unknown>;
 
 // `routePath: null` models an unmatched request: Express leaves `req.route` unset, which is every 404.
@@ -47,6 +55,66 @@ describe('HttpExceptionFilter', () => {
   beforeEach(() => {
     captureException.mockClear();
     logWarn.mockClear();
+    logError.mockClear();
+  });
+
+  describe('server error masking', () => {
+    const body = (response: ReturnType<typeof makeHost>['response']) =>
+      (response.json.mock.calls as unknown as [Record<string, unknown>][])[0][0];
+
+    it('answers a plain Error with a generic 500 that carries neither its text nor a stack', () => {
+      const { host, response } = makeHost();
+
+      filter.catch(new Error('db password=hunter2'), host);
+
+      expect(response.status).toHaveBeenCalledWith(500);
+      expect(body(response)).toMatchObject({ statusCode: 500, message: 'Internal server error' });
+      expect(Object.keys(body(response)).sort()).toEqual(['message', 'path', 'requestId', 'statusCode', 'timestamp']);
+      expect(JSON.stringify(body(response))).not.toContain('hunter2');
+    });
+
+    it.each([
+      [new InternalServerErrorException('internal detail'), 500, 'Internal server error'],
+      [new ServiceUnavailableException('upstream detail'), 503, 'Service unavailable'],
+    ])('masks the message of a thrown %s and reports it', (exception, status, message) => {
+      const { host, response } = makeHost();
+
+      filter.catch(exception, host);
+
+      expect(body(response)).toMatchObject({ statusCode: status, message });
+      expect(captureException).toHaveBeenCalledOnce();
+    });
+
+    it.each([['a string'], [undefined], [{ code: 1 }]])(
+      'answers a thrown %j with a masked 500 and logs an Error',
+      (thrown) => {
+        const { host, response } = makeHost();
+
+        filter.catch(thrown, host);
+
+        expect(body(response)).toMatchObject({ statusCode: 500, message: 'Internal server error' });
+        expect((logError.mock.calls[0][0] as { err: unknown }).err).toBeInstanceOf(Error);
+      },
+    );
+
+    // Terminus builds this payload and has already logged it; the masking would erase the per-check detail.
+    it('answers a health-check result as is, without logging or reporting it', () => {
+      const { host, response } = makeHost('GET', '/health/ready');
+      const result = {
+        status: 'error',
+        info: {},
+        error: { database: { status: 'down' } },
+        details: { database: { status: 'down' } },
+      };
+
+      filter.catch(new ServiceUnavailableException(result), host);
+
+      expect(response.status).toHaveBeenCalledWith(503);
+      expect(response.json).toHaveBeenCalledWith(result);
+      expect(logError).not.toHaveBeenCalled();
+      expect(logWarn).not.toHaveBeenCalled();
+      expect(captureException).not.toHaveBeenCalled();
+    });
   });
 
   describe('Sentry reporting', () => {

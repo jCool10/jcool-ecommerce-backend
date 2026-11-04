@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
+import { coverageScope } from '../vitest.config.mjs';
 import { E2E_BASE_ENV } from './setup/e2e-env.js';
 import { workerCount } from './setup/worker-count.js';
 
@@ -10,7 +11,7 @@ export default defineConfig({
     environment: 'node',
     root: fileURLToPath(new URL('..', import.meta.url)),
     include: ['test/integration/**/*.e2e-spec.ts'],
-    passWithNoTests: true,
+    coverage: { ...coverageScope, reportsDirectory: './coverage/e2e' },
     // Only has to pass validation when AppModule is imported; createTestApp sets the real values.
     env: {
       ...E2E_BASE_ENV,

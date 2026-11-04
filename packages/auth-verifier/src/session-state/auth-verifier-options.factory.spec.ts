@@ -1,7 +1,7 @@
 import { type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ServiceUnavailableException } from '@nestjs/common';
-import { type JWK, SignJWT, exportJWK, generateKeyPair, jwtVerify } from 'jose';
+import { type JWK, SignJWT, errors, exportJWK, generateKeyPair, jwtVerify } from 'jose';
 import type { Mock } from 'vitest';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
@@ -117,8 +117,7 @@ describe('authVerifierOptions', () => {
           (error: unknown) => error,
         );
 
-        expect(failure).not.toBeInstanceOf(ServiceUnavailableException);
-        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toBeInstanceOf(errors.JWKSNoMatchingKey);
       });
     });
 
@@ -218,14 +217,14 @@ describe('authVerifierOptions', () => {
         await verify(await sign(first), options);
         jwks.published = [first.jwk, rotated.jwk];
 
-        await expect(verify(await sign(rotated), options)).rejects.toThrow();
+        await expect(verify(await sign(rotated), options)).rejects.toBeInstanceOf(errors.JWKSNoMatchingKey);
         expect(jwks.requests).toBe(1);
 
         vi.advanceTimersByTime(30_001);
         await expect(verify(await sign(rotated), options)).resolves.toBeDefined();
         expect(jwks.requests).toBe(2);
 
-        await expect(verify(await sign(unknown), options)).rejects.toThrow();
+        await expect(verify(await sign(unknown), options)).rejects.toBeInstanceOf(errors.JWKSNoMatchingKey);
         expect(jwks.requests).toBe(2);
       });
     });

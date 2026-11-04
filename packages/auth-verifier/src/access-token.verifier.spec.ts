@@ -49,18 +49,21 @@ interface Es256Options {
   issuer?: string;
   audience?: string;
   alg?: string;
-  expiresIn?: string | number;
+  /** `null` signs a token with no `exp` at all. */
+  expiresIn?: string | number | null;
+  notBefore?: string | number;
 }
 
 function es256(key: SigningKey, options: Es256Options = {}): Promise<string> {
-  const { claims = CLAIMS, issuer = ISSUER, audience = AUDIENCE, alg = 'ES256', expiresIn = '5m' } = options;
-  return new SignJWT(claims)
+  const { claims = CLAIMS, issuer = ISSUER, audience = AUDIENCE, alg = 'ES256', expiresIn = '5m', notBefore } = options;
+  const jwt = new SignJWT(claims)
     .setProtectedHeader({ alg, kid: key.kid, typ: 'JWT' })
     .setIssuer(issuer)
     .setAudience(audience)
-    .setIssuedAt()
-    .setExpirationTime(expiresIn)
-    .sign(key.privateKey);
+    .setIssuedAt();
+  if (expiresIn !== null) jwt.setExpirationTime(expiresIn);
+  if (notBefore !== undefined) jwt.setNotBefore(notBefore);
+  return jwt.sign(key.privateKey);
 }
 
 interface Refusal {
@@ -167,6 +170,19 @@ describe('AccessTokenVerifier', () => {
     await expectRefused(es256(current, { claims: noJti }), { cause: MALFORMED });
   });
 
+  // jose checks `exp` only when present, so a signed token without one would never expire.
+  it('refuses a signed token with no expiry', async () => {
+    await expectRefused(es256(current, { expiresIn: null }), { cause: MALFORMED });
+  });
+
+  it('refuses an epoch claim that is not a number', async () => {
+    await expectRefused(es256(current, { claims: { ...CLAIMS, epoch: '2' } }), { cause: MALFORMED });
+  });
+
+  it('refuses a token that is not valid yet', async () => {
+    await expectRefused(es256(current, { notBefore: '10m' }), { cause: errors.JWTClaimValidationFailed });
+  });
+
   // Every id column downstream throws on a non-routable id, which would surface as a 500.
   it('refuses a signed token whose subject is not a routable id', async () => {
     await expectRefused(es256(current, { claims: { ...CLAIMS, sub: '0197c8f4-3a1b-8c2d-8e4f-1a2b3c4d5e6f' } }), {
@@ -188,6 +204,16 @@ describe('AccessTokenVerifier', () => {
 
     await expectRefused(es256(current), { message: 'Token has been revoked' });
     expect(denylist.isDenylisted).toHaveBeenCalledWith('jti-1');
+  });
+
+  // Fails closed: a revoked token must not pass while the denylist is unreachable, and the outage is
+  // not the caller's credential problem, so it is no 401 either.
+  it('rejects with the denylist failure itself when the denylist cannot be read', async () => {
+    const outage = new Error('Connection is closed.');
+    denylist.isDenylisted.mockRejectedValue(outage);
+
+    await expect(verifier().verify(await es256(current))).rejects.toBe(outage);
+    expect(epochs.current).not.toHaveBeenCalled();
   });
 
   it('refuses a token minted before the current session epoch', async () => {

@@ -44,6 +44,11 @@
       "cache": false,
       "passThroughEnv": ["TESTCONTAINERS_*", "E2E_WORKERS", "DOCKER_*"]
     },
+    "test:e2e:cov": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "passThroughEnv": ["TESTCONTAINERS_*", "E2E_WORKERS", "DOCKER_*"]
+    },
     "test:system": {
       "dependsOn": ["^build"],
       "cache": false,

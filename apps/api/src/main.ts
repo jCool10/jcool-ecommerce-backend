@@ -9,6 +9,7 @@ import helmet from 'helmet';
 import { Logger, PinoLogger } from 'nestjs-pino';
 import { swaggerContentSecurityPolicy } from '@jcool/platform/interface';
 import { logProcessCrashes } from '@jcool/platform/observability';
+import { LoadSheddingMiddleware } from '@jcool/platform/resilience';
 import { AppModule } from './app.module';
 
 /**
@@ -53,6 +54,9 @@ async function bootstrap(): Promise<void> {
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
+
+  // Ahead of every Nest middleware, guard and interceptor: refusing the excess must cost close to nothing.
+  app.use(app.get(LoadSheddingMiddleware).handle);
 
   // The global exception filter is wired via APP_FILTER (app.module) so it can inject CLS.
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));

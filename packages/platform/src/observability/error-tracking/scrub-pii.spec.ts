@@ -58,4 +58,21 @@ describe('scrubPii', () => {
     expect(out).toBe(input);
     expect((out.extra as { password: string }).password).toBe('[Redacted]');
   });
+
+  it('returns on a cyclic extra instead of spinning', () => {
+    const cyclic: Record<string, unknown> = { name: 'ok' };
+    cyclic.self = cyclic;
+
+    expect(() => scrubPii(event({ extra: cyclic }), HINT)).not.toThrow();
+  });
+
+  it('still redacts a sensitive key six objects below extra', () => {
+    const deepest: Record<string, unknown> = { password: 'p@ss' };
+    let extra: Record<string, unknown> = deepest;
+    for (let level = 0; level < 6; level++) extra = { nested: extra };
+
+    scrubPii(event({ extra }), HINT);
+
+    expect(deepest.password).toBe('[Redacted]');
+  });
 });

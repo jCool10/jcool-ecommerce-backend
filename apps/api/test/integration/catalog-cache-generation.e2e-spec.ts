@@ -96,10 +96,11 @@ describe('Catalog cache generation and lock budget (integration, real Postgres +
     expect((await readProduct(slug)).body.name).toBe(name);
   });
 
-  // Known defect. Intended: the single-flight lock keeps a herd on one cold key off the database.
-  // Actual: SwrCacheService.waitForEnvelope gives up after CACHE_LOCK_WAIT_MS and reads through,
-  // and nothing pairs that budget with the lease, so a slower rebuild protects nothing.
-  it('lets the whole herd through once the rebuild outlasts the waiter budget', async () => {
+  // Known defect, bounded. Intended: the single-flight lock keeps a herd on one cold key to one read.
+  // Actual: SwrCacheService.waitForEnvelope gives up after CACHE_LOCK_WAIT_MS, and nothing pairs that
+  // budget with the lease. Waiters in the holder's process join its read, but each other replica's
+  // waiters share one read of their own, so a slow rebuild costs one read per replica.
+  it('keeps the herd to one read in the holder process once the rebuild outlasts the waiter budget', async () => {
     await createTestProduct(app);
     const config = app.get(ConfigService);
     expect(config.get('cache.waitMs')).toBe(LOCK_WAIT_MS);
@@ -117,7 +118,7 @@ describe('Catalog cache generation and lock budget (integration, real Postgres +
     );
 
     for (const response of responses) expect(response.status).toBe(200);
-    expect(reads).toHaveBeenCalledTimes(HERD);
+    expect(reads).toHaveBeenCalledTimes(1);
     expect(await readCacheCounter(app, 'lock_timeout')).toBe(timeoutsBefore + HERD - 1);
   });
 });

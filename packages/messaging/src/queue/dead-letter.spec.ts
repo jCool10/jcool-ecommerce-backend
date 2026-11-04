@@ -1,6 +1,6 @@
 import type { Job, Queue } from 'bullmq';
 import { describe, expect, it, vi } from 'vitest';
-import type { MetricsPort } from '@jcool/metrics-port';
+import { fakeMetricsPort } from '@jcool/testing/fake-metrics-port';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import { UnhandledEventError } from '../errors';
 import { consumersOf, fakeDispatcher, inTransaction } from '../testing/fake-dispatcher';
@@ -37,8 +37,9 @@ function inMemoryDlq({ addRejects = false } = {}) {
 }
 
 function build(dlq = inMemoryDlq()) {
-  const recordDeadLetter = vi.fn();
+  const metrics = fakeMetricsPort();
   const error = vi.fn();
+  const warn = vi.fn();
   const catalogDlq = inMemoryDlq();
   const dispatcher = fakeDispatcher({ 'order.placed': inTransaction() });
   const router = new DeadLetterRouter(
@@ -46,14 +47,22 @@ function build(dlq = inMemoryDlq()) {
       [ORDERS.dlq, dlq.queue],
       [CATALOG.dlq, catalogDlq.queue],
     ]),
-    { recordConsumeRetry: vi.fn(), recordDeadLetter } as unknown as MetricsPort,
+    metrics,
     consumersOf({ spec: ORDERS, dispatcher }, { spec: CATALOG, dispatcher }),
-    fakePinoLogger({ error }),
+    fakePinoLogger({ error, warn }),
   );
-  return { router, stored: dlq.stored, catalogStored: catalogDlq.stored, recordDeadLetter, error };
+  return {
+    router,
+    stored: dlq.stored,
+    catalogStored: catalogDlq.stored,
+    recordDeadLetter: metrics.recordDeadLetter,
+    recordConsumeRetry: metrics.recordConsumeRetry,
+    error,
+    warn,
+  };
 }
 
-const finishedJob = (overrides: { name?: string; data?: Partial<DomainEventJob> } = {}) =>
+const finishedJob = (overrides: { name?: string; data?: Partial<DomainEventJob>; finishedOn?: number } = {}) =>
   ({
     name: 'order.placed',
     data: envelope,
@@ -64,6 +73,18 @@ const finishedJob = (overrides: { name?: string; data?: Partial<DomainEventJob> 
   }) as unknown as Job<DomainEventJob>;
 
 describe('DeadLetterRouter', () => {
+  // BullMQ leaves `finishedOn` unset exactly when it scheduled another attempt.
+  it('counts a retry and parks nothing for a job BullMQ will run again', async () => {
+    const { router, stored, recordConsumeRetry, recordDeadLetter, warn } = build();
+
+    await router.route('orders', finishedJob({ finishedOn: undefined }), new Error('database unavailable'));
+
+    expect(recordConsumeRetry).toHaveBeenCalledWith('order.placed');
+    expect(warn).toHaveBeenCalledOnce();
+    expect(stored.size).toBe(0);
+    expect(recordDeadLetter).not.toHaveBeenCalled();
+  });
+
   it('labels the reason and folds an unregistered event type', async () => {
     const { router, recordDeadLetter } = build();
 

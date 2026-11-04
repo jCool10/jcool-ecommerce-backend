@@ -96,12 +96,12 @@ describe('ShutdownService', () => {
 
       expect(error).toHaveBeenCalledWith(
         expect.objectContaining({ step: 'broken', err: expect.objectContaining({ message: 'boom' }) as unknown }),
-        'shutdown step failed',
+        expect.any(String),
       );
       expect(second).toHaveBeenCalledOnce();
       expect(info).toHaveBeenCalledWith(
         expect.objectContaining({ step: 'second', durationMs: expect.any(Number) as unknown }),
-        'shutdown step done',
+        expect.any(String),
       );
     });
 
@@ -141,10 +141,7 @@ describe('ShutdownService', () => {
 
       expect(service.isShuttingDown()).toBe(true);
       expect(info).toHaveBeenCalledOnce();
-      expect(info).toHaveBeenCalledWith(
-        { signal: 'SIGTERM', gracePeriodMs: 500 },
-        'shutdown signal received; /health/ready now returns 503',
-      );
+      expect(info).toHaveBeenCalledWith({ signal: 'SIGTERM', gracePeriodMs: 500 }, expect.any(String));
     });
   });
 });

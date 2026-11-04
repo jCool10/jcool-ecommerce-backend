@@ -6,6 +6,9 @@ import { makeCounterProvider, makeGaugeProvider, makeHistogramProvider } from '@
 
 export const HTTP_REQUEST_DURATION_SECONDS = 'http_request_duration_seconds';
 export const HTTP_REQUESTS_TOTAL = 'http_requests_total';
+// Shed requests are answered before Nest routes them, so they never reach the RED series above.
+export const HTTP_REQUESTS_SHED_TOTAL = 'http_requests_shed_total';
+export const HTTP_REQUESTS_IN_FLIGHT = 'http_requests_in_flight';
 
 export const ORDERS_CREATED_TOTAL = 'orders_created_total';
 export const ORDER_VALUE_MINOR = 'order_value_minor';
@@ -89,6 +92,18 @@ export const HTTP_METRIC_PROVIDERS: Provider[] = [
     name: HTTP_REQUESTS_TOTAL,
     help: 'Total HTTP requests (RED). Labels: method, route (template), status_code.',
     labelNames: ['method', 'route', 'status_code'],
+  }),
+];
+
+export const LOAD_SHEDDING_METRIC_PROVIDERS: Provider[] = [
+  makeCounterProvider({
+    name: HTTP_REQUESTS_SHED_TOTAL,
+    help: 'Requests answered 503 because the process already had its limit in flight. Labels: method.',
+    labelNames: ['method'],
+  }),
+  makeGaugeProvider({
+    name: HTTP_REQUESTS_IN_FLIGHT,
+    help: 'Requests admitted and not yet answered; health and metrics probes are not counted.',
   }),
 ];
 

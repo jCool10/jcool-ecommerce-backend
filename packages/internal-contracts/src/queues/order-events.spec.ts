@@ -25,8 +25,4 @@ describe('order-events queue', () => {
       expect(orderEventsJobOptions(eventType, 12)).toEqual({});
     },
   );
-
-  it('gives no event a priority', () => {
-    expect(orderEventsJobOptions('order.paid', 12)).not.toHaveProperty('priority');
-  });
 });

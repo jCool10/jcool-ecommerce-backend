@@ -18,6 +18,7 @@ import { ThrottlerSecurityModule } from '@jcool/platform/throttler';
 import { HealthModule } from '@jcool/platform/health';
 import { CanonicalLogInterceptor, ObservabilityLoggerModule, clsModuleOptions } from '@jcool/platform/observability';
 import { MetricsModule } from '@jcool/platform/metrics';
+import { LoadSheddingModule } from '@jcool/platform/resilience';
 import { HttpExceptionFilter } from '@jcool/platform/interface';
 import { DebugController } from '@shared/interface/controllers/debug.controller';
 import { CartModule } from '@modules/cart/cart.module';
@@ -33,6 +34,7 @@ import { ProductModule } from '@modules/product/product.module';
     ClsModule.forRoot(clsModuleOptions),
     ObservabilityLoggerModule,
     MetricsModule,
+    LoadSheddingModule,
     SentryModule.forRoot(),
     DrizzleModule.forRoot({ schema }),
     RedisModule,

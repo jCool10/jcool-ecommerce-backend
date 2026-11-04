@@ -1,6 +1,27 @@
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
+// Shared with test/vitest-e2e.config.mts: the merge keeps only files both runs admit.
+export const coverageScope = {
+  provider: 'v8' as const,
+  include: ['src/**/*.ts'],
+  exclude: [
+    'src/**/*.spec.ts',
+    'src/**/testing/**',
+    // Wiring and declarations: no logic to measure.
+    'src/**/*.module.ts',
+    'src/main.ts',
+    'src/instrumentation.ts',
+    'src/**/index.ts',
+    'src/**/schema/**',
+    // Does its work at import as a child process, outside the measured workers.
+    'src/lease/lift-floors-cli.ts',
+  ],
+};
+
+// Applied only by test/vitest-coverage-merge.config.mts, over the merged unit and e2e maps.
+export const mergedThresholds = { statements: 95, branches: 88, functions: 95, lines: 98 };
+
 // SWC rather than esbuild: Nest DI in the specs needs `emitDecoratorMetadata`, which esbuild drops.
 export default defineConfig({
   test: {
@@ -10,26 +31,11 @@ export default defineConfig({
     // Workspace deps resolve outside node_modules; without this Vitest inlines their dist.
     server: { deps: { external: [/\/packages\/[^/]+\/dist\//] } },
     coverage: {
-      provider: 'v8',
-      reportsDirectory: './coverage',
-      include: ['src/**/*.ts'],
-      // The etcd store, the floor lift, the Nest wiring and the mint endpoint are covered by the e2e tier.
-      exclude: [
-        'src/**/*.spec.ts',
-        'src/**/testing/**',
-        'src/**/*.module.ts',
-        'src/main.ts',
-        'src/app.setup.ts',
-        'src/health/health.controller.ts',
-        'src/etcd/**',
-        'src/lease/etcd-lease-*.ts',
-        'src/lease/lift-floors*.ts',
-        'src/mint/mint.controller.ts',
-        'src/mint/lease-not-held.filter.ts',
-        'src/mint/mint.request.ts',
-        'src/mint/mint.metrics.ts',
-      ],
-      thresholds: { statements: 98, branches: 90, functions: 98, lines: 98 },
+      ...coverageScope,
+      reportsDirectory: './coverage/unit',
+      // The etcd store, the endpoint and the Nest wiring are reached by the e2e tier; the strict floor
+      // is the merged one. Measured minus two.
+      thresholds: { statements: 46, branches: 41, functions: 35, lines: 48 },
     },
   },
   plugins: [
