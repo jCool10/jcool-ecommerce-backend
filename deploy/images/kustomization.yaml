@@ -3,19 +3,19 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 images:
   - name: ghcr.io/jcool10/jcool-api
-    newTag: sha-6a4d6ce6142f
+    newTag: sha-016eee7553ee
   - name: ghcr.io/jcool10/jcool-gateway
-    newTag: sha-6a4d6ce6142f
+    newTag: sha-016eee7553ee
   - name: ghcr.io/jcool10/jcool-id-service
-    newTag: sha-6a4d6ce6142f
+    newTag: sha-016eee7553ee
   - name: ghcr.io/jcool10/jcool-user-service
-    newTag: sha-6a4d6ce6142f
+    newTag: sha-016eee7553ee
   - name: ghcr.io/jcool10/jcool-inventory-service
-    newTag: sha-6a4d6ce6142f
+    newTag: sha-016eee7553ee
   - name: ghcr.io/jcool10/jcool-payment-service
-    newTag: sha-6a4d6ce6142f
+    newTag: sha-016eee7553ee
   - name: ghcr.io/jcool10/jcool-order-service
-    newTag: sha-6a4d6ce6142f
+    newTag: sha-016eee7553ee
   - name: ghcr.io/jcool10/jcool-temporal
     newTag: tree-86240079a8c3
   - name: ghcr.io/jcool10/jcool-elasticsearch
