@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jcool
+resources:
+  - id-service.yaml
+  - user-service.yaml
+  - inventory-service.yaml
+  - payment-service.yaml
+  - order-service.yaml
+  - api.yaml
+  - gateway.yaml
+  - hooks.yaml
+components:
+  - ../images
+# The hash suffix stays: a changed value renames the ConfigMap, which rolls every pod that reads it.
+configMapGenerator:
+  - name: apps-env
+    envs: [apps.properties]
+  - name: gateway-env
+    envs: [gateway.properties]
+patches:
+  # Service links would inject ID_SERVICE_PORT=tcp://… and the like over the values the images expect.
+  - target: {kind: Deployment|Job}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/enableServiceLinks
+        value: false

@@ -1,0 +1,58 @@
+# Job names match infra/prometheus/prometheus.railway.yml (jcool-api, -inventory, -payment, -order, loki),
+# so the rules baked into the image run unchanged. A pod opts in with the jcool.dev/scrape-job and
+# jcool.dev/scrape-port annotations.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: jcool-services
+    metrics_path: /metrics
+    # /metrics answers 404 without the token.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics-token
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [jcool]}
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_jcool_dev_scrape_job]
+        regex: jcool-.+
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_annotation_jcool_dev_scrape_job]
+        target_label: job
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_jcool_dev_scrape_port]
+        separator: ':'
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+    # Kubelet probes are most of the traffic at rest: kept, they would dilute the SLO error rates and
+    # count a readiness 503 as a failed request.
+    metric_relabel_configs:
+      - source_labels: [route]
+        regex: /health/.*
+        action: drop
+
+  # Unauthenticated exporters; the job label is still the annotation's value.
+  - job_name: infra
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [jcool]}
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_jcool_dev_scrape_job]
+        regex: redis|loki
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_annotation_jcool_dev_scrape_job]
+        target_label: job
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_jcool_dev_scrape_port]
+        separator: ':'
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod

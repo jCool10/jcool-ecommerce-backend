@@ -181,6 +181,31 @@ describe('gateway: public site', () => {
       expect(echo.headers['x-forwarded-for'].split(',')).toHaveLength(1);
       expect(echo.headers['x-real-ip']).toBe(echo.headers['x-forwarded-for']);
     });
+
+    it('reads the client from GATEWAY_CLIENT_IP_HEADERS, not X-Real-IP, when the edge names it there', async () => {
+      const cfEdge = await startFixture(network, 'fake-edge.cjs', 'cf-edge', {
+        UPSTREAM: 'cf-gateway:8080',
+        CLIENT_IP_HEADER: 'cf-connecting-ip',
+      });
+      const cfGateway = await gatewayContainer(network, {
+        ...baseEnv,
+        GATEWAY_CLIENT_IP_HEADERS: 'Cf-Connecting-Ip',
+        TRUSTED_PROXY_CIDRS: `${cfEdge.getIpAddress(network.getName())}/32`,
+      })
+        .withNetworkAliases('cf-gateway')
+        .withWaitStrategy(Wait.forHttp('/health/live', PUBLIC_PORT))
+        .start();
+      try {
+        const echo = await echoOf(
+          fetch(fixtureUrl(cfEdge, '/products'), { headers: { ...FORGED_HEADERS, 'x-test-client-ip': CLIENT } }),
+        );
+
+        expect(echo.headers['x-forwarded-for']).toBe(CLIENT);
+        expect(echo.headers['x-real-ip']).toBe(CLIENT);
+      } finally {
+        await Promise.allSettled([cfGateway.stop(), cfEdge.stop()]);
+      }
+    });
   });
 
   describe('auth routes', () => {

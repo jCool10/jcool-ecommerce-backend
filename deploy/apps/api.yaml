@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector: {app.kubernetes.io/name: api}
+  ports:
+    - {name: http, port: 8080}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels: {app.kubernetes.io/name: api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: api}
+      annotations:
+        jcool.dev/scrape-job: jcool-api
+        jcool.dev/scrape-port: "8080"
+    spec:
+      # Railway's drainingSeconds (30) plus slack; RUNBOOK "The shutdown budget".
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: ghcr.io/jcool10/jcool-api
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: PORT, value: "8080"}
+            - {name: SHUTDOWN_GRACE_PERIOD_MS, value: "5000"}
+            - name: NODE_ENV
+              valueFrom: {configMapKeyRef: {name: apps-env, key: NODE_ENV}}
+            - name: LOG_LEVEL
+              valueFrom: {configMapKeyRef: {name: apps-env, key: LOG_LEVEL}}
+            - name: SEARCH_ENABLED
+              valueFrom: {configMapKeyRef: {name: apps-env, key: SEARCH_ENABLED}}
+            - name: SWAGGER_ENABLED
+              valueFrom: {configMapKeyRef: {name: apps-env, key: SWAGGER_ENABLED}}
+            - name: THROTTLE_ENABLED
+              valueFrom: {configMapKeyRef: {name: apps-env, key: THROTTLE_ENABLED}}
+            - name: TRUST_PROXY
+              valueFrom: {configMapKeyRef: {name: apps-env, key: TRUST_PROXY}}
+            - name: JWT_ISSUER
+              valueFrom: {configMapKeyRef: {name: apps-env, key: JWT_ISSUER}}
+            - name: JWT_AUDIENCE
+              valueFrom: {configMapKeyRef: {name: apps-env, key: JWT_AUDIENCE}}
+            - name: ID_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: apps-env, key: ID_SERVICE_URL}}
+            - name: LOKI_URL
+              valueFrom: {configMapKeyRef: {name: apps-env, key: LOKI_URL}}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: API_DB_PASSWORD}}
+            - {name: DATABASE_URL, value: "postgresql://jcool:$(DB_PASSWORD)@postgres:5432/jcool_ecommerce"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis, key: REDIS_PASSWORD}}
+            - {name: REDIS_URL, value: "redis://:$(REDIS_PASSWORD)@redis:6379"}
+            - {name: USER_SERVICE_INTERNAL_URL, value: http://user-service:3000}
+            - {name: AUTH_JWKS_URL, value: http://user-service:3000/.well-known/jwks.json}
+            - name: INTERNAL_API_TOKEN
+              valueFrom: {secretKeyRef: {name: internal-tokens, key: API_TO_USER}}
+            - name: INTERNAL_CALLER_TOKEN_ORDER_SERVICE
+              valueFrom: {secretKeyRef: {name: internal-tokens, key: ORDER_TO_API}}
+            - name: INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS
+              valueFrom: {secretKeyRef: {name: internal-tokens, key: ORDER_TO_API_PREVIOUS, optional: true}}
+            - name: METRICS_TOKEN
+              valueFrom: {secretKeyRef: {name: metrics-token, key: METRICS_TOKEN}}
+            - name: STORAGE_ENDPOINT
+              valueFrom: {secretKeyRef: {name: object-storage, key: STORAGE_ENDPOINT}}
+            - name: STORAGE_BUCKET
+              valueFrom: {secretKeyRef: {name: object-storage, key: STORAGE_BUCKET}}
+            - name: STORAGE_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: object-storage, key: STORAGE_ACCESS_KEY_ID}}
+            - name: STORAGE_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: object-storage, key: STORAGE_SECRET_ACCESS_KEY}}
+            # jcool_api, limited to products* (RUNBOOK).
+            - {name: SEARCH_URL, value: http://elasticsearch:9200}
+            - {name: SEARCH_USERNAME, value: jcool_api}
+            - name: SEARCH_PASSWORD
+              valueFrom: {secretKeyRef: {name: search, key: API_SEARCH_PASSWORD}}
+          startupProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}

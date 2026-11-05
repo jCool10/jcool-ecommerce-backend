@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-service
+spec:
+  selector: {app.kubernetes.io/name: inventory-service}
+  ports:
+    - {name: http, port: 3000}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels: {app.kubernetes.io/name: inventory-service}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: inventory-service}
+      annotations:
+        jcool.dev/scrape-job: jcool-inventory
+        jcool.dev/scrape-port: "3000"
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: inventory-service
+          image: ghcr.io/jcool10/jcool-inventory-service
+          ports:
+            - {name: http, containerPort: 3000}
+          env:
+            - {name: PORT, value: "3000"}
+            - {name: SHUTDOWN_GRACE_PERIOD_MS, value: "5000"}
+            - name: NODE_ENV
+              valueFrom: {configMapKeyRef: {name: apps-env, key: NODE_ENV}}
+            - name: TRUST_PROXY
+              valueFrom: {configMapKeyRef: {name: apps-env, key: TRUST_PROXY}}
+            - name: JWT_ISSUER
+              valueFrom: {configMapKeyRef: {name: apps-env, key: JWT_ISSUER}}
+            - name: JWT_AUDIENCE
+              valueFrom: {configMapKeyRef: {name: apps-env, key: JWT_AUDIENCE}}
+            - name: ID_SERVICE_URL
+              valueFrom: {configMapKeyRef: {name: apps-env, key: ID_SERVICE_URL}}
+            - name: LOKI_URL
+              valueFrom: {configMapKeyRef: {name: apps-env, key: LOKI_URL}}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: INVENTORY_DB_PASSWORD}}
+            - {name: DATABASE_URL, value: "postgresql://inventory:$(DB_PASSWORD)@postgres:5432/inventory"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis, key: REDIS_PASSWORD}}
+            - {name: REDIS_URL, value: "redis://:$(REDIS_PASSWORD)@redis:6379"}
+            - {name: AUTH_JWKS_URL, value: http://user-service:3000/.well-known/jwks.json}
+            - {name: USER_SERVICE_URL, value: http://user-service:3000}
+            - name: USER_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: internal-tokens, key: INVENTORY_TO_USER}}
+            - name: INTERNAL_CALLER_TOKEN_ORDER_SERVICE
+              valueFrom: {secretKeyRef: {name: internal-tokens, key: ORDER_TO_INVENTORY}}
+            - name: INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS
+              valueFrom: {secretKeyRef: {name: internal-tokens, key: ORDER_TO_INVENTORY_PREVIOUS, optional: true}}
+            # The public catalog through the gateway, never the api directly.
+            - {name: CATALOG_PUBLIC_URL, value: http://gateway:8080}
+            - name: METRICS_TOKEN
+              valueFrom: {secretKeyRef: {name: metrics-token, key: METRICS_TOKEN}}
+          startupProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 320Mi}
+            limits: {memory: 320Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}

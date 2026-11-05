@@ -1,0 +1,117 @@
+name: Images
+
+# Publishes the arm64 images the k3s cluster runs. Chained off CI like cd.yml, so only a green push on
+# main reaches a job that can write packages.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: images-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  gate:
+    name: Require green CI
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      # A workflow_run already carries CI's verdict; a dispatch builds whatever main points at.
+      - if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&status=success" \
+            --jq '.total_count')
+          if [ "$green" -eq 0 ]; then
+            echo "::error::CI has no green push run for $SHA on main; only verified commits are published"
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.image }}
+    needs: gate
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: api, dockerfile: Dockerfile }
+          - { image: gateway, dockerfile: apps/gateway/Dockerfile }
+          - { image: id-service, dockerfile: apps/id-service/Dockerfile }
+          - { image: user-service, dockerfile: apps/user-service/Dockerfile }
+          - { image: inventory-service, dockerfile: apps/inventory-service/Dockerfile }
+          - { image: payment-service, dockerfile: apps/payment-service/Dockerfile }
+          - { image: order-service, dockerfile: apps/order-service/Dockerfile }
+          - { image: temporal, dockerfile: infra/temporal/Dockerfile, tree: infra/temporal }
+          - { image: elasticsearch, dockerfile: infra/elasticsearch/Dockerfile, tree: infra/elasticsearch }
+          - { image: prometheus, dockerfile: infra/prometheus/Dockerfile, tree: infra/prometheus }
+          - { image: loki, dockerfile: infra/loki/Dockerfile, tree: infra/loki }
+          - { image: grafana, dockerfile: infra/grafana/Dockerfile, tree: infra/grafana }
+    env:
+      IMAGE: ghcr.io/jcool10/jcool-${{ matrix.image }}
+      CACHE: ghcr.io/jcool10/jcool-build-cache:${{ matrix.image }}
+      TREE: ${{ matrix.tree }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: |
+          if [ -n "$TREE" ]; then
+            tag="tree-$(git rev-parse "HEAD:$TREE" | cut -c1-12)"
+          else
+            tag="sha-${SHA:0:12}"
+          fi
+          # An infra Dockerfile copies only from its own tree, so a tree tag already pushed is this image.
+          exists=false
+          if [ -n "$TREE" ] && docker buildx imagetools inspect "$IMAGE:$tag" >/dev/null 2>&1; then
+            exists=true
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+      - if: steps.tag.outputs.exists != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          labels: org.opencontainers.image.source=https://github.com/jCool10/jcool-ecommerce-backend
+          cache-from: type=registry,ref=${{ env.CACHE }}
+          cache-to: type=registry,ref=${{ env.CACHE }},mode=max
+      - name: Summary
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          EXISTS: ${{ steps.tag.outputs.exists }}
+        run: |
+          if [ "$EXISTS" = true ]; then result="skipped (exists)"; else result=built; fi
+          echo "- \`$IMAGE:$TAG\` $result" >> "$GITHUB_STEP_SUMMARY"

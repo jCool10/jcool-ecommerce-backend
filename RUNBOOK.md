@@ -45,6 +45,7 @@ Conventions used below:
 - [The inventory-service](#the-inventory-service)
 - [The payment-service](#the-payment-service)
 - [The order-service](#the-order-service)
+- [Production on k3s](#production-on-k3s)
 - [Standing exceptions](#standing-exceptions)
 
 ---
@@ -1781,6 +1782,143 @@ The order confirmation reads the buyer's address from the user-service before it
 A buyer the user-service does not know is retried until the event is `USER_DIRECTORY_NOT_FOUND_GRACE` (10m) old, since a freshly restored directory can miss the newest accounts. After that it is parked as permanent.
 
 Either way `DeadLetterQueued` pages for `jcool-order`. Once the user-service answers again, [replay `order-events`](#dead-letter-queues).
+
+---
+
+## Production on k3s
+
+One k3s node on an Oracle Cloud A1 VM (arm64) runs the whole stack. Argo CD, in the same cluster, syncs `deploy/` from `main`: `jcool-infra` (`deploy/infra`: databases, Temporal, Elasticsearch, observability, cloudflared; never pruned) and `jcool-apps` (`deploy/apps`: the seven services and their migrations; pruned). The internet reaches it only through the Cloudflare Tunnel, whose public hostname points at `gateway.jcool.svc.cluster.local:8080`; the VM opens SSH alone. Measured memory and bootstrap timings are recorded here after the first bootstrap.
+
+### One-time setup
+
+Done once per account or domain, by hand, before the first bootstrap.
+
+- **Oracle Cloud.** Home region `ap-singapore-1` (fixed at sign-up). Create a VCN with the wizard, public subnet included, and leave its security list with one ingress rule: TCP 22 from `0.0.0.0/0`. Create a `VM.Standard.A1.Flex` instance with 2 OCPU and 12 GB, image Canonical Ubuntu 24.04 aarch64, a 100 GB boot volume and your SSH key. "Out of capacity" means retry later in the day; if it persists, upgrade to Pay As You Go and set a budget alert at 1 USD in the same sitting.
+- **Idle reclaim.** Oracle reclaims an Always Free instance whose CPU p95, network and memory all stay under 20% for 7 days. On the instance page, Oracle Cloud Agent must show the "Compute Instance Monitoring" plugin as Enabled. The three series are on the instance's Metrics tab (`CpuUtilization`, `NetworksBytesIn`/`NetworksBytesOut`, `MemoryUtilization`); memory alone stays above 20% by design.
+- **Cloudflare.** Zero Trust → Networks → Tunnels: create a cloudflared tunnel and put its token in `$JCOOL_SECRETS_DIR/cloudflared.env` only. Add the public hostname `jcool.tech` → `HTTP` → `gateway.jcool.svc.cluster.local:8080`. Turn Bot Fight Mode off, since it challenges k6 and Stripe's webhook calls. Turn on Email Routing for `jcool.tech` with a catch-all that drops, so the smoke's sign-up mail has somewhere to go.
+- **Stripe, test mode.** Add the endpoint `https://jcool.tech/webhooks/payment` with the events `checkout.session.completed` and `checkout.session.expired`; its signing secret is `PAYMENT_WEBHOOK_SECRET` in `stripe.env`. Each endpoint only settles the sessions its own deployment created, so while Railway still runs, the other one answers errors and Stripe retries; that is expected in test mode.
+- **Media bucket.** Add `https://jcool.tech` to the R2 bucket's CORS AllowedOrigins ([why](#cors-content-sniffing-and-downloads-are-bucket-configuration-not-app-code)).
+
+### Access
+
+The API server listens on the VM's loopback only. Keep a tunnel open in its own terminal, and fetch the kubeconfig once (it already points at `https://127.0.0.1:6443`):
+
+```bash
+ssh -N -L 6443:127.0.0.1:6443 ubuntu@<vm-ip>
+ssh ubuntu@<vm-ip> sudo cat /etc/rancher/k3s/k3s.yaml > ~/.kube/jcool-oracle.yaml && chmod 600 ~/.kube/jcool-oracle.yaml
+export KUBECONFIG=~/.kube/jcool-oracle.yaml
+kubectl config rename-context default jcool-oracle
+kubectl get nodes
+```
+
+### Argo CD
+
+No public hostname. Open the UI on a port-forward, as `admin`:
+
+```bash
+kubectl -n argocd port-forward svc/argocd-server 8443:443   # https://localhost:8443
+# the first login's password; print it only where nobody else is watching
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+Argo CD does not manage itself, its AppProject or the two Applications. After a change under `deploy/argocd`, apply it by hand:
+
+```bash
+kubectl apply --server-side --force-conflicts -k deploy/argocd
+kubectl apply -f deploy/argocd/project.yaml -f deploy/argocd/applications.yaml
+```
+
+### Bootstrap a cluster
+
+On a fresh VM, as root: copy `deploy/scripts/bootstrap-vm.sh` over and run `sudo bash bootstrap-vm.sh`. It patches the system, turns off SSH passwords, opens Oracle's firewall to the pod and service networks, and installs the pinned k3s. Rerunning it is safe. If CoreDNS crashloops unable to reach the API, check that `sudo iptables -L INPUT -n --line-numbers` lists the ACCEPTs for `10.42.0.0/16` and `10.43.0.0/16` above the REJECT.
+
+From the laptop, with the tunnel open and every Secret file in place (next section), run `deploy/scripts/bootstrap-cluster.sh` from a checkout with `pnpm install` done. It installs Argo CD, applies the Secrets, syncs `jcool-infra` and waits for every StatefulSet, creates the api's Elasticsearch role and user, syncs `jcool-apps`, then seeds the demo catalog (through a port-forward on `127.0.0.1:15432`), tops up its stock, rebuilds the search index, and prints how long each step took. Every step is safe to rerun. The first `jcool-apps` sync waits a full id lease TTL (300 s) in `id-floors` on the empty etcd keyspace.
+
+Fix a failed step in `deploy/` and merge it, rather than editing the cluster by hand: selfHeal reverts hand edits.
+
+### Secrets
+
+Values never enter the repo. Each `deploy/secrets/<name>.env.example` lists the keys of one Secret; the values live in `$JCOOL_SECRETS_DIR/<name>.env` (default `~/.config/jcool/prod`, `chmod 600`, backed up in the password manager). `KEY=value` per line, bare values, no quotes.
+
+`deploy/scripts/init-secrets.sh` writes every file that does not exist yet: random values for the seven Secrets the cluster owns (passwords, internal tokens, the metrics token, a fresh ES256 signing key), and empty keys for `stripe`, `object-storage`, `smtp` and `cloudflared`. It never overwrites a file, so it is safe to rerun. Fill the four by hand, writing each value straight into its file. The media bucket's credentials come from Railway's api, without passing through the terminal:
+
+```bash
+railway variables --service jcool-ecommerce-backend --json |
+  jq -r '"STORAGE_ENDPOINT=\(.STORAGE_ENDPOINT)\nSTORAGE_BUCKET=\(.STORAGE_BUCKET)\nSTORAGE_ACCESS_KEY_ID=\(.STORAGE_ACCESS_KEY_ID)\nSTORAGE_SECRET_ACCESS_KEY=\(.STORAGE_SECRET_ACCESS_KEY)"' \
+  > ~/.config/jcool/prod/object-storage.env
+```
+
+`deploy/scripts/apply-secrets.sh` checks every file before it touches the cluster (a missing file, a missing, empty, repeated or quoted key all fail it), then prints `created`, `changed` or `unchanged` per Secret and never a value. An empty `_PREVIOUS` rotation slot is left out of the Secret, because the services reject an empty token. A changed Secret restarts the Deployments and StatefulSets that read it. For the internal tokens, follow [Per-caller internal tokens](#per-caller-internal-tokens).
+
+`postgres-credentials`, `redis`, `search` and `grafana` are the exception: the engine keeps the old password in its own storage, so nothing restarts. Change the password inside the engine first (`ALTER ROLE`, `CONFIG SET requirepass`, [Rotate a password](#rotate-a-password) for Elasticsearch, `grafana cli admin reset-admin-password`), then apply, then `kubectl -n jcool rollout restart` its readers.
+
+Never print a Secret (`kubectl get secret -o yaml` or `-o json`) where the output is shared, recorded or logged.
+
+### Deploy
+
+A push to `main` runs CI; a green CI run starts `images.yml`, which builds the arm64 images and pushes them to GHCR. The images that `deploy/images/kustomization.yaml` names are the ones the cluster runs: set them with `deploy/scripts/set-image-tags.sh <commit>` and commit the result. Argo CD polls `main` every three minutes.
+
+A `jcool-apps` sync runs the six PreSync Jobs (five migrations and `id-floors`), then the waves id-service, user-service, inventory-service, payment-service, order-service, api, gateway, each waiting for the previous one to be ready, then the PostSync `inventory-seed-stock`. A failed Job stops the sync, and Argo CD retries it with backoff (10 attempts, at most 5 minutes apart). Migrations must stay expand/contract: the old pods keep running on the new schema during the rollout.
+
+```bash
+kubectl -n argocd get applications
+kubectl -n jcool get jobs,pods
+kubectl -n jcool logs job/api-migrate
+```
+
+### Roll back
+
+Point `deploy/images` back at the last good commit and push. The schema stays where it is, which expand/contract migrations allow:
+
+```bash
+deploy/scripts/set-image-tags.sh <last good commit>
+git commit -am "fix(deploy): roll images back to <last good commit>" && git push
+```
+
+### Logs and metrics
+
+```bash
+kubectl -n jcool logs deploy/api -f            # --previous for the crashed container
+kubectl -n jcool port-forward deploy/grafana 3000   # http://localhost:3000, admin / GF_SECURITY_ADMIN_PASSWORD
+kubectl -n jcool port-forward svc/prometheus 9090
+```
+
+Only the one-shopper smoke (`BASE_URL=https://jcool.tech LOAD_EMAIL_DOMAIN=jcool.tech pnpm load:smoke`) runs against production. Load tests stay local: the VM is small and shares its CPUs with every service.
+
+### The client IP
+
+cloudflared names the client in `Cf-Connecting-Ip`, so `deploy/apps/gateway.properties` sets `GATEWAY_CLIENT_IP_HEADERS=Cf-Connecting-Ip`. The gateway trusts the header only from `TRUSTED_PROXY_CIDRS=10.42.0.0/16`, the pod network cloudflared runs in. Railway leaves the variable unset and keeps `X-Real-IP`. When every user lands in one throttle bucket, check this pair first.
+
+### Check the stack
+
+After a bootstrap, and after any change to the edge:
+
+```bash
+curl -sf https://jcool.tech/health/ready && echo ready
+kubectl -n argocd get applications                     # both Synced and Healthy
+kubectl -n jcool get pods                              # no restart count that keeps climbing
+kubectl get events -A | grep -i oomkill                # empty
+BASE_URL=https://jcool.tech LOAD_EMAIL_DOMAIN=jcool.tech pnpm load:smoke   # 100% checks
+# The Redis password stays in the pod: redis-cli reads it from REDISCLI_AUTH there.
+scripts/check-internal-auth.sh https://jcool.tech \
+  kubectl -n jcool exec sts/redis -c redis -- sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli "$@"' redis-cli
+```
+
+The client IP: `curl -s https://jcool.tech/health/live` from the laptop, then find the laptop's address (`curl -s https://ifconfig.me`) as `client_ip` in `kubectl -n jcool logs deploy/gateway`; a `10.42.x.x` there means the header pair above is wrong. A paid order: sign up, add to cart, order, `/pay` with the test card `4242 4242 4242 4242`, and the order reaches `PAID` (`kubectl -n jcool logs deploy/order-service` shows the saga's capture).
+
+From a machine outside Oracle, only SSH answers: `nc -zvw3 <vm-ip> 22` connects, while 80, 443, 6443, 10250 and 30000 time out or are refused.
+
+### Back up
+
+One custom-format dump per database. `*.dump` is ignored by git; keep the files out of the repo and in the password manager's vault or another private place.
+
+```bash
+for db in jcool_ecommerce users inventory payment order temporal temporal_visibility; do
+  kubectl -n jcool exec postgres-0 -- pg_dump -U postgres -Fc "$db" > "$db-$(date +%F).dump"
+done
+```
+
+Restore one into its database with `kubectl -n jcool exec -i postgres-0 -- pg_restore -U postgres -d <db> --clean --if-exists < <db>.dump`, under the rules of [Backup and restore](#backup-and-restore).
 
 ---
 

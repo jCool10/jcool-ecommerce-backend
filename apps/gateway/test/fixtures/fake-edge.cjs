@@ -1,16 +1,18 @@
 // Stands in for Railway's edge in front of the gateway. Every test request comes from the same host,
 // so the client address the edge would see on the socket is taken from `x-test-client-ip` instead.
-// Like the edge, it overwrites any X-Real-IP the client sent and appends to its X-Forwarded-For.
+// Like the edge, it overwrites the client header it owns (CLIENT_IP_HEADER, X-Real-IP by default), passes
+// any other the client sent through untouched, and appends to X-Forwarded-For.
 const http = require('node:http');
 
 const [host, port] = (process.env.UPSTREAM ?? 'gateway:8080').split(':');
+const clientIpHeader = (process.env.CLIENT_IP_HEADER ?? 'x-real-ip').toLowerCase();
 
 http
   .createServer((req, res) => {
     const headers = { ...req.headers };
     const client = headers['x-test-client-ip'];
     delete headers['x-test-client-ip'];
-    headers['x-real-ip'] = client;
+    headers[clientIpHeader] = client;
     headers['x-forwarded-for'] = headers['x-forwarded-for'] ? `${headers['x-forwarded-for']}, ${client}` : client;
     headers['x-forwarded-proto'] = 'https';
     // IPv4, as Railway's edge arrives from 100.64.0.0/10, and so a single address for the test to trust.
