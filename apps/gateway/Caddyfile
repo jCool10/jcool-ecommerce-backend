@@ -7,9 +7,9 @@
 	shutdown_delay {$GATEWAY_SHUTDOWN_DELAY:5s}
 	grace_period {$GATEWAY_GRACE_PERIOD:10s}
 	servers :{$PORT:8080} {
-		# Only Railway's edge may name the client. From any other peer, the socket address is the client.
+		# Only the edge in TRUSTED_PROXY_CIDRS may name the client. From any other peer, the socket address is the client.
 		trusted_proxies static {$TRUSTED_PROXY_CIDRS}
-		client_ip_headers X-Real-IP
+		client_ip_headers {$GATEWAY_CLIENT_IP_HEADERS:X-Real-IP}
 	}
 }
 
