@@ -2,8 +2,8 @@
 // listed, cancel it. The cancel keeps the account clear of the pending-order cap and runs the saga's
 // release path through the inventory-service and the payment-service.
 //
-// Run:  BASE_URL=https://jcool.tech LOAD_EMAIL_DOMAIN=jcool.tech pnpm load:smoke   (production), or
-//       BASE_URL=http://localhost:8080 pnpm load:smoke after pnpm db:seed plus the stock seed on the dev stack
+// Run:  BASE_URL=http://localhost:8080 pnpm load:smoke after pnpm db:seed plus the stock seed on the dev stack,
+//       or BASE_URL=<deployed gateway> LOAD_EMAIL_DOMAIN=<a domain that accepts the sign-up mail> against a deployment
 
 import http from 'k6/http';
 import { check } from 'k6';

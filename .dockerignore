@@ -28,7 +28,6 @@ tmp
 # Repo-only material not needed to build or run the app.
 .claude
 .railway
-deploy
 plans
 docs
 README.md

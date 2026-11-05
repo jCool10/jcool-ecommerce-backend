@@ -62,28 +62,6 @@ jobs:
       # (domain/application in the apps). The merged unit+e2e floors run in the e2e jobs.
       - run: pnpm turbo run test:cov # unit (Vitest) — fast, hermetic, no Docker; fails under the coverage floor
 
-  # Argo CD syncs deploy/ from main, so a render that fails or references a missing Secret key must not land.
-  manifests:
-    name: Deploy manifests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      # Pinned with the sha256 their releases publish; yq (mikefarah v4) ships on the runner image.
-      - name: Install kustomize and kubeconform
-        run: |
-          curl -sSfL -o /tmp/kustomize.tar.gz \
-            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.3/kustomize_v5.8.3_linux_amd64.tar.gz"
-          echo "cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61  /tmp/kustomize.tar.gz" | sha256sum -c -
-          curl -sSfL -o /tmp/kubeconform.tar.gz \
-            "https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz"
-          echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  /tmp/kubeconform.tar.gz" | sha256sum -c -
-          sudo tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
-          sudo tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
-          kustomize version
-          kubeconform -v
-          yq --version
-      - run: deploy/scripts/validate-manifests.sh
-
   # A job, not a workflow-level `paths` filter: CD chains off this workflow, so a red gateway run must
   # live here to block a deploy, and `paths` cannot scope a single job.
   gateway-changes:

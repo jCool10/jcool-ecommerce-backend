@@ -16,9 +16,6 @@ coverage/
 .env
 .env.*
 !.env.example
-# Production Secret values live outside the repo ($JCOOL_SECRETS_DIR); a copy dropped in here stays out.
-*.secrets.env
-deploy/secrets/*.env
 # pg_dump output carries every row.
 *.dump
 
