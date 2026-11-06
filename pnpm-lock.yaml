@@ -1109,8 +1109,8 @@ importers:
         specifier: ^22.6.1
         version: 22.6.1(@types/node@24.19.2)
       uuid:
-        specifier: ^11.1.0
-        version: 11.1.1
+        specifier: ^14.0.3
+        version: 14.0.3
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -1287,8 +1287,8 @@ importers:
         specifier: ^7.8.1
         version: 7.8.2
       uuid:
-        specifier: ^11.1.0
-        version: 11.1.1
+        specifier: ^14.0.3
+        version: 14.0.3
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -7563,6 +7563,10 @@ packages:
     resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
+  uuid@14.0.3:
+    resolution: {integrity: sha512-Sc5u1VVln93y1Xnz4R+CunOZc7R9LUcTmhj7Rc7Eg3HVcf7rVn2FOoa812fe0W8p3jD7xeoGSYbfqCGGH2B6xw==}
+    hasBin: true
+
   v8-compile-cache-lib@3.0.1:
     resolution: {integrity: sha512-wa7YjyUGfNZngI/vtK0UHAN+lgDCxBPCylVXGp0zu59Fz5aiGtNXaq3DhIov063MorB+VfufLh3JlF2KdTK3xg==}
 
@@ -13507,6 +13511,8 @@ snapshots:
   util-deprecate@1.0.2: {}
 
   uuid@11.1.1: {}
+
+  uuid@14.0.3: {}
 
   v8-compile-cache-lib@3.0.1: {}
 
