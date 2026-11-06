@@ -5,11 +5,12 @@ import * as Sentry from '@sentry/nestjs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { resourceFromAttributes } from '@opentelemetry/resources';
-import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 // Not the observability barrel: it would load Nest and nestjs-pino before the SDK can patch them.
 import { scrubPii } from '@jcool/platform/error-tracking';
 import type { TelemetryFlushGlobal } from '@jcool/platform/observability';
+import type { WorkflowSpanExportGlobal } from './modules/order/infrastructure/temporal/workflow-tracing';
+import { telemetryResource } from './telemetry-resource';
 
 const sentryEnabled = Boolean(process.env.SENTRY_DSN);
 
@@ -38,9 +39,13 @@ if (process.env.OTEL_ENABLED === 'true') {
   const serviceName = process.env.OTEL_SERVICE_NAME ?? 'jcool-order-service';
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318';
 
+  const resource = telemetryResource(serviceName);
+  const spanProcessor = new BatchSpanProcessor(new OTLPTraceExporter({ url: `${endpoint}/v1/traces` }));
+
   const sdk = new NodeSDK({
-    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: serviceName }),
-    traceExporter: new OTLPTraceExporter({ url: `${endpoint}/v1/traces` }),
+    resource,
+    autoDetectResources: false,
+    spanProcessors: [spanProcessor],
     ...(sentryEnabled ? { contextManager: new Sentry.SentryContextManager() } : {}),
     instrumentations: [
       getNodeAutoInstrumentations({
@@ -58,6 +63,9 @@ if (process.env.OTEL_ENABLED === 'true') {
   });
 
   sdk.start();
+  // Workflow spans are made in the Temporal sandbox and reach Node through a sink; the worker hands
+  // them to this processor.
+  (globalThis as WorkflowSpanExportGlobal).__workflowSpanExport = { spanProcessor, resource };
 
   publishTelemetryFlush(async () => {
     await Promise.all([

@@ -1,28 +1,35 @@
 import type {
   ActiveSession,
   CreateRefreshTokenInput,
+  CreateRefreshTokenOutcome,
+  PasswordReplacement,
   RefreshTokenOwner,
   RefreshTokenRepositoryPort,
   RotateOutcome,
   RotateRefreshTokenInput,
 } from '../application/ports';
 
-/** Answers `owner` and `outcome` as the spec sets them and records every write; `log` orders calls across fakes. */
+/**
+ * Answers `owner`, `outcome`, `createOutcome` and `revokeAllEpoch` as the spec sets them and records
+ * every write; `log` orders calls across fakes.
+ */
 export class FakeRefreshTokenRepository implements RefreshTokenRepositoryPort {
   owner: RefreshTokenOwner | null = null;
   outcome: RotateOutcome = { status: 'invalid' };
+  createOutcome: CreateRefreshTokenOutcome = { status: 'created', role: 'CUSTOMER', tokenEpoch: 0 };
+  revokeAllEpoch: number | null = 1;
   readonly created: CreateRefreshTokenInput[] = [];
   readonly lookedUp: string[] = [];
   readonly rotations: RotateRefreshTokenInput[] = [];
   readonly revokedFamilies: Array<{ userId: string; familyId: string }> = [];
-  readonly revokedAllFor: string[] = [];
+  readonly revokedAll: Array<{ userId: string } & Partial<PasswordReplacement>> = [];
 
   constructor(readonly log: string[] = []) {}
 
-  create(input: CreateRefreshTokenInput): Promise<void> {
+  create(input: CreateRefreshTokenInput): Promise<CreateRefreshTokenOutcome> {
     this.log.push('create');
     this.created.push(input);
-    return Promise.resolve();
+    return Promise.resolve(this.createOutcome);
   }
 
   findOwner(tokenHash: string): Promise<RefreshTokenOwner | null> {
@@ -37,10 +44,10 @@ export class FakeRefreshTokenRepository implements RefreshTokenRepositoryPort {
     return Promise.resolve(this.outcome);
   }
 
-  revokeAllForUser(userId: string): Promise<void> {
+  revokeAllForUser(userId: string, replacement?: PasswordReplacement): Promise<number | null> {
     this.log.push('revokeAllForUser');
-    this.revokedAllFor.push(userId);
-    return Promise.resolve();
+    this.revokedAll.push({ userId, ...replacement });
+    return Promise.resolve(this.revokeAllEpoch);
   }
 
   listActiveSessions(): Promise<ActiveSession[]> {

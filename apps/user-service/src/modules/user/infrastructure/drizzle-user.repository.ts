@@ -64,8 +64,4 @@ export class DrizzleUserRepository implements UserRepositoryPort {
       .set({ emailVerifiedAt: new Date() })
       .where(and(eq(users.id, userId), isNull(users.emailVerifiedAt)));
   }
-
-  async updatePassword(userId: string, passwordHash: string): Promise<void> {
-    await this.db.update(users).set({ passwordHash }).where(eq(users.id, userId));
-  }
 }

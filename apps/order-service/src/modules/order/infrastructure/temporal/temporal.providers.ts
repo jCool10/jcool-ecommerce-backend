@@ -1,6 +1,7 @@
 import { Inject, Injectable, type OnApplicationShutdown, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Client, Connection } from '@temporalio/client';
+import { OpenTelemetryWorkflowClientInterceptor } from '@temporalio/interceptors-opentelemetry-v2';
 import type { CheckoutSagaConfig } from '../../../../config/checkout-saga.config';
 import { makeDeadlineBoundedRetryInterceptor } from './deadline-bounded-grpc-retry.interceptor';
 
@@ -37,7 +38,11 @@ export const temporalProviders: Provider[] = [
     provide: TEMPORAL_CLIENT,
     inject: [TEMPORAL_CONNECTION, ConfigService],
     useFactory: (connection: Connection, config: ConfigService): Client =>
-      new Client({ connection, namespace: config.getOrThrow<CheckoutSagaConfig>('checkoutSaga').temporal.namespace }),
+      new Client({
+        connection,
+        namespace: config.getOrThrow<CheckoutSagaConfig>('checkoutSaga').temporal.namespace,
+        interceptors: { workflow: [new OpenTelemetryWorkflowClientInterceptor()] },
+      }),
   },
   TemporalConnectionCloser,
 ];

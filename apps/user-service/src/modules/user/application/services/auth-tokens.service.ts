@@ -59,20 +59,21 @@ export class AuthTokensService {
     return { raw, hash: hashRefreshToken(raw), expiresAt: new Date(Date.now() + this.refreshTtlMs) };
   }
 
-  async issuePair(user: User): Promise<AuthTokens> {
-    const accessToken = await this.signAccess(user.id, user.role, user.tokenEpoch);
-
+  /** Null when the password `user` was verified against has been replaced since it was read. */
+  async issuePair(user: User): Promise<AuthTokens | null> {
     // Login opens a fresh token family (= one session/device).
     const refresh = this.newRefreshToken();
-    await this.refreshTokenRepo.create({
+    const stored = await this.refreshTokenRepo.create({
       userId: user.id,
       tokenHash: refresh.hash,
       familyId: await this.idGeneratorService.mintId(),
       expiresAt: refresh.expiresAt,
+      verifiedPasswordHash: user.passwordHash,
     });
+    if (stored.status === 'credentials_changed') return null;
 
     return {
-      accessToken,
+      accessToken: await this.signAccess(user.id, stored.role, stored.tokenEpoch),
       refreshToken: refresh.raw,
       expiresIn: this.accessTokenSigner.expiresIn,
     };

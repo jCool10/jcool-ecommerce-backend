@@ -25,7 +25,10 @@ export class FakeSessionEpochPublisher implements SessionEpochPublisherPort {
   readonly published = new Map<string, number>();
   readonly failFor = new Set<string>();
 
+  constructor(readonly log: string[] = []) {}
+
   publish(userId: string, epoch: number): Promise<number> {
+    this.log.push('publish');
     if (this.failFor.has(userId)) return Promise.reject(new Error('Connection is closed.'));
     const next = Math.max(this.published.get(userId) ?? 0, epoch);
     this.published.set(userId, next);

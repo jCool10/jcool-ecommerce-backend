@@ -11,8 +11,6 @@ import {
   type PasswordHasherPort,
   PASSWORD_RESET_TOKEN_REPOSITORY,
   type PasswordResetTokenRepositoryPort,
-  USER_REPOSITORY,
-  type UserRepositoryPort,
 } from '../ports';
 import { SessionService } from './session.service';
 
@@ -28,7 +26,6 @@ export class PasswordResetService {
   constructor(
     @Inject(PASSWORD_RESET_TOKEN_REPOSITORY)
     private readonly passwordResetTokenRepo: PasswordResetTokenRepositoryPort,
-    @Inject(USER_REPOSITORY) private readonly userRepo: UserRepositoryPort,
     @Inject(PASSWORD_HASHER) private readonly passwordHasher: PasswordHasherPort,
     private readonly sessionService: SessionService,
     @Inject(MAILER) private readonly mailer: MailerPort,
@@ -69,13 +66,9 @@ export class PasswordResetService {
     }
 
     const passwordHash = await this.passwordHasher.hash(newPassword);
-    // A reset is a compromise response, so every session goes. Revoking first fails safe: a crash
-    // leaves the old password with the sessions gone, never the reverse. Still open — the attacker
-    // holds that old password, and a login racing the window INSERTs a refresh family after
-    // revokeAllForUser has passed, which no later write revokes. Closing it needs one transaction.
-    await this.sessionService.revokeAllThen(outcome.userId, () =>
-      this.userRepo.updatePassword(outcome.userId, passwordHash),
-    );
+    // A reset is a compromise response, so every session goes, including one a login holding the old
+    // password is storing right now.
+    await this.sessionService.replacePassword(outcome.userId, { newPasswordHash: passwordHash });
 
     return { userId: outcome.userId };
   }

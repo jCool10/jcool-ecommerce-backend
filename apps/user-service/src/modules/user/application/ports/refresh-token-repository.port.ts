@@ -9,6 +9,22 @@ export interface CreateRefreshTokenInput {
   /** Groups every token derived from one login session (reuse detection). */
   familyId: string;
   expiresAt: Date;
+  /** The stored hash the caller verified the password against. */
+  verifiedPasswordHash: string;
+}
+
+/**
+ * `created` carries the owner's `role`+`tokenEpoch` read where the session was stored, for its access
+ * token. `credentials_changed` means the password was replaced (or the user is gone) since the caller
+ * verified it, and nothing was stored.
+ */
+export type CreateRefreshTokenOutcome =
+  { status: 'created'; role: Role; tokenEpoch: number } | { status: 'credentials_changed' };
+
+export interface PasswordReplacement {
+  newPasswordHash: string;
+  /** The stored hash the caller verified the current password against; omitted by a reset. */
+  verifiedPasswordHash?: string;
 }
 
 export interface RefreshTokenOwner {
@@ -54,7 +70,8 @@ export interface ActiveSession {
 }
 
 export interface RefreshTokenRepositoryPort {
-  create(input: CreateRefreshTokenInput): Promise<void>;
+  /** Under the user lock, and only while the stored hash still equals `verifiedPasswordHash`. */
+  create(input: CreateRefreshTokenInput): Promise<CreateRefreshTokenOutcome>;
 
   /** Unlocked read; {@link rotate} re-reads the row under its lock. */
   findOwner(tokenHash: string): Promise<RefreshTokenOwner | null>;
@@ -62,7 +79,12 @@ export interface RefreshTokenRepositoryPort {
   /** Row-locked, so concurrent rotations can't both win. */
   rotate(input: RotateRefreshTokenInput): Promise<RotateOutcome>;
 
-  revokeAllForUser(userId: string): Promise<void>;
+  /**
+   * One transaction under the user lock: bumps `token_epoch`, stores `replacement`'s hash when given,
+   * and revokes every live refresh token. Resolves to the new epoch, still to be published, or null
+   * when nothing was written: the user is gone, or `verifiedPasswordHash` is no longer the stored hash.
+   */
+  revokeAllForUser(userId: string, replacement?: PasswordReplacement): Promise<number | null>;
 
   /** Newest first; `currentTokenHash` flags the caller's own. */
   listActiveSessions(userId: string, currentTokenHash: string | null): Promise<ActiveSession[]>;

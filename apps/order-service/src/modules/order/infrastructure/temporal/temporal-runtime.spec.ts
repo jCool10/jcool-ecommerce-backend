@@ -1,6 +1,7 @@
 import type { Logger, RuntimeOptions } from '@temporalio/worker';
 import type { PinoLogger } from 'nestjs-pino';
 import { installTemporalRuntime } from './temporal-runtime';
+import type { WorkflowSpanExport, WorkflowSpanExportGlobal } from './workflow-tracing';
 
 const install = vi.hoisted(() => vi.fn<(options: RuntimeOptions) => void>());
 
@@ -49,6 +50,31 @@ describe('installTemporalRuntime', () => {
       'payment authorization not verified',
     );
     expect(pino.error).toHaveBeenCalledWith({ workflowId: 'checkout-1', err: error }, 'workflow task failed');
+  });
+
+  describe("the trace ids the tracing interceptors stamp on a workflow's lines", () => {
+    const stamped = { workflowId: 'checkout-1', trace_id: 'a'.repeat(32), span_id: 'b'.repeat(16), trace_flags: '01' };
+    const global = globalThis as WorkflowSpanExportGlobal;
+    afterEach(() => {
+      delete global.__workflowSpanExport;
+    });
+
+    it('are dropped when no span is exported, since no backend has that trace', () => {
+      installedLogger().warn('payment authorization ignored', stamped);
+
+      expect(pino.warn).toHaveBeenCalledWith({ workflowId: 'checkout-1' }, 'payment authorization ignored');
+    });
+
+    it('go under the keys every other line uses, so the line links to its trace', () => {
+      global.__workflowSpanExport = {} as WorkflowSpanExport;
+
+      installedLogger().warn('payment authorization ignored', stamped);
+
+      expect(pino.warn).toHaveBeenCalledWith(
+        { workflowId: 'checkout-1', traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) },
+        'payment authorization ignored',
+      );
+    });
   });
 
   it('drops anything below warn', () => {

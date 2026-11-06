@@ -11,6 +11,7 @@ import {
 } from '@temporalio/client';
 import { ApplicationFailure, CancelledFailure } from '@temporalio/common';
 import { historyToJSON } from '@temporalio/common/lib/proto-utils';
+import { OpenTelemetryWorkflowClientInterceptor } from '@temporalio/interceptors-opentelemetry-v2';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { afterAll, afterEach, beforeAll, describe, expect, inject, it } from 'vitest';
 import type { CancelBy, CheckoutSagaMode, PaymentAuthorization } from '../../src/modules/order/domain/checkout-saga';
@@ -31,6 +32,10 @@ import {
   type CheckoutSagaInput,
 } from '../../src/modules/order/infrastructure/temporal/checkout-saga.contract';
 import { installTemporalRuntime } from '../../src/modules/order/infrastructure/temporal/temporal-runtime';
+import {
+  workflowTracingInterceptors,
+  workflowTracingSinks,
+} from '../../src/modules/order/infrastructure/temporal/workflow-tracing';
 import { sleep } from '../setup/sleep';
 import { TEMPORAL_TEST_NAMESPACE } from '../setup/temporal-server';
 import { temporalTaskQueueForCurrentSpec } from '../setup/temporal-task-queue';
@@ -108,6 +113,8 @@ describe('CheckoutSaga workflow (dev server, stub activities)', () => {
       namespace: TEMPORAL_TEST_NAMESPACE,
       taskQueue,
       workflowBundle: { codePath: inject('TEMPORAL_WORKFLOW_BUNDLE_PATH') },
+      interceptors: workflowTracingInterceptors({ bundling: false }),
+      sinks: workflowTracingSinks(),
       activities: stubActivities(),
       maxConcurrentActivityTaskExecutions: 2,
       maxConcurrentLocalActivityExecutions: 2,
@@ -116,7 +123,12 @@ describe('CheckoutSaga workflow (dev server, stub activities)', () => {
     });
     running = worker.run();
     connection = await Connection.connect({ address: inject('TEMPORAL_ADDRESS') });
-    client = new Client({ connection, namespace: TEMPORAL_TEST_NAMESPACE });
+    // Traced like the app's client and worker, so a history recorded here is what production writes.
+    client = new Client({
+      connection,
+      namespace: TEMPORAL_TEST_NAMESPACE,
+      interceptors: { workflow: [new OpenTelemetryWorkflowClientInterceptor()] },
+    });
   });
 
   afterEach(async () => {

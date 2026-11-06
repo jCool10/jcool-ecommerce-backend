@@ -48,7 +48,10 @@ export class LoginUserUseCase {
       throw new ForbiddenException('Email not verified');
     }
 
-    return this.authTokensService.issuePair(user);
+    // A password change committed after the verify: answered like a wrong password.
+    const tokens = await this.authTokensService.issuePair(user);
+    if (!tokens) throw new UnauthorizedException(INVALID_CREDENTIALS);
+    return tokens;
   }
 
   private getDummyHash(): Promise<string> {

@@ -1,44 +1,73 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
-import { FakeSessionEpoch } from '../../testing/session-epoch.double';
+import { FakeSessionEpochPublisher } from '../../testing/session-epoch.double';
 import { SessionEpochNotPublishedError } from '../ports';
 import { SessionService } from './session.service';
 
-describe('SessionService.revokeAllThen', () => {
+describe('SessionService', () => {
   let log: string[];
-  let epochs: FakeSessionEpoch;
+  let refreshTokens: FakeRefreshTokenRepository;
+  let publisher: FakeSessionEpochPublisher;
   let service: SessionService;
-
-  const write = (): Promise<void> => {
-    log.push('write');
-    return Promise.resolve();
-  };
 
   beforeEach(() => {
     log = [];
-    epochs = new FakeSessionEpoch(log);
-    service = new SessionService(new FakeRefreshTokenRepository(log), epochs);
+    refreshTokens = new FakeRefreshTokenRepository(log);
+    publisher = new FakeSessionEpochPublisher(log);
+    service = new SessionService(refreshTokens, publisher);
   });
 
-  it('writes only after the refresh tokens are revoked and the epoch is bumped', async () => {
-    await service.revokeAllThen('u1', write);
+  describe('revokeAll', () => {
+    it('revokes every session in one repository write, then publishes the epoch it committed', async () => {
+      refreshTokens.revokeAllEpoch = 4;
 
-    expect(log).toEqual(['revokeAllForUser', 'bump', 'write']);
+      await service.revokeAll('u1');
+
+      expect(refreshTokens.revokedAll).toEqual([{ userId: 'u1' }]);
+      expect(publisher.published.get('u1')).toBe(4);
+      expect(log).toEqual(['revokeAllForUser', 'publish']);
+    });
+
+    it('publishes nothing for a missing user', async () => {
+      refreshTokens.revokeAllEpoch = null;
+
+      await service.revokeAll('gone');
+
+      expect(log).toEqual(['revokeAllForUser']);
+    });
   });
 
-  // The bump is committed by then: skipping the write would strand a half-applied change.
-  it('still writes when only the publish failed, then surfaces that failure', async () => {
-    const unpublished = new SessionEpochNotPublishedError('u1', 1, new Error('redis down'));
-    epochs.bumpError = unpublished;
+  describe('replacePassword', () => {
+    const replacement = { newPasswordHash: 'hashed:new-password', verifiedPasswordHash: 'hashed:old-pw' };
 
-    await expect(service.revokeAllThen('u1', write)).rejects.toBe(unpublished);
-    expect(log).toEqual(['revokeAllForUser', 'bump', 'write']);
-  });
+    it('stores the new hash in the write that revokes every session, then publishes', async () => {
+      refreshTokens.revokeAllEpoch = 2;
 
-  it('does not write when the bump itself failed', async () => {
-    epochs.bumpError = new Error('db down');
+      await expect(service.replacePassword('u1', replacement)).resolves.toBe(true);
 
-    await expect(service.revokeAllThen('u1', write)).rejects.toThrow('db down');
-    expect(log).toEqual(['revokeAllForUser', 'bump']);
+      expect(refreshTokens.revokedAll).toEqual([{ userId: 'u1', ...replacement }]);
+      expect(publisher.published.get('u1')).toBe(2);
+      expect(log).toEqual(['revokeAllForUser', 'publish']);
+    });
+
+    // The change is committed by then; only the publish is left for the reconciler.
+    it('surfaces a failed publish after the write as SessionEpochNotPublishedError', async () => {
+      refreshTokens.revokeAllEpoch = 3;
+      publisher.failFor.add('u1');
+
+      const failure = service.replacePassword('u1', replacement);
+
+      await expect(failure).rejects.toBeInstanceOf(SessionEpochNotPublishedError);
+      await expect(failure).rejects.toMatchObject({ userId: 'u1', epoch: 3 });
+      expect(log).toEqual(['revokeAllForUser', 'publish']);
+    });
+
+    it('reports nothing written and publishes nothing when the repository wrote nothing', async () => {
+      refreshTokens.revokeAllEpoch = null;
+
+      await expect(service.replacePassword('u1', replacement)).resolves.toBe(false);
+
+      expect(log).toEqual(['revokeAllForUser']);
+    });
   });
 });

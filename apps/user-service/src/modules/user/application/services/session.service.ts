@@ -3,17 +3,18 @@ import { hashRefreshToken } from '..';
 import {
   REFRESH_TOKEN_REPOSITORY,
   type ActiveSession,
+  type PasswordReplacement,
+  publishEpochOrRaise,
   type RefreshTokenRepositoryPort,
-  SESSION_EPOCH,
-  SessionEpochNotPublishedError,
-  type SessionEpochPort,
+  SESSION_EPOCH_PUBLISHER,
+  type SessionEpochPublisherPort,
 } from '../ports';
 
 @Injectable()
 export class SessionService {
   constructor(
     @Inject(REFRESH_TOKEN_REPOSITORY) private readonly refreshTokenRepo: RefreshTokenRepositoryPort,
-    @Inject(SESSION_EPOCH) private readonly sessionEpoch: SessionEpochPort,
+    @Inject(SESSION_EPOCH_PUBLISHER) private readonly sessionEpochPublisher: SessionEpochPublisherPort,
   ) {}
 
   listActiveSessions(userId: string, currentRawToken: string | null): Promise<ActiveSession[]> {
@@ -29,20 +30,21 @@ export class SessionService {
   // The epoch bump is what rejects already-issued access tokens; revoking the refresh rows alone
   // would only stop the next refresh.
   async revokeAll(userId: string): Promise<void> {
-    await this.refreshTokenRepo.revokeAllForUser(userId);
-    await this.sessionEpoch.bump(userId);
+    const epoch = await this.refreshTokenRepo.revokeAllForUser(userId);
+    await this.publish(userId, epoch);
   }
 
-  /** `revokeAll`, then `write`. A failed publish is surfaced only after the write, which it must not skip. */
-  async revokeAllThen(userId: string, write: () => Promise<void>): Promise<void> {
-    let unpublished: SessionEpochNotPublishedError | undefined;
-    try {
-      await this.revokeAll(userId);
-    } catch (error) {
-      if (!(error instanceof SessionEpochNotPublishedError)) throw error;
-      unpublished = error;
-    }
-    await write();
-    if (unpublished) throw unpublished;
+  /**
+   * The new hash, the epoch bump and the revoke commit together, so no session outlives the old
+   * password. False when nothing was written (see {@link RefreshTokenRepositoryPort.revokeAllForUser}).
+   */
+  async replacePassword(userId: string, replacement: PasswordReplacement): Promise<boolean> {
+    const epoch = await this.refreshTokenRepo.revokeAllForUser(userId, replacement);
+    await this.publish(userId, epoch);
+    return epoch !== null;
+  }
+
+  private async publish(userId: string, epoch: number | null): Promise<void> {
+    if (epoch !== null) await publishEpochOrRaise(this.sessionEpochPublisher, userId, epoch);
   }
 }

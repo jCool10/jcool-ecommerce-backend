@@ -7,9 +7,8 @@ import { PlainPasswordHasher } from '../../testing/plain-password-hasher.double'
 import { RecordingAuthAudit } from '../../testing/recording-auth-audit.double';
 import { RecordingMailer } from '../../testing/recording-mailer.double';
 import { FakeRefreshTokenRepository } from '../../testing/refresh-token-repository.double';
-import { FakeSessionEpoch } from '../../testing/session-epoch.double';
+import { FakeSessionEpochPublisher } from '../../testing/session-epoch.double';
 import { FakeSingleUseTokenRepository } from '../../testing/single-use-token-repository.double';
-import { FakeUserRepository } from '../../testing/user-repository.double';
 import { PasswordResetService } from './password-reset.service';
 import { SessionService } from './session.service';
 
@@ -21,9 +20,8 @@ describe('PasswordResetService', () => {
 
   let log: string[];
   let tokens: FakeSingleUseTokenRepository;
-  let users: FakeUserRepository;
   let refreshTokens: FakeRefreshTokenRepository;
-  let epochs: FakeSessionEpoch;
+  let publisher: FakeSessionEpochPublisher;
   let mailer: RecordingMailer;
   let audit: RecordingAuthAudit;
   let service: PasswordResetService;
@@ -31,16 +29,14 @@ describe('PasswordResetService', () => {
   beforeEach(() => {
     log = [];
     tokens = new FakeSingleUseTokenRepository();
-    users = new FakeUserRepository(log);
     refreshTokens = new FakeRefreshTokenRepository(log);
-    epochs = new FakeSessionEpoch(log);
+    publisher = new FakeSessionEpochPublisher(log);
     mailer = new RecordingMailer();
     audit = new RecordingAuthAudit();
     service = new PasswordResetService(
       tokens,
-      users,
       new PlainPasswordHasher(),
-      new SessionService(refreshTokens, epochs),
+      new SessionService(refreshTokens, publisher),
       mailer,
       audit,
       fakeConfigService({ 'auth.passwordResetTtl': '1h' }),
@@ -75,17 +71,15 @@ describe('PasswordResetService', () => {
   });
 
   describe('reset', () => {
-    // Not one transaction, so revoking first fails safe: a crash leaves the old password with no sessions.
-    it('consumes the token, revokes every session, then stores the new hash', async () => {
+    it('consumes the token, stores the new hash in the write that revokes every session, then publishes', async () => {
       tokens.consumeResult = { status: 'consumed', userId: 'u7' };
 
       await expect(service.reset('raw-token', 'new-password')).resolves.toEqual({ userId: 'u7' });
 
       expect(tokens.consumedHash).toBe(sha256Hex('raw-token'));
-      expect(refreshTokens.revokedAllFor).toEqual(['u7']);
-      expect(epochs.epochs.get('u7')).toBe(1);
-      expect(users.passwordUpdates).toEqual([{ userId: 'u7', passwordHash: 'hashed:new-password' }]);
-      expect(log).toEqual(['revokeAllForUser', 'bump', 'updatePassword']);
+      expect(refreshTokens.revokedAll).toEqual([{ userId: 'u7', newPasswordHash: 'hashed:new-password' }]);
+      expect(publisher.published.get('u7')).toBe(1);
+      expect(log).toEqual(['revokeAllForUser', 'publish']);
     });
 
     it('answers 400 and changes nothing for a token it cannot consume', async () => {

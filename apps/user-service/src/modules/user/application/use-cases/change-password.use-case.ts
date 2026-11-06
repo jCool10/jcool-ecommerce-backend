@@ -29,10 +29,13 @@ export class ChangePasswordUseCase {
     }
 
     const passwordHash = await this.passwordHasher.hash(input.newPassword);
-    // Not atomic, so ordered to fail safe: a crash between them leaves the old password with every
-    // session gone, never the reverse. Still open — the old password verifies until the second write,
-    // and a login racing it INSERTs a refresh family after revokeAllForUser has already passed, so no
-    // later write to the users row revokes it. Closing that needs both writes in one transaction.
-    await this.sessionService.revokeAllThen(user.id, () => this.userRepo.updatePassword(user.id, passwordHash));
+    // Refused when a reset replaced the hash verified above, so a stale change cannot undo it.
+    const replaced = await this.sessionService.replacePassword(user.id, {
+      newPasswordHash: passwordHash,
+      verifiedPasswordHash: user.passwordHash,
+    });
+    if (!replaced) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
   }
 }
