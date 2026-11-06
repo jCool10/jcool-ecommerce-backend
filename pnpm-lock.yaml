@@ -229,8 +229,8 @@ importers:
         specifier: ^6.1.3
         version: 6.1.3(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)
       '@nestjs/swagger':
-        specifier: ^12.0.5
-        version: 12.0.5(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
+        specifier: ^12.1.0
+        version: 12.1.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
       '@nestjs/throttler':
         specifier: ^6.7.1
         version: 6.7.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)
@@ -259,8 +259,8 @@ importers:
         specifier: ^6.1.1
         version: 6.1.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(prom-client@15.1.3)
       bullmq:
-        specifier: ^6.5.3
-        version: 6.5.3(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
+        specifier: ^6.5.4
+        version: 6.5.4(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
       class-transformer:
         specifier: ^0.5.1
         version: 0.5.1
@@ -280,8 +280,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@8.1.1)
       jose:
-        specifier: ^6.2.14
-        version: 6.2.14
+        specifier: ^6.2.15
+        version: 6.2.15
       nestjs-cls:
         specifier: ^6.2.2
         version: 6.2.2(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -365,14 +365,14 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       drizzle-kit:
         specifier: ^0.31.11
         version: 0.31.11
@@ -386,8 +386,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       pino-pretty:
         specifier: ^13.2.0
         version: 13.2.0
@@ -431,8 +431,8 @@ importers:
         specifier: ^6.1.1
         version: 6.1.1(supports-color@8.1.1)(typescript@5.9.3)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   apps/gateway:
     devDependencies:
@@ -446,8 +446,8 @@ importers:
         specifier: ^5.7.3
         version: 5.9.3
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   apps/id-service:
     dependencies:
@@ -549,11 +549,11 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -564,8 +564,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -585,8 +585,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   apps/inventory-service:
     dependencies:
@@ -624,8 +624,8 @@ importers:
         specifier: ^6.1.3
         version: 6.1.3(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)
       '@nestjs/swagger':
-        specifier: ^12.0.5
-        version: 12.0.5(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
+        specifier: ^12.1.0
+        version: 12.1.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
       '@nestjs/terminus':
         specifier: ^11.1.1
         version: 11.1.1(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -672,8 +672,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@8.1.1)
       jose:
-        specifier: ^6.2.14
-        version: 6.2.14
+        specifier: ^6.2.15
+        version: 6.2.15
       nestjs-cls:
         specifier: ^6.2.2
         version: 6.2.2(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -733,11 +733,11 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       drizzle-kit:
         specifier: ^0.31.11
         version: 0.31.11
@@ -751,8 +751,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -772,8 +772,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   apps/order-service:
     dependencies:
@@ -814,8 +814,8 @@ importers:
         specifier: ^6.1.3
         version: 6.1.3(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)
       '@nestjs/swagger':
-        specifier: ^12.0.5
-        version: 12.0.5(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
+        specifier: ^12.1.0
+        version: 12.1.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
       '@nestjs/terminus':
         specifier: ^11.1.1
         version: 11.1.1(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -862,8 +862,8 @@ importers:
         specifier: ^6.1.1
         version: 6.1.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(prom-client@15.1.3)
       bullmq:
-        specifier: ^6.5.3
-        version: 6.5.3(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
+        specifier: ^6.5.4
+        version: 6.5.4(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
       class-transformer:
         specifier: ^0.5.1
         version: 0.5.1
@@ -880,8 +880,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@8.1.1)
       jose:
-        specifier: ^6.2.14
-        version: 6.2.14
+        specifier: ^6.2.15
+        version: 6.2.15
       nestjs-cls:
         specifier: ^6.2.2
         version: 6.2.2(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -953,11 +953,11 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       drizzle-kit:
         specifier: ^0.31.11
         version: 0.31.11
@@ -971,8 +971,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -995,8 +995,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   apps/payment-service:
     dependencies:
@@ -1034,8 +1034,8 @@ importers:
         specifier: ^6.1.3
         version: 6.1.3(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)
       '@nestjs/swagger':
-        specifier: ^12.0.5
-        version: 12.0.5(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
+        specifier: ^12.1.0
+        version: 12.1.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
       '@nestjs/terminus':
         specifier: ^11.1.1
         version: 11.1.1(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -1064,8 +1064,8 @@ importers:
         specifier: ^6.1.1
         version: 6.1.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(prom-client@15.1.3)
       bullmq:
-        specifier: ^6.5.3
-        version: 6.5.3(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
+        specifier: ^6.5.4
+        version: 6.5.4(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
       class-transformer:
         specifier: ^0.5.1
         version: 0.5.1
@@ -1146,11 +1146,11 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       drizzle-kit:
         specifier: ^0.31.11
         version: 0.31.11
@@ -1164,8 +1164,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -1185,8 +1185,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   apps/user-service:
     dependencies:
@@ -1221,8 +1221,8 @@ importers:
         specifier: ^6.1.3
         version: 6.1.3(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)
       '@nestjs/swagger':
-        specifier: ^12.0.5
-        version: 12.0.5(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
+        specifier: ^12.1.0
+        version: 12.1.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
       '@nestjs/terminus':
         specifier: ^11.1.1
         version: 11.1.1(@grpc/grpc-js@1.14.5)(@grpc/proto-loader@0.8.1)(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -1239,8 +1239,8 @@ importers:
         specifier: ^6.1.1
         version: 6.1.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(prom-client@15.1.3)
       argon2:
-        specifier: ^0.45.1
-        version: 0.45.1
+        specifier: ^0.45.2
+        version: 0.45.2
       class-transformer:
         specifier: ^0.5.1
         version: 0.5.1
@@ -1260,8 +1260,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@8.1.1)
       jose:
-        specifier: ^6.2.14
-        version: 6.2.14
+        specifier: ^6.2.15
+        version: 6.2.15
       nestjs-cls:
         specifier: ^6.2.2
         version: 6.2.2(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -1327,11 +1327,11 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       drizzle-kit:
         specifier: ^0.31.11
         version: 0.31.11
@@ -1345,8 +1345,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -1369,8 +1369,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/auth-verifier:
     dependencies:
@@ -1387,8 +1387,8 @@ importers:
         specifier: workspace:*
         version: link:../platform
       jose:
-        specifier: ^6.2.14
-        version: 6.2.14
+        specifier: ^6.2.15
+        version: 6.2.15
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -1424,11 +1424,11 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -1439,8 +1439,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       nestjs-cls:
         specifier: ^6.2.2
         version: 6.2.2(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -1472,8 +1472,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/id-codec:
     devDependencies:
@@ -1484,11 +1484,11 @@ importers:
         specifier: ^24.19.2
         version: 24.19.2
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -1499,8 +1499,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -1511,8 +1511,8 @@ importers:
         specifier: ^8.72.1
         version: 8.72.1(eslint@10.14.0(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/id-generator:
     dependencies:
@@ -1527,11 +1527,11 @@ importers:
         specifier: ^24.19.2
         version: 24.19.2
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -1542,8 +1542,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -1554,8 +1554,8 @@ importers:
         specifier: ^8.72.1
         version: 8.72.1(eslint@10.14.0(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/internal-contracts:
     devDependencies:
@@ -1566,11 +1566,11 @@ importers:
         specifier: ^24.19.2
         version: 24.19.2
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -1581,8 +1581,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -1593,8 +1593,8 @@ importers:
         specifier: ^8.72.1
         version: 8.72.1(eslint@10.14.0(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/kernel:
     devDependencies:
@@ -1605,11 +1605,11 @@ importers:
         specifier: ^24.19.2
         version: 24.19.2
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -1620,8 +1620,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -1632,8 +1632,8 @@ importers:
         specifier: ^8.72.1
         version: 8.72.1(eslint@10.14.0(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/messaging:
     dependencies:
@@ -1690,17 +1690,17 @@ importers:
         specifier: ^8.23.1
         version: 8.23.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       '@willsoto/nestjs-prometheus':
         specifier: ^6.1.1
         version: 6.1.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(prom-client@15.1.3)
       bullmq:
-        specifier: ^6.5.3
-        version: 6.5.3(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
+        specifier: ^6.5.4
+        version: 6.5.4(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.23.1)
@@ -1714,8 +1714,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@8.1.1)
@@ -1753,8 +1753,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/metrics-port:
     devDependencies:
@@ -1762,8 +1762,8 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.14.0(supports-color@8.1.1))
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -1774,8 +1774,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -1838,8 +1838,8 @@ importers:
         specifier: ^6.1.3
         version: 6.1.3(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)
       '@nestjs/swagger':
-        specifier: ^12.0.5
-        version: 12.0.5(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
+        specifier: ^12.1.0
+        version: 12.1.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)
       '@nestjs/testing':
         specifier: ^11.0.1
         version: 11.1.29(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(@nestjs/platform-express@11.1.29)
@@ -1883,8 +1883,8 @@ importers:
         specifier: ^7.0.0
         version: 7.2.1
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       '@willsoto/nestjs-prometheus':
         specifier: ^6.1.1
         version: 6.1.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(prom-client@15.1.3)
@@ -1895,8 +1895,8 @@ importers:
         specifier: ^0.15.1
         version: 0.15.1
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.23.1)
@@ -1910,8 +1910,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@8.1.1)
@@ -1952,8 +1952,8 @@ importers:
         specifier: ^1.5.11
         version: 1.5.11(@swc/core@1.16.21)(esbuild@0.28.2)(rolldown@1.2.4)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))(webpack@5.109.2(@swc/core@1.16.21)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26))
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/testing:
     dependencies:
@@ -1971,11 +1971,11 @@ importers:
         specifier: ^24.19.2
         version: 24.19.2
       '@vitest/coverage-v8':
-        specifier: ^5.0.5
-        version: 5.0.5(vitest@5.0.5)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       dependency-cruiser:
-        specifier: ^18.7.0
-        version: 18.7.0
+        specifier: ^18.7.2
+        version: 18.7.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(supports-color@8.1.1)
@@ -1986,8 +1986,8 @@ importers:
         specifier: ^5.5.7
         version: 5.5.7(@types/eslint@9.6.1)(eslint-config-prettier@10.1.8(eslint@10.14.0(supports-color@8.1.1)))(eslint@10.14.0(supports-color@8.1.1))(prettier@3.9.10)
       globals:
-        specifier: ^17.13.0
-        version: 17.13.0
+        specifier: ^17.14.0
+        version: 17.14.0
       nestjs-pino:
         specifier: ^4.6.1
         version: 4.6.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(pino-http@11.0.0)(pino@10.4.0)(rxjs@7.8.2)
@@ -2001,8 +2001,8 @@ importers:
         specifier: ^8.72.1
         version: 8.72.1(eslint@10.14.0(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       vitest:
-        specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^5.1.0
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
 packages:
 
@@ -3230,8 +3230,8 @@ packages:
       '@nestjs/websockets':
         optional: true
 
-  '@nestjs/mapped-types@12.0.0':
-    resolution: {integrity: sha512-aX7lxZcqXldtnSr0bgT2ZPQvpTpIwBMW1GMX29o4s3q02vmq6JoTYuPW0GwYXa8BiFMRX7WbGZVDA703pNqOMQ==}
+  '@nestjs/mapped-types@12.0.1':
+    resolution: {integrity: sha512-AHkgYt6UgJ5XBE3v4zGUUdfPD7kCGBzOa/uHfOYkkRTfojYWLRCCdAJiyWNpIFHCySJH/MR2F/z4MrMo5YheHg==}
     engines: {node: '>=20.19.0'}
     peerDependencies:
       '@nestjs/common': ^10.0.0 || ^11.0.0 || ^12.0.0
@@ -3265,8 +3265,8 @@ packages:
       prettier:
         optional: true
 
-  '@nestjs/swagger@12.0.5':
-    resolution: {integrity: sha512-6Zf8DhSqyBt3409Ycpezy7cVfAiO1s9XkjyxE7RtOJmVzMPs2T4XGC7sukBvxdtIVmhUC9EoglHH73O75MKApw==}
+  '@nestjs/swagger@12.1.0':
+    resolution: {integrity: sha512-WpgAPV783os2TwEFarEDH9VulfQh2G+SCN2o+6jO1yNZT35ytvSUNs45suINxewRbo8Hmg72NZLWL+wre6i18Q==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@fastify/static': ^8.0.0 || ^9.0.0 || ^10.0.0
@@ -4507,25 +4507,25 @@ packages:
     resolution: {integrity: sha512-SB8xqipSzZHUePCCLNeYxqnxq83X61/qzNhjQGbTfjxGZIeOEP7tBgWYX05Tcd6CgE02WdTJnh5b8kMZJ/+bnQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@vitest/coverage-v8@5.0.5':
-    resolution: {integrity: sha512-4KpkGdIrSqBihx/JyP/e+S+IKB98etg1XDQiLAxksLfcShnwi1VReGeOT9NI43hLHbknosKp/1CCLn9Zgcs8mg==}
+  '@vitest/coverage-v8@5.1.0':
+    resolution: {integrity: sha512-OY9aShBQG5KOIw2zCo9fDoCHI9RHliNHJ//nM7m6jGg41Hyke9JOGWmeMlK74xYErsxMoK8mIB3gAeEyFVA7LA==}
     peerDependencies:
-      '@vitest/browser': 5.0.5
-      vitest: 5.0.5
+      '@vitest/browser': 5.1.0
+      vitest: 5.1.0
     peerDependenciesMeta:
       '@vitest/browser':
         optional: true
 
-  '@vitest/istanbul-lib-coverage@1.0.2':
-    resolution: {integrity: sha512-9J/JMwOf9AoJhAywhrn7ScKTL38hsWQP/qPG60OtaAFcQ5OXPwKsxZFlbnuCKmZ61m8/lGgHYnFpdyQZUvG/iA==}
+  '@vitest/istanbul-lib-coverage@2.1.0':
+    resolution: {integrity: sha512-WOjuS+xcjSIy7ruYBQ+9BUcV7XZQ0FyVcbWbWxW9TRx/kLGx5SQaeFRIFDJxjNplb6YsT7SpKo2zuXXUo91OIQ==}
     engines: {node: '>=22'}
 
-  '@vitest/istanbul-lib-report@1.0.2':
-    resolution: {integrity: sha512-gUsfXZJbzPamoIY5TvHFiMMoXESBrUMo+xqaj+rYrWI69+EnvRlYBlP96ZnHPY4vX8kyUpgAnFUCg5wZG/HkDQ==}
+  '@vitest/istanbul-lib-report@2.1.0':
+    resolution: {integrity: sha512-+ZFta25nWtGCOBG9/IET8w1RO5Oawsd6H8Uf6AJ9EA/StFuKVtKAEJEJ6uRt84OH+T4YkI0ASmIHAhRA+0KVxw==}
     engines: {node: '>=22'}
 
-  '@vitest/mocker@5.0.5':
-    resolution: {integrity: sha512-xLL3lkDegJZw+MGoGaCCsFayDZthGgpAtr3Vziyfc4p7xH89K7KRPcRBBh/kEYm0Aqkt5DtTmkYpBtRV/FrHZg==}
+  '@vitest/mocker@5.1.0':
+    resolution: {integrity: sha512-5umB9/jlWcqVS6fsrFmv5Gdnpu6wAUio/lEOwAmvB7v+lFo/IW2B9FhAD0p19GCULTgMzLCdUmuCDCnAzWgppQ==}
     peerDependencies:
       msw: ^2.4.9 || ^3.0.0
       vite: ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -4535,8 +4535,8 @@ packages:
       vite:
         optional: true
 
-  '@vitest/spy@5.0.5':
-    resolution: {integrity: sha512-lwJRExuH417257Q5wv9QYugN9IMJkoxcrKrYxGPQkBzl7wlNpTUxD/5yNX4ESKVUIShKPgkGchYPFMWOOk0wzw==}
+  '@vitest/spy@5.1.0':
+    resolution: {integrity: sha512-2DPO5OMHWKrBngC+fCmTQqemNF0gidRhp3lxbBmRhW+M1XJrfgPpqNqWVevXtn2f2ufD5ZaR1B6B641aAlcX5A==}
 
   '@webassemblyjs/ast@1.14.1':
     resolution: {integrity: sha512-nuBEDgQfm1ccRp/8bCQrx1frohyufl4JlbMMZ4P1wpeOfDhF6FQkxZJ1b/e+PLwr6X1Nhw6OLme5usuBWYBvuQ==}
@@ -4754,8 +4754,8 @@ packages:
   arg@4.1.3:
     resolution: {integrity: sha512-58S9QDqG0Xx27YwPSt9fJxivjYl432YCwfDMfZ+71RAqUrZef7LrKQZ3LHLOwCS4FLNBplP533Zx895SeOCHvA==}
 
-  argon2@0.45.1:
-    resolution: {integrity: sha512-skm+/WCjkGqCQxF7FG1LuZXM5yvbFjgbfiCGsud2oLgaDhh6b6dbH0b1EkghbM+xx4Bj8Ape+KKgixoIlWZicQ==}
+  argon2@0.45.2:
+    resolution: {integrity: sha512-41gOiSQBpQf+7H7HyLZbUqRZxrNk5ps39TsJKILjWuOyAOialUkztuIVL/Y/l+n5iSA2C4/jFg3FUYso/cX7TA==}
     engines: {node: '>=16.17.0'}
 
   argparse@2.0.1:
@@ -4928,8 +4928,8 @@ packages:
     resolution: {integrity: sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA==}
     engines: {node: '>=10.0.0'}
 
-  bullmq@6.5.3:
-    resolution: {integrity: sha512-XIgBXLfZH1faMw969AcLdTgDa2OegVYHbj+qGjkesAwGTr0ox0Wg57EComEIzkTKplLUgpENcNR0LM6sxIIiug==}
+  bullmq@6.5.4:
+    resolution: {integrity: sha512-6dwbbVL6Q+3XsHwYhD02WSK3se0Se4vhbvrvY8tnNqv0WeejUucWfbZaosnYycQ1yXW2MuMhKDhUOlvQREq/SA==}
     engines: {node: '>=14.18.0'}
     peerDependencies:
       bullmq-otel: '>=2.0.0'
@@ -5251,8 +5251,8 @@ packages:
     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
     engines: {node: '>= 0.8'}
 
-  dependency-cruiser@18.7.0:
-    resolution: {integrity: sha512-WexT4OswA6Gy86ms2J7SJ4FJscN43dyS+i5skpbtXlPTFQW4yWbontjFip1TOBAVnc+U+9zdH0a56YTRZX/IGw==}
+  dependency-cruiser@18.7.2:
+    resolution: {integrity: sha512-3Pkco0Kx3GI8tG6DTUDfl9RSZVOXMqD+lvili8m0qw2+zhGFcZMyPspUgb7Crqps1UkL23SFXslpj7a9hj11+A==}
     engines: {node: ^22||^24||>=26}
     hasBin: true
 
@@ -5828,8 +5828,8 @@ packages:
     resolution: {integrity: sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==}
     engines: {node: '>=18'}
 
-  globals@17.13.0:
-    resolution: {integrity: sha512-RwMTC61u7hrG3ZJMkZQOK4JLJrKS8QtoTii63EmWvFXHqycY9FObBJQCbsLxSO8kjKhWE5kV1GC+Vb1g3RI0Zg==}
+  globals@17.14.0:
+    resolution: {integrity: sha512-UtdkTVyAJePQv0J2M9Xe4L0ruNSDV314XiIJsADI2Zf40bcdAonE/D/OhAU8AT99oij9mhLByb+NvA3QWZYgCg==}
     engines: {node: '>=18'}
 
   globby@11.1.0:
@@ -5943,6 +5943,10 @@ packages:
 
   ignore@7.0.12:
     resolution: {integrity: sha512-/8UvqAPU9DGTI9k4mxtf49U37Isfwr8Uts96+SBHIkFxPJnHS0Ew4f00sM4Scd8V8EjM0jUNtVDdv1kPdt35lg==}
+    engines: {node: '>= 4'}
+
+  ignore@7.0.14:
+    resolution: {integrity: sha512-wCBiZ77u1tuWde6G/nfOtLaCTYcFDU5yCzARzK10y+rLhzYoL7a7yEemcopcc2Mzow7gZOIjnV2ym1NYmdiJOQ==}
     engines: {node: '>= 4'}
 
   import-fresh@3.3.1:
@@ -6070,8 +6074,8 @@ packages:
     resolution: {integrity: sha512-7vuh85V5cdDofPyxn58nrPjBktZo0u9x1g8WtjQol+jZDaE+fhN+cIvTj11GndBnMnyfrUOG1sZQxCdjKh+DKg==}
     engines: {node: '>= 10.13.0'}
 
-  jose@6.2.14:
-    resolution: {integrity: sha512-3JasLuki1NRLQvY4wCoC37KZk4qxoBx2k2aFqLxT84IezqW0bkJKnNtxnZj/Fu1xsQivoc/lytxaRHJoGLjJ1A==}
+  jose@6.2.15:
+    resolution: {integrity: sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==}
 
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
@@ -6434,8 +6438,8 @@ packages:
     resolution: {integrity: sha512-4kmO/MdyUIkLIvTPr8VHLil4AtoKIoniWPIEk5+CDy0xnWC84azhSFmuJ7PxZdsYtiP5kEeQsORAVIeMgxT+Hw==}
     hasBin: true
 
-  msgpackr@2.1.2:
-    resolution: {integrity: sha512-JHAdwubWNEadHQsFAib6uXOzKFxY8QOWHu9LCCksOINMC+TjgaKS2Tdrw7dW5SY0LLz8YK2/YqLSi2vigQt05w==}
+  msgpackr@2.1.3:
+    resolution: {integrity: sha512-C8pQ8SJjwH9C9JiCe5asXWvJC3melOxMuBj7vpTY95096ay6r1wPXG0XN56wMaRpzRPE3hdf4ufukia/j+beKQ==}
 
   multer@2.5.0:
     resolution: {integrity: sha512-BsqOzYGVq49JcW2IzoSAxeKYRevb+dGGPPWleOR8Lrlk4igwxu1/9pwSXlByhCb7MVZDrNJFC0IBP5/O5nLYRw==}
@@ -6492,8 +6496,8 @@ packages:
   node-abort-controller@3.1.1:
     resolution: {integrity: sha512-AGK2yQKIjRuqnc6VkX2Xj5d+QW8xZ87pa1UK6yA6ouUyuxfHuMP6umE5QK7UmTeOAymo+Zx1Fxiuw9rVx8taHQ==}
 
-  node-addon-api@8.9.1:
-    resolution: {integrity: sha512-4eUQWVPCUUUiBjLnHS3cXWeC6ryoPUc0U3rP7IuzapoGbzMqd/r6KKO0clr0b+snQhsrueFEhCZDdK+LK7hxKg==}
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
     engines: {node: ^18 || ^20 || >= 21}
 
   node-domexception@1.0.0:
@@ -7004,6 +7008,11 @@ packages:
 
   semver@7.8.5:
     resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
+    engines: {node: '>=10'}
+    hasBin: true
+
+  semver@7.8.6:
+    resolution: {integrity: sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==}
     engines: {node: '>=10'}
     hasBin: true
 
@@ -7622,20 +7631,20 @@ packages:
       yaml:
         optional: true
 
-  vitest@5.0.5:
-    resolution: {integrity: sha512-cPODOMF8YnkiiYtDdHo6n4wWmBrOBBbOIYH2d33M4l3CdNn72h+qMmO6uXffUN6A5AZFXNND/d+krS9mgkXRfg==}
+  vitest@5.1.0:
+    resolution: {integrity: sha512-MzmNFnrwa8v8lF1bLxw3UJ4EREwVOVb75VqJZmUDRjJ6EluK/x9th7qTbaeDk41WxE1GxWqmTXcdsfobfH5sOA==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
       '@types/node': ^22.0.0 || >=24.0.0
-      '@vitest/browser-playwright': 5.0.5
-      '@vitest/browser-preview': 5.0.5
+      '@vitest/browser-playwright': 5.1.0
+      '@vitest/browser-preview': 5.1.0
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
-      '@vitest/coverage-istanbul': 5.0.5
-      '@vitest/coverage-v8': 5.0.5
-      '@vitest/ui': 5.0.5
+      '@vitest/coverage-istanbul': 5.1.0
+      '@vitest/coverage-v8': 5.1.0
+      '@vitest/ui': 5.1.0
       happy-dom: '*'
       jsdom: '*'
       vite: ^6.4.0 || ^7.0.0 || ^8.0.0
@@ -8937,7 +8946,7 @@ snapshots:
     optionalDependencies:
       '@nestjs/platform-express': 11.1.29(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(supports-color@8.1.1)
 
-  '@nestjs/mapped-types@12.0.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)':
+  '@nestjs/mapped-types@12.0.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)':
     dependencies:
       '@nestjs/common': 11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1)
       reflect-metadata: 0.2.2
@@ -8989,12 +8998,12 @@ snapshots:
     transitivePeerDependencies:
       - chokidar
 
-  '@nestjs/swagger@12.0.5(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)':
+  '@nestjs/swagger@12.1.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.1.29)(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(typescript@5.9.3)':
     dependencies:
       '@microsoft/tsdoc': 0.17.1
       '@nestjs/common': 11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1)
       '@nestjs/core': 11.1.29(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/platform-express@11.1.29)(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/mapped-types': 12.0.0(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)
+      '@nestjs/mapped-types': 12.0.1(@nestjs/common@11.1.29(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)
       '@standard-schema/spec': 1.1.0
       es-toolkit: 1.52.0
       js-yaml: 5.5.0
@@ -10446,34 +10455,34 @@ snapshots:
       '@typescript-eslint/types': 8.72.1
       eslint-visitor-keys: 5.0.1
 
-  '@vitest/coverage-v8@5.0.5(vitest@5.0.5)':
+  '@vitest/coverage-v8@5.1.0(vitest@5.1.0)':
     dependencies:
       '@bcoe/v8-coverage': 1.0.2
-      '@vitest/istanbul-lib-coverage': 1.0.2
-      '@vitest/istanbul-lib-report': 1.0.2
+      '@vitest/istanbul-lib-coverage': 2.1.0
+      '@vitest/istanbul-lib-report': 2.1.0
       ast-v8-to-istanbul: 1.0.7
       magicast: 0.5.5
       obug: 3.0.0
       std-env: 4.3.0
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+      vitest: 5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
 
-  '@vitest/istanbul-lib-coverage@1.0.2': {}
+  '@vitest/istanbul-lib-coverage@2.1.0': {}
 
-  '@vitest/istanbul-lib-report@1.0.2':
+  '@vitest/istanbul-lib-report@2.1.0':
     dependencies:
-      '@vitest/istanbul-lib-coverage': 1.0.2
+      '@vitest/istanbul-lib-coverage': 2.1.0
 
-  '@vitest/mocker@5.0.5(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))':
+  '@vitest/mocker@5.1.0(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
-      '@vitest/spy': 5.0.5
+      '@vitest/spy': 5.1.0
       estree-walker: 3.0.3
       magic-string: 1.4.5
     optionalDependencies:
       vite: 8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0)
 
-  '@vitest/spy@5.0.5': {}
+  '@vitest/spy@5.1.0': {}
 
   '@webassemblyjs/ast@1.14.1':
     dependencies:
@@ -10773,11 +10782,11 @@ snapshots:
 
   arg@4.1.3: {}
 
-  argon2@0.45.1:
+  argon2@0.45.2:
     dependencies:
       '@phc/format': 1.0.0
       cross-env: 10.1.0
-      node-addon-api: 8.9.1
+      node-addon-api: 8.9.2
       node-gyp-build: 4.8.4
 
   argparse@2.0.1: {}
@@ -10945,10 +10954,10 @@ snapshots:
   buildcheck@0.0.7:
     optional: true
 
-  bullmq@6.5.3(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1):
+  bullmq@6.5.4(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1):
     dependencies:
       cron-parser: 5.10.2
-      msgpackr: 2.1.2
+      msgpackr: 2.1.3
       node-abort-controller: 3.1.1
       semver: 7.8.5
       tslib: 2.8.1
@@ -11218,7 +11227,7 @@ snapshots:
 
   depd@2.0.0: {}
 
-  dependency-cruiser@18.7.0:
+  dependency-cruiser@18.7.2:
     dependencies:
       acorn: 8.19.0
       acorn-jsx: 5.3.2(acorn@8.19.0)
@@ -11227,7 +11236,7 @@ snapshots:
       acorn-walk: 8.3.5
       commander: 15.0.0
       enhanced-resolve: 5.26.0
-      ignore: 7.0.12
+      ignore: 7.0.14
       interpret: 3.1.1
       is-installed-globally: 1.0.1
       json5: 2.2.3
@@ -11235,7 +11244,7 @@ snapshots:
       prompts: 2.4.2
       rechoir: 0.8.0
       safe-regex: 2.1.1
-      semver: 7.8.5
+      semver: 7.8.6
       tsconfig-paths-webpack-plugin: 4.2.0
       watskeburt: 6.0.0
 
@@ -11874,7 +11883,7 @@ snapshots:
 
   globals@14.0.0: {}
 
-  globals@17.13.0: {}
+  globals@17.14.0: {}
 
   globby@11.1.0:
     dependencies:
@@ -11980,6 +11989,8 @@ snapshots:
 
   ignore@7.0.12: {}
 
+  ignore@7.0.14: {}
+
   import-fresh@3.3.1:
     dependencies:
       parent-module: 1.0.1
@@ -12081,7 +12092,7 @@ snapshots:
       merge-stream: 2.0.0
       supports-color: 8.1.1
 
-  jose@6.2.14: {}
+  jose@6.2.15: {}
 
   joycon@3.1.1: {}
 
@@ -12355,7 +12366,7 @@ snapshots:
       '@msgpackr-extract/msgpackr-extract-win32-x64': 3.0.4
     optional: true
 
-  msgpackr@2.1.2:
+  msgpackr@2.1.3:
     optionalDependencies:
       msgpackr-extract: 3.0.4
 
@@ -12398,7 +12409,7 @@ snapshots:
 
   node-abort-controller@3.1.1: {}
 
-  node-addon-api@8.9.1: {}
+  node-addon-api@8.9.2: {}
 
   node-domexception@1.0.0: {}
 
@@ -12928,6 +12939,8 @@ snapshots:
       semver: 7.8.5
 
   semver@7.8.5: {}
+
+  semver@7.8.6: {}
 
   send@1.2.1(supports-color@8.1.1):
     dependencies:
@@ -13539,10 +13552,10 @@ snapshots:
       tsx: 4.23.15
       yaml: 2.9.0
 
-  vitest@5.0.5(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0)):
+  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.5(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+      '@vitest/mocker': 5.1.0(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
       chai: 6.3.0
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -13558,14 +13571,14 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 24.19.2
-      '@vitest/coverage-v8': 5.0.5(vitest@5.0.5)
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
     transitivePeerDependencies:
       - msw
 
-  vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0)):
+  vitest@5.1.0(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.5(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
+      '@vitest/mocker': 5.1.0(vite@8.2.1(@types/node@24.19.2)(esbuild@0.28.2)(terser@5.49.2)(tsx@4.23.15)(yaml@2.9.0))
       chai: 6.3.0
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -13581,7 +13594,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@types/node': 24.19.2
-      '@vitest/coverage-v8': 5.0.5(vitest@5.0.5)
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
     transitivePeerDependencies:
       - msw
 
