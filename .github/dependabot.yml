@@ -19,11 +19,45 @@ updates:
       # green-or-red signal from the same CI run.
       minor-and-patch:
         update-types: [minor, patch]
+      # Nest majors only work in lockstep: core, every @nestjs/* module and the libraries that peer on
+      # Nest (Sentry, pino, cls, prometheus) move together or the build splits into two Nest copies.
+      nestjs-major:
+        update-types: [major]
+        patterns:
+          - '@nestjs/*'
+          - '@nest-lab/*'
+          - 'nestjs-*'
+          - '@willsoto/nestjs-prometheus'
+          - '@sentry/*'
     ignore:
       # Node major upgrades are a deploy decision (engines, .nvmrc, CI matrix, Dockerfile base image
       # all move together), not something to accept from a bot PR.
       - dependency-name: '@types/node'
         update-types: [version-update:semver-major]
+      # typescript-eslint and @nestjs/swagger cap their TypeScript peer below 7; lift this once they
+      # support the native compiler.
+      - dependency-name: 'typescript'
+        update-types: [version-update:semver-major]
+      # OpenTelemetry ships api, the stable 2.x/3.x SDK, the experimental 0.x SDK and contrib as one
+      # release train, and @sentry/node-core still caps @opentelemetry/core at ^2. Bumping part of the
+      # set mixes trains (api 1.10 is outside core 2's peer range) and splits @sentry/nestjs into
+      # per-service peer variants. Hold the whole set on the core-2 train until Sentry moves.
+      - dependency-name: '@opentelemetry/api'
+        versions: ['>=1.10.0']
+      - dependency-name: '@opentelemetry/core'
+        versions: ['>=3.0.0']
+      - dependency-name: '@opentelemetry/resources'
+        versions: ['>=3.0.0']
+      - dependency-name: '@opentelemetry/context-async-hooks'
+        versions: ['>=3.0.0']
+      - dependency-name: '@opentelemetry/sdk-trace-base'
+        versions: ['>=3.0.0']
+      - dependency-name: '@opentelemetry/sdk-node'
+        versions: ['>=0.300.0']
+      - dependency-name: '@opentelemetry/exporter-trace-otlp-http'
+        versions: ['>=0.300.0']
+      - dependency-name: '@opentelemetry/auto-instrumentations-node'
+        versions: ['>=0.82.0']
 
   # The workflows themselves. An action pinned to a tag that silently moves is the supply-chain risk
   # CI is otherwise there to catch, so it gets the same weekly review.
