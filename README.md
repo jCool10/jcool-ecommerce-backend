@@ -30,7 +30,7 @@ Four invariants drive nearly every design decision:
 
 ## Architecture
 
-Five Node services, a Caddy gateway and a self-hosted Temporal server, deployed on Railway. Each service owns its database and shares no table and no foreign key with another. The diagram shows the public domain on the gateway, which is a manual cut-over step ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)).
+Five Node services, a Caddy gateway and a self-hosted Temporal server, deployed on Railway. Each service owns its database and shares no table and no foreign key with another. The public domain is on the gateway, which is the only way in: the api has no domain of its own ([RUNBOOK](./RUNBOOK.md#put-the-gateway-in-front-of-the-api)).
 
 ```mermaid
 flowchart LR
@@ -157,9 +157,7 @@ Stated plainly, because a reviewer will find them anyway. The reasoning behind e
 - **Auth mail is sent synchronously, outside the outbox**, so its raw token never lands in Postgres.
 - **Checkout needs the api, stock, payment, the id-service and Temporal at once.** Temporal is one self-hosted server; while it is down, checkout and cancel answer `503` and catalog and cart keep serving.
 - **The strongest checkout test runs locally only.** The fault-injecting system test needs several GB of RAM, so CI runs the integration tier instead.
-- **A password change has a race** between revoking sessions and writing the new hash.
 - **Ids have hard ceilings.** The id `CHECK` is a floor, not a type, and 1024 ids per node-millisecond and 254 leasable nodes are real limits.
-- **IP throttling counts connections** until the public domain moves onto the gateway.
 - **Search trails writes by about 1–2 s** and is not read-your-writes.
 - **There is no API version prefix**; changes are additive-only.
 - **Traces are local-only**; in production a `traceId` only joins log lines.

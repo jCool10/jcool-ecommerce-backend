@@ -1,7 +1,7 @@
 import { User } from '../domain/entities/user.entity';
 import type { CreateUserInput, UserRepositoryPort } from '../application/ports';
 
-/** Holds at most one user and records what each call was asked; `log` orders calls across fakes. */
+/** Holds at most one user and records what each call was asked. */
 export class FakeUserRepository implements UserRepositoryPort {
   user: User | null = null;
   /** `create` answers null, as the unique email index does for a taken address. */
@@ -9,9 +9,6 @@ export class FakeUserRepository implements UserRepositoryPort {
   lastFindEmail?: string;
   created?: CreateUserInput;
   readonly verified: string[] = [];
-  readonly passwordUpdates: Array<{ userId: string; passwordHash: string }> = [];
-
-  constructor(readonly log: string[] = []) {}
 
   findByEmail(email: string): Promise<User | null> {
     this.lastFindEmail = email;
@@ -31,12 +28,6 @@ export class FakeUserRepository implements UserRepositoryPort {
 
   markEmailVerified(userId: string): Promise<void> {
     this.verified.push(userId);
-    return Promise.resolve();
-  }
-
-  updatePassword(userId: string, passwordHash: string): Promise<void> {
-    this.log.push('updatePassword');
-    this.passwordUpdates.push({ userId, passwordHash });
     return Promise.resolve();
   }
 }

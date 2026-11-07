@@ -94,6 +94,18 @@ describe('LoginUserUseCase', () => {
     expect((wrongPassword as Error).message).toBe((unknownEmail as Error).message);
   });
 
+  it('answers 401 when the credential it verified was replaced before its session was stored', async () => {
+    const useCase = loginUseCase(false);
+    users.user = makeUser();
+    const wrongPassword = await failureOf(useCase.execute({ email: 'user@example.com', password: 'wrong' }));
+    refreshTokens.createOutcome = { status: 'credentials_changed' };
+
+    const replaced = await failureOf(useCase.execute({ email: 'user@example.com', password: 'correct-password' }));
+
+    expect(replaced).toBeInstanceOf(UnauthorizedException);
+    expect((replaced as Error).message).toBe((wrongPassword as Error).message);
+  });
+
   describe('with the verified-email gate on', () => {
     it('refuses an unverified account with 403 and issues no tokens', async () => {
       users.user = makeUser(null);

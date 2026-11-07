@@ -11,6 +11,7 @@ import type { CheckoutSagaConfig } from '../../../../config/checkout-saga.config
 import { CheckoutSagaActivities } from './checkout-saga.activities';
 import { installTemporalRuntime } from './temporal-runtime';
 import { CHECKOUT_SAGA_BUNDLE_FILE, checkoutSagaWorkflowsPath } from './workflow-bundle';
+import { workflowTracingInterceptors, workflowTracingSinks } from './workflow-tracing';
 
 const LOG_CONTEXT = 'CheckoutSagaWorker';
 const BACKOFF_MIN_MS = 1000;
@@ -128,6 +129,8 @@ export class CheckoutSagaWorker implements OnModuleInit, OnApplicationBootstrap 
       // Named after the service, so `temporal task-queue describe` tells this poller from the api's.
       identity: `order-service@${hostname()}:${process.pid}`,
       ...workflows,
+      interceptors: workflowTracingInterceptors({ bundling: workflows.workflowsPath !== undefined }),
+      sinks: workflowTracingSinks(),
       activities: this.activities,
       maxConcurrentActivityTaskExecutions: this.settings.activityConcurrency,
       maxConcurrentLocalActivityExecutions: this.settings.localActivityConcurrency,

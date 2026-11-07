@@ -1,11 +1,13 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { Worker, bundleWorkflowCode } from '@temporalio/worker';
+import { Worker } from '@temporalio/worker';
 import { installTemporalRuntime } from './temporal-runtime';
-import { checkoutSagaWorkflowsPath } from './workflow-bundle';
+import { checkoutSagaWorkflowCode } from './workflow-bundle';
+import { workflowTracingSinks } from './workflow-tracing';
 
 // Histories recorded by checkout-saga-workflow.e2e-spec.ts with CHECKOUT_SAGA_HISTORY_OUT set. A
 // workflow change that fails here would break every run already open in production: it needs patched().
+// Replayed through the production bundle, tracing interceptors included.
 const HISTORIES_DIR = resolve('src/modules/order/infrastructure/temporal/replay-histories');
 const HISTORIES = readdirSync(HISTORIES_DIR).filter((file) => file.endsWith('.history.json'));
 
@@ -14,7 +16,7 @@ describe('CheckoutSaga replay', () => {
 
   beforeAll(async () => {
     installTemporalRuntime();
-    ({ code } = await bundleWorkflowCode({ workflowsPath: checkoutSagaWorkflowsPath() }));
+    code = await checkoutSagaWorkflowCode();
   }, 60_000);
 
   it('has a history for every way a run closes', () => {
@@ -33,7 +35,7 @@ describe('CheckoutSaga replay', () => {
       const history: unknown = JSON.parse(readFileSync(join(HISTORIES_DIR, file), 'utf8'));
 
       await expect(
-        Worker.runReplayHistory({ workflowBundle: { code }, replayName: file }, history),
+        Worker.runReplayHistory({ workflowBundle: { code }, replayName: file, sinks: workflowTracingSinks() }, history),
       ).resolves.toBeUndefined();
     },
     30_000,

@@ -9,6 +9,7 @@ import type { CheckoutSagaActivities } from './checkout-saga.activities';
 import { CheckoutSagaWorker, workerBackoffMs } from './checkout-saga.worker';
 import { installTemporalRuntime } from './temporal-runtime';
 import { checkoutSagaWorkflowsPath } from './workflow-bundle';
+import { workflowInterceptorModules } from './workflow-tracing';
 
 vi.mock('./temporal-runtime', () => ({ installTemporalRuntime: vi.fn() }));
 // So the production cases do not depend on whether a local build left a bundle in dist.
@@ -139,7 +140,7 @@ describe('CheckoutSagaWorker', () => {
     expect(supervisor.status().state).toBe('CONNECTING');
   });
 
-  it('runs a worker on the configured queue with both activity pools and the shutdown budget', async () => {
+  it('runs a traced worker on the configured queue with both activity pools and the shutdown budget', async () => {
     const { supervisor, boot, activities, connection, connect, create } = build();
 
     await boot();
@@ -151,6 +152,8 @@ describe('CheckoutSagaWorker', () => {
       taskQueue: 'checkout-saga',
       identity: `order-service@${hostname()}:${process.pid}`,
       workflowBundle: { codePath: '/tmp/checkout-saga.bundle.js' },
+      interceptors: { activity: [expect.any(Function)], workflowModules: [] },
+      sinks: { exporter: { export: { fn: expect.any(Function) as unknown } } },
       activities,
       maxConcurrentActivityTaskExecutions: 3,
       maxConcurrentLocalActivityExecutions: 4,
@@ -165,7 +168,12 @@ describe('CheckoutSagaWorker', () => {
 
     await boot();
 
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ workflowsPath: checkoutSagaWorkflowsPath() }));
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowsPath: checkoutSagaWorkflowsPath(),
+        interceptors: expect.objectContaining({ workflowModules: workflowInterceptorModules() }) as unknown,
+      }),
+    );
   });
 
   it('runs the bundle built into dist in production', async () => {

@@ -61,6 +61,7 @@ export class InventoryServiceStub {
   private readonly locked = new Set<string>();
   private readonly faults = new Map<InventoryStubRoute, Fault>();
   private readonly counts = new Map<InventoryStubRoute, number>();
+  private readonly traceparents = new Map<InventoryStubRoute, Array<string | null>>();
   private readonly hanging = new Set<ServerResponse>();
   private readonly server: Server = createServer((req, res) => this.handle(req, res));
 
@@ -147,6 +148,11 @@ export class InventoryServiceStub {
     return this.counts.get(route) ?? 0;
   }
 
+  /** The `traceparent` of every request that reached the route, in arrival order; null when it carried none. */
+  traceparentsOf(route: InventoryStubRoute): Array<string | null> {
+    return [...(this.traceparents.get(route) ?? [])];
+  }
+
   reset(): void {
     this.stock.clear();
     this.headers.clear();
@@ -154,6 +160,7 @@ export class InventoryServiceStub {
     this.locked.clear();
     this.faults.clear();
     this.counts.clear();
+    this.traceparents.clear();
     for (const res of this.hanging) res.destroy();
     this.hanging.clear();
   }
@@ -240,6 +247,7 @@ export class InventoryServiceStub {
     const route = req.method === 'POST' ? routeOf(req.url ?? '') : null;
     if (!route) return void reply(res, 404, { statusCode: 404, message: 'Not Found' });
     this.counts.set(route.name, this.calls(route.name) + 1);
+    this.traceparents.set(route.name, [...this.traceparentsOf(route.name), traceparentOf(req)]);
 
     const fault = this.faults.get(route.name);
     if (fault) {
@@ -285,6 +293,11 @@ function routeOf(path: string): Route | null {
   const name = match[2];
   if (name !== 'try' && !(RESERVATION_COMMANDS as readonly string[]).includes(name)) return null;
   return { name: name as 'try' | ReservationCommand, orderId: decodeURIComponent(match[1]) };
+}
+
+function traceparentOf(req: IncomingMessage): string | null {
+  const { traceparent } = req.headers;
+  return typeof traceparent === 'string' ? traceparent : null;
 }
 
 function parse(raw: string): unknown {

@@ -40,26 +40,35 @@ describe('AuthTokensService', () => {
     );
   });
 
-  it("signs the user's id, role and current session epoch under a fresh jti", async () => {
-    const { accessToken } = await service.issuePair(user);
+  const issued = async () => {
+    const tokens = await service.issuePair(user);
+    if (!tokens) throw new Error('expected a token pair');
+    return tokens;
+  };
+
+  // The user was read before the password check; the row read where the session is stored is newer.
+  it('signs the access token with the role and epoch read where the session was stored', async () => {
+    repo.createOutcome = { status: 'created', role: 'ADMIN', tokenEpoch: 7 };
+
+    const { accessToken } = await issued();
 
     expect(claimsOf(accessToken)).toEqual({
       sub: USER_ID,
-      role: 'CUSTOMER',
+      role: 'ADMIN',
       jti: expect.any(String) as string,
-      epoch: 5,
+      epoch: 7,
     });
   });
 
   it('names the new session with a freshly minted id', async () => {
-    await service.issuePair(user);
+    await issued();
 
     expect(ids.requests).toEqual([1]);
     expect(isRoutableId(repo.created[0].familyId)).toBe(true);
   });
 
-  it('hands out the raw refresh token and persists only its sha256 hash', async () => {
-    const { refreshToken } = await service.issuePair(user);
+  it('hands out the raw refresh token and persists only its sha256 hash, bound to the verified hash', async () => {
+    const { refreshToken } = await issued();
 
     // 48 random bytes, base64url.
     expect(refreshToken).toHaveLength(64);
@@ -69,13 +78,20 @@ describe('AuthTokensService', () => {
         tokenHash: createHash('sha256').update(refreshToken).digest('hex'),
         familyId: expect.any(String) as string,
         expiresAt: new Date(NOW.getTime() + SEVEN_DAYS_MS),
+        verifiedPasswordHash: '$argon2id$hash',
       },
     ]);
   });
 
+  it('issues nothing when the verified password was replaced before the session was stored', async () => {
+    repo.createOutcome = { status: 'credentials_changed' };
+
+    await expect(service.issuePair(user)).resolves.toBeNull();
+  });
+
   it('opens a new session per call: new jti, refresh token and family', async () => {
-    const first = await service.issuePair(user);
-    const second = await service.issuePair(user);
+    const first = await issued();
+    const second = await issued();
 
     expect(claimsOf(second.accessToken).jti).not.toBe(claimsOf(first.accessToken).jti);
     expect(second.refreshToken).not.toBe(first.refreshToken);

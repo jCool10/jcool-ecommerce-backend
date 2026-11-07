@@ -5,16 +5,17 @@ import { users } from './schema/user.schema';
 import {
   type EpochChange,
   type EpochChangeCursor,
+  publishEpochOrRaise,
   SESSION_EPOCH_PUBLISHER,
   type SessionEpochChangesPort,
-  SessionEpochNotPublishedError,
   type SessionEpochPort,
   type SessionEpochPublisherPort,
 } from '../application/ports';
 
 /**
- * `bump` is a single atomic `token_epoch + 1`, so concurrent logout-all calls can't lose an
- * increment. Every revocation flow bumps through here, which is why the publish lives here too.
+ * `bump` is a single atomic `token_epoch + 1`, so concurrent bumps can't lose an increment, and it
+ * publishes what it committed. Logout-all and password changes bump inside the refresh-token revoke
+ * instead, where the epoch commits with the revoke.
  */
 @Injectable()
 export class DrizzleSessionEpochRepository implements SessionEpochPort, SessionEpochChangesPort {
@@ -41,13 +42,7 @@ export class DrizzleSessionEpochRepository implements SessionEpochPort, SessionE
     // A bump for a missing user affects no rows; report epoch 0 (nothing to revoke).
     if (!row) return 0;
 
-    // A throw here is a 5xx on a revocation the database already holds; the reconciler publishes
-    // it on its next pass.
-    try {
-      await this.sessionEpochPublisher.publish(userId, row.tokenEpoch);
-    } catch (error) {
-      throw new SessionEpochNotPublishedError(userId, row.tokenEpoch, error);
-    }
+    await publishEpochOrRaise(this.sessionEpochPublisher, userId, row.tokenEpoch);
     return row.tokenEpoch;
   }
 

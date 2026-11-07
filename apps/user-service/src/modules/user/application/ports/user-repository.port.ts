@@ -31,6 +31,4 @@ export interface UserRepositoryPort {
 
   /** Idempotent — a no-op if already set. */
   markEmailVerified(userId: string): Promise<void>;
-
-  updatePassword(userId: string, passwordHash: string): Promise<void>;
 }

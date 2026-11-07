@@ -17,3 +17,16 @@ export class SessionEpochNotPublishedError extends Error {
     this.name = 'SessionEpochNotPublishedError';
   }
 }
+
+/** For an epoch already committed: a failed publish becomes a 5xx the reconciler later repairs. */
+export async function publishEpochOrRaise(
+  publisher: SessionEpochPublisherPort,
+  userId: string,
+  epoch: number,
+): Promise<void> {
+  try {
+    await publisher.publish(userId, epoch);
+  } catch (error) {
+    throw new SessionEpochNotPublishedError(userId, epoch, error);
+  }
+}

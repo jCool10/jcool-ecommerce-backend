@@ -997,7 +997,7 @@ SELECT order_id, status, hold_until FROM reservation_orders WHERE order_id IN ('
 
 A `RESERVING` order with no hold and no workflow is one whose start never reached Temporal. The reaper hands it back to its saga once it is older than `CHECKOUT_RESERVING_ORPHAN_SEC`, every `CHECKOUT_REAPER_INTERVAL_MS`, and the saga rejects it because its Try budget is long spent. A reaper tick stops at the first order the engine cannot take, so a Temporal outage costs one failed call per tick.
 
-The reaper cannot hand back an order whose run has already closed, which only a terminated, timed-out, failed or cancelled run leaves behind. It logs `RESERVING order whose checkout saga has already closed` at error on every tick and moves on; the order keeps one of the buyer's three checkout slots, and fifty of them fill the reaper's batch so newer orphans wait. Close it by hand as in [Terminate a saga](#terminate-a-saga): clean up its inventory header first (in `inventory-postgres`), then, in `order-postgres`, `UPDATE orders SET status = 'REJECTED', finalized_at = now(), finalize_reason = 'ops:closed_saga' WHERE id = '<order id>' AND status = 'RESERVING';`.
+The reaper cannot hand back an order whose run has already closed, which only a terminated, timed-out, failed or cancelled run leaves behind. It logs `RESERVING order whose checkout saga has already closed` at error on every tick and moves on; the order keeps one of the buyer's three checkout slots, and fifty of them fill the reaper's batch so newer orphans wait. Close it by hand as in [Terminate a saga](#terminate-a-saga): clean up its inventory header first (in `inventory-postgres`), then, in `order-postgres`, `UPDATE orders SET status = 'REJECTED', finalized_at = now(), finalize_reason = 'ops:closed_saga', idempotency_key = NULL WHERE id = '<order id>' AND status = 'RESERVING';`. Clear the key as the saga's own reject does, so a retry under it places a fresh order: left set, every such retry answers `503` until the `order:rejected-orders` sweep deletes the row.
 
 #### A `payment.authorized` in the dead-letter queue
 
@@ -1478,6 +1478,8 @@ Reading a failure: the message names the state the scenario waited for and the l
 ---
 
 ## Put the gateway in front of the api
+
+Done: the public domain is on the gateway and the api's direct domain is deleted. This section stays as the procedure to redo the move on a fresh environment and to roll it back.
 
 The `gateway` service (Caddy, `apps/gateway`) hands every public route to its service unchanged (the api, or the order-service, inventory-service and payment-service for theirs), answers `/internal/*` with 404, and tells each upstream who the client is. CD creates and deploys it without a public domain. Moving `jcool-ecommerce.up.railway.app` onto it is this manual step. Do it off-peak, because between the two renames the name routes nowhere for a few seconds.
 

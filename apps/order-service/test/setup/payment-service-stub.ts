@@ -81,6 +81,7 @@ export class PaymentServiceStub {
   private readonly published = new Map<string, DomainEventJob>();
   private readonly faults = new Map<PaymentStubRoute, Fault>();
   private readonly counts = new Map<PaymentStubRoute, number>();
+  private readonly traceparents = new Map<PaymentStubRoute, Array<string | null>>();
   private readonly hanging = new Set<ServerResponse>();
   private options: PaymentStubOptions = { ...DEFAULT_OPTIONS };
   private readonly server: Server = createServer((req, res) => this.handle(req, res));
@@ -131,9 +132,14 @@ export class PaymentServiceStub {
   /**
    * The buyer pays the open session: the header turns AUTHORIZED on the current attempt and
    * `payment.authorized` lands on `order-events` in this worker's Redis, under the spec's prefix.
-   * A charge passed here goes into the event only, to stage a report payment would not back.
+   * A charge passed here goes into the event only, to stage a report payment would not back. A
+   * `traceparent` is what the service's outbox would have stamped from the webhook's trace.
    */
-  async authorize(orderId: string, charge: { amountMinor?: number; currency?: string } = {}): Promise<string> {
+  async authorize(
+    orderId: string,
+    charge: { amountMinor?: number; currency?: string } = {},
+    traceparent: string | null = null,
+  ): Promise<string> {
     const header = this.headers.get(orderId);
     const attempt = this.attempts.get(orderId)?.at(-1);
     if (header?.status !== 'OPEN' || attempt?.status !== 'PENDING') {
@@ -141,7 +147,7 @@ export class PaymentServiceStub {
     }
     attempt.status = 'AUTHORIZED';
     header.status = 'AUTHORIZED';
-    return this.publishAuthorized(orderId, attempt, charge);
+    return this.publishAuthorized(orderId, attempt, charge, traceparent);
   }
 
   /**
@@ -156,13 +162,14 @@ export class PaymentServiceStub {
       throw new Error(`order ${orderId} has no session its cancel just expired`);
     }
     attempt.status = 'AUTHORIZED';
-    return this.publishAuthorized(orderId, attempt, {});
+    return this.publishAuthorized(orderId, attempt, {}, null);
   }
 
   private async publishAuthorized(
     orderId: string,
     attempt: StubAttempt,
     charge: { amountMinor?: number; currency?: string },
+    traceparent: string | null,
   ): Promise<string> {
     const authorizedAt = new Date();
     const outboxId = testId();
@@ -181,7 +188,7 @@ export class PaymentServiceStub {
         }),
       },
       occurredAt: authorizedAt.toISOString(),
-      traceparent: null,
+      traceparent,
     };
     await publish(job);
     this.published.set(orderId, job);
@@ -236,6 +243,11 @@ export class PaymentServiceStub {
     return this.counts.get(route) ?? 0;
   }
 
+  /** The `traceparent` of every request that reached the route, in arrival order; null when it carried none. */
+  traceparentsOf(route: PaymentStubRoute): Array<string | null> {
+    return [...(this.traceparents.get(route) ?? [])];
+  }
+
   reset(): void {
     this.headers.clear();
     this.attempts.clear();
@@ -245,6 +257,7 @@ export class PaymentServiceStub {
     this.published.clear();
     this.faults.clear();
     this.counts.clear();
+    this.traceparents.clear();
     this.options = { ...DEFAULT_OPTIONS };
     for (const res of this.hanging) res.destroy();
     this.hanging.clear();
@@ -373,6 +386,7 @@ export class PaymentServiceStub {
     const route = req.method === 'POST' ? routeOf(req.url ?? '') : null;
     if (!route) return void reply(res, 404, { statusCode: 404, message: 'Not Found' });
     this.counts.set(route.name, this.calls(route.name) + 1);
+    this.traceparents.set(route.name, [...this.traceparentsOf(route.name), traceparentOf(req)]);
 
     const fault = this.faults.get(route.name);
     if (fault) {
@@ -428,6 +442,11 @@ function routeOf(path: string): Route | null {
   const match = new RegExp(`^/${PAYMENTS_PREFIX}/([^/]+)/(session|capture|cancel)$`).exec(path);
   if (!match) return null;
   return { name: match[2] as 'session' | 'capture' | 'cancel', orderId: decodeURIComponent(match[1]) };
+}
+
+function traceparentOf(req: IncomingMessage): string | null {
+  const { traceparent } = req.headers;
+  return typeof traceparent === 'string' ? traceparent : null;
 }
 
 const redirectUrlOf = (providerSessionId: string) => `https://checkout.stripe.test/c/pay/${providerSessionId}`;

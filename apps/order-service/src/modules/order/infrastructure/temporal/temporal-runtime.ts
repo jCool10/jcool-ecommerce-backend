@@ -1,6 +1,7 @@
 import { DefaultLogger, type LogEntry, Runtime } from '@temporalio/worker';
 import { toError } from '@jcool/kernel';
 import type { PinoLogger } from 'nestjs-pino';
+import { traceLogFields } from './workflow-tracing';
 
 /**
  * Idempotent per process. No shutdown signals: Nest owns SIGTERM, and the SDK's own handler would
@@ -20,7 +21,8 @@ export function installTemporalRuntime(logger?: PinoLogger): void {
 const toPino =
   (logger: PinoLogger) =>
   ({ level, message, meta }: LogEntry): void => {
-    const { error, ...fields } = meta ?? {};
+    const { error, ...rest } = meta ?? {};
+    const fields = traceLogFields(rest);
     const entry = error === undefined ? fields : { ...fields, err: toError(error) };
     if (level === 'ERROR') logger.error(entry, message);
     else logger.warn(entry, message);

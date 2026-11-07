@@ -91,8 +91,8 @@ export async function driveToPaid(app: INestApplication, token: string, orderId:
  * The buyer completes the manual-capture session: payment holds the charge and queues
  * `payment.authorized` on order-events. Returns the attempt's payment id.
  */
-export async function authorizePayment(orderId: string): Promise<string> {
-  return (await paymentServiceStub()).authorize(orderId);
+export async function authorizePayment(orderId: string, traceparent: string | null = null): Promise<string> {
+  return (await paymentServiceStub()).authorize(orderId, {}, traceparent);
 }
 
 export function untilOrderStatus(app: INestApplication, orderId: string, status: string, timeoutMs?: number) {

@@ -1,11 +1,15 @@
 import type { INestApplication } from '@nestjs/common';
 import type { Pool, PoolClient } from 'pg';
 import request from 'supertest';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashRefreshToken } from '../../src/modules/user/application/hash-refresh-token';
-import { authHeader, loginAs, sessionFrom, sessionHeaders, type Session } from '../setup/auth.helper';
+import { AUTH_AUDIT, type AuthAuditPort } from '../../src/modules/user/application/ports';
+import { ageRotation, authHeader, loginAs, sessionFrom, sessionHeaders, type Session } from '../setup/auth.helper';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { waitForLockWaiters } from '../setup/lock-waiters.helper';
+
+// The harness leaves REFRESH_REUSE_GRACE at its 20 s default.
+const PAST_GRACE_MS = 60_000;
 
 /**
  * Reproduces the race a single READ COMMITTED `UPDATE ... WHERE revoked_at IS NULL` loses to a
@@ -66,7 +70,7 @@ describe('Revoking a user/family races a concurrent rotation (integration, real 
     try {
       await waitForLockWaiters(pool, 1); // the rotation is parked on the leaf row lock the holder took
       revokingAll = fire(request(app.getHttpServer()).post('/auth/logout-all').set(authHeader(session.accessToken)));
-      await waitForLockWaiters(pool, 2); // logout-all is parked behind the rotation's shared user lock
+      await waitForLockWaiters(pool, 2); // logout-all is parked behind the rotation's user lock
     } finally {
       await holder.query('COMMIT');
       holder.release();
@@ -94,7 +98,7 @@ describe('Revoking a user/family races a concurrent rotation (integration, real 
     try {
       await waitForLockWaiters(pool, 1);
       loggingOut = fire(request(app.getHttpServer()).post('/auth/logout').set(sessionHeaders(session)));
-      await waitForLockWaiters(pool, 2); // parked behind the rotation's shared user lock
+      await waitForLockWaiters(pool, 2); // parked behind the rotation's user lock
     } finally {
       await holder.query('COMMIT');
       holder.release();
@@ -142,5 +146,34 @@ describe('Revoking a user/family races a concurrent rotation (integration, real 
     expect(rows.length).toBeGreaterThan(1);
     expect(rows.every((row) => row.revoked_at !== null)).toBe(true);
     await refresh(sessionFrom(rotateRes)).expect(401);
+  });
+
+  it('a retired token replayed during a rotation revokes its successor and flags reuse', async () => {
+    const retired = await loginAs(app, { email, password });
+    const live = sessionFrom(await refresh(retired).expect(200));
+    await ageRotation(pool, retired, PAST_GRACE_MS);
+    const record = vi.spyOn(app.get<AuthAuditPort>(AUTH_AUDIT, { strict: false }), 'record');
+    const holder = await holdLeafRowLock(live);
+
+    const rotating = fire(refresh(live));
+    let replaying: Promise<request.Response>;
+    try {
+      await waitForLockWaiters(pool, 1); // the rotation of the live leaf is parked on its row lock
+      replaying = fire(refresh(retired));
+      await waitForLockWaiters(pool, 2); // the replay is parked behind the rotation's user lock
+    } finally {
+      await holder.query('COMMIT');
+      holder.release();
+    }
+
+    const [rotateRes, replayRes] = await Promise.all([rotating, replaying]);
+
+    expect(rotateRes.status).toBe(200);
+    expect(replayRes.status).toBe(401);
+    expect((await familyRowsOf(live)).every((row) => row.revoked_at !== null)).toBe(true);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ event: 'token.reuse_detected' }));
+    record.mockRestore();
+    await refresh(sessionFrom(rotateRes)).expect(401);
+    await request(app.getHttpServer()).get('/auth/me').set(authHeader(rotateRes.body.accessToken)).expect(401);
   });
 });
