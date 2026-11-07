@@ -59,7 +59,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "stripe": "^22.6.1",
-    "uuid": "^11.1.0"
+    "uuid": "^14.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
