@@ -26,6 +26,7 @@ Conventions used below:
 - [Freeze checkout](#freeze-checkout)
 - [Deploy the monitoring stack](#deploy-the-monitoring-stack)
 - [Logs in Loki](#logs-in-loki)
+- [Traces in Grafana Cloud](#traces-in-grafana-cloud)
 - [Deploy Elasticsearch](#deploy-elasticsearch)
 - [The id-service's etcd](#the-id-services-etcd)
 - [Checkout saga](#checkout-saga)
@@ -650,6 +651,40 @@ The rules in `infra/prometheus/rules/loki.yml` (`LokiDown`, `LokiPushFailing`, `
 2. `railway redeploy --service loki`. On restart it replays the WAL, so nothing it had acknowledged is lost.
 
 To stop shipping, remove `LOKI_URL` from the services in `.railway/railway.ts` and apply. Each service goes back to stdout only on its next deploy.
+
+---
+
+## Traces in Grafana Cloud
+
+The api, the order-service, the inventory-service and the payment-service export spans over OTLP/HTTP when `OTEL_ENABLED=true`; the user-service and the id-service have no preload, and their work shows as the callers' client spans. The backend is a Grafana Cloud free-tier stack (50 GB of traces a month, 14 days, 3 users), outside Railway, so each process scrubs its spans before they leave (`ScrubbingSpanExporter` in `packages/platform/src/observability/telemetry/`): no email, credential header, query string, client IP, `db.user`, Redis argument, Stripe secret or JSON parse message reaches the backend, and express middleware layers make no span. Only traces leave: the preloads start no OTel metrics or logs pipeline (Prometheus scrapes the metrics, Loki gets the logs). Health probes, `/metrics` scrapes, DNS lookups, socket connects, and database, Redis or outgoing HTTP calls outside a trace (outbox polls, queue pops, reconnects) start no trace. Each scheduler tick runs inside a span, so an idle replica still sends a few traces a minute (`payment.reconcile`, `checkout.reaper`, `inventory.lapsed_hold_sweep` and the like). The gateway drops `traceparent`, `tracestate` and `baggage` from public requests, so every trace starts at a service; the id-service balancer on `:4000` passes them on.
+
+`OTEL_EXPORTER_OTLP_HEADERS` is preserved on the api (`Authorization=Basic%20<base64 of instance-id:token>`). Until the variables below are in `.railway/railway.ts`, nothing exports.
+
+### Turn export on
+
+Export goes on in a change of its own, after the code that scrubs is running. An apply restarts each service whose variables changed on the image it already runs, before CD deploys it, so a single change would restart the old preloads with export on and nothing scrubbed.
+
+1. In Grafana Cloud, create the stack and an access-policy token with `traces:write` only. From the stack's OpenTelemetry tile, note the OTLP endpoint (`https://otlp-gateway-prod-<region>.grafana.net/otlp`) and the header value.
+2. Check that all four services run the scrubbing code: their latest deployment is the CD run of the commit that added `packages/platform/src/observability/telemetry/`, or a later one.
+3. Set `OTEL_EXPORTER_OTLP_HEADERS` on the api in the dashboard. Deploying that restarts the api, which still exports nothing.
+4. Merge the change that adds, on the four services, `OTEL_ENABLED: 'true'`, `OTEL_EXPORTER_OTLP_ENDPOINT` (the endpoint, no `/v1/traces`), `OTEL_TRACES_SAMPLER: 'parentbased_traceidratio'` and `OTEL_TRACES_SAMPLER_ARG: '1.0'`, and on the order-, inventory- and payment-service `OTEL_EXPORTER_OTLP_HEADERS` as a reference to the api's. `railway config plan` must show additions only. CD's apply restarts the four with export on.
+5. Place an order. In Grafana Cloud → Explore → Tempo, `{ resource.service.name = "jcool-order-service" }` finds its trace, with api, inventory and payment spans and the id- and user-service calls as client spans. `{ span.user.email != nil }` must find nothing.
+
+### Lower the ratio, or turn export off
+
+Change the `OTEL_TRACES_SAMPLER_ARG` literal of the four services in `.railway/railway.ts` and merge; the apply restarts them. `'0'` samples nothing and is the off switch. Never remove the variables: a removal is a [destructive change](#review-a-destructive-change), and a revert of the change that added them is one.
+
+An invalid sampler name or ratio fails the boot: the SDK would otherwise quietly sample everything.
+
+### Rotate the token
+
+Create a second token, set the new header value on the api in the dashboard, then `railway redeploy --service` the order-, inventory- and payment-service so their references resolve to it. Revoke the old token once spans arrive under the new one.
+
+### When export fails
+
+A request or a boot never waits on the backend, and a shutdown waits at most 3 seconds for the last flush. Each failed batch prints one line to stderr, which Railway's log explorer shows, and its spans are dropped once the exporter's retries run out: `"name":"OTLPExporterError","message":"Unauthorized","code":"401"` is a wrong or revoked token, a connection error such as `"code":"ECONNREFUSED"` a wrong endpoint or a backend outage.
+
+A new attribute source (an instrumentation, a span attribute set in code) is checked against the scrubber's rules before it ships: its unit spec is `scrubbing-span-exporter.spec.ts`, and `trace-export-scrubbing.e2e-spec.ts` decodes what would be sent.
 
 ---
 

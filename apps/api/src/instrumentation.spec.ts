@@ -1,5 +1,7 @@
+import { diag } from '@opentelemetry/api';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TelemetryFlushGlobal } from '@jcool/platform/observability';
+import { autoInstrumentationConfig, ScrubbingSpanExporter } from '@jcool/platform/telemetry';
 
 const telemetryGlobal = globalThis as TelemetryFlushGlobal;
 type Flush = NonNullable<TelemetryFlushGlobal['__flushTelemetry']>;
@@ -8,93 +10,139 @@ type Flush = NonNullable<TelemetryFlushGlobal['__flushTelemetry']>;
 // terminationGracePeriodSeconds next to the readiness grace.
 const FLUSH_CEILING_MS = 3000;
 
+const EXPORTING = { SENTRY_DSN: 'https://public@sentry.invalid/1', OTEL_ENABLED: 'true' };
+
 afterEach(() => {
   delete telemetryGlobal.__flushTelemetry;
+  diag.disable();
+});
+
+interface Loaded {
+  flush: () => Flush;
+  sentryFlush: ReturnType<typeof vi.fn>;
+  sdkConfig: () => Record<string, unknown>;
+  instrumentationConfig: () => unknown;
+}
+
+// Loads the real preload with its telemetry clients stubbed, so what is under test is the shipped
+// wiring.
+async function withInstrumentation(
+  env: Record<string, string | undefined>,
+  otelShutdown: () => Promise<void>,
+  body: (loaded: Loaded) => void | Promise<void>,
+): Promise<void> {
+  const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  const sentryFlush = vi.fn(() => Promise.resolve(true));
+  let sdkConfig: Record<string, unknown> | undefined;
+  let instrumentationConfig: unknown;
+  vi.doMock('@sentry/nestjs', () => ({
+    init: (): void => undefined,
+    httpIntegration: (): Record<string, never> => ({}),
+    SentryContextManager: class {},
+    flush: sentryFlush,
+  }));
+  vi.doMock('@opentelemetry/sdk-node', () => ({
+    NodeSDK: class {
+      constructor(config: Record<string, unknown>) {
+        sdkConfig = config;
+      }
+      start(): void {}
+      shutdown = otelShutdown;
+    },
+  }));
+  // Real instrumentations would patch modules in this worker for the rest of the run.
+  vi.doMock('@opentelemetry/auto-instrumentations-node', () => ({
+    getNodeAutoInstrumentations: (config: unknown) => {
+      instrumentationConfig = config;
+      return [];
+    },
+  }));
+
+  try {
+    // `.js` because a dynamic import is resolved as ESM even from a CJS-emitted spec.
+    await import('./instrumentation.js');
+    await body({
+      flush: () => {
+        const flush = telemetryGlobal.__flushTelemetry;
+        if (!flush) throw new Error('instrumentation published no flush handle');
+        return flush;
+      },
+      sentryFlush,
+      sdkConfig: () => {
+        if (!sdkConfig) throw new Error('instrumentation built no NodeSDK');
+        return sdkConfig;
+      },
+      instrumentationConfig: () => instrumentationConfig,
+    });
+  } finally {
+    vi.useRealTimers();
+    vi.doUnmock('@sentry/nestjs');
+    vi.doUnmock('@opentelemetry/sdk-node');
+    vi.doUnmock('@opentelemetry/auto-instrumentations-node');
+    vi.resetModules();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+const never = (): Promise<void> => new Promise<void>(() => undefined);
+
+// Spans leave the process for a third-party backend, so only through the scrubber.
+describe('trace export wiring', () => {
+  it('exports every span through the scrubbing exporter', async () => {
+    await withInstrumentation(EXPORTING, never, ({ sdkConfig }) => {
+      expect(sdkConfig().traceExporter).toBeInstanceOf(ScrubbingSpanExporter);
+    });
+  });
+
+  it('instruments with the shared configuration', async () => {
+    await withInstrumentation(EXPORTING, never, ({ instrumentationConfig }) => {
+      expect(instrumentationConfig()).toEqual(autoInstrumentationConfig());
+    });
+  });
+
+  it('starts no metrics or logs pipeline next to the traces', async () => {
+    await withInstrumentation(EXPORTING, never, ({ sdkConfig }) => {
+      expect(sdkConfig()).toMatchObject({ metricReaders: [], logRecordProcessors: [] });
+    });
+  });
 });
 
 // The handle TelemetryFlushService awaits, as the preload publishes it.
 describe('published telemetry flush', () => {
-  // Loads the real preload with its telemetry clients stubbed, so the published handle under test is
-  // the shipped one. `sentryFlush` is the spy each case asserts on.
-  async function withInstrumentation(
-    env: Record<string, string | undefined>,
-    otelShutdown: () => Promise<void>,
-    body: (flush: Flush, sentryFlush: ReturnType<typeof vi.fn>) => Promise<void>,
-  ): Promise<void> {
-    const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    const sentryFlush = vi.fn(() => Promise.resolve(true));
-    vi.doMock('@sentry/nestjs', () => ({
-      init: (): void => undefined,
-      httpIntegration: (): Record<string, never> => ({}),
-      SentryContextManager: class {},
-      flush: sentryFlush,
-    }));
-    vi.doMock('@opentelemetry/sdk-node', () => ({
-      NodeSDK: class {
-        start(): void {}
-        shutdown = otelShutdown;
-      },
-    }));
-
-    try {
-      // `.js` because a dynamic import is resolved as ESM even from a CJS-emitted spec.
-      await import('./instrumentation.js');
-      const flush = telemetryGlobal.__flushTelemetry;
-      if (!flush) throw new Error('instrumentation published no flush handle');
-      await body(flush, sentryFlush);
-    } finally {
-      vi.useRealTimers();
-      vi.doUnmock('@sentry/nestjs');
-      vi.doUnmock('@opentelemetry/sdk-node');
-      vi.resetModules();
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
-  }
-
-  const never = (): Promise<void> => new Promise<void>(() => undefined);
-
   // A dead telemetry sink must not stall the exit.
   it('gives up on a flush that never lands once the ceiling passes', async () => {
-    await withInstrumentation(
-      { SENTRY_DSN: 'https://public@sentry.invalid/1', OTEL_ENABLED: 'true' },
-      never,
-      async (flush) => {
-        vi.useFakeTimers();
-        let outcome: string | undefined;
-        void flush().then((settled) => {
-          outcome = settled;
-        });
+    await withInstrumentation(EXPORTING, never, async ({ flush }) => {
+      vi.useFakeTimers();
+      let outcome: string | undefined;
+      void flush()().then((settled) => {
+        outcome = settled;
+      });
 
-        await vi.advanceTimersByTimeAsync(FLUSH_CEILING_MS - 1);
-        expect(outcome).toBeUndefined();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(outcome).toBe('timed_out');
-      },
-    );
+      await vi.advanceTimersByTimeAsync(FLUSH_CEILING_MS - 1);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toBe('timed_out');
+    });
   });
 
   // A blackholed OTLP endpoint is the case the ceiling exists for, and it is also when Sentry holds
   // the errors worth keeping. Chaining the two flushes would spend the whole budget on the collector.
   it('still flushes Sentry when the OTLP shutdown never returns', async () => {
-    await withInstrumentation(
-      { SENTRY_DSN: 'https://public@sentry.invalid/1', OTEL_ENABLED: 'true' },
-      never,
-      async (flush, sentryFlush) => {
-        vi.useFakeTimers();
-        void flush();
-        // One microtask is all it takes: both flushes are started together, so Sentry's is already
-        // in flight. Awaiting the OTLP shutdown first would leave this at zero calls forever.
-        await Promise.resolve();
+    await withInstrumentation(EXPORTING, never, async ({ flush, sentryFlush }) => {
+      vi.useFakeTimers();
+      void flush()();
+      // One microtask is all it takes: both flushes are started together, so Sentry's is already
+      // in flight. Awaiting the OTLP shutdown first would leave this at zero calls forever.
+      await Promise.resolve();
 
-        expect(sentryFlush).toHaveBeenCalledOnce();
-      },
-    );
+      expect(sentryFlush).toHaveBeenCalledOnce();
+    });
   });
 });

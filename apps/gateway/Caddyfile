@@ -45,6 +45,10 @@
 	}
 	# Responses leave as the app wrote them. reverse_proxy adds Via after header_down would run.
 	header -Via
+	# Traces start here: a client must not pick its trace id or force sampling of an exported trace.
+	request_header -traceparent
+	request_header -tracestate
+	request_header -baggage
 
 	handle /health/live {
 		respond "ok" 200

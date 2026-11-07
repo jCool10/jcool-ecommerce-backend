@@ -1,6 +1,7 @@
 // Preload via `node --import ./dist/instrumentation.js` before the app, so auto-instrumentation can
 // patch pg/ioredis/http as they load. Runs before Nest's ConfigModule, hence the raw process.env.
 import * as Sentry from '@sentry/nestjs';
+import { DiagConsoleLogger, DiagLogLevel, diag } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
@@ -9,6 +10,7 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 // Not the observability barrel: it would load Nest and nestjs-pino before the SDK can patch them.
 import { scrubPii } from '@jcool/platform/error-tracking';
 import type { TelemetryFlushGlobal } from '@jcool/platform/observability';
+import { ScrubbingSpanExporter, autoInstrumentationConfig } from '@jcool/platform/telemetry';
 
 const sentryEnabled = Boolean(process.env.SENTRY_DSN);
 
@@ -48,26 +50,23 @@ if (process.env.OTEL_ENABLED === 'true') {
   const serviceName = process.env.OTEL_SERVICE_NAME ?? 'jcool-api';
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318';
 
+  // A refused or unauthorized export never fails a request, so the service log is the only place it shows.
+  diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN);
+
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: serviceName }),
-    traceExporter: new OTLPTraceExporter({ url: `${endpoint}/v1/traces` }),
+    // The credential comes from OTEL_EXPORTER_OTLP_HEADERS, which the exporter reads next to this url.
+    traceExporter: new ScrubbingSpanExporter(new OTLPTraceExporter({ url: `${endpoint}/v1/traces` })),
+    // Left unset, NodeSDK starts OTLP metric and log exporters from the same environment, past the
+    // scrubber and the sampler. Prometheus scrapes the metrics and pino writes the logs.
+    metricReaders: [],
+    logRecordProcessors: [],
     // Sentry's context manager is a strict superset of AsyncLocalStorage: it adds Sentry scopes (so
     // error events pick up the active traceId) then delegates to normal OTel propagation. It is the
     // only piece of Sentry's tracing pipeline wired in — a Sentry span processor and sampler would
     // fight the OTel sampler and the W3C propagation seam this export depends on.
     ...(sentryEnabled ? { contextManager: new Sentry.SentryContextManager() } : {}),
-    instrumentations: [
-      getNodeAutoInstrumentations({
-        // fs spans are noise for an HTTP service.
-        '@opentelemetry/instrumentation-fs': { enabled: false },
-        // pino gets traceId/spanId from our own mixin (logger.module); avoid a second path.
-        '@opentelemetry/instrumentation-pino': { enabled: false },
-        '@opentelemetry/instrumentation-http': { enabled: true },
-        '@opentelemetry/instrumentation-express': { enabled: true },
-        '@opentelemetry/instrumentation-pg': { enabled: true },
-        '@opentelemetry/instrumentation-ioredis': { enabled: true },
-      }),
-    ],
+    instrumentations: [getNodeAutoInstrumentations(autoInstrumentationConfig())],
   });
 
   sdk.start();

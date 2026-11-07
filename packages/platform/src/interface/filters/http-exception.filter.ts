@@ -16,6 +16,7 @@ import {
   getDbQueryCount,
   getRequestDurationMs,
 } from '../../observability';
+import { JSON_PARSE_ERROR, MALFORMED_BODY_REASON } from '../../observability/logging/json-parse-error';
 
 // Plain numbers so comparisons don't mix enum/number (no-unsafe-enum-comparison).
 const SERVER_ERROR_MIN: number = HttpStatus.INTERNAL_SERVER_ERROR;
@@ -220,12 +221,8 @@ function exposedClientError(exception: unknown): { status: number; message: stri
   return { status, message: exception.message };
 }
 
-const MALFORMED_BODY_REASON = 'malformed request body';
-
-// Nest rewraps body-parser's SyntaxError as a BadRequestException with only its message, and V8's
-// JSON.parse message quotes the body around the fault, so it must never reach the log.
-const JSON_PARSE_ERROR = /(in JSON at position \d+|is not valid JSON|Unexpected end of JSON input)/;
-
+// Nest rewraps body-parser's SyntaxError as a BadRequestException with only its message, which must
+// never reach the log.
 function isMalformedJsonBody(exception: unknown, message: unknown, cause: unknown): boolean {
   if (!(exception instanceof BadRequestException)) return false;
   if (cause instanceof SyntaxError) return true;

@@ -1,5 +1,6 @@
 // An id-service replica the spec can steer: POST /__mode/{ok|503|hang}; GET /__hits counts mints it saw.
 // A mint whose body is not the one the spec sends is refused with 400, so a retry that lost its body shows.
+// A mint's answer names the trace context the replica received.
 const http = require('node:http');
 const { hostname } = require('node:os');
 
@@ -29,7 +30,14 @@ http
       if (mode === 'hang') return;
       const status = body !== EXPECTED_BODY ? 400 : mode === '503' ? 503 : 200;
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ replica: hostname(), code: status === 503 ? 'LEASE_NOT_HELD' : undefined }));
+      res.end(
+        JSON.stringify({
+          replica: hostname(),
+          code: status === 503 ? 'LEASE_NOT_HELD' : undefined,
+          traceparent: req.headers.traceparent,
+          tracestate: req.headers.tracestate,
+        }),
+      );
     });
   })
   .listen(3000);

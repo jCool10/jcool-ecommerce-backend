@@ -127,6 +127,24 @@ describe('gateway: public site', () => {
     expect(echo.headers['x-request-id']).toBe('req-1');
   });
 
+  // Once traces are exported, a client's sampled flag would force sampling and its trace id would be ours.
+  it("drops the client's trace context on every route", async () => {
+    const traceContext = {
+      traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+      tracestate: 'vendor=opaque',
+      baggage: 'user.id=42',
+    };
+
+    for (const path of ['/products', '/orders/1']) {
+      const echo = await echoOf(direct(path, { headers: traceContext }));
+
+      expect(echo.upstream, path).toBe(path === '/products' ? 'api' : 'order');
+      expect(echo.headers, path).not.toHaveProperty('traceparent');
+      expect(echo.headers, path).not.toHaveProperty('tracestate');
+      expect(echo.headers, path).not.toHaveProperty('baggage');
+    }
+  });
+
   it("hands the api's response back without adding or changing a header", async () => {
     const [proxied, straight] = await Promise.all([direct('/products'), fetch(fixtureUrl(api, '/products'))]);
 
