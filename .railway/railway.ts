@@ -36,6 +36,9 @@ const API_VARIABLES = [
   // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.
   'METRICS_TOKEN',
   'NODE_ENV',
+  // The trace backend's credential, `Authorization=Basic%20<base64>`; the other exporting services
+  // reference it. Unread until OTEL_ENABLED is true.
+  'OTEL_EXPORTER_OTLP_HEADERS',
   'POSTGRES_DB',
   'POSTGRES_HOST_PORT',
   'POSTGRES_PASSWORD',

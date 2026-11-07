@@ -1,11 +1,7 @@
 import { spanExporter } from '../setup/tracing-preload';
 import { randomBytes } from 'node:crypto';
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import type { INestApplication } from '@nestjs/common';
 import { SpanKind, trace } from '@opentelemetry/api';
-import { type ExportResult, ExportResultCode } from '@opentelemetry/core';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import type { Pool } from 'pg';
 import request from 'supertest';
@@ -23,6 +19,7 @@ import {
 } from '../setup/fixtures/order-flow.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { type InventoryServiceStub, inventoryServiceStub } from '../setup/inventory-service-stub';
+import { exportOverOtlp, otlpCollector } from '../setup/otlp-collector';
 import { type PaymentServiceStub, paymentServiceStub } from '../setup/payment-service-stub';
 
 const newTraceId = (): string => randomBytes(16).toString('hex');
@@ -63,36 +60,6 @@ const ancestorsOf = (span: ReadableSpan | undefined): ReadableSpan[] => {
   for (let parent = span && parentOf(span); parent; parent = parentOf(parent)) chain.push(parent);
   return chain;
 };
-
-interface OtlpSpan {
-  traceId: string;
-  spanId: string;
-  parentSpanId?: string;
-  name: string;
-}
-
-/** Answers like an OTLP/HTTP collector and keeps every span it was sent. */
-async function otlpCollector() {
-  const bodies: string[] = [];
-  const server = createServer((req, res) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => (raw += chunk.toString()));
-    req.on('end', () => {
-      bodies.push(raw);
-      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
-    });
-  });
-  await new Promise<void>((listening) => server.listen(0, '127.0.0.1', listening));
-  return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/traces`,
-    spans: (): OtlpSpan[] =>
-      bodies.flatMap((body) => {
-        const request = JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] };
-        return request.resourceSpans.flatMap(({ scopeSpans }) => scopeSpans.flatMap(({ spans }) => spans));
-      }),
-    close: () => new Promise<void>((closed) => server.close(() => closed())),
-  };
-}
 
 describe('Checkout saga trace (integration, real Temporal, OpenTelemetry SDK in process)', () => {
   let app: INestApplication;
@@ -209,12 +176,9 @@ describe('Checkout saga trace (integration, real Temporal, OpenTelemetry SDK in 
     expect(run.resource.attributes).toHaveProperty(['host.name']);
 
     const collector = await otlpCollector();
-    const exporter = new OTLPTraceExporter({ url: collector.url });
     try {
-      const result = await new Promise<ExportResult>((done) => exporter.export(spans, done));
-      expect(result).toMatchObject({ code: ExportResultCode.SUCCESS });
+      await exportOverOtlp(collector, spans);
     } finally {
-      await exporter.shutdown();
       await collector.close();
     }
 

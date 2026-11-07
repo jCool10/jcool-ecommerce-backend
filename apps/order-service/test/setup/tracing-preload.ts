@@ -5,12 +5,14 @@ import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentation
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { afterAll, beforeAll } from 'vitest';
+import { ScrubbingSpanExporter, autoInstrumentationConfig } from '@jcool/platform/telemetry';
 import type { WorkflowSpanExportGlobal } from '../../src/modules/order/infrastructure/temporal/workflow-tracing';
 import { telemetryResource } from '../../src/telemetry-resource';
 
+/** Holds what production would send to the backend: every span here has been scrubbed. */
 export const spanExporter = new InMemorySpanExporter();
 
-const spanProcessor = new SimpleSpanProcessor(spanExporter);
+const spanProcessor = new SimpleSpanProcessor(new ScrubbingSpanExporter(spanExporter));
 const resource = telemetryResource('jcool-order-service');
 const sdk = new NodeSDK({
   resource,
@@ -32,12 +34,20 @@ afterAll(async () => {
 });
 
 function instrumentations(): ReturnType<typeof getNodeAutoInstrumentations> {
-  // The env list is the only way to switch every other instrumentation off.
-  process.env.OTEL_NODE_ENABLED_INSTRUMENTATIONS = 'http,express,undici';
+  const production = autoInstrumentationConfig();
+  // The env list is the only way to switch every other instrumentation off. The request path's
+  // instrumentations take production's settings, so a span production would make is made here too.
+  process.env.OTEL_NODE_ENABLED_INSTRUMENTATIONS = 'http,express,router,undici';
   try {
     return getNodeAutoInstrumentations({
-      // Else supertest's request opens a trace of its own and overwrites the traceparent a test sets.
-      '@opentelemetry/instrumentation-http': { ignoreOutgoingRequestHook: () => true },
+      '@opentelemetry/instrumentation-http': {
+        ...production['@opentelemetry/instrumentation-http'],
+        // Else supertest's request opens a trace of its own and overwrites the traceparent a test sets.
+        ignoreOutgoingRequestHook: () => true,
+      },
+      '@opentelemetry/instrumentation-express': production['@opentelemetry/instrumentation-express'],
+      '@opentelemetry/instrumentation-router': production['@opentelemetry/instrumentation-router'],
+      '@opentelemetry/instrumentation-undici': production['@opentelemetry/instrumentation-undici'],
     });
   } finally {
     delete process.env.OTEL_NODE_ENABLED_INSTRUMENTATIONS;

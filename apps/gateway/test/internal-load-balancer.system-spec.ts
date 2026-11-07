@@ -76,6 +76,20 @@ describe('gateway: internal load balancer over id-service', () => {
     expect(new Set(answers.map((answer) => answer.replica))).toEqual(new Set(replicas.map(replicaName)));
   });
 
+  // The callers' traces show each mint as a client span with the id-service under it.
+  it("passes the caller's trace context to the id-service", async () => {
+    const traceparent = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
+
+    const res = await fetch(urlOf(gateway, LB_PORT, '/v1/ids'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', traceparent, tracestate: 'vendor=opaque' },
+      body: JSON.stringify({ count: 1 }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ traceparent, tracestate: 'vendor=opaque' });
+  });
+
   it('retries a mint a replica refused with 503 on another one, then keeps that replica out', async () => {
     const [unleased] = replicas;
     await setMode(unleased, '503');
