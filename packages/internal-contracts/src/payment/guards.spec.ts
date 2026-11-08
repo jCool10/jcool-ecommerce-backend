@@ -6,11 +6,26 @@ import {
   isOpenSessionResponse,
   isPaymentStatusResponse,
   isProviderUnavailable,
+  isRefundResponse,
   paymentStatusesOf,
+  refundOutcomeOf,
   sessionOutcomeOf,
 } from './guards';
-import { CANCEL_OUTCOME_STATUS, CAPTURE_OUTCOME_STATUS, SESSION_OUTCOME_STATUS, paymentRoutes } from './routes';
-import { CANCEL_OUTCOMES, CAPTURE_OUTCOMES, PROVIDER_UNAVAILABLE, type PaymentStatusEntry } from './types';
+import {
+  CANCEL_OUTCOME_STATUS,
+  CAPTURE_OUTCOME_STATUS,
+  REFUND_OUTCOME_STATUS,
+  SESSION_OUTCOME_STATUS,
+  paymentRoutes,
+} from './routes';
+import {
+  CANCEL_OUTCOMES,
+  CAPTURE_OUTCOMES,
+  PAYMENT_ORDER_STATUSES,
+  PROVIDER_UNAVAILABLE,
+  REFUND_OUTCOMES,
+  type PaymentStatusEntry,
+} from './types';
 
 const OPENED = { outcome: 'OPENED', paymentId: '7', providerSessionId: 'cs_1', redirectUrl: 'https://pay.test/cs_1' };
 const NOTHING: PaymentStatusEntry = {
@@ -67,9 +82,27 @@ describe('payment response guards', () => {
     expect(isCancelResponse(body)).toBe(false);
   });
 
+  it.each(REFUND_OUTCOMES)('accepts a refund answered %s', (outcome) => {
+    expect(isRefundResponse({ outcome })).toBe(true);
+  });
+
+  it.each([undefined, {}, { outcome: 'CAPTURED' }, { outcome: 'REFUND_FAILED', reason: 7 }])(
+    'refuses %j as a refund answer',
+    (body) => {
+      expect(isRefundResponse(body)).toBe(false);
+    },
+  );
+
   it('accepts statuses that carry every field', () => {
     expect(isPaymentStatusResponse({ statuses: {} })).toBe(true);
     expect(isPaymentStatusResponse({ statuses: { '1': NOTHING, '2': HELD } })).toBe(true);
+  });
+
+  it('accepts the refund headers, appended after FENCED in the enum order', () => {
+    expect(PAYMENT_ORDER_STATUSES.slice(-4)).toEqual(['FENCED', 'REFUNDING', 'REFUNDED', 'REFUND_FAILED']);
+    for (const header of ['REFUNDING', 'REFUNDED', 'REFUND_FAILED']) {
+      expect(isPaymentStatusResponse({ statuses: { '1': { ...HELD, header } } })).toBe(true);
+    }
   });
 
   it.each([
@@ -109,6 +142,38 @@ describe('payment outcome and status code', () => {
     expect(cancelOutcomeOf(200, { outcome: 'FENCED' })).toBe('FENCED');
     expect(cancelOutcomeOf(409, { outcome: 'CAPTURED_CONFLICT' })).toBe('CAPTURED_CONFLICT');
     expect(cancelOutcomeOf(409, { outcome: 'CANCELLED' })).toBeUndefined();
+  });
+
+  it('maps a refund to 202 while Stripe holds it and to 409 on its refusals', () => {
+    expect(REFUND_OUTCOME_STATUS).toEqual({
+      REFUNDED: 200,
+      IDEMPOTENT: 200,
+      PENDING: 202,
+      REFUND_FAILED: 409,
+      NOT_REFUNDABLE: 409,
+    });
+  });
+
+  it.each([
+    [200, 'REFUNDED'],
+    [200, 'IDEMPOTENT'],
+    [202, 'PENDING'],
+    [409, 'REFUND_FAILED'],
+    [409, 'NOT_REFUNDABLE'],
+  ] as const)('reads a refund answered %i %s', (status, outcome) => {
+    expect(refundOutcomeOf(status, { outcome })).toEqual({ outcome });
+  });
+
+  it('reads a refund only when the status code agrees with it, keeping the failure reason', () => {
+    expect(refundOutcomeOf(409, { outcome: 'REFUND_FAILED', reason: 'expired_or_canceled_card', extra: 1 })).toEqual({
+      outcome: 'REFUND_FAILED',
+      reason: 'expired_or_canceled_card',
+    });
+    expect(refundOutcomeOf(200, { outcome: 'PENDING' })).toBeUndefined();
+    expect(refundOutcomeOf(202, { outcome: 'REFUNDED' })).toBeUndefined();
+    expect(refundOutcomeOf(200, { outcome: 'NOT_REFUNDABLE' })).toBeUndefined();
+    expect(refundOutcomeOf(409, { outcome: 'CANCELLED' })).toBeUndefined();
+    expect(refundOutcomeOf(409, { message: 'Conflict' })).toBeUndefined();
   });
 
   it('keeps only the fields of the contract from an opened session', () => {
@@ -153,6 +218,7 @@ describe('paymentRoutes', () => {
     expect(paymentRoutes.session('42')).toBe('/internal/v1/payments/42/session');
     expect(paymentRoutes.capture('42')).toBe('/internal/v1/payments/42/capture');
     expect(paymentRoutes.cancel('a/b')).toBe('/internal/v1/payments/a%2Fb/cancel');
+    expect(paymentRoutes.refund('42')).toBe('/internal/v1/payments/42/refund');
     expect(paymentRoutes.status).toBe('/internal/v1/payments/status');
   });
 });

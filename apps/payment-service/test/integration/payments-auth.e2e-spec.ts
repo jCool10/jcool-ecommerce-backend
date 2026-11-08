@@ -32,6 +32,7 @@ describe('Internal API auth (integration)', () => {
       },
       { path: paymentRoutes.capture(orderId), body: undefined },
       { path: paymentRoutes.cancel(orderId), body: undefined },
+      { path: paymentRoutes.refund(orderId), body: { requestedBy: testId() } },
       { path: paymentRoutes.status, body: { orderIds: [orderId] } },
     ];
   };
@@ -70,7 +71,7 @@ describe('Internal API auth (integration)', () => {
   // The guard refuses a route that names no caller, so a handler-level override could only narrow it.
   it('admits only the order-service on every internal route', () => {
     const reflector = app.get(Reflector);
-    const handlers = ['openSession', 'capture', 'cancel', 'status'] as const;
+    const handlers = ['openSession', 'capture', 'cancel', 'refund', 'status'] as const;
 
     // Only a metadata target, never called.
     const handlerOf = (name: string) =>

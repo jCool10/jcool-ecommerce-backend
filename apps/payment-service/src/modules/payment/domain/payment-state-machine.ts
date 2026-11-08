@@ -8,8 +8,8 @@ interface Transition {
   from: PaymentStatus;
   to: PaymentStatus;
   /**
-   * Declared edges default to wired; a future refund/chargeback edge lands here as a flag flip,
-   * not a restructure. false = declared but rejected at runtime.
+   * false = declared but rejected at runtime. A refund is not an edge here: the attempt stays
+   * SUCCEEDED because the money was taken, and the refund is its own `payment_refunds` row.
    */
   wired: boolean;
 }

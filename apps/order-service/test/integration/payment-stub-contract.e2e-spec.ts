@@ -28,6 +28,9 @@ describe('Payment-service stub against the shared contract', () => {
         stub.providerDown('capture');
         return Promise.resolve();
       },
+      stripeRefundPending: (orderId) => Promise.resolve(stub.stripeRefundPending(orderId)),
+      stripeFailsRefund: (orderId) => Promise.resolve(stub.stripeFailsRefund(orderId)),
+      refundOutOfBand: (orderId) => Promise.resolve(stub.refundOutOfBand(orderId)),
     });
   });
   beforeEach(() => stub.reset());

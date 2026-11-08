@@ -10,12 +10,14 @@ import {
   PAYMENTS_PREFIX,
   PROVIDER_UNAVAILABLE,
   PROVIDER_UNAVAILABLE_STATUS,
+  REFUND_OUTCOME_STATUS,
   SESSION_OUTCOME_STATUS,
   type CancelOutcome,
   type CaptureOutcome,
   type OpenSessionResponse,
   type PaymentOrderStatus,
   type PaymentStatusEntry,
+  type RefundResponse,
 } from '@jcool/internal-contracts';
 import {
   PAYMENT_AUTHORIZED_EVENT,
@@ -26,7 +28,12 @@ import { type DomainEventJob, buildJobOptions, jobIdFor } from '@jcool/messaging
 import { testId } from './id-service-stub';
 import { workerRedisUrl } from './worker-resources';
 
-export type PaymentStubRoute = 'session' | 'capture' | 'cancel' | 'status';
+export type PaymentStubRoute = 'session' | 'capture' | 'cancel' | 'refund' | 'status';
+
+/** How Stripe answers the order's next refund, when not with success. */
+type RefundArrangement = 'pending' | 'fails';
+
+const STUB_REFUND_FAILURE = 'expired_or_canceled_card';
 
 export type StubAttemptStatus = 'PENDING' | 'AUTHORIZED' | 'SUCCEEDED' | 'FAILED' | 'EXPIRED' | 'VOIDED';
 
@@ -78,6 +85,8 @@ export class PaymentServiceStub {
   private readonly captures = new Map<string, number>();
   private readonly statusOverrides = new Map<string, PaymentStatusEntry>();
   private readonly droppedHolds = new Set<string>();
+  private readonly refundArrangements = new Map<string, RefundArrangement>();
+  private readonly refundedOutOfBand = new Set<string>();
   private readonly published = new Map<string, DomainEventJob>();
   private readonly faults = new Map<PaymentStubRoute, Fault>();
   private readonly counts = new Map<PaymentStubRoute, number>();
@@ -216,6 +225,21 @@ export class PaymentServiceStub {
     this.droppedHolds.add(orderId);
   }
 
+  /** Stripe holds the order's next refund as pending, and nothing here settles it. */
+  stripeRefundPending(orderId: string): void {
+    this.refundArrangements.set(orderId, 'pending');
+  }
+
+  /** Stripe fails the order's next refund. */
+  stripeFailsRefund(orderId: string): void {
+    this.refundArrangements.set(orderId, 'fails');
+  }
+
+  /** The whole charge is refunded outside the shop; the next refund adopts it instead of refunding again. */
+  refundOutOfBand(orderId: string): void {
+    this.refundedOutOfBand.add(orderId);
+  }
+
   /** Answers the next `times` calls to the route with a bare `status`; nothing is applied. */
   fail(route: PaymentStubRoute, status: number, { times = 1 }: FaultOptions = {}): void {
     this.faults.set(route, { kind: 'status', status, remaining: times });
@@ -254,6 +278,8 @@ export class PaymentServiceStub {
     this.captures.clear();
     this.statusOverrides.clear();
     this.droppedHolds.clear();
+    this.refundArrangements.clear();
+    this.refundedOutOfBand.clear();
     this.published.clear();
     this.faults.clear();
     this.counts.clear();
@@ -306,6 +332,9 @@ export class PaymentServiceStub {
       case 'OPEN':
         return 'CONFLICT';
       case 'CAPTURED':
+      case 'REFUNDING':
+      case 'REFUNDED':
+      case 'REFUND_FAILED':
         return 'IDEMPOTENT';
       case 'CANCELLED':
       case 'FENCED':
@@ -332,6 +361,9 @@ export class PaymentServiceStub {
         this.headers.set(orderId, { orderId, status: 'FENCED', amountMinor: null, currency: null });
         return 'FENCED';
       case 'CAPTURED':
+      case 'REFUNDING':
+      case 'REFUNDED':
+      case 'REFUND_FAILED':
         return 'CAPTURED_CONFLICT';
       // A repeat still lets go of anything left open under the header, as the real rescan does.
       case 'CANCELLED':
@@ -343,6 +375,41 @@ export class PaymentServiceStub {
         this.release(orderId);
         header.status = 'CANCELLED';
         return 'CANCELLED';
+    }
+  }
+
+  /** Always the captured amount, at most one provider refund per order, as the real service. */
+  refund(orderId: string): RefundResponse {
+    const header = this.headers.get(orderId);
+    switch (header?.status) {
+      case undefined:
+      case 'OPEN':
+      case 'AUTHORIZED':
+      case 'CANCELLED':
+      case 'FENCED':
+        return { outcome: 'NOT_REFUNDABLE' };
+      case 'REFUNDED':
+        return { outcome: 'IDEMPOTENT' };
+      case 'REFUND_FAILED':
+        return { outcome: 'REFUND_FAILED', reason: STUB_REFUND_FAILURE };
+      case 'REFUNDING':
+        return { outcome: 'PENDING' };
+      case 'CAPTURED':
+        break;
+    }
+
+    const arrangement = this.refundedOutOfBand.has(orderId) ? undefined : this.refundArrangements.get(orderId);
+    this.refundArrangements.delete(orderId);
+    switch (arrangement) {
+      case 'pending':
+        header.status = 'REFUNDING';
+        return { outcome: 'PENDING' };
+      case 'fails':
+        header.status = 'REFUND_FAILED';
+        return { outcome: 'REFUND_FAILED', reason: STUB_REFUND_FAILURE };
+      case undefined:
+        header.status = 'REFUNDED';
+        return { outcome: 'REFUNDED' };
     }
   }
 
@@ -431,17 +498,23 @@ export class PaymentServiceStub {
         const outcome = this.cancel(route.orderId);
         return void reply(res, CANCEL_OUTCOME_STATUS[outcome], { outcome });
       }
+      case 'refund': {
+        if (!isRefundBody(body)) return void badRequest(res);
+        const answer = this.refund(route.orderId);
+        return void reply(res, REFUND_OUTCOME_STATUS[answer.outcome], answer);
+      }
     }
   }
 }
 
-type Route = { name: 'status' } | { name: Exclude<PaymentStubRoute, 'status'>; orderId: string };
+type OrderRoute = Exclude<PaymentStubRoute, 'status'>;
+type Route = { name: 'status' } | { name: OrderRoute; orderId: string };
 
 function routeOf(path: string): Route | null {
   if (path === `/${PAYMENTS_PREFIX}/status`) return { name: 'status' };
-  const match = new RegExp(`^/${PAYMENTS_PREFIX}/([^/]+)/(session|capture|cancel)$`).exec(path);
+  const match = new RegExp(`^/${PAYMENTS_PREFIX}/([^/]+)/(session|capture|cancel|refund)$`).exec(path);
   if (!match) return null;
-  return { name: match[2] as 'session' | 'capture' | 'cancel', orderId: decodeURIComponent(match[1]) };
+  return { name: match[2] as OrderRoute, orderId: decodeURIComponent(match[1]) };
 }
 
 function traceparentOf(req: IncomingMessage): string | null {
@@ -502,6 +575,15 @@ function isSessionBody(body: unknown): body is { amountMinor: number; currency: 
     /^[A-Za-z]{3}$/.test(currency) &&
     typeof expiresAt === 'string' &&
     !Number.isNaN(Date.parse(expiresAt))
+  );
+}
+
+function isRefundBody(body: unknown): body is { requestedBy: string } {
+  return (
+    isRecord(body) &&
+    Object.keys(body).every((key) => key === 'requestedBy') &&
+    typeof body.requestedBy === 'string' &&
+    isRoutableId(body.requestedBy)
   );
 }
 

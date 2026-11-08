@@ -1,3 +1,5 @@
+import type { ReportedRefund } from '../../domain/refund-settlement';
+
 // FakeSignerGatewayAdapter implements this alongside StripeGatewayAdapter, which is how e2e exercises
 // the webhook path without Stripe's signing key.
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
@@ -32,6 +34,27 @@ export interface SessionAuthorization {
 export type CaptureIntentResult = { kind: 'captured' } | { kind: 'not_capturable'; intentStatus: IntentStatus };
 
 export type VoidIntentOutcome = 'voided' | 'already_canceled' | 'already_captured';
+
+export interface RefundIntentInput {
+  intentId: string;
+  /** The captured amount, sent as is: VND has no minor unit. */
+  amountMinor: number;
+  currency: string;
+  orderId: string;
+  requestedBy: string;
+}
+
+/**
+ * A refund as Stripe holds it. A refusal Stripe will never accept comes back `failed` with the code as
+ * `failureReason` and no `refundId`, so it settles like a refund Stripe failed.
+ */
+export interface ProviderRefund extends ReportedRefund {
+  /** Null only for a refund of a charge no PaymentIntent made, which this shop never creates. */
+  intentId: string | null;
+  metadataOrderId: string | null;
+  amountMinor: number;
+  currency: string;
+}
 
 export interface GatewaySession {
   providerSessionId: string; // handle persisted on Payment (Stripe: cs_...)
@@ -107,6 +130,12 @@ export interface PaymentGatewayPort {
   /** The key must stay the same across every retry of one capture; see `retryWithFreshKey`. */
   captureIntent(intentId: string, idempotencyKey: string): Promise<CaptureIntentResult>;
   voidIntent(intentId: string, idempotencyKey: string): Promise<VoidIntentOutcome>;
+  /**
+   * Refunds `amountMinor` of the intent, or adopts the refund already covering it, found by the intent
+   * whatever its metadata. A listed refund whose metadata names another order is never adopted.
+   */
+  refundIntent(input: RefundIntentInput, idempotencyKey: string): Promise<ProviderRefund>;
+  retrieveRefund(refundId: string): Promise<ProviderRefund>;
 }
 
 // An upstream provider fault (→ 502), kept distinct from the domain 4xx a bad request raises.

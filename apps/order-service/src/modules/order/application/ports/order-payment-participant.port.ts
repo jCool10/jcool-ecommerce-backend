@@ -3,7 +3,8 @@ import type { SettledCaptureOutcome } from '../../domain/checkout-saga';
 export const ORDER_PAYMENT_PARTICIPANT = Symbol('ORDER_PAYMENT_PARTICIPANT');
 
 /** Mirrors Payment's `payment_orders` header. Declared here so Order never imports Payment. */
-export type PaymentHoldStatus = 'OPEN' | 'AUTHORIZED' | 'CAPTURED' | 'CANCELLED' | 'FENCED';
+export type PaymentHoldStatus =
+  'OPEN' | 'AUTHORIZED' | 'CAPTURED' | 'CANCELLED' | 'FENCED' | 'REFUNDING' | 'REFUNDED' | 'REFUND_FAILED';
 
 export interface PaymentSessionInput {
   orderId: string;

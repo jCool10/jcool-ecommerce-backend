@@ -1,8 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
-import { ProcessWebhookEventUseCase, type WebhookProcessResult } from './process-webhook-event.use-case';
-import type { TccWebhookResult } from './process-tcc-webhook-event.use-case';
+import {
+  ProcessWebhookEventUseCase,
+  type ParticipantWebhookResult,
+  type WebhookProcessResult,
+} from './process-webhook-event.use-case';
 
 const LOG_CONTEXT = 'HandlePaymentWebhook';
 
@@ -17,7 +20,10 @@ export class HandlePaymentWebhookUseCase {
     logger.setContext(LOG_CONTEXT);
   }
 
-  async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult | TccWebhookResult> {
+  async execute(
+    rawBody: Buffer,
+    headers: Record<string, string>,
+  ): Promise<WebhookProcessResult | ParticipantWebhookResult> {
     const result = await this.processWebhookEvent.execute(rawBody, headers);
     if ('path' in result) {
       this.logger.info({ ...result }, 'participant webhook event handled');

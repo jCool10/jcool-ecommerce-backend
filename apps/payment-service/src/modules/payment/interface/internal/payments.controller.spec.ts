@@ -9,13 +9,14 @@ import {
   type PaymentParticipant,
   type PaymentParticipantStatus,
 } from '../../application/public/payment-participant.port';
-import { OpenSessionDto, PaymentStatusDto } from './dto';
+import { OpenSessionDto, PaymentStatusDto, RefundDto } from './dto';
 import { PaymentsController } from './payments.controller';
 
 // Routable ids: decimal strings that decode to a node the id service hands out.
 const ORDER_ID = '137465797020397179';
 const OTHER_ORDER_ID = '137465797020397180';
 const PAYMENT_ID = '137465797020397181';
+const ADMIN_ID = '137465797020397182';
 
 const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
 
@@ -52,6 +53,7 @@ function build(overrides: Partial<PaymentParticipant> = {}) {
     ),
     capture: vi.fn<PaymentParticipant['capture']>(overrides.capture ?? (() => Promise.resolve('CAPTURED'))),
     cancel: vi.fn<PaymentParticipant['cancel']>(overrides.cancel ?? (() => Promise.resolve('CANCELLED'))),
+    refund: vi.fn<PaymentParticipant['refund']>(overrides.refund ?? (() => Promise.resolve({ outcome: 'REFUNDED' }))),
     statusOf: vi.fn<PaymentParticipant['statusOf']>(overrides.statusOf ?? (() => Promise.resolve(new Map()))),
   };
   return { controller: new PaymentsController(participant), participant };
@@ -92,6 +94,20 @@ describe('PaymentsController validation', () => {
     );
 
     expect(answers).toEqual([false, false, true, true, true]);
+  });
+
+  it('takes a refund from a routable admin id and nothing else', async () => {
+    const answers = await Promise.all(
+      [
+        { requestedBy: ADMIN_ID },
+        {},
+        { requestedBy: '42' },
+        { requestedBy: 137_465_797_020_397 },
+        { requestedBy: ADMIN_ID, amountMinor: 1 },
+      ].map((body) => isRefused(() => validated(RefundDto, body))),
+    );
+
+    expect(answers).toEqual([false, true, true, true, true]);
   });
 
   it('refuses an order id in the path that is not routable', async () => {
@@ -155,6 +171,27 @@ describe('PaymentsController answers', () => {
     expect(participant[command]).toHaveBeenCalledWith({ orderId: ORDER_ID });
   });
 
+  it.each([
+    [{ outcome: 'REFUNDED' }, 200],
+    [{ outcome: 'IDEMPOTENT' }, 200],
+    [{ outcome: 'PENDING' }, 202],
+    [{ outcome: 'REFUND_FAILED', reason: 'charge_disputed' }, 409],
+    [{ outcome: 'NOT_REFUNDABLE' }, 409],
+  ] as const)('answers a refund that came out %j with %d', async (result, status) => {
+    const { controller, participant } = build({ refund: () => Promise.resolve(result) });
+    const res = fakeResponse();
+
+    await controller.refund(
+      ORDER_ID,
+      await validated(RefundDto, { requestedBy: ADMIN_ID }),
+      res as unknown as Response,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(status);
+    expect(res.json).toHaveBeenCalledWith(result);
+    expect(participant.refund).toHaveBeenCalledWith({ orderId: ORDER_ID, requestedBy: ADMIN_ID });
+  });
+
   it('answers every id asked for, a null header where payment never saw the order', async () => {
     const held: PaymentParticipantStatus = {
       header: 'AUTHORIZED',
@@ -186,11 +223,12 @@ describe('PaymentsController answers', () => {
     expect(answer).toEqual({ statuses: { [ORDER_ID]: held, [OTHER_ORDER_ID]: unknown } });
   });
 
-  async function failOn(route: 'openSession' | 'capture' | 'cancel' | 'status', fault: Error) {
+  async function failOn(route: 'openSession' | 'capture' | 'cancel' | 'refund' | 'status', fault: Error) {
     const { controller } = build({
       openSession: () => Promise.reject(fault),
       capture: () => Promise.reject(fault),
       cancel: () => Promise.reject(fault),
+      refund: () => Promise.reject(fault),
       statusOf: () => Promise.reject(fault),
     });
     const res = fakeResponse();
@@ -199,12 +237,13 @@ describe('PaymentsController answers', () => {
       openSession: () => controller.openSession(ORDER_ID, body, res as unknown as Response),
       capture: () => controller.capture(ORDER_ID, res as unknown as Response),
       cancel: () => controller.cancel(ORDER_ID, res as unknown as Response),
+      refund: () => controller.refund(ORDER_ID, { requestedBy: ADMIN_ID }, res as unknown as Response),
       status: () => controller.status({ orderIds: [ORDER_ID] }, res as unknown as Response),
     }[route];
     return { error: await run().catch((caught: unknown) => caught), res };
   }
 
-  it.each(['openSession', 'capture', 'cancel', 'status'] as const)(
+  it.each(['openSession', 'capture', 'cancel', 'refund', 'status'] as const)(
     'turns a fault the participant throws on %s into a 503 the caller retries after a second',
     async (route) => {
       const fault = new Error('connection terminated');
@@ -218,7 +257,7 @@ describe('PaymentsController answers', () => {
     },
   );
 
-  it.each(['openSession', 'capture', 'cancel'] as const)(
+  it.each(['openSession', 'capture', 'cancel', 'refund'] as const)(
     'leaves a Stripe failure on %s to the filter that names it, after a second',
     async (route) => {
       const fault = new PaymentGatewayError('gateway could not capture: timeout');

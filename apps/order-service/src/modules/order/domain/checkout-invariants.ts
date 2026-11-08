@@ -25,7 +25,8 @@ export type TerminalSagaStatus = (typeof TERMINAL_SAGA_STATUSES)[number];
 export type StockStanding = 'HELD' | 'COMMITTED' | 'RELEASED' | 'FENCED' | 'RESTOCKED' | null;
 
 export interface PaymentStanding {
-  header: 'OPEN' | 'AUTHORIZED' | 'CAPTURED' | 'CANCELLED' | 'FENCED' | null;
+  header:
+    'OPEN' | 'AUTHORIZED' | 'CAPTURED' | 'CANCELLED' | 'FENCED' | 'REFUNDING' | 'REFUNDED' | 'REFUND_FAILED' | null;
   authorizedPaymentId: string | null;
   /** Any attempt still holding money, whatever the header says. */
   hasAuthorizedAttempt: boolean;

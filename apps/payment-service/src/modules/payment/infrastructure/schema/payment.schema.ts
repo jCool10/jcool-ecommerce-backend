@@ -26,13 +26,20 @@ export const paymentStatus = pgEnum('payment_status', [
   'VOIDED',
 ]);
 export const webhookStatus = pgEnum('webhook_status', ['RECEIVED', 'PROCESSED', 'SKIPPED', 'FAILED']);
+// Appended, never inserted: drizzle-kit then emits a plain ADD VALUE. Migrations run in one
+// transaction and Postgres refuses a value added in it, so no CHECK, default or partial index may
+// name the refund values in the migration that adds them.
 export const paymentOrderStatus = pgEnum('payment_order_status', [
   'OPEN',
   'AUTHORIZED',
   'CAPTURED',
   'CANCELLED',
   'FENCED',
+  'REFUNDING',
+  'REFUNDED',
+  'REFUND_FAILED',
 ]);
+export const refundStatus = pgEnum('refund_status', ['PENDING', 'SUCCEEDED', 'FAILED']);
 
 // No default: the id is minted by the id service, not the database.
 const id = () => snowflakeId('id').primaryKey();
@@ -72,6 +79,8 @@ export const payments = pgTable(
     // Webhook, capture and cancel resolve a payment by the gateway's session id. Not unique: nothing
     // in the model forbids two rows sharing one, and the lookup takes whichever the query returns.
     index('idx_payments_provider_session').on(t.providerSessionId),
+    // Every refund webhook finds its order through the charge's intent.
+    index('idx_payments_provider_intent').on(t.providerIntentId),
     // At most one live payment per order — the DB backstop for "never double-charge". Partial so a
     // FAILED/EXPIRED attempt never blocks a legitimate retry. The app pre-checks too; this closes the
     // concurrent-double-submit race the check cannot. Written against the old enum values so the
@@ -102,6 +111,42 @@ export const paymentOrders = pgTable(
       'ck_payment_orders_amount_when_not_fenced',
       sql`${t.status} = 'FENCED' or (${t.amountMinor} is not null and ${t.currency} is not null)`,
     ),
+  ],
+);
+
+// The refund of an order's captured attempt. One per order: the unique order_id is the database's
+// "never refund twice", and dropping it is the whole schema change partial refunds would need.
+export const paymentRefunds = pgTable(
+  'payment_refunds',
+  {
+    id: id(),
+    orderId: snowflakeId('order_id').notNull(),
+    paymentId: snowflakeId('payment_id')
+      .notNull()
+      .references(() => payments.id),
+    providerRefundId: text('provider_refund_id'),
+    // Set instead of provider_refund_id when refunds made elsewhere together cover the charge, so a
+    // later failure of any one of them is still bound to the order.
+    coveredRefundIds: text('covered_refund_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    requestedBy: snowflakeId('requested_by').notNull(),
+    // Always the captured attempt's amount and currency, never a caller's.
+    amountMinor: bigint('amount_minor', { mode: 'number' }).notNull(),
+    currency: text('currency').notNull(),
+    status: refundStatus('status').notNull().default('PENDING'),
+    // Stripe's failure reason or refusal code.
+    failureReason: text('failure_reason'),
+    ...stamps,
+  },
+  (t) => [
+    routableIdCheck('ck_payment_refunds_id_routable', t.id),
+    routableIdCheck('ck_payment_refunds_order_id_routable', t.orderId),
+    routableIdCheck('ck_payment_refunds_requested_by_routable', t.requestedBy),
+    check('ck_payment_refunds_amount_positive', sql`${t.amountMinor} > 0`),
+    uniqueIndex('uq_payment_refunds_order').on(t.orderId),
+    uniqueIndex('uq_payment_refunds_provider_refund').on(t.providerRefundId),
   ],
 );
 

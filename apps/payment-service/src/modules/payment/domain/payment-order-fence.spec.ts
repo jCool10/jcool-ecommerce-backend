@@ -4,13 +4,18 @@ import { PAYMENT_ORDER_STATUSES, type PaymentOrderStatus } from './payment-order
 
 type Row = { [Op in PaymentOrderOp]: PaymentOrderDecisions[Op] };
 
+const AFTER_CAPTURE = { open_session: 'closed', capture: 'idempotent', cancel: 'captured_conflict' } as const;
+
 const TABLE: Record<PaymentOrderStatus | 'none', Row> = {
-  none: { open_session: 'open', capture: 'conflict', cancel: 'fence' },
-  OPEN: { open_session: 'open', capture: 'conflict', cancel: 'cancel' },
-  AUTHORIZED: { open_session: 'closed', capture: 'capture', cancel: 'cancel' },
-  CAPTURED: { open_session: 'closed', capture: 'idempotent', cancel: 'captured_conflict' },
-  CANCELLED: { open_session: 'closed', capture: 'not_capturable', cancel: 'rescan' },
-  FENCED: { open_session: 'closed', capture: 'not_capturable', cancel: 'rescan' },
+  none: { open_session: 'open', capture: 'conflict', cancel: 'fence', refund: 'not_refundable' },
+  OPEN: { open_session: 'open', capture: 'conflict', cancel: 'cancel', refund: 'not_refundable' },
+  AUTHORIZED: { open_session: 'closed', capture: 'capture', cancel: 'cancel', refund: 'not_refundable' },
+  CAPTURED: { ...AFTER_CAPTURE, refund: 'refund' },
+  CANCELLED: { open_session: 'closed', capture: 'not_capturable', cancel: 'rescan', refund: 'not_refundable' },
+  FENCED: { open_session: 'closed', capture: 'not_capturable', cancel: 'rescan', refund: 'not_refundable' },
+  REFUNDING: { ...AFTER_CAPTURE, refund: 'resume' },
+  REFUNDED: { ...AFTER_CAPTURE, refund: 'idempotent' },
+  REFUND_FAILED: { ...AFTER_CAPTURE, refund: 'failed' },
 };
 
 const CASES = (['none', ...PAYMENT_ORDER_STATUSES] as const).flatMap((status) =>
@@ -19,7 +24,7 @@ const CASES = (['none', ...PAYMENT_ORDER_STATUSES] as const).flatMap((status) =>
 
 describe('decidePaymentOrderOp', () => {
   it('covers every operation against every header state', () => {
-    expect(CASES).toHaveLength(18);
+    expect(CASES).toHaveLength(36);
   });
 
   it.each(CASES)('$op on $status → $expected', ({ status, op, expected }) => {

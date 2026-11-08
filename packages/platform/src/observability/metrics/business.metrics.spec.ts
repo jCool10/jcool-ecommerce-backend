@@ -61,7 +61,10 @@ describe('BusinessMetrics', () => {
     metrics.recordRateLimitRejection('account', '/auth/login');
     metrics.recordSessionEpochLookup('miss');
     metrics.recordTccBranch('inventory', 'release', 'applied');
+    metrics.recordTccBranch('payment', 'refund', 'refund_pending');
     metrics.recordCaptureConflict();
+    metrics.recordRefundOwed('refund_failed');
+    metrics.recordRefundUntracked();
 
     const exposition = await registry.metrics();
     const expected = [
@@ -94,7 +97,10 @@ describe('BusinessMetrics', () => {
       'rate_limit_rejections_total{tier="account",route="/auth/login"} 1',
       'session_epoch_lookups_total{result="miss"} 1',
       'tcc_branch_total{participant="inventory",op="release",outcome="applied"} 1',
+      'tcc_branch_total{participant="payment",op="refund",outcome="refund_pending"} 1',
       'payment_capture_conflict_total 1',
+      'payment_refund_owed_total{source="refund_failed"} 1',
+      'payment_refund_untracked_total 1',
     ];
 
     expect(warn).not.toHaveBeenCalled();

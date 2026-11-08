@@ -72,8 +72,11 @@ export type CheckoutInvariantKind =
 
 export type InvariantCheckResult = 'ok' | 'violations' | 'error';
 
-/** WHICH PATH noticed money on an order that will never ship — the observer, not the cause. */
-export type RefundOwedSource = 'webhook_direct';
+/**
+ * WHICH PATH noticed money the buyer is owed — the observer, not the cause. `refund_failed` is a
+ * refund Stripe refused or failed, so nothing will return the money unless a person does.
+ */
+export type RefundOwedSource = 'webhook_direct' | 'refund_failed';
 
 export type MailKind = 'email_verification' | 'password_reset' | 'order_paid';
 
@@ -91,7 +94,8 @@ export type TccOp =
   | 'open_session'
   | 'capture'
   | 'cancel'
-  | 'record_authorization';
+  | 'record_authorization'
+  | 'refund';
 
 /** The command's own outcome, lower-cased; `error` is a command that threw instead of answering. */
 export type TccBranchOutcome =
@@ -113,6 +117,10 @@ export type TccBranchOutcome =
   | 'already_recorded'
   | 'amount_mismatch'
   | 'stray_voided'
+  | 'refunded'
+  | 'refund_pending'
+  | 'refund_failed'
+  | 'not_refundable'
   | 'error';
 
 /**
@@ -162,4 +170,6 @@ export interface MetricsPort {
   recordTccBranch(participant: TccParticipant, op: TccOp, outcome: TccBranchOutcome): void;
   /** Money was captured on a payment the order had already cancelled. Each one needs a human. */
   recordCaptureConflict(): void;
+  /** A refund the shop did not issue landed on a captured order; the order still reads paid. */
+  recordRefundUntracked(): void;
 }

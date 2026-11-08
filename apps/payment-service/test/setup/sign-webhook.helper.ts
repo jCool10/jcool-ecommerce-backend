@@ -59,6 +59,19 @@ export function checkoutSessionCompleted(
   };
 }
 
+/** The body says `succeeded` on purpose: the participant must read the refund back, never trust it. */
+export function refundEvent(
+  type: 'refund.created' | 'refund.updated' | 'refund.failed',
+  refundId: string,
+  opts: { eventId?: string } = {},
+): Record<string, unknown> {
+  return {
+    id: opts.eventId ?? `evt_${type}_${refundId}`,
+    type,
+    data: { object: { id: refundId, object: 'refund', status: 'succeeded' } },
+  };
+}
+
 /** Drives Payment PENDING→FAILED. */
 export function checkoutSessionExpired(sessionId: string, opts: { eventId?: string } = {}): Record<string, unknown> {
   return {

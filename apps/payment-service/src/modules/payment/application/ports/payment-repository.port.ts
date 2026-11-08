@@ -31,6 +31,12 @@ export interface PaymentRepositoryPort {
 
   findByProviderSessionId(providerSessionId: string, tx?: DrizzleTx): Promise<Payment | null>;
 
+  /** The order's captured attempt; at most one exists, since a SUCCEEDED attempt counts as active. */
+  findSucceededByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment | null>;
+
+  /** The newest attempt carrying the PaymentIntent, whatever its status. */
+  findByProviderIntentId(providerIntentId: string, tx?: DrizzleTx): Promise<Payment | null>;
+
   /** Null when the id is unknown or `expectedStatus` no longer matches. The adapter only writes —
    * the state-machine guard lives in the domain entity. */
   updateStatus(id: string, status: PaymentStatus, options?: UpdatePaymentStatusOptions): Promise<Payment | null>;

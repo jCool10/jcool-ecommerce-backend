@@ -53,6 +53,7 @@ export const SESSION_EPOCH_LOOKUPS_TOTAL = 'session_epoch_lookups_total';
 
 export const TCC_BRANCH_TOTAL = 'tcc_branch_total';
 export const PAYMENT_CAPTURE_CONFLICT_TOTAL = 'payment_capture_conflict_total';
+export const PAYMENT_REFUND_UNTRACKED_TOTAL = 'payment_refund_untracked_total';
 
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
@@ -165,7 +166,7 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: PAYMENT_REFUND_OWED_TOTAL,
-    help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: webhook_direct = a paid checkout session no payment header owns, so no saga will capture or void it. Observations, not refunds, so alert on any increase and get the count from the database, never by summing this.',
+    help: 'Times a path found money the buyer is owed that nothing will return, labelled by which path saw it: webhook_direct = a paid checkout session no payment header owns, so no saga will capture or void it; refund_failed = a refund Stripe refused or failed, at once or after reporting it done. Observations, not refunds, so alert on any increase and get the count from the database, never by summing this.',
     labelNames: ['source'],
   }),
   makeGaugeProvider({
@@ -216,6 +217,10 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: PAYMENT_CAPTURE_CONFLICT_TOTAL,
     help: 'Captures that landed on a payment whose order had already been cancelled: the buyer was charged for an order that will not ship. Any increase needs a refund decision by a human.',
+  }),
+  makeCounterProvider({
+    name: PAYMENT_REFUND_UNTRACKED_TOTAL,
+    help: 'Refunds the shop did not issue (the Stripe dashboard, another API key) that landed on a captured order. The order still reads paid and its stock stays sold until an admin refunds it, which adopts the refund instead of sending a second one.',
   }),
   makeHistogramProvider({
     name: CACHE_REBUILD_DURATION_SECONDS,

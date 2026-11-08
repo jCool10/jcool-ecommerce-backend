@@ -11,6 +11,8 @@ import {
   type GatewayStatus,
   type IntentStatus,
   type PaymentGatewayPort,
+  type ProviderRefund,
+  type RefundIntentInput,
   type RetrievedSession,
   type SessionAuthorization,
   type VerifiedEvent,
@@ -18,8 +20,9 @@ import {
 } from '../../application/ports/payment-gateway.port';
 import { verifyAndParseStripeEvent } from './hmac-signature';
 import { isSessionNotOpen, isStripeServerError, isUnexpectedIntentState } from './stripe-fault-classification';
+import { StripeRefundCalls } from './stripe-refund-calls';
 
-type StripeClient = Pick<Stripe, 'checkout' | 'paymentIntents'>;
+type StripeClient = Pick<Stripe, 'checkout' | 'paymentIntents' | 'refunds'>;
 
 export interface StripeGatewayOptions {
   webhookSecret?: string;
@@ -33,7 +36,7 @@ export interface StripeGatewayOptions {
   /** Lifetime of a session opened without an explicit `expiresAt`: the floor plus the margin. */
   sessionMinTtlSec: number;
   sessionExpiryMarginSec: number;
-  /** Bounds each capture, void, expire and authorization read; the SDK does not retry them. */
+  /** Bounds each capture, void, refund, expire and authorization read; the SDK does not retry them. */
   captureTimeoutMs: number;
   /** Somewhere other than api.stripe.com, which env validation allows for test keys only. */
   apiAddress?: { host: string; port?: number; protocol?: 'http' | 'https' };
@@ -294,6 +297,14 @@ export class StripeGatewayAdapter implements PaymentGatewayPort {
       if (status === 'succeeded') return 'already_captured';
       throw this.unresolved('void', status, error);
     }
+  }
+
+  async refundIntent(input: RefundIntentInput, idempotencyKey: string): Promise<ProviderRefund> {
+    return new StripeRefundCalls(this.requireLive('refund').refunds, this.bounded).create(input, idempotencyKey);
+  }
+
+  async retrieveRefund(refundId: string): Promise<ProviderRefund> {
+    return new StripeRefundCalls(this.requireLive('read a refund of').refunds, this.bounded).retrieve(refundId);
   }
 
   private requireLive(op: string): StripeClient {

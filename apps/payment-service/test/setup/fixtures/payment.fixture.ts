@@ -31,6 +31,13 @@ export async function readPaymentOrder(app: INestApplication, orderId: string) {
   return row;
 }
 
+/** The order's `payment_refunds` row, undefined until a refund was asked for. */
+export async function readRefund(app: INestApplication, orderId: string) {
+  const db = app.get<DrizzleDB>(DRIZZLE);
+  const [row] = await db.select().from(schema.paymentRefunds).where(eq(schema.paymentRefunds.orderId, orderId));
+  return row;
+}
+
 /**
  * The buyer completes the manual-capture session: the fake gateway now holds the charge and the
  * provider reports it with a signed `checkout.session.completed`. Returns the intent id.

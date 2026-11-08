@@ -111,4 +111,124 @@ describe('FakeSignerGatewayAdapter', () => {
       expect(gateway.wasVoided(intentId)).toBe(true);
     });
   });
+
+  describe('refunds', () => {
+    async function capturedIntent() {
+      const gateway = new FakeSignerGatewayAdapter(SECRET);
+      const { providerSessionId } = await gateway.createSession({
+        orderId: '7001',
+        amountMinor: 150_000,
+        currency: 'VND',
+      });
+      const intentId = gateway.authorize(providerSessionId);
+      await gateway.captureIntent(intentId, 'capture:1:0');
+      const input = { intentId, amountMinor: 150_000, currency: 'VND', orderId: '7001', requestedBy: '9001' };
+      return { gateway, intentId, input };
+    }
+
+    it('refunds a captured charge once, and replays the first answer for its key', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+
+      const first = await gateway.refundIntent(input, 'refund:1:0');
+      expect(first).toMatchObject({ intentId, metadataOrderId: '7001', amountMinor: 150_000, status: 'succeeded' });
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toEqual(first);
+      expect(gateway.refundsOf(intentId)).toEqual([
+        expect.objectContaining({ id: first.refundId, metadata: { order_id: '7001', requested_by: '9001' } }),
+      ]);
+    });
+
+    it('holds a refund as pending until settled, replaying the pending answer for its key as Stripe does', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      gateway.failRefund(intentId, 'refund_pending');
+
+      const pending = await gateway.refundIntent(input, 'refund:1:0');
+      expect(pending.status).toBe('pending');
+      gateway.settleRefund(pending.refundId as string, 'succeeded');
+
+      await expect(gateway.retrieveRefund(pending.refundId as string)).resolves.toMatchObject({ status: 'succeeded' });
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toMatchObject({ status: 'pending' });
+    });
+
+    it('fails a refund with a reason, and can fail one it already reported succeeded', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      gateway.failRefund(intentId, 'refund_fails');
+
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toMatchObject({
+        status: 'failed',
+        failureReason: 'expired_or_canceled_card',
+      });
+
+      const other = await capturedIntent();
+      const done = await other.gateway.refundIntent(other.input, 'refund:2:0');
+      other.gateway.settleRefund(done.refundId as string, 'failed');
+      await expect(other.gateway.retrieveRefund(done.refundId as string)).resolves.toMatchObject({ status: 'failed' });
+    });
+
+    it('replays a stored 5xx for its key until a fresh key refunds, once', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      gateway.failRefund(intentId, 'server_error');
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(gateway.refundIntent(input, 'refund:1:0')).rejects.toMatchObject({ retryWithFreshKey: true });
+      }
+      await expect(gateway.refundIntent(input, 'refund:1:1')).resolves.toMatchObject({ status: 'succeeded' });
+      expect(gateway.refundsOf(intentId)).toHaveLength(1);
+    });
+
+    it('answers a refund that landed before its 5xx with that refund', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      gateway.failRefund(intentId, 'refund_applied_then_500');
+
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toMatchObject({ status: 'succeeded' });
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toMatchObject({ status: 'succeeded' });
+      expect(gateway.refundsOf(intentId)).toHaveLength(1);
+    });
+
+    it('applies a refund whose answer timed out, and answers the same key with it', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      gateway.failRefund(intentId, 'timeout');
+
+      await expect(gateway.refundIntent(input, 'refund:1:0')).rejects.toMatchObject({ retryWithFreshKey: false });
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toMatchObject({ status: 'succeeded' });
+      expect(gateway.refundsOf(intentId)).toHaveLength(1);
+    });
+
+    it('adopts a full refund made outside the shop instead of refunding again', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      const dashboard = gateway.outOfBandRefund(intentId);
+
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toMatchObject({
+        refundId: dashboard,
+        metadataOrderId: null,
+        status: 'succeeded',
+      });
+      expect(gateway.refundsOf(intentId)).toHaveLength(1);
+    });
+
+    it('refuses a full refund once part of the charge was refunded elsewhere', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      gateway.outOfBandRefund(intentId, 50_000);
+
+      await expect(gateway.refundIntent(input, 'refund:1:0')).resolves.toEqual({
+        refundId: null,
+        intentId,
+        metadataOrderId: null,
+        amountMinor: 150_000,
+        currency: 'VND',
+        status: 'failed',
+        failureReason: 'amount_too_large',
+      });
+    });
+
+    it('refuses every refund call while Stripe is unreachable, applying nothing', async () => {
+      const { gateway, intentId, input } = await capturedIntent();
+      const done = await gateway.refundIntent(input, 'refund:1:0');
+      gateway.failRefundCalls(intentId);
+
+      await expect(gateway.refundIntent(input, 'refund:1:1')).rejects.toThrow(/unreachable/);
+      await expect(gateway.retrieveRefund(done.refundId as string)).rejects.toThrow(/unreachable/);
+      gateway.restoreRefundCalls(intentId);
+      await expect(gateway.retrieveRefund(done.refundId as string)).resolves.toMatchObject({ status: 'succeeded' });
+    });
+  });
 });

@@ -9,7 +9,9 @@ import type {
   PaymentOrderRepositoryPort,
 } from '../application/ports/payment-order-repository.port';
 import { DuplicateActivePaymentError, type PaymentRepositoryPort } from '../application/ports/payment-repository.port';
+import type { PaymentRefund, PaymentRefundRepositoryPort } from '../application/ports/payment-refund-repository.port';
 import type { TransactionRunnerPort } from '../application/ports/transaction-runner.port';
+import { PaymentRefundStatus } from '../domain/payment-refund-status';
 
 const TX = { __tx: true } as unknown as DrizzleTx;
 const RETIRED = new Set<PaymentStatus>([PaymentStatus.FAILED, PaymentStatus.EXPIRED]);
@@ -17,13 +19,15 @@ const RETIRED = new Set<PaymentStatus>([PaymentStatus.FAILED, PaymentStatus.EXPI
 export const CHARGE = { amountMinor: 150_000, currency: 'VND' } as const;
 
 /**
- * Headers, payments and the outbox in memory, for the participant's use-case specs. A transaction
- * rolls back when its work throws, and minting an id inside one throws, so a spec fails the moment
- * a use case mints under a lock.
+ * Headers, payments, refunds and the outbox in memory, for the participant's use-case specs. A
+ * transaction rolls back when its work throws, and minting an id inside one throws, so a spec fails
+ * the moment a use case mints under a lock.
  */
 export class InMemoryParticipantStore {
   readonly headers = new Map<string, PaymentOrderHeader>();
   readonly payments = new Map<string, Payment>();
+  /** Keyed by order: one refund per order, as `uq_payment_refunds_order`. */
+  readonly refunds = new Map<string, PaymentRefund>();
   readonly outbox: Array<{ id?: string; record: OutboxRecord }> = [];
   /** Stand-in for `updated_at`: every write to a payment moves it to the back. */
   readonly touchedAt = new Map<string, number>();
@@ -75,6 +79,10 @@ export class InMemoryParticipantStore {
     findByOrderId: (orderId) => Promise.resolve(this.byOrder(orderId).at(-1) ?? null),
     findByProviderSessionId: (sessionId) =>
       Promise.resolve([...this.payments.values()].find((p) => p.providerSessionId === sessionId) ?? null),
+    findSucceededByOrderId: (orderId) =>
+      Promise.resolve(this.byOrder(orderId).find((p) => p.status === PaymentStatus.SUCCEEDED) ?? null),
+    findByProviderIntentId: (intentId) =>
+      Promise.resolve([...this.payments.values()].findLast((p) => p.providerIntentId === intentId) ?? null),
     updateStatus: (id, status, options = {}) => {
       const current = this.payments.get(id);
       if (!current || (options.expectedStatus !== undefined && current.status !== options.expectedStatus)) {
@@ -112,6 +120,48 @@ export class InMemoryParticipantStore {
     },
   };
 
+  readonly refundRepo: PaymentRefundRepositoryPort = {
+    insert: (_tx, refund) => {
+      if (this.refunds.has(refund.orderId)) return Promise.resolve(false);
+      this.refunds.set(refund.orderId, {
+        ...refund,
+        providerRefundId: null,
+        coveredRefundIds: [],
+        status: PaymentRefundStatus.PENDING,
+        failureReason: null,
+      });
+      return Promise.resolve(true);
+    },
+    findByOrderId: (orderId) => Promise.resolve(this.copyOf(this.refunds.get(orderId))),
+    findByProviderRefundId: (providerRefundId) =>
+      Promise.resolve(this.copyOf([...this.refunds.values()].find((r) => r.providerRefundId === providerRefundId))),
+    update: (_tx, id, patch, expectedStatus) => {
+      const current = [...this.refunds.values()].find((r) => r.id === id);
+      if (current?.status !== expectedStatus) return Promise.resolve(false);
+      this.refunds.set(current.orderId, { ...current, ...patch });
+      return Promise.resolve(true);
+    },
+  };
+
+  seedRefund(refund: Partial<PaymentRefund> & Pick<PaymentRefund, 'orderId' | 'paymentId'>): PaymentRefund {
+    const row: PaymentRefund = {
+      id: `r${refund.orderId}`,
+      providerRefundId: null,
+      coveredRefundIds: [],
+      requestedBy: '9001',
+      ...CHARGE,
+      status: PaymentRefundStatus.PENDING,
+      failureReason: null,
+      ...refund,
+    };
+    this.refunds.set(row.orderId, row);
+    return { ...row };
+  }
+
+  refund(orderId: string): PaymentRefund | undefined {
+    return this.copyOf(this.refunds.get(orderId)) ?? undefined;
+  }
+
   seedHeader(
     orderId: string,
     status: PaymentOrderStatus,
@@ -127,6 +177,7 @@ export class InMemoryParticipantStore {
     sessionId?: string;
     intentId?: string | null;
     stripeKeyGen?: number;
+    amountMinor?: number;
   }): Payment {
     return this.write(
       Payment.rehydrate({
@@ -136,6 +187,7 @@ export class InMemoryParticipantStore {
         providerSessionId: props.sessionId ?? `cs_${props.id}`,
         providerIntentId: props.intentId ?? null,
         ...CHARGE,
+        amountMinor: props.amountMinor ?? CHARGE.amountMinor,
         status: props.status,
         stripeKeyGen: props.stripeKeyGen ?? 0,
       }),
@@ -162,6 +214,10 @@ export class InMemoryParticipantStore {
     return [...this.payments.values()].filter((p) => p.orderId === orderId);
   }
 
+  private copyOf(refund: PaymentRefund | undefined): PaymentRefund | null {
+    return refund ? { ...refund, coveredRefundIds: [...refund.coveredRefundIds] } : null;
+  }
+
   private insertHeader(header: Omit<PaymentOrderHeader, 'authorizedAt'>): boolean {
     if (this.headers.has(header.orderId)) return false;
     this.headers.set(header.orderId, { ...header, authorizedAt: null });
@@ -179,6 +235,7 @@ export class InMemoryParticipantStore {
     if (this.inTransaction) throw new Error('nested transaction');
     const headers = new Map(this.headers);
     const payments = new Map(this.payments);
+    const refunds = new Map(this.refunds);
     const outboxLength = this.outbox.length;
     this.inTransaction = true;
     this.transactions++;
@@ -187,6 +244,7 @@ export class InMemoryParticipantStore {
     } catch (error) {
       replace(this.headers, headers);
       replace(this.payments, payments);
+      replace(this.refunds, refunds);
       this.outbox.length = outboxLength;
       throw error;
     } finally {

@@ -37,5 +37,14 @@ export function isStripeServerError(error: unknown): boolean {
 
 /** Stripe refused because the intent had already moved on (captured, canceled, lapsed). */
 export function isUnexpectedIntentState(error: unknown): boolean {
-  return error instanceof Stripe.errors.StripeError && error.code === 'payment_intent_unexpected_state';
+  return hasStripeCode(error, 'payment_intent_unexpected_state');
+}
+
+/** Another request under the same key, or on the same charge, is still running: it may yet land. */
+export function isStripeRequestInFlight(error: unknown): boolean {
+  return hasStripeCode(error, 'idempotency_key_in_use', 'lock_timeout');
+}
+
+export function hasStripeCode(error: unknown, ...codes: string[]): boolean {
+  return error instanceof Stripe.errors.StripeError && error.code !== undefined && codes.includes(error.code);
 }

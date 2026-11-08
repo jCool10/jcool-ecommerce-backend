@@ -31,6 +31,7 @@ const METHODS = [
   'recordOrderCreated',
   'recordRateLimitRejection',
   'recordRefundOwed',
+  'recordRefundUntracked',
   'recordRetentionSweep',
   'recordRetentionSweepFailure',
   'recordSagaStep',

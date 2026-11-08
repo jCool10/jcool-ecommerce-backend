@@ -23,6 +23,14 @@ export type CaptureOutcome = 'CAPTURED' | 'IDEMPOTENT' | 'NOT_CAPTURABLE' | 'CON
 
 export type CancelOutcome = 'CANCELLED' | 'FENCED' | 'IDEMPOTENT' | 'CAPTURED_CONFLICT';
 
+export type RefundOutcome = 'REFUNDED' | 'IDEMPOTENT' | 'PENDING' | 'REFUND_FAILED' | 'NOT_REFUNDABLE';
+
+export interface RefundResult {
+  outcome: RefundOutcome;
+  /** Stripe's failure reason or refusal code, on REFUND_FAILED. */
+  reason?: string;
+}
+
 export interface PaymentParticipantStatus {
   header: PaymentOrderStatus | null;
   /** The payment currently holding or holding-then-captured the money, null when there is none. */
@@ -47,6 +55,12 @@ export interface PaymentParticipant {
   capture(input: { orderId: string }): Promise<CaptureOutcome>;
 
   cancel(input: { orderId: string }): Promise<CancelOutcome>;
+
+  /**
+   * Refunds the captured attempt in full, at most once per order. PENDING means Stripe holds the
+   * refund; asking again later reads it back. `requestedBy` is recorded by the first call only.
+   */
+  refund(input: { orderId: string; requestedBy: string }): Promise<RefundResult>;
 
   /** One lock-free query for the whole batch; every id asked for gets a key. Callers send at most 200. */
   statusOf(orderIds: string[]): Promise<Map<string, PaymentParticipantStatus>>;

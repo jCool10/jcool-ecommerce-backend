@@ -9,11 +9,14 @@ import {
   type GatewayStatus,
   type IntentStatus,
   type PaymentGatewayPort,
+  type ProviderRefund,
+  type RefundIntentInput,
   type RetrievedSession,
   type SessionAuthorization,
   type VerifiedEvent,
   type VoidIntentOutcome,
 } from '../../application/ports/payment-gateway.port';
+import { FakeStripeRefunds, type FakeRefund, type FakeRefundFault } from '../../testing/fake-stripe-refunds';
 import { signStripeStyle, verifyAndParseStripeEvent } from './hmac-signature';
 
 /**
@@ -54,6 +57,10 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
   private readonly responses = new Map<string, StoredResponse>();
   private readonly captureFaults = new Map<string, FakeIntentFault>();
   private readonly voidFaults = new Map<string, FakeIntentFault>();
+  private readonly refunds = new FakeStripeRefunds((intentId) => {
+    const hold = this.holds.get(intentId);
+    return hold && { captured: hold.status === 'succeeded', amountMinor: hold.amountMinor, currency: hold.currency };
+  });
   private lastCreateInput?: CreateSessionInput;
   private createDelayMs = 0;
   private expireDelayMs = 0;
@@ -159,6 +166,33 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
     return this.holds.get(intentId)?.voided ?? false;
   }
 
+  failRefund(intentId: string, fault: FakeRefundFault): void {
+    this.refunds.fail(intentId, fault);
+  }
+
+  failRefundCalls(intentId: string): void {
+    this.refunds.failCalls(intentId);
+  }
+
+  restoreRefundCalls(intentId: string): void {
+    this.refunds.restoreCalls(intentId);
+  }
+
+  /** Stripe moves a refund on by itself, as it does for a pending refund or a late failure. */
+  settleRefund(refundId: string, status: 'succeeded' | 'failed'): void {
+    this.refunds.settle(refundId, status);
+  }
+
+  /** A refund made in the dashboard, with no metadata. Returns its id. */
+  outOfBandRefund(intentId: string, amountMinor?: number): string {
+    return this.refunds.outOfBand(intentId, amountMinor);
+  }
+
+  /** Refunds Stripe actually holds for the intent, whatever the caller was told. */
+  refundsOf(intentId: string): FakeRefund[] {
+    return this.refunds.of(intentId);
+  }
+
   lastCreateSessionInput(): CreateSessionInput | undefined {
     return this.lastCreateInput;
   }
@@ -257,6 +291,14 @@ export class FakeSignerGatewayAdapter implements PaymentGatewayPort {
       hold.voided = true;
       return 'voided';
     });
+  }
+
+  refundIntent(input: RefundIntentInput, idempotencyKey: string): Promise<ProviderRefund> {
+    return this.refunds.create(input, idempotencyKey);
+  }
+
+  retrieveRefund(refundId: string): Promise<ProviderRefund> {
+    return this.refunds.retrieve(refundId);
   }
 
   private settle<T extends CaptureIntentResult | VoidIntentOutcome>(

@@ -6,6 +6,7 @@ import type { WebhookEventRepositoryPort } from '../ports/webhook-event-reposito
 import type { TransactionRunnerPort } from '../ports/transaction-runner.port';
 import { ProcessWebhookEventUseCase } from './process-webhook-event.use-case';
 import type { ProcessTccWebhookEventUseCase, TccWebhookResult } from './process-tcc-webhook-event.use-case';
+import type { ProcessRefundWebhookEventUseCase, RefundWebhookResult } from './process-refund-webhook-event.use-case';
 
 const ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const EVENT_ROW_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
@@ -30,7 +31,14 @@ function eventRow(): WebhookEvent {
   });
 }
 
-function build(opts: { verify?: VerifiedEvent; inserted?: boolean; tcc?: TccWebhookResult | null } = {}) {
+function build(
+  opts: {
+    verify?: VerifiedEvent;
+    inserted?: boolean;
+    tcc?: TccWebhookResult | null;
+    refund?: RefundWebhookResult | null;
+  } = {},
+) {
   const insertIfNew = vi.fn().mockResolvedValue({ inserted: opts.inserted ?? true, event: eventRow() });
   const markProcessed = vi.fn().mockResolvedValue(undefined);
   const markSkipped = vi.fn().mockResolvedValue(undefined);
@@ -42,11 +50,16 @@ function build(opts: { verify?: VerifiedEvent; inserted?: boolean; tcc?: TccWebh
     run: vi.fn().mockImplementation((work: (t: unknown) => unknown) => work(tx)),
   } as unknown as TransactionRunnerPort;
   const tccExecute = vi.fn<ProcessTccWebhookEventUseCase['execute']>().mockResolvedValue(opts.tcc ?? null);
+  const refundExecute = vi.fn<ProcessRefundWebhookEventUseCase['execute']>().mockResolvedValue(opts.refund ?? null);
 
-  const useCase = new ProcessWebhookEventUseCase(txRunner, fakePaymentGateway({ verifyAndParseEvent }), webhookEvents, {
-    execute: tccExecute,
-  } as unknown as ProcessTccWebhookEventUseCase);
-  return { useCase, tx, insertIfNew, markProcessed, markSkipped, tccExecute };
+  const useCase = new ProcessWebhookEventUseCase(
+    txRunner,
+    fakePaymentGateway({ verifyAndParseEvent }),
+    webhookEvents,
+    { execute: tccExecute } as unknown as ProcessTccWebhookEventUseCase,
+    { execute: refundExecute } as unknown as ProcessRefundWebhookEventUseCase,
+  );
+  return { useCase, tx, insertIfNew, markProcessed, markSkipped, tccExecute, refundExecute };
 }
 
 const RAW = Buffer.from('{}');
@@ -69,11 +82,33 @@ describe('ProcessWebhookEventUseCase', () => {
     expect(insertIfNew).not.toHaveBeenCalled();
   });
 
-  it('never asks the TCC path about a delivery that failed verification', async () => {
-    const { useCase, tccExecute } = build({ verify: { kind: 'invalid_signature' } });
+  it('hands a refund event to the refund path before the TCC path sees it', async () => {
+    const refund: RefundWebhookResult = {
+      path: 'refund',
+      outcome: 'processed',
+      orderId: ORDER_ID,
+      refundId: 're_1',
+      providerEventId: 'evt_1',
+      eventType: 'refund.updated',
+    };
+    const { useCase, refundExecute, tccExecute, insertIfNew } = build({
+      verify: stripeEvent('refund.updated'),
+      refund,
+    });
+
+    await expect(useCase.execute(RAW, HEADERS)).resolves.toBe(refund);
+
+    expect(refundExecute).toHaveBeenCalledWith(expect.objectContaining({ kind: 'valid', type: 'refund.updated' }));
+    expect(tccExecute).not.toHaveBeenCalled();
+    expect(insertIfNew).not.toHaveBeenCalled();
+  });
+
+  it('never asks the TCC or refund path about a delivery that failed verification', async () => {
+    const { useCase, tccExecute, refundExecute } = build({ verify: { kind: 'invalid_signature' } });
 
     await useCase.execute(RAW, HEADERS);
     expect(tccExecute).not.toHaveBeenCalled();
+    expect(refundExecute).not.toHaveBeenCalled();
   });
 
   it('logs a session with no payment header as skipped, in the transaction that recorded it', async () => {

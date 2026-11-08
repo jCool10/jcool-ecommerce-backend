@@ -17,7 +17,13 @@ export interface AuthorizationFacts {
 
 const RECORDED = new Set<PaymentStatus>([PaymentStatus.AUTHORIZED, PaymentStatus.SUCCEEDED, PaymentStatus.VOIDED]);
 const RETIRED = new Set<PaymentStatus>([PaymentStatus.EXPIRED, PaymentStatus.FAILED]);
-const HEADER_HOLDS = new Set<PaymentOrderStatus>([PaymentOrderStatus.AUTHORIZED, PaymentOrderStatus.CAPTURED]);
+const HEADER_HOLDS = new Set<PaymentOrderStatus>([
+  PaymentOrderStatus.AUTHORIZED,
+  PaymentOrderStatus.CAPTURED,
+  PaymentOrderStatus.REFUNDING,
+  PaymentOrderStatus.REFUNDED,
+  PaymentOrderStatus.REFUND_FAILED,
+]);
 
 /**
  * What to do with a hold Stripe reports on a payment. Checked in order: a hold that is not the

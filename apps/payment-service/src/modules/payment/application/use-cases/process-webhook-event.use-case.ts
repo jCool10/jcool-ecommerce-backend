@@ -5,6 +5,7 @@ import { WEBHOOK_EVENT_REPOSITORY, type WebhookEventRepositoryPort } from '../po
 import { TRANSACTION_RUNNER, type TransactionRunnerPort } from '../ports/transaction-runner.port';
 import { mapEventToOutcome } from '../mappers/map-event-to-outcome';
 import { readCheckoutSession } from '../mappers/read-checkout-session';
+import { ProcessRefundWebhookEventUseCase, type RefundWebhookResult } from './process-refund-webhook-event.use-case';
 import { ProcessTccWebhookEventUseCase, type TccWebhookResult } from './process-tcc-webhook-event.use-case';
 
 /**
@@ -25,9 +26,11 @@ export type WebhookProcessResult =
       moneyMoved: boolean;
     };
 
+export type ParticipantWebhookResult = TccWebhookResult | RefundWebhookResult;
+
 /**
- * Participant payments go to the TCC path. Anything else is only logged: nothing here changes a
- * payment or an order any more.
+ * Refunds go to the refund path, participant payments to the TCC path. Anything else is only logged:
+ * nothing here changes a payment or an order any more.
  */
 @Injectable()
 export class ProcessWebhookEventUseCase {
@@ -36,14 +39,20 @@ export class ProcessWebhookEventUseCase {
     @Inject(PAYMENT_GATEWAY) private readonly paymentGateway: PaymentGatewayPort,
     @Inject(WEBHOOK_EVENT_REPOSITORY) private readonly webhookEventRepo: WebhookEventRepositoryPort,
     private readonly tccWebhookEvent: ProcessTccWebhookEventUseCase,
+    private readonly refundWebhookEvent: ProcessRefundWebhookEventUseCase,
   ) {}
 
-  async execute(rawBody: Buffer, headers: Record<string, string>): Promise<WebhookProcessResult | TccWebhookResult> {
+  async execute(
+    rawBody: Buffer,
+    headers: Record<string, string>,
+  ): Promise<WebhookProcessResult | ParticipantWebhookResult> {
     // Verify BEFORE any DB write — a forged or replayed body must never reach the event log.
     const verified = this.paymentGateway.verifyAndParseEvent(rawBody, headers);
     if (verified.kind !== 'valid') {
       return { outcome: 'rejected', reason: verified.kind };
     }
+    const refund = await this.refundWebhookEvent.execute(verified);
+    if (refund) return refund;
     const tcc = await this.tccWebhookEvent.execute(verified);
     if (tcc) return tcc;
 

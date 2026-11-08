@@ -8,12 +8,15 @@ import type {
   OpenSessionResult,
   PaymentParticipant,
   PaymentParticipantStatus,
+  RefundOutcome,
+  RefundResult,
 } from './public/payment-participant.port';
 import { CancelPaymentUseCase } from './use-cases/cancel-payment.use-case';
 import { CapturePaymentUseCase } from './use-cases/capture-payment.use-case';
 import { OpenPaymentSessionUseCase } from './use-cases/open-payment-session.use-case';
+import { RefundPaymentUseCase } from './use-cases/refund-payment.use-case';
 
-type ParticipantOutcome = OpenSessionResult['outcome'] | CaptureOutcome | CancelOutcome;
+type ParticipantOutcome = OpenSessionResult['outcome'] | CaptureOutcome | CancelOutcome | RefundOutcome;
 
 const OUTCOME_LABEL: Record<ParticipantOutcome, TccBranchOutcome> = {
   OPENED: 'opened',
@@ -25,6 +28,10 @@ const OUTCOME_LABEL: Record<ParticipantOutcome, TccBranchOutcome> = {
   CANCELLED: 'cancelled',
   FENCED: 'fenced',
   CAPTURED_CONFLICT: 'captured_conflict',
+  REFUNDED: 'refunded',
+  PENDING: 'refund_pending',
+  REFUND_FAILED: 'refund_failed',
+  NOT_REFUNDABLE: 'not_refundable',
 };
 
 @Injectable()
@@ -33,6 +40,7 @@ export class PaymentParticipantFacade implements PaymentParticipant {
     private readonly openPaymentSession: OpenPaymentSessionUseCase,
     private readonly capturePayment: CapturePaymentUseCase,
     private readonly cancelPayment: CancelPaymentUseCase,
+    private readonly refundPayment: RefundPaymentUseCase,
     @Inject(PAYMENT_ORDER_REPOSITORY) private readonly headers: PaymentOrderRepositoryPort,
     @Inject(METRICS) private readonly metrics: MetricsPort,
   ) {}
@@ -58,6 +66,14 @@ export class PaymentParticipantFacade implements PaymentParticipant {
       'cancel',
       () => this.cancelPayment.execute(orderId),
       (outcome) => outcome,
+    );
+  }
+
+  refund({ orderId, requestedBy }: { orderId: string; requestedBy: string }): Promise<RefundResult> {
+    return this.observe(
+      'refund',
+      () => this.refundPayment.execute(orderId, requestedBy),
+      (result) => result.outcome,
     );
   }
 
