@@ -20,8 +20,9 @@ datasources:
     url: ${LOKI_URL}
     jsonData:
       maxLines: 1000
-      # With no trace backend on Railway, a traceId links to every service's lines for that trace.
-      # `$$` because provisioning expands `$` as an environment variable.
+      # A traceId links to every service's lines for that trace, and to the trace in Grafana Cloud behind
+      # that stack's login. Same-name fields share the first one's regex. `$$` because provisioning
+      # expands `$` as an environment variable.
       derivedFields:
         - name: traceId
           matcherType: regex
@@ -29,3 +30,8 @@ datasources:
           datasourceUid: loki
           url: '{service=~".+"} |= "$${__value.raw}"'
           urlDisplayLabel: Logs for this trace
+        - name: traceId
+          matcherType: regex
+          matcherRegex: '"traceId":"(\w+)"'
+          url: 'https://jcool.grafana.net/explore?schemaVersion=1&panes=%7B%22trace%22:%7B%22datasource%22:%22grafanacloud-traces%22,%22queries%22:%5B%7B%22refId%22:%22A%22,%22datasource%22:%7B%22type%22:%22tempo%22,%22uid%22:%22grafanacloud-traces%22%7D,%22queryType%22:%22traceId%22,%22query%22:%22$${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22now-14d%22,%22to%22:%22now%22%7D%7D%7D'
+          urlDisplayLabel: View trace
