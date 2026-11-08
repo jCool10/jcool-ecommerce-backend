@@ -26,6 +26,21 @@ const CHECKOUT_POSTGRES_IMAGE = 'ghcr.io/railwayapp-templates/postgres-ssl:18';
 // Every Node service ships its pino lines here as well as to stdout; unset, they go to stdout only.
 const LOKI_URL = `http://\${{loki.RAILWAY_PRIVATE_DOMAIN}}:${LOKI_PORT}`;
 
+// The api, order, inventory and payment services send scrubbed spans to Grafana Cloud (RUNBOOK
+// "Traces in Grafana Cloud"). A ratio of '0' turns export off; removing these names is a destructive change.
+const TRACE_EXPORT = {
+  OTEL_ENABLED: 'true',
+  OTEL_EXPORTER_OTLP_ENDPOINT: 'https://otlp-gateway-prod-ap-southeast-1.grafana.net/otlp',
+  OTEL_TRACES_SAMPLER: 'parentbased_traceidratio',
+  OTEL_TRACES_SAMPLER_ARG: '1.0',
+};
+
+// The api holds the credential; the others reference it, so a rotation changes one value.
+const TRACE_EXPORT_WITH_API_CREDENTIAL = {
+  ...TRACE_EXPORT,
+  OTEL_EXPORTER_OTLP_HEADERS: `\${{${API_SERVICE}.OTEL_EXPORTER_OTLP_HEADERS}}`,
+};
+
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
@@ -37,7 +52,7 @@ const API_VARIABLES = [
   'METRICS_TOKEN',
   'NODE_ENV',
   // The trace backend's credential, `Authorization=Basic%20<base64>`; the other exporting services
-  // reference it. Unread until OTEL_ENABLED is true.
+  // reference it.
   'OTEL_EXPORTER_OTLP_HEADERS',
   'POSTGRES_DB',
   'POSTGRES_HOST_PORT',
@@ -148,6 +163,7 @@ export default defineRailway(() => {
       // Every row id is minted there, through the gateway's internal load balancer.
       ID_SERVICE_URL: `http://\${{gateway.RAILWAY_PRIVATE_DOMAIN}}:${ID_LB_PORT}`,
       LOKI_URL,
+      ...TRACE_EXPORT,
       // A user limited to products* (RUNBOOK); its password lives on the elasticsearch service.
       SEARCH_URL: `http://\${{elasticsearch.RAILWAY_PRIVATE_DOMAIN}}:${ELASTICSEARCH_PORT}`,
       SEARCH_USERNAME: 'jcool_api',
@@ -303,6 +319,7 @@ export default defineRailway(() => {
       TRUST_PROXY: 'fd12::/16',
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
       LOKI_URL,
+      ...TRACE_EXPORT_WITH_API_CREDENTIAL,
     },
   });
 
@@ -340,6 +357,7 @@ export default defineRailway(() => {
       // nothing here can reference it: change one, change both (RUNBOOK cross rules).
       ORDER_PAID_CONSUMER_ATTEMPTS: '15',
       LOKI_URL,
+      ...TRACE_EXPORT_WITH_API_CREDENTIAL,
     },
   });
 
@@ -393,6 +411,7 @@ export default defineRailway(() => {
       TRUST_PROXY: 'fd12::/16',
       SHUTDOWN_GRACE_PERIOD_MS: '5000',
       LOKI_URL,
+      ...TRACE_EXPORT_WITH_API_CREDENTIAL,
     },
   });
 

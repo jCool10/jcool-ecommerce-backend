@@ -4,7 +4,7 @@ This document owns product intent, domain terminology, and business rules the co
 
 ## Intent and non-goals
 
-The product intent, the four invariants that drive the design, and the deliberate non-goals (multi-vendor, automatic refunds, a deployed tracing collector) are stated in [`README.md#what-this-is`](../README.md#what-this-is).
+The product intent, the four invariants that drive the design, and the deliberate non-goals (multi-vendor, automatic refunds) are stated in [`README.md#what-this-is`](../README.md#what-this-is).
 
 Single-store is structural, not a flag: no table carries a seller, vendor, store or tenant key, so multi-vendor would be a schema change across every context rather than a feature.
 

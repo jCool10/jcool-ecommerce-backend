@@ -73,6 +73,8 @@ Each service's env validator is the final word on what it refuses to boot withou
 
 Each caller token is required too: a callee refuses to boot with no `INTERNAL_CALLER_TOKEN_<CALLER>` at all or with two callers sharing a value, and each caller's `*_SERVICE_TOKEN` must equal its callee's ([RUNBOOK → Per-caller internal tokens](../RUNBOOK.md#per-caller-internal-tokens)). Settings of two services meet in rules no validator can check: the inventory-service's `INVENTORY_TRY_LOCK_TIMEOUT_MS` stays below the order-service's `CHECKOUT_TRY_TIMEOUT_MS`, the payment-service's timeouts, session floor and `ORDER_PAID_CONSUMER_ATTEMPTS` line up with the order-service's, and the order-service's shutdown steps fit its `drainingSeconds` ([RUNBOOK → Cross-service settings](../RUNBOOK.md#cross-service-settings)).
 
+Tracing is never required. With `OTEL_ENABLED` unset no SDK starts; with it on, an unreachable or rejecting backend delays no boot, request or shutdown and only prints a warning to stderr ([RUNBOOK → When export fails](../RUNBOOK.md#when-export-fails)). Only an unknown `OTEL_TRACES_SAMPLER` or an `OTEL_TRACES_SAMPLER_ARG` outside 0–1 refuses a boot.
+
 ## Runbook
 
 Every manual operation is in [`RUNBOOK.md`](../RUNBOOK.md), indexed by its own contents list. The ones a deploy itself can lead to:
