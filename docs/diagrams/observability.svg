@@ -1,4 +1,4 @@
-<svg class="ak-diagram-svg" viewBox="36 56 728 320" width="728" height="320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Observability on Railway"><title>Observability on Railway</title><desc>Every Node service pushes its pino lines to Loki as well as stdout; Prometheus scrapes the api&apos;s token-guarded /metrics; Grafana, the only public piece, queries both behind a login. No trace backend is deployed: a traceId joins log lines across services.</desc><defs><style>
+<svg class="ak-diagram-svg" viewBox="36 56 728 320" width="728" height="320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Observability on Railway"><title>Observability on Railway</title><desc>Every Node service pushes its pino lines to Loki as well as stdout; Prometheus scrapes the api&apos;s token-guarded /metrics; Grafana, the only public piece, queries both behind a login. Traces go to Grafana Cloud, outside Railway and outside this diagram.</desc><defs><style>
       svg {
         --ak-bg: #ffffff; --ak-surface: #f8fafc; --ak-surface-border: #e2e8f0;
         --ak-text-primary: #0f172a; --ak-text-secondary: #475569; --ak-text-muted: #94a3b8;

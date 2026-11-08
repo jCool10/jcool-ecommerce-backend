@@ -26,7 +26,7 @@ Four invariants drive nearly every design decision:
 | **Money and stock stay consistent with order state** | A Temporal saga is the order's only writer; every step before the capture is compensated (release the stock, void the card hold) until it lands |
 | **The order is the transaction source of truth** | Each line snapshots its price and name, so a later reprice cannot move a placed order |
 
-**Not in scope, deliberately:** multi-vendor, automatic refunds, and a deployed tracing collector. Where a guarantee is weaker than it looks, [Known limits](#known-limits) says so.
+**Not in scope, deliberately:** multi-vendor and automatic refunds. Where a guarantee is weaker than it looks, [Known limits](#known-limits) says so.
 
 ## Architecture
 
@@ -160,7 +160,7 @@ Stated plainly, because a reviewer will find them anyway. The reasoning behind e
 - **Ids have hard ceilings.** The id `CHECK` is a floor, not a type, and 1024 ids per node-millisecond and 254 leasable nodes are real limits.
 - **Search trails writes by about 1–2 s** and is not read-your-writes.
 - **There is no API version prefix**; changes are additive-only.
-- **Traces are local-only**; in production a `traceId` only joins log lines.
+- **Traces go to Grafana Cloud, sampled and scrubbed**; viewing one needs the Grafana Cloud login, and the user-service and the id-service appear only as their callers' client spans.
 
 ## Documentation
 
