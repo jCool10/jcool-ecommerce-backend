@@ -257,12 +257,15 @@ export function onCompensationDone(state: CheckoutSagaState, id: number): Transi
   return { state: { ...state, pending, step }, commands: [] };
 }
 
+const MONEY_KEPT: ReadonlySet<OrderStatus> = new Set([OrderStatus.PAID, OrderStatus.REFUNDING, OrderStatus.REFUNDED]);
+
 /** Decides a late-authorization run once it has read the order; the order itself is never changed. */
 export function onLateAuthorizationContext(state: CheckoutSagaState, orderStatus: OrderStatus | null): Transition {
   if (state.mode !== 'lateAuthorization' || state.orderStatus !== null) return noop(state);
   // null would read as "not loaded yet", so a missing order is recorded as REJECTED: never placed.
   const known = { ...state, orderStatus: orderStatus ?? OrderStatus.REJECTED };
-  if (orderStatus === OrderStatus.PAID) {
+  // The money of a refunding or refunded order was captured once; payment refuses a void of it.
+  if (orderStatus !== null && MONEY_KEPT.has(orderStatus)) {
     return { state: { ...known, step: CheckoutStep.COMPLETED }, commands: [] };
   }
   return compensate(known, [], [['CANCEL_PAYMENT', 'LATE_AUTHORIZATION']]);

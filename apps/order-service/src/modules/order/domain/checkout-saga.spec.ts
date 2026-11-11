@@ -382,8 +382,9 @@ describe('checkout saga', () => {
       expect(commands).toEqual([]);
     });
 
-    it('leaves a paid order alone', () => {
-      const { state, commands } = onLateAuthorizationContext(lateRun(), OrderStatus.PAID);
+    // A refunded payment refuses a void, so voiding it would retry a conflict forever.
+    it.each([OrderStatus.PAID, OrderStatus.REFUNDING, OrderStatus.REFUNDED])('leaves a %s order alone', (status) => {
+      const { state, commands } = onLateAuthorizationContext(lateRun(), status);
 
       expect(state.step).toBe(CheckoutStep.COMPLETED);
       expect(commands).toEqual([]);

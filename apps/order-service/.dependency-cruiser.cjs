@@ -63,12 +63,12 @@ module.exports = {
       name: 'workflow-sandbox-imports',
       severity: 'error',
       comment:
-        'Workflow code is bundled alone into the deterministic sandbox: only the Temporal workflow API, the saga contract and the pure saga domain may come in. Node core, Nest, the DB, the other Temporal packages and every other layer either break the bundle or break replay.',
+        'Workflow code is bundled alone into the deterministic sandbox: only the Temporal workflow API, the saga and refund contracts and the pure saga domain may come in. Node core, Nest, the DB, the other Temporal packages and every other layer either break the bundle or break replay.',
       from: { path: '^src/modules/order/infrastructure/temporal/workflows/' },
       to: {
         pathNot: [
           '^src/modules/order/infrastructure/temporal/workflows/',
-          '^src/modules/order/infrastructure/temporal/checkout-saga\\.(contract|activities)\\.ts$',
+          '^src/modules/order/infrastructure/temporal/(checkout-saga|refund-order)\\.(contract|activities)\\.ts$',
           '^src/modules/order/domain/(checkout-saga|order-status)\\.ts$',
           '(^|/)node_modules/@temporalio/(workflow|common)/',
         ],
@@ -80,7 +80,7 @@ module.exports = {
       comment: 'The workflow may name the activities type, never load the Nest class that implements it.',
       from: { path: '^src/modules/order/infrastructure/temporal/workflows/' },
       to: {
-        path: '^src/modules/order/infrastructure/temporal/checkout-saga\\.activities\\.ts$',
+        path: '^src/modules/order/infrastructure/temporal/(checkout-saga|refund-order)\\.activities\\.ts$',
         dependencyTypesNot: ['type-only'],
       },
     },

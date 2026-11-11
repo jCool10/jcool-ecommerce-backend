@@ -288,4 +288,133 @@ describe('Order repository: saga writes (integration, real Postgres)', () => {
       ).toBe('stale');
     });
   });
+
+  describe('applyRefundChange', () => {
+    const ADMIN_ID = testId();
+
+    const paid = async () => {
+      const orderId = await place();
+      await repo.applyTryResult({ orderId, outcome: 'HELD', reason: null });
+      await repo.applyOrderChange({ orderId, from: [OrderStatus.PENDING], to: OrderStatus.CONFIRMING, reason: null });
+      await repo.applyOrderChange({
+        orderId,
+        from: [OrderStatus.CONFIRMING],
+        to: OrderStatus.PAID,
+        reason: 'saga:captured',
+        paymentRef: 'pay-88',
+      });
+      return orderId;
+    };
+    const updatedAtOf = async (orderId: string) =>
+      (await pool.query<{ updated_at: Date }>('SELECT updated_at FROM orders WHERE id = $1', [orderId])).rows[0]
+        .updated_at;
+
+    it('begins and abandons a refund without an event, the settlement left as it was', async () => {
+      const orderId = await paid();
+      const settled = await readOrderRow(orderId);
+      const paidAt = await updatedAtOf(orderId);
+
+      expect(await repo.applyRefundChange({ orderId, from: OrderStatus.PAID, to: OrderStatus.REFUNDING })).toBe(
+        'applied',
+      );
+      expect((await readOrderRow(orderId)).status).toBe('REFUNDING');
+      expect((await updatedAtOf(orderId)).getTime()).toBeGreaterThan(paidAt.getTime());
+
+      expect(await repo.applyRefundChange({ orderId, from: OrderStatus.REFUNDING, to: OrderStatus.PAID })).toBe(
+        'applied',
+      );
+      expect(await readOrderRow(orderId)).toEqual(settled);
+      expect((await outboxFor(orderId)).map((event) => event.event_type)).toEqual(['order.placed', 'order.paid']);
+    });
+
+    it('completes a refund with its finalization and one order.refunded naming the admin', async () => {
+      const orderId = await paid();
+      await repo.applyRefundChange({ orderId, from: OrderStatus.PAID, to: OrderStatus.REFUNDING });
+
+      expect(
+        await repo.applyRefundChange({
+          orderId,
+          from: OrderStatus.REFUNDING,
+          to: OrderStatus.REFUNDED,
+          requestedBy: ADMIN_ID,
+        }),
+      ).toBe('applied');
+
+      const row = await readOrderRow(orderId);
+      expect(row).toMatchObject({ status: 'REFUNDED', finalize_reason: 'admin:refund', payment_ref: 'pay-88' });
+      expect(row.finalized_at).toBeInstanceOf(Date);
+      const events = await outboxFor(orderId);
+      expect(events.map((event) => event.event_type)).toEqual(['order.placed', 'order.paid', 'order.refunded']);
+      expect(events[2].payload).toMatchObject({
+        orderId,
+        totalAmountMinor: 250_000,
+        currency: 'VND',
+        paymentRef: 'pay-88',
+        requestedBy: ADMIN_ID,
+        reason: 'admin:refund',
+      });
+    });
+
+    it('answers already for a repeat and stale when the order is not at the source', async () => {
+      const orderId = await paid();
+      const begin = { orderId, from: OrderStatus.PAID, to: OrderStatus.REFUNDING } as const;
+      await repo.applyRefundChange(begin);
+      const complete = {
+        orderId,
+        from: OrderStatus.REFUNDING,
+        to: OrderStatus.REFUNDED,
+        requestedBy: ADMIN_ID,
+      } as const;
+      await repo.applyRefundChange(complete);
+
+      expect(await repo.applyRefundChange(complete)).toBe('already');
+      expect(await repo.applyRefundChange(begin)).toBe('stale');
+      expect(await repo.applyRefundChange({ orderId, from: OrderStatus.REFUNDING, to: OrderStatus.PAID })).toBe(
+        'stale',
+      );
+      expect((await readOrderRow(orderId)).status).toBe('REFUNDED');
+      expect((await outboxFor(orderId)).filter((event) => event.event_type === 'order.refunded')).toHaveLength(1);
+    });
+
+    it('answers stale for an order that is not paid, or does not exist', async () => {
+      const orderId = await place();
+      await repo.applyTryResult({ orderId, outcome: 'HELD', reason: null });
+
+      expect(await repo.applyRefundChange({ orderId, from: OrderStatus.PAID, to: OrderStatus.REFUNDING })).toBe(
+        'stale',
+      );
+      expect(
+        await repo.applyRefundChange({ orderId: testId(), from: OrderStatus.PAID, to: OrderStatus.REFUNDING }),
+      ).toBe('stale');
+      expect((await readOrderRow(orderId)).status).toBe('PENDING');
+    });
+
+    it('lets one of two racing begins through', async () => {
+      const orderId = await paid();
+      const begin = { orderId, from: OrderStatus.PAID, to: OrderStatus.REFUNDING } as const;
+
+      const results = await Promise.all([repo.applyRefundChange(begin), repo.applyRefundChange(begin)]);
+
+      expect(results.toSorted()).toEqual(['already', 'applied']);
+    });
+  });
+
+  describe('findStatusesByIds', () => {
+    it('reads the status and updated_at of each order found, and leaves out the rest', async () => {
+      const first = await place();
+      const second = await place();
+      await setStatus(second, OrderStatus.PENDING);
+      const missing = testId();
+
+      const stamps = await repo.findStatusesByIds([first, second, missing]);
+
+      expect([...stamps.keys()].sort()).toEqual([first, second].sort());
+      expect(stamps.get(first)).toEqual({ status: OrderStatus.RESERVING, updatedAt: expect.any(Date) });
+      expect(stamps.get(second)?.status).toBe(OrderStatus.PENDING);
+    });
+
+    it('answers an empty map for no ids', async () => {
+      await expect(repo.findStatusesByIds([])).resolves.toEqual(new Map());
+    });
+  });
 });

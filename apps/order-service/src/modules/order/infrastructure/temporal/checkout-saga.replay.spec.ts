@@ -5,13 +5,13 @@ import { installTemporalRuntime } from './temporal-runtime';
 import { checkoutSagaWorkflowCode } from './workflow-bundle';
 import { workflowTracingSinks } from './workflow-tracing';
 
-// Histories recorded by checkout-saga-workflow.e2e-spec.ts with CHECKOUT_SAGA_HISTORY_OUT set. A
-// workflow change that fails here would break every run already open in production: it needs patched().
-// Replayed through the production bundle, tracing interceptors included.
+// Histories recorded by checkout-saga-workflow.e2e-spec.ts and refund-order-workflow.e2e-spec.ts with
+// CHECKOUT_SAGA_HISTORY_OUT set. A workflow change that fails here would break every run already open
+// in production: it needs patched(). Replayed through the production bundle, tracing interceptors included.
 const HISTORIES_DIR = resolve('src/modules/order/infrastructure/temporal/replay-histories');
 const HISTORIES = readdirSync(HISTORIES_DIR).filter((file) => file.endsWith('.history.json'));
 
-describe('CheckoutSaga replay', () => {
+describe('CheckoutSaga and RefundOrder replay', () => {
   let code: string;
 
   beforeAll(async () => {
@@ -25,6 +25,10 @@ describe('CheckoutSaga replay', () => {
       'completed.history.json',
       'expired.history.json',
       'late-authorization.history.json',
+      'refund-completed.history.json',
+      'refund-failed.history.json',
+      'refund-not-refundable.history.json',
+      'refund-pending-then-completed.history.json',
       'try-out-of-stock.history.json',
     ]);
   });

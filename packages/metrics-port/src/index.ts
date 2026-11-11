@@ -36,9 +36,15 @@ export type ConsumeResult = 'processed' | 'duplicate' | 'failed';
 
 export type DeadLetterReason = 'permanent' | 'attempts_exhausted';
 
-/** A checkout saga activity that calls a participant. */
+/** A checkout saga or refund activity that calls a participant; a refund's restock counts as `restock`. */
 export type SagaStep =
-  'try_reserve' | 'commit_stock' | 'capture_payment' | 'release_stock' | 'restock' | 'cancel_payment';
+  | 'try_reserve'
+  | 'commit_stock'
+  | 'capture_payment'
+  | 'release_stock'
+  | 'restock'
+  | 'cancel_payment'
+  | 'refund_payment';
 
 /** The participant's own outcome, lower-cased; `error` is a call that threw and will be retried. */
 export type SagaStepOutcome =
@@ -53,6 +59,9 @@ export type SagaStepOutcome =
   | 'cancelled'
   | 'fenced'
   | 'captured_conflict'
+  | 'refunded'
+  | 'refund_pending'
+  | 'refund_failed'
   | 'error';
 
 export type CompensationKind = 'release_stock' | 'restock' | 'cancel_payment';
@@ -68,7 +77,13 @@ export type CompensationReason =
   | 'late_authorization';
 
 export type CheckoutInvariantKind =
-  'captured_without_paid' | 'paid_without_capture' | 'paid_without_commit' | 'orphan_hold' | 'authorized_on_dead_order';
+  | 'captured_without_paid'
+  | 'paid_without_capture'
+  | 'paid_without_commit'
+  | 'orphan_hold'
+  | 'authorized_on_dead_order'
+  | 'refunded_without_refund'
+  | 'refunded_without_restock';
 
 export type InvariantCheckResult = 'ok' | 'violations' | 'error';
 
@@ -78,7 +93,7 @@ export type InvariantCheckResult = 'ok' | 'violations' | 'error';
  */
 export type RefundOwedSource = 'webhook_direct' | 'refund_failed';
 
-export type MailKind = 'email_verification' | 'password_reset' | 'order_paid';
+export type MailKind = 'email_verification' | 'password_reset' | 'order_paid' | 'order_refunded';
 
 /** `miss` is a read-through to the user-service, paid for on the request path. */
 export type SessionEpochLookupResult = 'hit' | 'miss';

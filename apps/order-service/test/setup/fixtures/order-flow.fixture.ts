@@ -194,6 +194,7 @@ export async function auditLedgerInvariants(
 
     switch (order.status) {
       case 'PENDING':
+      case 'REFUNDING':
         pending.push(order.id);
         break;
       case 'PAID': {
@@ -205,7 +206,23 @@ export async function auditLedgerInvariants(
           violations.push(`PAID order ${order.id} has no SUCCEEDED payment: [${statuses(linked)}]`);
         }
         if (stockHeader !== 'COMMITTED') violations.push(`PAID order ${order.id} has stock header ${stockHeader}`);
-        if (paymentHeader !== 'CAPTURED') violations.push(`PAID order ${order.id} has payment header ${paymentHeader}`);
+        // REFUND_FAILED: a refund the provider failed leaves the order PAID with the money kept.
+        if (paymentHeader !== 'CAPTURED' && paymentHeader !== 'REFUND_FAILED') {
+          violations.push(`PAID order ${order.id} has payment header ${paymentHeader}`);
+        }
+        break;
+      }
+      case 'REFUNDED': {
+        if (holds.length === 0) violations.push(`REFUNDED order ${order.id} settled without ever holding stock`);
+        const wrong = holds.filter((r) => r.status !== 'RESTOCKED');
+        if (wrong.length > 0) violations.push(`REFUNDED order ${order.id} has holds not restocked: ${statuses(wrong)}`);
+        if (succeeded.length !== 1) {
+          violations.push(`REFUNDED order ${order.id} has no SUCCEEDED payment to refund: [${statuses(linked)}]`);
+        }
+        if (stockHeader !== 'RESTOCKED') violations.push(`REFUNDED order ${order.id} has stock header ${stockHeader}`);
+        if (paymentHeader !== 'REFUNDED') {
+          violations.push(`REFUNDED order ${order.id} has payment header ${paymentHeader}`);
+        }
         break;
       }
       case 'FAILED':

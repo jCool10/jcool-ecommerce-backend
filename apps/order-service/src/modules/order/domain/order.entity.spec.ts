@@ -10,6 +10,7 @@ import { OrderPlacedEvent } from './events/order-placed.event';
 import { OrderFailedEvent } from './events/order-failed.event';
 import { OrderExpiredEvent } from './events/order-expired.event';
 import { OrderCancelledEvent } from './events/order-cancelled.event';
+import { OrderRefundedEvent } from './events/order-refunded.event';
 
 const line = (unitPriceMinor: number, quantity: number, skuId = 'sku-a', name = 'Widget'): OrderItem =>
   OrderItem.of(skuId, name, unitPriceMinor, quantity);
@@ -73,7 +74,7 @@ describe('Order entity', () => {
       const paid = confirming.finalize(OrderStatus.PAID, { now, reason: 'saga:captured', paymentRef: 'pay_123' });
 
       expect(paid.status).toBe(OrderStatus.PAID);
-      expect(paid.isTerminal()).toBe(true);
+      expect(paid.isTerminal()).toBe(false);
       expect(paid.finalizedAt).toBe(now);
       expect(paid.finalizeReason).toBe('saga:captured');
       expect(paid.paymentRef).toBe('pay_123');
@@ -163,6 +164,92 @@ describe('Order entity', () => {
     it('rehydrate() reads the payment deadline and defaults it to null', () => {
       expect(reserving().paymentDeadlineAt).toBe(deadline);
       expect(pendingOrder().paymentDeadlineAt).toBeNull();
+    });
+  });
+
+  describe('refund transitions', () => {
+    const paidAt = new Date('2026-04-04T00:00:00.000Z');
+    const refundedAt = new Date('2026-04-05T00:00:00.000Z');
+    const paid = (): Order =>
+      Order.rehydrate({
+        id: 'order-1',
+        userId: 'u',
+        status: OrderStatus.PAID,
+        currency: 'VND',
+        items: [line(100_000, 1)],
+        totalAmountMinor: 100_000,
+        placedAt: new Date('2026-04-03T23:00:00.000Z'),
+        finalizedAt: paidAt,
+        finalizeReason: 'saga:captured',
+        paymentRef: 'pay_7',
+      });
+
+    it('beginRefund() moves PAID to REFUNDING and keeps the settlement it was paid with', () => {
+      const refunding = paid().beginRefund();
+
+      expect(refunding).toMatchObject({
+        status: OrderStatus.REFUNDING,
+        finalizedAt: paidAt,
+        finalizeReason: 'saga:captured',
+        paymentRef: 'pay_7',
+      });
+      expect(refunding.isTerminal()).toBe(false);
+    });
+
+    it('abandonRefund() puts a refunding order back to PAID unchanged', () => {
+      expect(paid().beginRefund().abandonRefund()).toMatchObject({
+        status: OrderStatus.PAID,
+        finalizedAt: paidAt,
+        finalizeReason: 'saga:captured',
+      });
+    });
+
+    it('completeRefund() settles REFUNDED, restamped with the refund', () => {
+      const refunded = paid().beginRefund().completeRefund(refundedAt);
+
+      expect(refunded).toMatchObject({
+        status: OrderStatus.REFUNDED,
+        finalizedAt: refundedAt,
+        finalizeReason: 'admin:refund',
+        paymentRef: 'pay_7',
+      });
+      expect(refunded.isTerminal()).toBe(true);
+    });
+
+    it('refuses each refund step from the wrong source', () => {
+      expect(() => pendingOrder().beginRefund()).toThrow(OrderTransitionError);
+      expect(() => pendingOrder(OrderStatus.CONFIRMING).beginRefund()).toThrow(OrderTransitionError);
+      expect(() => paid().abandonRefund()).toThrow(OrderTransitionError);
+      expect(() => paid().completeRefund(refundedAt)).toThrow(OrderTransitionError);
+      expect(() => paid().beginRefund().completeRefund(refundedAt).beginRefund()).toThrow(OrderTransitionError);
+    });
+
+    it('toRefundedEvent() names the money returned, the payment and the admin who asked', () => {
+      const event = paid().beginRefund().completeRefund(refundedAt).toRefundedEvent('137465797020397182');
+
+      expect(event).toBeInstanceOf(OrderRefundedEvent);
+      expect(event).toEqual(
+        new OrderRefundedEvent(
+          'order-1',
+          'u',
+          100_000,
+          'VND',
+          'pay_7',
+          '137465797020397182',
+          'admin:refund',
+          refundedAt,
+        ),
+      );
+      expect(event.eventName).toBe('order.refunded');
+    });
+
+    it('toRefundedEvent() refuses an order that is not refunded', () => {
+      expect(() => paid().toRefundedEvent('137465797020397182')).toThrow(DomainError);
+      expect(() => paid().beginRefund().toRefundedEvent('137465797020397182')).toThrow(DomainError);
+    });
+
+    it('has no finalization event for a refund status', () => {
+      expect(() => paid().beginRefund().completeRefund(refundedAt).toFinalizedEvent()).toThrow(DomainError);
     });
   });
 

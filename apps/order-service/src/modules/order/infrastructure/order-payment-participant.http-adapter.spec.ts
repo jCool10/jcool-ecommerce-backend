@@ -175,6 +175,49 @@ describe('OrderPaymentParticipantHttpAdapter', () => {
     expect(payment.received[0].body).toBeUndefined();
   });
 
+  describe('refund', () => {
+    const ADMIN_ID = '137465797020397182';
+
+    it.each<[number, Record<string, unknown>]>([
+      [200, { outcome: 'REFUNDED' }],
+      [200, { outcome: 'IDEMPOTENT' }],
+      [202, { outcome: 'PENDING' }],
+      [409, { outcome: 'REFUND_FAILED', reason: 'charge_disputed' }],
+      [409, { outcome: 'NOT_REFUNDABLE' }],
+    ])('posts the admin as requestedBy and reads %d %o', async (status, body) => {
+      payment.reply = () => ({ status, body });
+
+      await expect(adapter().refund(ORDER_ID, ADMIN_ID)).resolves.toEqual(body);
+      expect(payment.received[0].url).toBe(`/internal/v1/payments/${ORDER_ID}/refund`);
+      expect(payment.received[0].body).toEqual({ requestedBy: ADMIN_ID });
+      expect(payment.received[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
+    });
+
+    it('keeps Stripe being away a retryable refusal that names the provider', async () => {
+      payment.reply = () => STRIPE_AWAY;
+
+      const error = await adapter()
+        .refund(ORDER_ID, ADMIN_ID)
+        .catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(PaymentServiceRejection);
+      expect((error as PaymentServiceRejection).code).toBe(PROVIDER_UNAVAILABLE);
+      expect(isPaymentServiceFault(error)).toBe(false);
+    });
+
+    it.each<[string, Reply]>([
+      ['an outcome the status code disagrees with', { status: 202, body: { outcome: 'REFUNDED' } }],
+      ['a failure reason that is not a string', { status: 409, body: { outcome: 'REFUND_FAILED', reason: 42 } }],
+      ['an outcome the contract does not name', { status: 200, body: { outcome: 'DONE' } }],
+      ['a 400 for a malformed body', { status: 400, body: { statusCode: 400 } }],
+      ['a body that is not JSON', { status: 200, raw: 'REFUNDED' }],
+    ])('throws on %s for the activity to retry', async (_case, reply) => {
+      payment.reply = () => reply;
+
+      await expect(adapter().refund(ORDER_ID, ADMIN_ID)).rejects.toBeInstanceOf(PaymentServiceRejection);
+    });
+  });
+
   it('reads a status per order, with the attempt that holds the money', async () => {
     payment.reply = () => ({
       status: 200,

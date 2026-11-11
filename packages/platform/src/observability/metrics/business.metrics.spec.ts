@@ -39,6 +39,7 @@ describe('BusinessMetrics', () => {
     metrics.recordConsumeRetry('order.paid');
     metrics.recordDeadLetter('order.paid', 'permanent');
     metrics.recordSagaStep('release_stock', 'idempotent');
+    metrics.recordSagaStep('refund_payment', 'refund_pending');
     metrics.recordCompensation('release_stock', 'late_authorization');
     metrics.setCheckoutInvariantViolations({
       captured_without_paid: 0,
@@ -46,10 +47,13 @@ describe('BusinessMetrics', () => {
       paid_without_commit: 0,
       orphan_hold: 2,
       authorized_on_dead_order: 0,
+      refunded_without_refund: 1,
+      refunded_without_restock: 0,
     });
     metrics.recordInvariantCheck('violations');
     metrics.recordRefundOwed('webhook_direct');
     metrics.recordMailSendFailure('order_paid');
+    metrics.recordMailSendFailure('order_refunded');
     metrics.recordRetentionSweep('messaging:outbox', 0);
     metrics.observeRetentionSweepDuration('messaging:outbox', 0.2);
     metrics.recordRetentionSweepFailure('messaging:outbox');
@@ -78,13 +82,17 @@ describe('BusinessMetrics', () => {
       'messaging_consume_retries_total{event_type="order.paid"} 1',
       'messaging_dlq_total{event_type="order.paid",reason="permanent"} 1',
       'saga_step_total{step="release_stock",outcome="idempotent"} 1',
+      'saga_step_total{step="refund_payment",outcome="refund_pending"} 1',
       'saga_compensation_total{kind="release_stock",reason="late_authorization"} 1',
       'checkout_invariant_violations{kind="orphan_hold"} 2',
+      'checkout_invariant_violations{kind="refunded_without_refund"} 1',
+      'checkout_invariant_violations{kind="refunded_without_restock"} 0',
       // Zeros are written too, so an alert sees a clean kind rather than a missing one.
       'checkout_invariant_violations{kind="captured_without_paid"} 0',
       'checkout_invariant_check_total{result="violations"} 1',
       'payment_refund_owed_total{source="webhook_direct"} 1',
       'mail_send_failures_total{kind="order_paid"} 1',
+      'mail_send_failures_total{kind="order_refunded"} 1',
       // Recorded at zero so an idle sweep still has a series to alert on.
       'retention_rows_deleted_total{sweep="messaging:outbox"} 0',
       'retention_sweep_duration_seconds_count{sweep="messaging:outbox"} 1',

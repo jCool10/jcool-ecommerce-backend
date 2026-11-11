@@ -13,7 +13,7 @@ interface Transition {
   wired: boolean;
 }
 
-// Every edge past DRAFT is written by the checkout saga and nothing else.
+// Every edge past DRAFT is written by the checkout saga, or from PAID on by the refund run, and nothing else.
 const TRANSITIONS: readonly Transition[] = [
   { from: OrderStatus.DRAFT, to: OrderStatus.CANCELLED, wired: true }, // discard a draft
   { from: OrderStatus.PENDING, to: OrderStatus.EXPIRED, wired: true }, // payment deadline passed unpaid
@@ -24,15 +24,18 @@ const TRANSITIONS: readonly Transition[] = [
   { from: OrderStatus.PENDING, to: OrderStatus.CONFIRMING, wired: true }, // authorization verified
   { from: OrderStatus.CONFIRMING, to: OrderStatus.PAID, wired: true }, // captured
   { from: OrderStatus.CONFIRMING, to: OrderStatus.FAILED, wired: true }, // commit conflicted or hold lost
+  { from: OrderStatus.PAID, to: OrderStatus.REFUNDING, wired: true }, // admin refund started
+  { from: OrderStatus.REFUNDING, to: OrderStatus.REFUNDED, wired: true }, // money and stock returned
+  { from: OrderStatus.REFUNDING, to: OrderStatus.PAID, wired: true }, // the provider refused or failed the refund
 ];
 
 // The guard that turns an at-least-once webhook into an exactly-once effect: nothing leaves these.
 const TERMINAL_STATUSES: ReadonlySet<OrderStatus> = new Set([
-  OrderStatus.PAID,
   OrderStatus.FAILED,
   OrderStatus.EXPIRED,
   OrderStatus.CANCELLED,
   OrderStatus.REJECTED,
+  OrderStatus.REFUNDED,
 ]);
 
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {

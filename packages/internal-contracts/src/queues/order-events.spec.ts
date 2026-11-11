@@ -14,10 +14,13 @@ describe('order-events queue', () => {
     expect(ORDER_EVENTS_CONSUMER).toBe('order-events');
   });
 
-  // Both wait on another service: the buyer's address for order.paid, Temporal for payment.authorized.
-  it.each(['order.paid', PAYMENT_AUTHORIZED_EVENT])('puts %s on the long ladder the producer sizes', (eventType) => {
-    expect(orderEventsJobOptions(eventType, 12)).toEqual({ attempts: 12, backoff: { type: ORDER_PAID_BACKOFF } });
-  });
+  // Each waits on another service: the buyer's address for the two mails, Temporal for payment.authorized.
+  it.each(['order.paid', 'order.refunded', PAYMENT_AUTHORIZED_EVENT])(
+    'puts %s on the long ladder the producer sizes',
+    (eventType) => {
+      expect(orderEventsJobOptions(eventType, 12)).toEqual({ attempts: 12, backoff: { type: ORDER_PAID_BACKOFF } });
+    },
+  );
 
   it.each(['order.placed', 'order.failed', 'order.expired', 'order.cancelled'])(
     'leaves %s on the queue defaults',

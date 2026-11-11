@@ -14,7 +14,7 @@ import { CHECKOUT_INVARIANT_KINDS } from '../../src/modules/order/domain/checkou
 import type { DrizzleDB } from '../../src/database';
 import * as schema from '../../src/database/schema';
 import { eventually } from '../setup/eventually';
-import { failAlways, releaseHung, sagaEngine } from '../setup/fixtures/checkout-saga.fixture';
+import { failAlways, holdCalls, releaseHung, sagaEngine } from '../setup/fixtures/checkout-saga.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetSagasAndDatabaseBeforeEach } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { inventoryServiceStub } from '../setup/inventory-service-stub';
@@ -101,12 +101,14 @@ describe('Checkout invariant checker (integration, real Postgres and Temporal)',
     await seedSettled('CANCELLED', { stock: 'HELD', payment: 'CANCELLED' });
     // The header was cancelled, but an attempt under it still holds the money.
     await seedSettled('CANCELLED', { stock: 'RELEASED', payment: 'CANCELLED', attempt: 'AUTHORIZED' });
+    await seedSettled('REFUNDED', { stock: 'RESTOCKED', payment: 'REFUND_FAILED', attempt: 'SUCCEEDED' });
+    await seedSettled('REFUNDED', { stock: 'COMMITTED', payment: 'REFUNDED', attempt: 'SUCCEEDED' });
     const before = (await scrapeMetrics(app)).value('checkout_invariant_check_total', { result: 'violations' }) ?? 0;
 
     const run = await check();
 
     const one = Object.fromEntries(CHECKOUT_INVARIANT_KINDS.map((kind) => [kind, 1]));
-    expect(run).toEqual({ result: 'violations', checked: 5, violations: one });
+    expect(run).toEqual({ result: 'violations', checked: 7, violations: one });
     const metrics = await scrapeMetrics(app);
     for (const kind of CHECKOUT_INVARIANT_KINDS) {
       expect(metrics.value('checkout_invariant_violations', { kind }), kind).toBe(1);
@@ -183,6 +185,34 @@ describe('Checkout invariant checker (integration, real Postgres and Temporal)',
     const orderIds = Array.from({ length: 200 }, () => testId());
 
     await expect(sagaEngine(app).runningOrderIds(orderIds)).resolves.toEqual(new Set());
+  });
+
+  it('judges a refunded order clean, and a paid one whose refund failed', async () => {
+    await seedSettled('REFUNDED', {
+      stock: 'RESTOCKED',
+      payment: 'REFUNDED',
+      attempt: 'SUCCEEDED',
+      finalizeReason: 'admin:refund',
+    });
+    await seedSettled('PAID', { stock: 'COMMITTED', payment: 'REFUND_FAILED', attempt: 'SUCCEEDED' });
+
+    await expect(check()).resolves.toEqual({ result: 'ok', checked: 2, violations: NONE });
+  });
+
+  // PAID → REFUNDING → PAID between the batch read and the re-read: the status matches again, but
+  // the participants answered for the order mid-refund.
+  it('skips an order whose refund began and failed while the participants were read', async () => {
+    const orderId = await seedSettled('PAID', { stock: 'COMMITTED', payment: 'REFUNDING', attempt: 'SUCCEEDED' });
+    const statusOf = holdCalls(app.get<OrderPaymentParticipantPort>(ORDER_PAYMENT_PARTICIPANT), 'statusOf');
+
+    const run = check();
+    await statusOf.waitForCalls(1);
+    await pool.query("UPDATE orders SET updated_at = now() + interval '1 second' WHERE id = $1", [orderId]);
+    statusOf.release();
+
+    await expect(run).resolves.toEqual({ result: 'ok', checked: 0, violations: NONE });
+    // Left alone, the same order would have paged.
+    await expect(check()).resolves.toMatchObject({ checked: 1, violations: { ...NONE, paid_without_capture: 1 } });
   });
 
   it('reports every kind at zero on clean data', async () => {

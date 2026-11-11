@@ -8,6 +8,10 @@ import { OrderPaidEvent } from './events/order-paid.event';
 import { OrderFailedEvent } from './events/order-failed.event';
 import { OrderExpiredEvent } from './events/order-expired.event';
 import { OrderCancelledEvent } from './events/order-cancelled.event';
+import { OrderRefundedEvent } from './events/order-refunded.event';
+
+/** The finalize_reason a refunded order carries. */
+export const REFUND_FINALIZE_REASON = 'admin:refund';
 
 export type FinalizeOutcome =
   typeof OrderStatus.PAID | typeof OrderStatus.FAILED | typeof OrderStatus.EXPIRED | typeof OrderStatus.CANCELLED;
@@ -133,6 +137,36 @@ export class Order {
 
   isTerminal(): boolean {
     return isTerminal(this.status);
+  }
+
+  /** The paid settlement stays stamped: a refund that fails puts the order back exactly as it was. */
+  beginRefund(): Order {
+    return this.moveTo(OrderStatus.REFUNDING, {});
+  }
+
+  abandonRefund(): Order {
+    return this.moveTo(OrderStatus.PAID, {});
+  }
+
+  /** Restamped so the invariant checker's window, keyed on finalized_at, judges the refund. */
+  completeRefund(now: Date): Order {
+    return this.moveTo(OrderStatus.REFUNDED, { finalizedAt: now, finalizeReason: REFUND_FINALIZE_REASON });
+  }
+
+  toRefundedEvent(requestedBy: string): OrderRefundedEvent {
+    if (this.id === null || this.finalizedAt === null || this.status !== OrderStatus.REFUNDED) {
+      throw new DomainError('Only a refunded order can produce an OrderRefundedEvent');
+    }
+    return new OrderRefundedEvent(
+      this.id,
+      this.userId,
+      this.totalAmountMinor,
+      this.currency,
+      this.paymentRef,
+      requestedBy,
+      this.finalizeReason ?? REFUND_FINALIZE_REASON,
+      this.finalizedAt,
+    );
   }
 
   /** Idempotency is the caller's job (status guard under the row lock) before it ever gets here. */

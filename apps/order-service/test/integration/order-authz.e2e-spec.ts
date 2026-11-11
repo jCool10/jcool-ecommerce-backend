@@ -26,6 +26,7 @@ const ADMIN_ROUTES: Route[] = [
   ['get', '/admin/orders'],
   ['get', `/admin/orders/${ID}`],
   ['post', `/admin/orders/${ID}/cancel`],
+  ['post', `/admin/orders/${ID}/refund`],
 ];
 
 // Guards run before validation and lookup, so an empty body and an unknown id still reach them.

@@ -87,6 +87,8 @@ export class PaymentServiceStub {
   private readonly droppedHolds = new Set<string>();
   private readonly refundArrangements = new Map<string, RefundArrangement>();
   private readonly refundedOutOfBand = new Set<string>();
+  private readonly refunds = new Map<string, number>();
+  private readonly refundRequesters = new Map<string, string[]>();
   private readonly published = new Map<string, DomainEventJob>();
   private readonly faults = new Map<PaymentStubRoute, Fault>();
   private readonly counts = new Map<PaymentStubRoute, number>();
@@ -240,6 +242,23 @@ export class PaymentServiceStub {
     this.refundedOutOfBand.add(orderId);
   }
 
+  /** Stripe's webhook settles a pending refund: the next ask finds it done. */
+  settleRefund(orderId: string): void {
+    const header = this.headers.get(orderId);
+    if (header?.status !== 'REFUNDING') throw new Error(`order ${orderId} has no pending refund to settle`);
+    header.status = 'REFUNDED';
+  }
+
+  /** Refunds actually sent to Stripe for the order; asks answered PENDING, IDEMPOTENT or adopted add nothing. */
+  providerRefunds(orderId: string): number {
+    return this.refunds.get(orderId) ?? 0;
+  }
+
+  /** The `requestedBy` of every refund request for the order that got past the guard, in arrival order. */
+  refundRequestersOf(orderId: string): string[] {
+    return [...(this.refundRequesters.get(orderId) ?? [])];
+  }
+
   /** Answers the next `times` calls to the route with a bare `status`; nothing is applied. */
   fail(route: PaymentStubRoute, status: number, { times = 1 }: FaultOptions = {}): void {
     this.faults.set(route, { kind: 'status', status, remaining: times });
@@ -280,6 +299,8 @@ export class PaymentServiceStub {
     this.droppedHolds.clear();
     this.refundArrangements.clear();
     this.refundedOutOfBand.clear();
+    this.refunds.clear();
+    this.refundRequesters.clear();
     this.published.clear();
     this.faults.clear();
     this.counts.clear();
@@ -398,8 +419,10 @@ export class PaymentServiceStub {
         break;
     }
 
-    const arrangement = this.refundedOutOfBand.has(orderId) ? undefined : this.refundArrangements.get(orderId);
+    const outOfBand = this.refundedOutOfBand.has(orderId);
+    const arrangement = outOfBand ? undefined : this.refundArrangements.get(orderId);
     this.refundArrangements.delete(orderId);
+    if (!outOfBand) this.refunds.set(orderId, this.providerRefunds(orderId) + 1);
     switch (arrangement) {
       case 'pending':
         header.status = 'REFUNDING';
@@ -500,6 +523,7 @@ export class PaymentServiceStub {
       }
       case 'refund': {
         if (!isRefundBody(body)) return void badRequest(res);
+        this.refundRequesters.set(route.orderId, [...this.refundRequestersOf(route.orderId), body.requestedBy]);
         const answer = this.refund(route.orderId);
         return void reply(res, REFUND_OUTCOME_STATUS[answer.outcome], answer);
       }

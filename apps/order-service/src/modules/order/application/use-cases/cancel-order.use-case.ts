@@ -48,7 +48,7 @@ export class CancelOrderUseCase {
     if (order.status === OrderStatus.CANCELLED) {
       return toView(order);
     }
-    // PAID included: unwinding that is a refund, which this shop does not do.
+    // PAID included: unwinding that is the admin refund route's job, not a cancel's.
     if (order.status !== OrderStatus.PENDING) {
       throw new ConflictException(`Order cannot be cancelled in status ${order.status}`);
     }

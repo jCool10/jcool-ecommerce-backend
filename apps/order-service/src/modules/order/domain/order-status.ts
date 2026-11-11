@@ -19,6 +19,10 @@ export const OrderStatus = {
   CANCELLED: 'CANCELLED',
   /** The Try refused or ran out of time: never placed, nothing to compensate on the order. */
   REJECTED: 'REJECTED',
+  /** An admin refund is under way; only its RefundOrder run moves the order on. */
+  REFUNDING: 'REFUNDING',
+  /** The money and the stock both came back. */
+  REFUNDED: 'REFUNDED',
 } as const;
 
 export type OrderStatus = (typeof OrderStatus)[keyof typeof OrderStatus];

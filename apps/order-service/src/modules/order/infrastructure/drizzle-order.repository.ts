@@ -11,10 +11,12 @@ import {
   TooManyPendingOrdersError,
   type AdminOrderPageQuery,
   type ApplyOrderChangeInput,
+  type ApplyRefundChangeInput,
   type ApplyTryResultInput,
   type OrderPage,
   type OrderPageQuery,
   type OrderRepositoryPort,
+  type OrderStatusStamp,
   type ReservingCreateResult,
   type SagaWriteResult,
   type SettledSagaOrder,
@@ -26,7 +28,11 @@ import {
   userIdempotencyScope,
   type IdempotencyStorePort,
 } from '../application/ports/idempotency-store.port';
-import { toFinalizedOutboxRecord, toPlacedOutboxRecord } from '../application/order-outbox.mapper';
+import {
+  toFinalizedOutboxRecord,
+  toPlacedOutboxRecord,
+  toRefundedOutboxRecord,
+} from '../application/order-outbox.mapper';
 import { toView } from '../application/order-view.mapper';
 import { orderItems, orders } from './schema/order.schema';
 
@@ -171,6 +177,46 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     });
   }
 
+  async applyRefundChange(input: ApplyRefundChangeInput): Promise<SagaWriteResult> {
+    const outboxId = input.to === OrderStatus.REFUNDED ? (await this.idGenerator.mint(1))[0] : undefined;
+
+    return this.db.transaction(async (tx) => {
+      const locked = await this.lockOrder(input.orderId, tx);
+      if (!locked) return 'stale';
+      const { order } = locked;
+      if (order.status === input.to) return 'already';
+      if (order.status !== input.from) return 'stale';
+
+      const now = new Date();
+      const changed = moveForRefund(order, input.to, now);
+      // Set explicitly as well as by $onUpdate: the invariant checker compares it across two reads.
+      await tx
+        .update(orders)
+        .set({
+          status: changed.status,
+          finalizedAt: changed.finalizedAt,
+          finalizeReason: changed.finalizeReason,
+          updatedAt: now,
+        })
+        .where(eq(orders.id, input.orderId));
+      if (input.to === OrderStatus.REFUNDED) {
+        await this.outboxWriter.append(tx, toRefundedOutboxRecord(changed.toRefundedEvent(input.requestedBy)), {
+          id: outboxId,
+        });
+      }
+      return 'applied';
+    });
+  }
+
+  async findStatusesByIds(orderIds: string[]): Promise<Map<string, OrderStatusStamp>> {
+    if (orderIds.length === 0) return new Map();
+    const rows = await this.db
+      .select({ id: orders.id, status: orders.status, updatedAt: orders.updatedAt })
+      .from(orders)
+      .where(inArray(orders.id, orderIds));
+    return new Map(rows.map(({ id, status, updatedAt }) => [id, { status, updatedAt }]));
+  }
+
   // The order row only: items are immutable snapshots, so they need no lock.
   private async lockOrder(
     orderId: string,
@@ -293,7 +339,12 @@ export class DrizzleOrderRepository implements OrderRepositoryPort {
     // read back as a Date would sort before its own row and return the same page forever.
     const finalizedMs = sql`date_trunc('milliseconds', ${orders.finalizedAt})`;
     const rows = await this.db
-      .select({ id: orders.id, status: orders.status, finalizedAt: finalizedMs.mapWith(orders.finalizedAt) })
+      .select({
+        id: orders.id,
+        status: orders.status,
+        finalizedAt: finalizedMs.mapWith(orders.finalizedAt),
+        updatedAt: orders.updatedAt,
+      })
       .from(orders)
       .where(
         and(
@@ -383,5 +434,16 @@ function moveForSaga(
       return order.finalize(to, meta);
     default:
       throw new Error(`A saga order change cannot target ${to}`);
+  }
+}
+
+function moveForRefund(order: Order, to: ApplyRefundChangeInput['to'], now: Date): Order {
+  switch (to) {
+    case OrderStatus.REFUNDING:
+      return order.beginRefund();
+    case OrderStatus.PAID:
+      return order.abandonRefund();
+    case OrderStatus.REFUNDED:
+      return order.completeRefund(now);
   }
 }

@@ -156,7 +156,7 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: SAGA_STEP_TOTAL,
-    help: 'Checkout saga participant calls, per attempt, by step (try_reserve/commit_stock/capture_payment/release_stock/restock/cancel_payment) and outcome (the participant answer lower-cased, or error when the call threw and will be retried). A retried step counts every attempt, so idempotent next to applied is a retry that found its work done; conflict on a compensation step is retried until a human resolves it.',
+    help: 'Checkout saga and admin refund participant calls, per attempt, by step (try_reserve/commit_stock/capture_payment/release_stock/restock/cancel_payment/refund_payment; restock also counts a refund putting stock back) and outcome (the participant answer lower-cased, refund_pending/refund_failed for a refund Stripe holds or failed, or error when the call threw and will be retried). A retried step counts every attempt, so idempotent next to applied is a retry that found its work done; conflict on a compensation or refund step is retried until a human resolves it.',
     labelNames: ['step', 'outcome'],
   }),
   makeCounterProvider({
@@ -181,7 +181,7 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: MAIL_SEND_FAILURES_TOTAL,
-    help: 'Messages the transport refused or could not deliver, by kind. Nothing retries them: the auth kinds are re-triggerable by the user (resend verification, ask for another reset link), order_paid is a confirmation simply lost.',
+    help: 'Messages the transport refused or could not deliver, by kind. Nothing retries them: the auth kinds are re-triggerable by the user (resend verification, ask for another reset link), order_paid and order_refunded are a confirmation and a refund notice simply lost.',
     labelNames: ['kind'],
   }),
   makeCounterProvider({

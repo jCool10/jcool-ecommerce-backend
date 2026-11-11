@@ -24,6 +24,9 @@ export const CHECKOUT_SAGA_DEFAULTS = {
   CHECKOUT_INVARIANT_SETTLE_SEC: 600,
   CHECKOUT_INVARIANT_WINDOW_SEC: 86_400,
   CHECKOUT_INVARIANT_BATCH_SIZE: 200,
+  REFUND_WAIT_MS: 10_000,
+  REFUND_PENDING_POLL_BASE_MS: 60_000,
+  REFUND_PENDING_POLL_MAX_MS: 3_600_000,
 } as const;
 
 // Above the platform's 10: the saga worker's two activity pools draw on the same pool as HTTP and the
@@ -59,6 +62,13 @@ export const checkoutSagaConfig = () => ({
     retryCapMs: int('SAGA_RETRY_CAP_MS'),
     // A run still open this long past its deadline is stuck, not waiting out its grace.
     overdueGraceSec: int('SAGA_OVERDUE_GRACE_SEC'),
+    refund: {
+      // How long the admin call waits for the run before answering 202 with the order REFUNDING.
+      waitMs: int('REFUND_WAIT_MS'),
+      // A refund the provider holds is asked about again from base, doubling up to max.
+      pendingPollBaseMs: int('REFUND_PENDING_POLL_BASE_MS'),
+      pendingPollMaxMs: int('REFUND_PENDING_POLL_MAX_MS'),
+    },
     invariant: {
       enabled: process.env.CHECKOUT_INVARIANT_ENABLED !== 'false',
       intervalMs: int('CHECKOUT_INVARIANT_INTERVAL_MS'),

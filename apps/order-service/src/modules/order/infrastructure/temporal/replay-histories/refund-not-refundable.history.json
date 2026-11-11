@@ -1,0 +1,248 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-11-09T03:56:08.997231666Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1049038",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "RefundOrder"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYTZlOGE4NTYtNmRiMC00NDQ2LWEwNWQtNmY0Nzk1NWFjMWQyIiwicmVxdWVzdGVkQnkiOiIxMzc0NjU3OTcwMjAzOTcxODIiLCJzZXR0aW5ncyI6eyJhY3Rpdml0eVRpbWVvdXRNcyI6MjAwMCwicmV0cnlCYXNlTXMiOjUwLCJyZXRyeUNhcE1zIjoyMDAsInBlbmRpbmdQb2xsQmFzZU1zIjoxMDAsInBlbmRpbmdQb2xsTWF4TXMiOjE1MH19"
+            }
+          ]
+        },
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a1be72-fba5-7387-8031-31d349349524",
+        "identity": "71200@replay-host",
+        "firstExecutionRunId": "01a1be72-fba5-7387-8031-31d349349524",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "e30="
+            }
+          }
+        },
+        "workflowId": "refund-a6e8a856-6db0-4446-a05d-6f47955ac1d2"
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-11-09T03:56:08.997292041Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1049039",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-11-09T03:56:09.035970937Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1049044",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "71200@replay-host",
+        "requestId": "a4288970-b6ca-4237-8f5e-7d50bf8be806",
+        "historySizeBytes": "612",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-11-09T03:56:09.043104089Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1049048",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            1,
+            3,
+            4,
+            2
+          ],
+          "sdkName": "temporal-typescript",
+          "sdkVersion": "1.25.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-11-09T03:56:09.043151755Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1049049",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "1",
+        "activityType": {
+          "name": "beginRefund"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0cmFjZXBhcmVudCI6IjAwLWM2ZmQxNzNkYzA5MGQ2NzhlMzg0NDNkNDRmNjExNzZkLTk2NjFjNzkzYzMwYTIwOWUtMDEifQ=="
+            }
+          }
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYTZlOGE4NTYtNmRiMC00NDQ2LWEwNWQtNmY0Nzk1NWFjMWQyIn0="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "2s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "4",
+        "retryPolicy": {
+          "initialInterval": "0.050s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "0.200s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-11-09T03:56:09.086587169Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1049056",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "71200@replay-host",
+        "requestId": "7c99f731-f890-4908-af0a-0831245861c0",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-11-09T03:56:09.090055391Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1049057",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "Im5vdF9yZWZ1bmRhYmxlIg=="
+            }
+          ]
+        },
+        "scheduledEventId": "5",
+        "startedEventId": "6",
+        "identity": "71200@replay-host"
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-11-09T03:56:09.090071224Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1049058",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-11-09T03:56:09.134819435Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1049062",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "71200@replay-host",
+        "requestId": "21a2380d-e776-45d5-9ac3-fd2d42aed388",
+        "historySizeBytes": "1766",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-11-09T03:56:09.139032701Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1049066",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "startedEventId": "9",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-11-09T03:56:09.139070326Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED",
+      "taskId": "1049067",
+      "workflowExecutionCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvdXRjb21lIjoiTk9UX1JFRlVOREFCTEUiLCJyZXF1ZXN0ZWRCeSI6IjEzNzQ2NTc5NzAyMDM5NzE4MiJ9"
+            }
+          ]
+        },
+        "workflowTaskCompletedEventId": "10"
+      }
+    }
+  ]
+}

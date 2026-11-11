@@ -30,6 +30,15 @@ export type PaymentCaptureOutcome = SettledCaptureOutcome | 'CONFLICT';
 
 export type PaymentCancelOutcome = 'CANCELLED' | 'FENCED' | 'IDEMPOTENT' | 'CAPTURED_CONFLICT';
 
+/** PENDING: the provider holds the refund, ask again later. NOT_REFUNDABLE: nothing captured to refund. */
+export type PaymentRefundOutcome = 'REFUNDED' | 'IDEMPOTENT' | 'PENDING' | 'REFUND_FAILED' | 'NOT_REFUNDABLE';
+
+export interface PaymentRefundResult {
+  outcome: PaymentRefundOutcome;
+  /** The provider's failure code on REFUND_FAILED; never a raw provider message. */
+  reason?: string;
+}
+
 export interface OrderPaymentStatus {
   header: PaymentHoldStatus | null;
   /** The payment holding (or holding then captured) the money; null when there is none. */
@@ -53,6 +62,9 @@ export interface OrderPaymentParticipantPort {
   capture(orderId: string, options?: CallOptions): Promise<PaymentCaptureOutcome>;
 
   cancel(orderId: string, options?: CallOptions): Promise<PaymentCancelOutcome>;
+
+  /** Refunds the whole captured amount, once per order; `requestedBy` is recorded the first time only. */
+  refund(orderId: string, requestedBy: string, options?: CallOptions): Promise<PaymentRefundResult>;
 
   /** Every id asked for gets a key. At most 200 ids per call. */
   statusOf(orderIds: string[], options?: CallOptions): Promise<Map<string, OrderPaymentStatus>>;

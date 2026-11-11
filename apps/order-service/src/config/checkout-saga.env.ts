@@ -187,6 +187,26 @@ export function CheckoutSagaEnv<TBase extends EnvBase>(Base: TBase) {
     // The pattern alone lets 02-30 through, and Date rolls it into March.
     @IsISO8601({ strict: true }, { message: 'CHECKOUT_INVARIANT_NOT_BEFORE must be a real calendar date' })
     CHECKOUT_INVARIANT_NOT_BEFORE?: string;
+
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1000)
+    REFUND_WAIT_MS?: number;
+
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(1000)
+    REFUND_PENDING_POLL_BASE_MS?: number;
+
+    // Each pending poll adds about ten history events: under a ten-minute cap a refund held for a
+    // month outgrows Temporal's history limit, and the server terminates the run.
+    @IsOptional()
+    @StrictInt()
+    @IsInt()
+    @Min(600_000)
+    REFUND_PENDING_POLL_MAX_MS?: number;
   }
   return CheckoutSagaEnv;
 }
@@ -277,6 +297,10 @@ export function assertCheckoutSagaEnv(env: CrossRuleEnv): void {
     ), `${shown('QUEUE_WORKER_CONCURRENCY')} + ${shown('SAGA_ACTIVITY_CONCURRENCY')} + ${shown('SAGA_LOCAL_ACTIVITY_CONCURRENCY')} + ${POOL_SPARE} must not exceed ${shown('DB_POOL_MAX')}`);
   require(v('SAGA_RETRY_CAP_MS') >=
     v('SAGA_RETRY_BASE_MS'), `${shown('SAGA_RETRY_CAP_MS')} must be at least ${shown('SAGA_RETRY_BASE_MS')}`);
+  require(v('REFUND_PENDING_POLL_MAX_MS') >=
+    v(
+      'REFUND_PENDING_POLL_BASE_MS',
+    ), `${shown('REFUND_PENDING_POLL_MAX_MS')} must be at least ${shown('REFUND_PENDING_POLL_BASE_MS')}`);
   require(v('CHECKOUT_PAYMENT_DEADLINE_SEC') >
     v(
       'CHECKOUT_PAY_CUTOFF_SEC',

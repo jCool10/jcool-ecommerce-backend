@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cappedBackoffMs, destinationsOf, retryHorizonMs, routeOf } from '@jcool/messaging';
 import configuration from '../../config/configuration';
+import type { OrderRefundedEvent } from '../../modules/order/domain/events/order-refunded.event';
 import type { OrderFinalizedEvent } from '../../modules/order/domain/order.entity';
 import { ORDER_CONSUMED_QUEUES, ORDER_EVENT_ROUTES } from './order-events.routes';
 
@@ -12,14 +13,15 @@ const LADDER_ENV = [
   'ORDER_PAID_CONSUMER_BACKOFF_CAP_MS',
 ];
 
-// From the domain type, so a new finalized event fails typecheck here until it is routed.
+// From the domain types, so a new order event fails typecheck here until it is routed.
 const ORDER_EVENT_TYPES = Object.keys({
   'order.placed': true,
   'order.paid': true,
   'order.failed': true,
   'order.expired': true,
   'order.cancelled': true,
-} satisfies Record<OrderFinalizedEvent['eventName'] | 'order.placed', true>);
+  'order.refunded': true,
+} satisfies Record<OrderFinalizedEvent['eventName'] | OrderRefundedEvent['eventName'] | 'order.placed', true>);
 
 describe('order-service event routes', () => {
   it('sends every order event to order-events, and nothing else', () => {

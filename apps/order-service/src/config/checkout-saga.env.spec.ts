@@ -116,6 +116,13 @@ describe('checkout saga env', () => {
       ['CHECKOUT_INVARIANT_NOT_BEFORE', '2026-02-30T03:00:00Z', false],
       ['CHECKOUT_INVARIANT_NOT_BEFORE', '', false],
       ['CHECKOUT_INVARIANT_NOT_BEFORE', 'yesterday', false],
+      ['REFUND_WAIT_MS', '999', false],
+      ['REFUND_WAIT_MS', '1000', true],
+      ['REFUND_PENDING_POLL_BASE_MS', '999', false],
+      ['REFUND_PENDING_POLL_BASE_MS', '1000', true],
+      ['REFUND_PENDING_POLL_MAX_MS', '1.5e6', false],
+      ['REFUND_PENDING_POLL_MAX_MS', '599999', false],
+      ['REFUND_PENDING_POLL_MAX_MS', '600000', true],
     ];
     for (const [key, value, valid] of cases) {
       const env = { ...BASE_ENV, [key]: value };
@@ -236,6 +243,14 @@ describe('checkout saga env', () => {
         { ...BASE_ENV, SAGA_RETRY_BASE_MS: '2000', SAGA_RETRY_CAP_MS: '1000' },
         /SAGA_RETRY_CAP_MS \(1000\) must be at least SAGA_RETRY_BASE_MS \(2000\)/,
       );
+    });
+
+    it('never lets the pending refund poll cap undercut its base', () => {
+      expectInvalid(
+        { ...BASE_ENV, REFUND_PENDING_POLL_BASE_MS: '900000', REFUND_PENDING_POLL_MAX_MS: '600000' },
+        /REFUND_PENDING_POLL_MAX_MS \(600000\) must be at least REFUND_PENDING_POLL_BASE_MS \(900000\)/,
+      );
+      expectValid({ ...BASE_ENV, REFUND_PENDING_POLL_BASE_MS: '1000', REFUND_PENDING_POLL_MAX_MS: '600000' });
     });
 
     it('closes payment before the deadline', () => {

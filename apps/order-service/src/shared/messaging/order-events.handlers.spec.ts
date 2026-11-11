@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { type DomainEventJob, UnhandledEventError, eventLabel } from '@jcool/messaging';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { DrizzleTx } from '../../database';
+import type { OrderRefundedEvent } from '../../modules/order/domain/events/order-refunded.event';
 import type { OrderFinalizedEvent } from '../../modules/order/domain/order.entity';
 import type { OrderPaidMailHandler } from '../../modules/order/interface/queue/order-paid-mail.handler';
+import type { OrderRefundedMailHandler } from '../../modules/order/interface/queue/order-refunded-mail.handler';
 import type { PaymentAuthorizedHandler } from '../../modules/order/interface/queue/payment-authorized.handler';
 import { OrderEventsAudit, OrderEventsDispatcher } from './order-events.handlers';
 
@@ -28,20 +30,26 @@ const DELIVERED_EVENT_TYPES = Object.keys({
   'order.failed': true,
   'order.expired': true,
   'order.cancelled': true,
+  'order.refunded': true,
   'payment.authorized': true,
-} satisfies Record<OrderFinalizedEvent['eventName'] | 'order.placed' | 'payment.authorized', true>);
+} satisfies Record<
+  OrderFinalizedEvent['eventName'] | OrderRefundedEvent['eventName'] | 'order.placed' | 'payment.authorized',
+  true
+>);
 
 interface Doubles {
   audit?: OrderEventsAudit;
   forwardAuthorization?: PaymentAuthorizedHandler['forward'];
   prepareMail?: OrderPaidMailHandler['prepare'];
+  prepareRefundMail?: OrderRefundedMailHandler['prepare'];
 }
 
-const dispatcherWith = ({ audit, forwardAuthorization, prepareMail }: Doubles = {}) =>
+const dispatcherWith = ({ audit, forwardAuthorization, prepareMail, prepareRefundMail }: Doubles = {}) =>
   new OrderEventsDispatcher(
     audit ?? new OrderEventsAudit(fakePinoLogger()),
     { forward: forwardAuthorization ?? vi.fn() } as unknown as PaymentAuthorizedHandler,
     { prepare: prepareMail ?? vi.fn() } as unknown as OrderPaidMailHandler,
+    { prepare: prepareRefundMail ?? vi.fn() } as unknown as OrderRefundedMailHandler,
   );
 
 const run = async (dispatcher: OrderEventsDispatcher, event: DomainEventJob) => (await dispatcher.prepare(event))(tx);
@@ -86,6 +94,33 @@ describe('OrderEventsDispatcher', () => {
 
     await expect(step(tx)).resolves.toBe(sendMail);
     expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it('prepares the order.refunded mail before the transaction, records the event, and hands the mail back unsent', async () => {
+    const info = vi.fn();
+    const sendMail = vi.fn();
+    const prepareRefundMail = vi.fn().mockResolvedValue(sendMail);
+    const prepareMail = vi.fn();
+
+    const step = await dispatcherWith({
+      audit: new OrderEventsAudit(fakePinoLogger({ info })),
+      prepareMail,
+      prepareRefundMail,
+    }).prepare(job('order.refunded'));
+    expect(prepareRefundMail).toHaveBeenCalledOnce();
+    expect(info).not.toHaveBeenCalled();
+
+    await expect(step(tx)).resolves.toBe(sendMail);
+    expect(info).toHaveBeenCalledOnce();
+    expect(sendMail).not.toHaveBeenCalled();
+    expect(prepareMail).not.toHaveBeenCalled();
+  });
+
+  it('fails the prepare when the refund mail cannot be composed yet', async () => {
+    const outage = new Error('user-service unavailable');
+    const dispatcher = dispatcherWith({ prepareRefundMail: vi.fn().mockRejectedValue(outage) });
+
+    await expect(dispatcher.prepare(job('order.refunded'))).rejects.toBe(outage);
   });
 
   it('only records the order events the saga already applied', async () => {

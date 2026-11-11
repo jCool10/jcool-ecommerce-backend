@@ -19,6 +19,7 @@ import type { CheckoutSagaMode, PaymentAuthorization } from '../../../src/module
 import type { Order } from '../../../src/modules/order/domain/order.entity';
 import { checkoutWorkflowId } from '../../../src/modules/order/infrastructure/temporal/checkout-saga.contract';
 import { CheckoutSagaWorker } from '../../../src/modules/order/infrastructure/temporal/checkout-saga.worker';
+import { refundOrderWorkflowId } from '../../../src/modules/order/infrastructure/temporal/refund-order.contract';
 import { TEMPORAL_CLIENT } from '../../../src/modules/order/infrastructure/temporal/temporal.providers';
 import { DRIZZLE, PG_POOL, type DrizzleDB } from '../../../src/database';
 import * as schema from '../../../src/database/schema';
@@ -347,7 +348,12 @@ export async function resetCheckoutSagas(apps: INestApplication[]): Promise<void
   const { rows } = await first.get<Pool>(PG_POOL).query<{ id: string }>('SELECT id FROM orders');
   const orderIds = rows.map(({ id }) => id);
 
-  await Promise.all(orderIds.map((orderId) => terminate(client, checkoutWorkflowId(orderId))));
+  await Promise.all(
+    orderIds.flatMap((orderId) => [
+      terminate(client, checkoutWorkflowId(orderId)),
+      terminate(client, refundOrderWorkflowId(orderId)),
+    ]),
+  );
   releaseHung();
 
   const deadline = Date.now() + IDLE_WAIT_TIMEOUT_MS;

@@ -33,6 +33,7 @@ describe('CheckoutSagaActivities', () => {
       openSession: vi.fn<OrderPaymentParticipantPort['openSession']>(),
       capture: vi.fn<OrderPaymentParticipantPort['capture']>(),
       cancel: vi.fn<OrderPaymentParticipantPort['cancel']>(),
+      refund: vi.fn<OrderPaymentParticipantPort['refund']>(),
       statusOf: vi.fn<OrderPaymentParticipantPort['statusOf']>(),
     };
     const logger = { setContext: vi.fn(), error: vi.fn(), warn: vi.fn() };

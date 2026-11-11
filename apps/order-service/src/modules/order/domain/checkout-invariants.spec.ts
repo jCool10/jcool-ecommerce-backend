@@ -53,8 +53,44 @@ describe('evaluateCheckoutInvariants', () => {
   });
 
   describe('paid_without_capture', () => {
-    it.each(['AUTHORIZED', 'CANCELLED', null] as const)('flags a paid order whose header is %s', (header) => {
-      expect(evaluate(OrderStatus.PAID, 'COMMITTED', payment({ header }))).toEqual(['paid_without_capture']);
+    it.each(['AUTHORIZED', 'CANCELLED', 'REFUNDING', 'REFUNDED', null] as const)(
+      'flags a paid order whose header is %s',
+      (header) => {
+        expect(evaluate(OrderStatus.PAID, 'COMMITTED', payment({ header }))).toEqual(['paid_without_capture']);
+      },
+    );
+
+    // The refund failed for good: the order went back to PAID and the money is still captured.
+    it('passes a paid order whose refund the provider failed', () => {
+      expect(evaluate(OrderStatus.PAID, 'COMMITTED', { ...CAPTURED, header: 'REFUND_FAILED' })).toEqual([]);
+    });
+  });
+
+  describe('refunded orders', () => {
+    const REFUNDED = { ...CAPTURED, header: 'REFUNDED' as const };
+
+    it('passes a refunded order whose money and stock both came back', () => {
+      expect(evaluate(OrderStatus.REFUNDED, 'RESTOCKED', REFUNDED)).toEqual([]);
+    });
+
+    it.each(['CAPTURED', 'REFUNDING', 'REFUND_FAILED', null] as const)(
+      'flags refunded_without_refund on a refunded order whose header is %s',
+      (header) => {
+        expect(evaluate(OrderStatus.REFUNDED, 'RESTOCKED', { ...CAPTURED, header })).toEqual([
+          'refunded_without_refund',
+        ]);
+      },
+    );
+
+    it.each(['COMMITTED', 'RELEASED', null] as const)(
+      'flags refunded_without_restock on a refunded order whose stock is %s',
+      (stock) => {
+        expect(evaluate(OrderStatus.REFUNDED, stock, REFUNDED)).toEqual(['refunded_without_restock']);
+      },
+    );
+
+    it('does not read the succeeded attempt of a refunded order as money without an order', () => {
+      expect(evaluate(OrderStatus.REFUNDED, 'RESTOCKED', REFUNDED)).not.toContain('captured_without_paid');
     });
   });
 
@@ -101,6 +137,7 @@ describe('evaluateCheckoutInvariants', () => {
 
   it('refuses an order the saga has not settled', () => {
     expect(() => evaluate(OrderStatus.PENDING, 'HELD')).toThrow(/PENDING/);
+    expect(() => evaluate(OrderStatus.REFUNDING, 'COMMITTED', CAPTURED)).toThrow(/REFUNDING/);
   });
 
   it('names its kinds and the statuses it checks', () => {
@@ -110,13 +147,17 @@ describe('evaluateCheckoutInvariants', () => {
       'paid_without_commit',
       'orphan_hold',
       'authorized_on_dead_order',
+      'refunded_without_refund',
+      'refunded_without_restock',
     ]);
+    // REFUNDING stays out: it is in flight, owned by its refund run.
     expect(TERMINAL_SAGA_STATUSES).toEqual([
       OrderStatus.PAID,
       OrderStatus.FAILED,
       OrderStatus.EXPIRED,
       OrderStatus.CANCELLED,
       OrderStatus.REJECTED,
+      OrderStatus.REFUNDED,
     ]);
   });
 });

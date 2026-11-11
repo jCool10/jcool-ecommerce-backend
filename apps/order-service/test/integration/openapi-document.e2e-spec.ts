@@ -26,7 +26,7 @@ describe('Published API document (integration)', () => {
       HTTP_METHODS.filter((method) => item[method]).map((method) => `${method.toUpperCase()} ${path}`),
     );
 
-  it('documents exactly the eight order routes besides the platform ones', () => {
+  it('documents exactly the nine order routes besides the platform ones', () => {
     expect(
       operations()
         .filter((operation) => !PLATFORM_ROUTE.test(operation))
@@ -38,6 +38,7 @@ describe('Published API document (integration)', () => {
         'GET /orders',
         'GET /orders/{id}',
         'POST /admin/orders/{id}/cancel',
+        'POST /admin/orders/{id}/refund',
         'POST /orders',
         'POST /orders/{id}/cancel',
         'POST /orders/{id}/pay',
@@ -45,11 +46,17 @@ describe('Published API document (integration)', () => {
     );
   });
 
-  it('tells a client that checkout and cancel can answer 503 with Retry-After', () => {
-    for (const path of ['/orders', '/orders/{id}/cancel']) {
+  it('tells a client that checkout, cancel and refund can answer 503 with Retry-After', () => {
+    for (const path of ['/orders', '/orders/{id}/cancel', '/admin/orders/{id}/refund']) {
       const unavailable = document.paths[path].post?.responses['503'] as { headers?: Record<string, unknown> };
       expect(unavailable, path).toBeDefined();
       expect(unavailable.headers, path).toHaveProperty('Retry-After');
     }
+  });
+
+  it('documents both answers a refund can settle with: 200 refunded, 202 still running', () => {
+    const { responses } = document.paths['/admin/orders/{id}/refund'].post ?? { responses: {} };
+
+    expect(Object.keys(responses)).toEqual(expect.arrayContaining(['200', '202', '404', '409', '503']));
   });
 });
