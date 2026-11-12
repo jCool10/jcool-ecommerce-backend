@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { EtcdContainer, type StartedEtcdContainer } from '@testcontainers/etcd';
 import { Etcd3 } from 'etcd3';
 import { GenericContainer, Network, type StartedNetwork, type StartedTestContainer, Wait } from 'testcontainers';
@@ -8,6 +10,7 @@ import { LEASED_NODE_MAX } from '@jcool/id-generator';
 /** Small, as callers mint, so the load arrives as many concurrent requests rather than a few large ones. */
 export const IDS_PER_REQUEST = 32;
 
+const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(__dirname, '../../../..');
 const ID_SERVICE_IMAGE = 'jcool-id-service:system-test';
 const GATEWAY_IMAGE = 'jcool-gateway:system-test';
@@ -21,11 +24,30 @@ export const SHUTDOWN_GRACE_MS = 3_000;
 
 export async function buildImages(): Promise<void> {
   await Promise.all([
-    GenericContainer.fromDockerfile(REPO_ROOT, 'apps/id-service/Dockerfile').build(ID_SERVICE_IMAGE, {
-      deleteOnExit: false,
-    }),
-    GenericContainer.fromDockerfile(REPO_ROOT, 'apps/gateway/Dockerfile').build(GATEWAY_IMAGE, { deleteOnExit: false }),
+    buildImage('apps/id-service/Dockerfile', ID_SERVICE_IMAGE),
+    buildImage('apps/gateway/Dockerfile', GATEWAY_IMAGE),
   ]);
+}
+
+const BUILD_OUTPUT_TAIL_LINES = 30;
+
+/**
+ * Built with the Docker CLI, not testcontainers: its build resolves once Docker's output ends even
+ * when a step failed, which leaves the tag on the previous image and the test on old code. BuildKit
+ * is forced on, since some Dockerfiles use `COPY --chmod`.
+ */
+export async function buildImage(dockerfile: string, tag: string): Promise<void> {
+  try {
+    await execFileAsync('docker', ['build', '--quiet', '--file', dockerfile, '--tag', tag, '.'], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, DOCKER_BUILDKIT: '1' },
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch (error) {
+    const { stderr } = error as { stderr?: string };
+    const tail = (stderr ?? '').trim().split('\n').slice(-BUILD_OUTPUT_TAIL_LINES).join('\n');
+    throw new Error(`docker build of ${tag} from ${dockerfile} failed:\n${tail}`, { cause: error });
+  }
 }
 
 export interface Stack {

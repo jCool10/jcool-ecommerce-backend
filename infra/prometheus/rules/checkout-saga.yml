@@ -44,18 +44,19 @@ groups:
 
       # The counter is born at its first conflict, already at 1, which increase() cannot see; the
       # `unless … offset` arm catches that one and must come before `or` (see LokiDiscardingLines).
+      # A refund records its steps here too: `refund_payment`, and `restock` for its stock.
       - alert: CheckoutCompensationConflict
         expr: |
           (
-            sum by (step) (saga_step_total{step=~"release_stock|restock|cancel_payment",outcome=~"conflict|captured_conflict"} unless saga_step_total{step=~"release_stock|restock|cancel_payment",outcome=~"conflict|captured_conflict"} offset 15m)
+            sum by (step) (saga_step_total{step=~"release_stock|restock|cancel_payment|refund_payment",outcome=~"conflict|captured_conflict"} unless saga_step_total{step=~"release_stock|restock|cancel_payment|refund_payment",outcome=~"conflict|captured_conflict"} offset 15m)
             or
-            sum by (step) (increase(saga_step_total{step=~"release_stock|restock|cancel_payment",outcome=~"conflict|captured_conflict"}[15m]))
+            sum by (step) (increase(saga_step_total{step=~"release_stock|restock|cancel_payment|refund_payment",outcome=~"conflict|captured_conflict"}[15m]))
           ) > 0
         labels:
           severity: page
         annotations:
-          summary: 'Checkout compensation {{ $labels.step }} hit a conflict'
-          description: 'A compensation found its participant in a state it cannot undo, such as stock already committed or a payment already captured, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
+          summary: 'Compensation or refund step {{ $labels.step }} hit a conflict'
+          description: 'A compensation or a refund found its participant in a state it cannot undo, such as stock already committed, a payment already captured, or no captured payment left for a refunding order, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
 
       - alert: PaymentAuthorizationUncaptured
         expr: max(payment_authorized_uncaptured_oldest_seconds) > 900
@@ -102,17 +103,56 @@ groups:
           summary: 'A payment was authorized after its checkout had ended ({{ $labels.kind }})'
           description: 'An authorization reached the saga after the order was already given up on, and a lateAuthorization run compensated it. One is handled; a steady stream means authorizations arrive later than the payment deadline allows. RUNBOOK → The checkout saga → CheckoutLateAuthorization.'
 
+      # A refund held at Stripe for longer, as a real card refund can be, keeps this firing until it
+      # settles; an hour is past both a test-mode refund and the workflow's longest poll gap.
+      - alert: OrderRefundStuck
+        expr: max(order_refunding_oldest_seconds) > 3600
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'A refund has been running for over an hour'
+          description: 'The oldest order still REFUNDING began its refund {{ $value | humanizeDuration }} ago. A test-mode refund settles at once, so the run is retrying a participant that keeps failing, conflicting, or gone; a refund Stripe holds as pending for longer, as a real card refund can, keeps this firing until Stripe settles it. The buyer sees REFUNDING meanwhile. RUNBOOK → Refunds → OrderRefundStuck.'
+
+      # Same shape as CheckoutCompensationConflict, over 30m. Only refunds Stripe failed: an owed
+      # refund from a webhook that skipped the saga is counted without an alert, as before refunds.
+      - alert: PaymentRefundFailed
+        expr: |
+          (
+            sum(payment_refund_owed_total{source="refund_failed"} unless payment_refund_owed_total{source="refund_failed"} offset 30m)
+            or
+            sum(increase(payment_refund_owed_total{source="refund_failed"}[30m]))
+          ) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'Stripe failed a refund, and the money is owed to the buyer'
+          description: 'Stripe refused or failed a refund in the last 30 minutes, either when the shop asked for it or after it had succeeded. The order is PAID again, or still REFUNDED when the failure came late, and the buyer has not been paid back. Each order is in the payment-service logs at level error. RUNBOOK → Refunds → PaymentRefundFailed.'
+
+      - alert: PaymentRefundUntracked
+        expr: |
+          (
+            sum(payment_refund_untracked_total unless payment_refund_untracked_total offset 30m)
+            or
+            sum(increase(payment_refund_untracked_total[30m]))
+          ) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'A charge was refunded outside the shop'
+          description: 'Stripe reported a refund on a captured charge the shop never asked to refund, most likely one made in the Stripe dashboard. The order still reads PAID and its stock was not returned. RUNBOOK → Refunds → PaymentRefundUntracked.'
+
       # `up` is counted and joined `on()`: absent() invents a series with no labels while `up` carries
       # job/instance, so `and up` alone never matches. Silent when the order-service is down:
       # OrderScrapeDown owns that.
       - alert: CheckoutSagaMetricsAbsent
-        expr: absent(checkout_saga_engine_up) and on() (count(up{job="jcool-order"} == 1) > 0)
+        expr: (absent(checkout_saga_engine_up) or absent(order_refunding_oldest_seconds)) and on() (count(up{job="jcool-order"} == 1) > 0)
         for: 10m
         labels:
           severity: ticket
         annotations:
-          summary: 'Checkout saga metrics are missing from the order-service'
-          description: 'The order-service is being scraped but reports no checkout_saga_engine_up, so every saga alert is blind: the saga collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+          summary: 'Checkout saga or refund metrics are missing from the order-service'
+          description: 'The order-service is being scraped but reports no checkout_saga_engine_up or no order_refunding_oldest_seconds, so the saga alerts or OrderRefundStuck are blind: a collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
 
       # Joined to the payment-service's `up`, which owns the gauge; PaymentScrapeDown covers it down.
       - alert: PaymentMetricsAbsent

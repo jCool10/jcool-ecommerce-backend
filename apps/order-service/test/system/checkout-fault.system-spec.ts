@@ -3,9 +3,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { metricSum } from './checkout-observers';
 import { ORDER_PAID_CONSUMER_ATTEMPTS, SAGA_TIMINGS } from './checkout-stack-env';
 import { expectCheckoutInvariants } from './checkout-invariants';
+import { checkoutScenarios, ORDER_MAIL_SUBJECT } from './checkout-scenarios';
 import { type Buyer, CheckoutStack, expectStatus, type HttpResult, waitFor } from './checkout-stack';
 
-const ORDER_MAIL_SUBJECT = 'Your order is confirmed';
 const SEEDED_ON_HAND = 1_000_000_000;
 // A restarted service is ready before this, and the saga has resumed by then.
 const AFTER_RESTART_MS = 20_000;
@@ -28,17 +28,8 @@ describe('checkout across every service, under real faults', () => {
 
   // --- scenario helpers ------------------------------------------------------------------------
 
-  async function placeOrder(buyer?: Buyer) {
-    const owner = buyer ?? (await stack.buyer());
-    const placed = expectStatus(await stack.checkout(owner), 201);
-    return { buyer: owner, orderId: placed.body.id as string };
-  }
-
-  async function awaitingAuthorization() {
-    const order = await placeOrder();
-    const session = expectStatus(await stack.pay(order.buyer, order.orderId), 201);
-    return { ...order, sessionId: session.body.providerSessionId };
-  }
+  const { placeOrder, awaitingAuthorization, outboxIds, paymentRow, onHand, reserved, breakerState } =
+    checkoutScenarios(() => stack);
 
   async function ordersOf(buyer: Buyer): Promise<{ id: string; status: string }[]> {
     return stack.sql('orders', 'select id::text, status from orders where user_id = $1 order by id', [buyer.userId]);
@@ -54,15 +45,6 @@ describe('checkout across every service, under real faults', () => {
     return Number(deadline) + SAGA_TIMINGS.authGraceSec * 1000 - Date.now();
   }
 
-  async function outboxIds(db: 'payment' | 'orders', eventType: string, orderId: string): Promise<string[]> {
-    const rows = await stack.sql<{ id: string }>(
-      db,
-      `select id::text from outbox where event_type = $1 and payload->>'orderId' = $2`,
-      [eventType, orderId],
-    );
-    return rows.map((row) => row.id);
-  }
-
   async function inboxClaims(messageId: string): Promise<number> {
     const [{ count }] = await stack.sql<{ count: number }>(
       'orders',
@@ -76,37 +58,6 @@ describe('checkout across every service, under real faults', () => {
     return stack.sql('payment', `select status from webhook_events where payload->'data'->'object'->>'id' = $1`, [
       sessionId,
     ]);
-  }
-
-  async function paymentRow(orderId: string): Promise<{ status: string; stripe_key_gen: number }> {
-    const [row] = await stack.sql<{ status: string; stripe_key_gen: number }>(
-      'payment',
-      'select status, stripe_key_gen from payments where order_id = $1 order by id desc limit 1',
-      [orderId],
-    );
-    return row;
-  }
-
-  async function onHand(skuId: string): Promise<number> {
-    const [row] = await stack.sql<{ on_hand: number }>(
-      'inventory',
-      'select quantity_on_hand as on_hand from stock_levels where variant_id = $1',
-      [skuId],
-    );
-    return row.on_hand;
-  }
-
-  async function reserved(skuId: string): Promise<number> {
-    const [row] = await stack.sql<{ reserved: number }>(
-      'inventory',
-      'select quantity_reserved as reserved from stock_levels where variant_id = $1',
-      [skuId],
-    );
-    return row.reserved;
-  }
-
-  async function breakerState(breaker: string): Promise<number> {
-    return metricSum(await stack.scrapeOrderMetrics(), 'circuit_breaker_state', (labels) => labels.breaker === breaker);
   }
 
   async function compensations(kind?: string): Promise<number> {

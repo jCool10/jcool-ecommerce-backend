@@ -1,15 +1,20 @@
 // A stateful stand-in for the slice of Stripe the payment-service calls: Checkout Sessions under
-// manual capture, PaymentIntent capture and cancel, idempotency keys and signed webhooks. Faults are
-// injected per operation through /__control. Node built-ins only, as it runs in a bare node image.
+// manual capture, PaymentIntent capture and cancel, refunds, idempotency keys and signed webhooks.
+// Faults are injected per operation through /__control. Node built-ins only, as it runs in a bare
+// node image.
 import { createHmac, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 
 const PORT = Number(process.env.PORT ?? 12111);
 const WEBHOOK_URL = process.env.WEBHOOK_URL ?? 'http://gateway:8080/webhooks/payment';
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? '';
+const API_VERSION = '2025-09-30.clover';
+const REFUND_FAILURE_REASON = 'expired_or_canceled_card';
 
 let sessions = new Map();
 let intents = new Map();
+// In creation order, which is what a list reverses into Stripe's newest first.
+let refunds = new Map();
 // Idempotency-Key → { path, status, body }, kept for every answer an endpoint produced, 5xx included.
 let replies = new Map();
 let inFlight = new Set();
@@ -29,8 +34,25 @@ function piStats(piId) {
     replays: 0,
     conflicts409: 0,
     capturesInFlight: 0,
+    refundRequests: 0,
+    refundsCreated: 0,
+    refundKeys: [],
   };
   return stats.byPi[piId];
+}
+
+/** The counters, plus what each intent's refunds look like now: a settle moves them after the fact. */
+function statsNow() {
+  const byPi = {};
+  for (const [piId, counters] of Object.entries(stats.byPi)) {
+    const own = refundsOf(piId);
+    byPi[piId] = {
+      ...counters,
+      refundedAmount: refundedTotal(piId),
+      refunds: own.map(({ id, amount, status, metadata }) => ({ id, amount, status, metadata })),
+    };
+  }
+  return { ...stats, byPi };
 }
 
 class StripeRefusal {
@@ -156,6 +178,86 @@ function captureIntent(id) {
   return publicIntent(intent);
 }
 
+function refundsOf(piId) {
+  return [...refunds.values()].filter((refund) => refund.payment_intent === piId);
+}
+
+// A failed or canceled refund returned nothing, so its amount can be refunded again.
+function refundedTotal(piId) {
+  return refundsOf(piId)
+    .filter((refund) => refund.status !== 'failed' && refund.status !== 'canceled')
+    .reduce((sum, refund) => sum + refund.amount, 0);
+}
+
+function findRefund(id) {
+  const refund = refunds.get(id);
+  if (!refund) throw missing('refund', id, 'refund');
+  return refund;
+}
+
+/** Stripe's cap: only what is left on the charge, refused by the codes its docs name. */
+function addRefund(intent, { amount, reason = null, metadata = {}, status = 'succeeded' }) {
+  if (intent.status !== 'succeeded') {
+    throw new StripeRefusal(400, {
+      type: 'invalid_request_error',
+      code: 'payment_intent_unexpected_state',
+      message: 'This PaymentIntent does not have a successful charge to refund.',
+    });
+  }
+  const left = intent.amount_received - refundedTotal(intent.id);
+  if (left <= 0) {
+    throw new StripeRefusal(400, {
+      type: 'invalid_request_error',
+      code: 'charge_already_refunded',
+      doc_url: 'https://stripe.com/docs/error-codes/charge-already-refunded',
+      message: `Charge for ${intent.id} has already been refunded.`,
+    });
+  }
+  const requested = amount ?? left;
+  if (!Number.isInteger(requested) || requested <= 0 || requested > left) {
+    throw new StripeRefusal(400, {
+      type: 'invalid_request_error',
+      code: 'amount_too_large',
+      param: 'amount',
+      doc_url: 'https://stripe.com/docs/error-codes/amount-too-large',
+      message: `Refund amount (${requested}) is greater than unrefunded amount on charge (${left})`,
+    });
+  }
+  const refund = {
+    id: newId('re_'),
+    object: 'refund',
+    amount: requested,
+    currency: intent.currency,
+    payment_intent: intent.id,
+    status,
+    reason,
+    metadata,
+    failure_reason: null,
+    created: nowSec(),
+  };
+  refunds.set(refund.id, refund);
+  piStats(intent.id).refundsCreated += 1;
+  return refund;
+}
+
+function createRefund(form, fault) {
+  const intent = findIntent(form.payment_intent);
+  return {
+    ...addRefund(intent, {
+      amount: form.amount === undefined ? undefined : Number(form.amount),
+      reason: form.reason ?? null,
+      metadata: form.metadata ?? {},
+      status: fault?.mode === 'pending' ? 'pending' : 'succeeded',
+    }),
+  };
+}
+
+function listRefunds(query) {
+  const all = [...refunds.values()].filter((refund) => !query.payment_intent || refund.payment_intent === query.payment_intent);
+  const data = all.reverse().slice(0, Number(query.limit ?? 10));
+  return { object: 'list', url: '/v1/refunds', has_more: data.length < all.length, data: data.map((r) => ({ ...r })) };
+}
+
 function cancelIntent(id) {
   const intent = findIntent(id);
   if (intent.status === 'succeeded' || intent.status === 'canceled') {
@@ -194,22 +296,30 @@ function authorize(session) {
   session.payment_status = manual ? 'unpaid' : 'paid';
   session.payment_intent = intent.id;
   // One event per completion: a redelivery is the same event, which is what the receiver dedups on.
-  session.completedEvent = {
+  session.completedEvent = newEvent('checkout.session.completed', publicSession(session));
+  return intent;
+}
+
+function newEvent(type, object) {
+  return {
     id: newId('evt_'),
     object: 'event',
-    api_version: '2025-09-30.clover',
+    api_version: API_VERSION,
     created: nowSec(),
     livemode: false,
     pending_webhooks: 1,
-    type: 'checkout.session.completed',
-    data: { object: publicSession(session) },
+    type,
+    data: { object },
   };
-  return intent;
 }
 
 async function deliverWebhook(session) {
   if (!session.completedEvent) return { status: 409, error: 'session has no completed event' };
-  const body = JSON.stringify(session.completedEvent);
+  return deliverEvent(session.completedEvent);
+}
+
+async function deliverEvent(event) {
+  const body = JSON.stringify(event);
   const timestamp = nowSec();
   const signature = `t=${timestamp},v1=${createHmac('sha256', WEBHOOK_SECRET).update(`${timestamp}.${body}`).digest('hex')}`;
   try {
@@ -219,9 +329,9 @@ async function deliverWebhook(session) {
       body,
       signal: AbortSignal.timeout(10_000),
     });
-    return { status: res.status, eventId: session.completedEvent.id };
+    return { status: res.status, eventId: event.id };
   } catch (error) {
-    return { status: null, eventId: session.completedEvent.id, error: String(error) };
+    return { status: null, eventId: event.id, error: String(error) };
   }
 }
 
@@ -249,11 +359,14 @@ const ROUTES = [
   ['GET', /^\/v1\/payment_intents\/([^/]+)$/, null, () => null, (m) => publicIntent(findIntent(m[1]))],
   ['POST', /^\/v1\/payment_intents\/([^/]+)\/capture$/, 'capture', (m) => m[1], (m) => captureIntent(m[1])],
   ['POST', /^\/v1\/payment_intents\/([^/]+)\/cancel$/, 'cancel', (m) => m[1], (m) => cancelIntent(m[1])],
+  ['POST', /^\/v1\/refunds$/, 'refund', (_m, form) => form.payment_intent, (_m, form, _q, fault) => createRefund(form, fault)],
+  ['GET', /^\/v1\/refunds$/, null, () => null, (_m, _form, query) => listRefunds(query)],
+  ['GET', /^\/v1\/refunds\/([^/]+)$/, null, () => null, (m) => ({ ...findRefund(m[1]) })],
 ];
 
-function run(handler, match, form, query) {
+function run(handler, match, form, query, fault) {
   try {
-    return { status: 200, body: handler(match, form, query) };
+    return { status: 200, body: handler(match, form, query, fault) };
   } catch (error) {
     if (error instanceof StripeRefusal) return { status: error.status, body: error.body };
     throw error;
@@ -274,11 +387,15 @@ async function api(req, res, url, raw) {
   const query = parseForm(url.search.slice(1));
   query.expand = query.expand && Object.values(query.expand);
   const key = req.method === 'POST' ? req.headers['idempotency-key'] : undefined;
-  const piId = piOf(match);
+  const piId = piOf(match, form);
   const counters = piId && intents.has(piId) ? piStats(piId) : null;
   if (counters && target === 'capture') {
     counters.captureRequests += 1;
     if (key && !counters.keys.includes(key)) counters.keys.push(key);
+  }
+  if (counters && target === 'refund') {
+    counters.refundRequests += 1;
+    if (key && !counters.refundKeys.includes(key)) counters.refundKeys.push(key);
   }
 
   // Stripe's order: a stored answer first, then a request still running under the key, then state.
@@ -322,7 +439,7 @@ async function api(req, res, url, raw) {
   try {
     // Applied even when the caller has given up and closed the socket.
     if (fault?.mode === 'slow') await new Promise((resolve) => setTimeout(resolve, fault.ms ?? 1_000));
-    const result = run(handler, match, form, query);
+    const result = run(handler, match, form, query, fault);
     if (fault?.mode === 'apply_then_500') {
       remember(500, SERVER_ERROR);
       return send(res, 500, SERVER_ERROR);
@@ -350,6 +467,32 @@ async function control(req, res, url, raw) {
     }
     return send(res, 200, await deliverWebhook(session));
   }
+  const settleRoute = url.pathname.match(/^\/__control\/refunds\/([^/]+)\/settle$/);
+  if (req.method === 'POST' && settleRoute) {
+    const refund = refunds.get(settleRoute[1]);
+    if (!refund) return send(res, 404, { error: 'unknown refund' });
+    if (body.status !== 'succeeded' && body.status !== 'failed') return send(res, 400, { error: 'status?' });
+    refund.status = body.status;
+    refund.failure_reason = body.status === 'failed' ? REFUND_FAILURE_REASON : null;
+    const type = body.status === 'failed' ? 'refund.failed' : 'refund.updated';
+    const webhook = body.deliverWebhook ? await deliverEvent(newEvent(type, { ...refund })) : null;
+    return send(res, 200, { refund, webhook });
+  }
+  const outOfBandRoute = url.pathname.match(/^\/__control\/intents\/([^/]+)\/refund-out-of-band$/);
+  if (req.method === 'POST' && outOfBandRoute) {
+    const intent = intents.get(outOfBandRoute[1]);
+    if (!intent) return send(res, 404, { error: 'unknown intent' });
+    let refund;
+    try {
+      // The dashboard sends no metadata, and the same cap applies to it.
+      refund = addRefund(intent, { amount: body.amount });
+    } catch (error) {
+      if (error instanceof StripeRefusal) return send(res, error.status, error.body);
+      throw error;
+    }
+    const webhook = body.deliverWebhook === false ? null : await deliverEvent(newEvent('refund.created', { ...refund }));
+    return send(res, 200, { refundId: refund.id, webhook });
+  }
   const orderRoute = url.pathname.match(/^\/__control\/orders\/([^/]+)$/);
   if (req.method === 'GET' && orderRoute) {
     const orderId = orderRoute[1];
@@ -364,9 +507,15 @@ async function control(req, res, url, raw) {
     faults.push({ mode: body.mode, target: body.target, times: body.times ?? 1, ms: body.ms });
     return send(res, 200, { faults });
   }
+  // Disarms what is left, keeping every session, intent and refund: Stripe recovering mid-scenario.
+  if (req.method === 'POST' && url.pathname === '/__control/faults/clear') {
+    faults = [];
+    return send(res, 200, { faults });
+  }
   if (req.method === 'POST' && url.pathname === '/__control/reset') {
     sessions = new Map();
     intents = new Map();
+    refunds = new Map();
     replies = new Map();
     inFlight = new Set();
     faults = [];
@@ -374,7 +523,7 @@ async function control(req, res, url, raw) {
     sink = [];
     return send(res, 200, {});
   }
-  if (req.method === 'GET' && url.pathname === '/__control/stats') return send(res, 200, stats);
+  if (req.method === 'GET' && url.pathname === '/__control/stats') return send(res, 200, statsNow());
   // A receiver of its own, for a check of the webhook signature with nothing else running.
   if (url.pathname === '/__control/webhook-sink') {
     if (req.method === 'POST') {

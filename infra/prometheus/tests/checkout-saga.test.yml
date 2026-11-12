@@ -167,8 +167,8 @@ tests:
               step: cancel_payment
               severity: page
             exp_annotations:
-              summary: 'Checkout compensation cancel_payment hit a conflict'
-              description: 'A compensation found its participant in a state it cannot undo, such as stock already committed or a payment already captured, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
+              summary: 'Compensation or refund step cancel_payment hit a conflict'
+              description: 'A compensation or a refund found its participant in a state it cannot undo, such as stock already committed, a payment already captured, or no captured payment left for a refunding order, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
       - eval_time: 22m
         alertname: CheckoutCompensationConflict
         exp_alerts: []
@@ -189,10 +189,120 @@ tests:
               step: release_stock
               severity: page
             exp_annotations:
-              summary: 'Checkout compensation release_stock hit a conflict'
-              description: 'A compensation found its participant in a state it cannot undo, such as stock already committed or a payment already captured, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
+              summary: 'Compensation or refund step release_stock hit a conflict'
+              description: 'A compensation or a refund found its participant in a state it cannot undo, such as stock already committed, a payment already captured, or no captured payment left for a refunding order, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
       - eval_time: 50m
         alertname: CheckoutCompensationConflict
+        exp_alerts: []
+
+  # A refund whose payment header was moved by hand: the refund step's conflict counter is born at 1.
+  # A refund that went through, however often, is not a conflict.
+  - interval: 1m
+    input_series:
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="refund_payment", outcome="conflict"}'
+        values: '_x5 1x40'
+      - series: 'saga_step_total{job="jcool-order", instance="order-service:3000", step="refund_payment", outcome="refunded"}'
+        values: '_x2 1+1x40'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CheckoutCompensationConflict
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CheckoutCompensationConflict
+        exp_alerts:
+          - exp_labels:
+              step: refund_payment
+              severity: page
+            exp_annotations:
+              summary: 'Compensation or refund step refund_payment hit a conflict'
+              description: 'A compensation or a refund found its participant in a state it cannot undo, such as stock already committed, a payment already captured, or no captured payment left for a refunding order, so the order and that participant disagree until someone reconciles them. RUNBOOK → The checkout saga → CheckoutCompensationConflict.'
+      - eval_time: 22m
+        alertname: CheckoutCompensationConflict
+        exp_alerts: []
+
+  # A refund running past the hour: silent through the hold, then firing, then clear once it settles.
+  - interval: 1m
+    input_series:
+      - series: 'order_refunding_oldest_seconds{job="jcool-order", instance="order-service:3000"}'
+        values: '0x5 3000+60x20 0x10'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OrderRefundStuck
+        exp_alerts: []
+      - eval_time: 23m
+        alertname: OrderRefundStuck
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'A refund has been running for over an hour'
+              description: 'The oldest order still REFUNDING began its refund 1h 7m 0s ago. A test-mode refund settles at once, so the run is retrying a participant that keeps failing, conflicting, or gone; a refund Stripe holds as pending for longer, as a real card refund can, keeps this firing until Stripe settles it. The buyer sees REFUNDING meanwhile. RUNBOOK → Refunds → OrderRefundStuck.'
+      - eval_time: 30m
+        alertname: OrderRefundStuck
+        exp_alerts: []
+
+  # The first refund Stripe failed: the counter is born already at 1. It fires and ages out of the
+  # 30m window. Refunds owed for another reason are not this alert's.
+  - interval: 1m
+    input_series:
+      - series: 'payment_refund_owed_total{job="jcool-payment", instance="payment-service:3000", source="refund_failed"}'
+        values: '_x5 1x60'
+      - series: 'payment_refund_owed_total{job="jcool-payment", instance="payment-service:3000", source="webhook_direct"}'
+        values: '_x2 1+1x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PaymentRefundFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PaymentRefundFailed
+        exp_alerts: &refund_failed
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'Stripe failed a refund, and the money is owed to the buyer'
+              description: 'Stripe refused or failed a refund in the last 30 minutes, either when the shop asked for it or after it had succeeded. The order is PAID again, or still REFUNDED when the failure came late, and the buyer has not been paid back. Each order is in the payment-service logs at level error. RUNBOOK → Refunds → PaymentRefundFailed.'
+      - eval_time: 30m
+        alertname: PaymentRefundFailed
+        exp_alerts: *refund_failed
+      - eval_time: 37m
+        alertname: PaymentRefundFailed
+        exp_alerts: []
+
+  # A later refund failure on a counter that already exists.
+  - interval: 1m
+    input_series:
+      - series: 'payment_refund_owed_total{job="jcool-payment", instance="payment-service:3000", source="refund_failed"}'
+        values: '1x30 2x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PaymentRefundFailed
+        exp_alerts: []
+      - eval_time: 33m
+        alertname: PaymentRefundFailed
+        exp_alerts: *refund_failed
+      - eval_time: 65m
+        alertname: PaymentRefundFailed
+        exp_alerts: []
+
+  # A refund made outside the shop, on a counter born at 1; it ages out of the 30m window.
+  - interval: 1m
+    input_series:
+      - series: 'payment_refund_untracked_total{job="jcool-payment", instance="payment-service:3000"}'
+        values: '_x5 1x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PaymentRefundUntracked
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PaymentRefundUntracked
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: 'A charge was refunded outside the shop'
+              description: 'Stripe reported a refund on a captured charge the shop never asked to refund, most likely one made in the Stripe dashboard. The order still reads PAID and its stock was not returned. RUNBOOK → Refunds → PaymentRefundUntracked.'
+      - eval_time: 37m
+        alertname: PaymentRefundUntracked
         exp_alerts: []
 
   # An authorization left uncaptured: the age climbs through 900s and holds, then it is captured.
@@ -367,6 +477,8 @@ tests:
         values: '1x40'
       - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
         values: '1x10 _x30'
+      - series: 'order_refunding_oldest_seconds{job="jcool-order", instance="order-service:3000"}'
+        values: '0x40'
       - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x10 _x30'
     alert_rule_test:
@@ -375,12 +487,12 @@ tests:
         exp_alerts: []
       - eval_time: 26m
         alertname: CheckoutSagaMetricsAbsent
-        exp_alerts:
+        exp_alerts: &saga_metrics_absent
           - exp_labels:
               severity: ticket
             exp_annotations:
-              summary: 'Checkout saga metrics are missing from the order-service'
-              description: 'The order-service is being scraped but reports no checkout_saga_engine_up, so every saga alert is blind: the saga collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
+              summary: 'Checkout saga or refund metrics are missing from the order-service'
+              description: 'The order-service is being scraped but reports no checkout_saga_engine_up or no order_refunding_oldest_seconds, so the saga alerts or OrderRefundStuck are blind: a collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
       - eval_time: 20m
         alertname: PaymentMetricsAbsent
         exp_alerts: []
@@ -393,6 +505,23 @@ tests:
               summary: 'Payment authorization metrics are missing from the payment-service'
               description: 'The payment-service is being scraped but reports no payment_authorized_uncaptured_oldest_seconds, so PaymentAuthorizationUncaptured cannot fire: the payment collector is not registered in the app that owns the metrics registry. RUNBOOK → The checkout saga → Saga metrics absent.'
 
+  # Only the refunding gauge went absent, with the saga's still reported.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
+        values: '1x40'
+      - series: 'order_refunding_oldest_seconds{job="jcool-order", instance="order-service:3000"}'
+        values: '0x10 _x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: CheckoutSagaMetricsAbsent
+        exp_alerts: *saga_metrics_absent
+
   # Both services are down: `up` reads 0 and every series of each app is gone.
   - interval: 1m
     input_series:
@@ -402,6 +531,8 @@ tests:
         values: '1x10 0x40'
       - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
         values: '1x10 _x40'
+      - series: 'order_refunding_oldest_seconds{job="jcool-order", instance="order-service:3000"}'
+        values: '0x10 _x40'
       - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x10 _x40'
     alert_rule_test:
@@ -418,7 +549,7 @@ tests:
         alertname: PaymentMetricsAbsent
         exp_alerts: []
 
-  # Present at 0 is reporting, not absent: Temporal unreachable and nothing authorized.
+  # Present at 0 is reporting, not absent: Temporal unreachable, nothing refunding, nothing authorized.
   - interval: 1m
     input_series:
       - series: 'up{job="jcool-order", instance="order-service:3000"}'
@@ -426,6 +557,8 @@ tests:
       - series: 'up{job="jcool-payment", instance="payment-service:3000"}'
         values: '1x40'
       - series: 'checkout_saga_engine_up{job="jcool-order", instance="order-service:3000"}'
+        values: '0x40'
+      - series: 'order_refunding_oldest_seconds{job="jcool-order", instance="order-service:3000"}'
         values: '0x40'
       - series: 'payment_authorized_uncaptured_oldest_seconds{job="jcool-payment", instance="payment-service:3000"}'
         values: '0x40'
