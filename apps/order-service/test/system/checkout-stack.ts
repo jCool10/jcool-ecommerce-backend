@@ -1,5 +1,4 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
 import { Pool } from 'pg';
 import {
   GenericContainer,
@@ -10,6 +9,7 @@ import {
   Wait,
 } from 'testcontainers';
 import {
+  buildImage,
   buildImages as buildIdServiceAndGatewayImages,
   startIdEtcd,
   startReplicas,
@@ -37,7 +37,6 @@ import {
 import { FAKE_STRIPE_PORT, FakeStripeControl, startFakeStripe, type StripeFault } from './fake-stripe';
 import { startToxiproxy, type Toxic, type Toxiproxy } from './toxiproxy';
 
-const REPO_ROOT = resolve(__dirname, '../../../..');
 const APP_PORT = 3000;
 const GATEWAY_PORT = 8080;
 const TEMPORAL_PORT = 7233;
@@ -104,16 +103,20 @@ export interface Buyer {
   userId: string;
 }
 
+export interface PaymentRefundRow {
+  status: 'PENDING' | 'SUCCEEDED' | 'FAILED';
+  requested_by: string;
+  amount_minor: number;
+  provider_refund_id: string | null;
+  covered_refund_ids: string[];
+  failure_reason: string | null;
+}
+
 export function buildImages(): Promise<unknown> {
   return Promise.all([
     buildIdServiceAndGatewayImages(),
-    ...Object.values(APP_IMAGES).map(({ dockerfile, tag }) =>
-      GenericContainer.fromDockerfile(REPO_ROOT, dockerfile).build(tag, { deleteOnExit: false }),
-    ),
-    // COPY --chmod needs BuildKit.
-    GenericContainer.fromDockerfile(REPO_ROOT, TEMPORAL_IMAGE.dockerfile)
-      .withBuildkit()
-      .build(TEMPORAL_IMAGE.tag, { deleteOnExit: false }),
+    ...Object.values(APP_IMAGES).map(({ dockerfile, tag }) => buildImage(dockerfile, tag)),
+    buildImage(TEMPORAL_IMAGE.dockerfile, TEMPORAL_IMAGE.tag),
   ]);
 }
 
@@ -307,15 +310,76 @@ export class CheckoutStack {
 
   /** A new account, signed in, with `quantity` of `skuId` in its cart. */
   async buyer(skuId = this.skus[0], quantity = 1): Promise<Buyer> {
-    const email = `buyer-${randomBytes(6).toString('hex')}@system-test.invalid`;
+    const buyer = await this.signIn(await this.register('buyer'));
+    expectStatus(await this.public('POST', '/cart/items', { token: buyer.token, body: { skuId, quantity } }), 200);
+    return buyer;
+  }
+
+  /**
+   * A new account promoted in the users database, then signed in: the role is read at login, and the
+   * user-service image has no tooling to grant one.
+   */
+  async admin(): Promise<Buyer> {
+    const account = await this.register('admin');
+    const promoted = await this.sql('users', `update users set role = 'ADMIN' where email = $1 returning id`, [
+      account.email,
+    ]);
+    if (promoted.length !== 1) throw new Error(`no user ${account.email} to promote`);
+    return this.signIn(account);
+  }
+
+  refund(admin: Buyer, orderId: string): Promise<HttpResult> {
+    return this.public('POST', `/admin/orders/${orderId}/refund`, { token: admin.token });
+  }
+
+  async paymentRefund(orderId: string): Promise<PaymentRefundRow | undefined> {
+    const rows = await this.sql<PaymentRefundRow>(
+      'payment',
+      `select status, requested_by::text, amount_minor::int, provider_refund_id, covered_refund_ids, failure_reason
+       from payment_refunds where order_id = $1`,
+      [orderId],
+    );
+    return rows[0];
+  }
+
+  async outboxPayloads(orderId: string, eventType: string): Promise<Record<string, unknown>[]> {
+    const rows = await this.sql<{ payload: Record<string, unknown> }>(
+      'orders',
+      'select payload from outbox where aggregate_id = $1 and event_type = $2 order by id',
+      [orderId, eventType],
+    );
+    return rows.map((row) => row.payload);
+  }
+
+  /**
+   * The event published once more under a new message id, which no inbox has claimed: what a
+   * producer that wrote the same fact twice would leave for its relay.
+   */
+  async republish(db: Database, outboxId: string): Promise<string> {
+    const [row] = await this.sql<{ id: string }>(
+      db,
+      `insert into outbox (id, aggregate_type, aggregate_id, event_type, payload, traceparent)
+       select (select max(id) + 1 from outbox), aggregate_type, aggregate_id, event_type, payload, traceparent
+       from outbox where id = $1
+       returning id::text`,
+      [outboxId],
+    );
+    if (!row) throw new Error(`no outbox row ${outboxId} in ${db}`);
+    return row.id;
+  }
+
+  private async register(role: string): Promise<{ email: string; password: string }> {
+    const email = `${role}-${randomBytes(6).toString('hex')}@system-test.invalid`;
     const password = `pw-${randomBytes(12).toString('hex')}`;
     expectStatus(await this.public('POST', '/auth/register', { body: { email, password } }), 201);
+    return { email, password };
+  }
+
+  private async signIn({ email, password }: { email: string; password: string }): Promise<Buyer> {
     const login = expectStatus(await this.public('POST', '/auth/login', { body: { email, password } }), 200);
     const token = login.body.accessToken as string;
     const { sub } = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as { sub: string };
-    const buyer = { email, token, userId: sub };
-    expectStatus(await this.public('POST', '/cart/items', { token: buyer.token, body: { skuId, quantity } }), 200);
-    return buyer;
+    return { email, token, userId: sub };
   }
 
   checkout(buyer: Buyer, idempotencyKey: string = randomUUID()): Promise<HttpResult> {

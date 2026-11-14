@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
 import { ORDER_THROTTLE, PAYMENT_SESSION_THROTTLE, USER_THROTTLER } from '@jcool/platform/throttler';
 import { authHeader } from '../setup/bearer.helper';
-import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
 import { createTestAppWithPool } from '../setup/harness';
 import { testId } from '../setup/id-service-stub';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
@@ -85,6 +85,22 @@ describe('Rate limiting on sensitive endpoints (integration, real Redis)', () =>
     }
 
     expect((await cancel()).status).toBe(429);
+  });
+
+  // Each landed refund ends in calls to the payment-service, Stripe and the inventory-service.
+  it('caps one admin at the refund endpoint', async () => {
+    const frank = await createTestAdminPrincipal(app);
+    const refund = (): request.Test =>
+      request(app.getHttpServer())
+        .post(`/admin/orders/${ABSENT_ORDER_ID}/refund`)
+        .set(authHeader(frank.accessToken))
+        .send();
+
+    for (let attempt = 0; attempt < USER_LIMIT; attempt++) {
+      expect((await refund()).status).toBe(404);
+    }
+
+    expect((await refund()).status).toBe(429);
   });
 
   // Each session open is a call to the payment-service and, behind it, to Stripe.

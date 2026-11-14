@@ -11,6 +11,7 @@ import {
   ORDER_FAILED_EVENT,
   ORDER_PAID_EVENT,
   ORDER_PLACED_EVENT,
+  ORDER_REFUNDED_EVENT,
 } from '../../modules/order/application/order-outbox.mapper';
 
 export const ORDER_EVENTS: QueueSpec = {
@@ -26,6 +27,7 @@ export const ORDER_EVENT_ROUTES: EventRoutes = {
   [ORDER_FAILED_EVENT]: ORDER_EVENTS,
   [ORDER_EXPIRED_EVENT]: ORDER_EVENTS,
   [ORDER_CANCELLED_EVENT]: ORDER_EVENTS,
+  [ORDER_REFUNDED_EVENT]: ORDER_EVENTS,
 };
 
 export type OrderConsumedQueue = Omit<QueueDefinition, 'dispatcher'>;

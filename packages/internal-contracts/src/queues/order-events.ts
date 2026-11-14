@@ -19,7 +19,7 @@ export interface LongLadderJobOptions {
   backoff: { type: typeof ORDER_PAID_BACKOFF };
 }
 
-const LONG_LADDER = new Set(['order.paid', PAYMENT_AUTHORIZED_EVENT]);
+const LONG_LADDER = new Set(['order.paid', 'order.refunded', PAYMENT_AUTHORIZED_EVENT]);
 
 /** Overrides of the queue defaults for events that wait on another service while they retry. */
 export function orderEventsJobOptions(

@@ -165,6 +165,8 @@ export function serviceEnv(s: StackSecrets) {
       SAGA_ACTIVITY_TIMEOUT_MS: String(SAGA_TIMINGS.activityTimeoutMs),
       SAGA_RETRY_BASE_MS: String(SAGA_TIMINGS.retryBaseMs),
       SAGA_RETRY_CAP_MS: '2000',
+      // A refund Stripe holds is asked about again within seconds, not a minute.
+      REFUND_PENDING_POLL_BASE_MS: '2000',
       // 5 + 2 + 10 + 5 spare = 22 ≤ 24: twenty buyers' Try calls clear in two rounds.
       SAGA_ACTIVITY_CONCURRENCY: '2',
       SAGA_LOCAL_ACTIVITY_CONCURRENCY: '10',

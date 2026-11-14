@@ -4,22 +4,43 @@ import { GenericContainer, type StartedNetwork, type StartedTestContainer, Wait 
 export const FAKE_STRIPE_PORT = 12111;
 
 export type StripeFault = {
-  /** `webhook_first` delivers the session's webhook while it holds the call. */
-  mode: 'slow' | 'hang' | '500' | 'apply_then_500' | 'webhook_first';
-  target: 'capture' | 'expire';
+  /**
+   * `webhook_first` delivers the session's webhook while it holds the call; `pending` creates the
+   * refund held as pending, to be settled through `settleRefund`.
+   */
+  mode: 'slow' | 'hang' | '500' | 'apply_then_500' | 'webhook_first' | 'pending';
+  target: 'capture' | 'expire' | 'refund';
   times?: number;
   ms?: number;
 };
+
+export interface FakeRefund {
+  id: string;
+  amount: number;
+  status: 'succeeded' | 'pending' | 'failed';
+  metadata: Record<string, string>;
+}
 
 export interface IntentStats {
   captures: number;
   voids: number;
   captureRequests: number;
   keys: string[];
+  /** Shared by captures and refunds of the intent. */
   replays: number;
   conflicts409: number;
   capturesInFlight: number;
+  /** Every POST /v1/refunds for the intent, replays and refusals included. */
+  refundRequests: number;
+  /** Refunds that exist, the shop's and the dashboard's, whatever became of them. */
+  refundsCreated: number;
+  /** What went back to the buyer: the refunds that have not failed. */
+  refundedAmount: number;
+  refundKeys: string[];
+  refunds: FakeRefund[];
 }
+
+type Delivery = { status: number | null; eventId: string; error?: string } | null;
 
 export interface FakeStripeStats {
   byPi: Record<string, IntentStats>;
@@ -75,8 +96,34 @@ export class FakeStripeControl {
     };
   }
 
+  /** Stripe moves a pending refund on, or fails one that had succeeded. */
+  async settleRefund(
+    refundId: string,
+    options: { status: 'succeeded' | 'failed'; deliverWebhook: boolean },
+  ): Promise<{ refund: FakeRefund; webhook: Delivery }> {
+    return (await this.command(`/__control/refunds/${refundId}/settle`, options)) as {
+      refund: FakeRefund;
+      webhook: Delivery;
+    };
+  }
+
+  /** A refund made in the dashboard: no metadata, all that is left on the charge unless told otherwise. */
+  async refundOutOfBand(
+    intentId: string,
+    options: { amount?: number; deliverWebhook?: boolean } = {},
+  ): Promise<{ refundId: string; webhook: Delivery }> {
+    return (await this.command(`/__control/intents/${intentId}/refund-out-of-band`, options)) as {
+      refundId: string;
+      webhook: Delivery;
+    };
+  }
+
   async setFault(fault: StripeFault): Promise<void> {
     await this.command('/__control/faults', fault);
+  }
+
+  async clearFaults(): Promise<void> {
+    await this.command('/__control/faults/clear');
   }
 
   async reset(): Promise<void> {

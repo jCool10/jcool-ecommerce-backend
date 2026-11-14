@@ -12,6 +12,8 @@ export const orderStatus = pgEnum('order_status', [
   'EXPIRED',
   'CANCELLED',
   'REJECTED',
+  'REFUNDING',
+  'REFUNDED',
 ]);
 
 // No default: the id is minted by the id service, not the database.

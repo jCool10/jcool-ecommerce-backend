@@ -3,6 +3,7 @@ import {
   CANCEL_OUTCOME_STATUS,
   CAPTURE_OUTCOME_STATUS,
   PROVIDER_UNAVAILABLE_STATUS,
+  REFUND_OUTCOME_STATUS,
   SESSION_OUTCOME_STATUS,
 } from './routes';
 import {
@@ -17,10 +18,13 @@ import {
   PROVIDER_UNAVAILABLE,
   type PaymentStatusEntry,
   type PaymentStatusResponse,
+  REFUND_OUTCOMES,
+  type RefundResponse,
 } from './types';
 
 const isCaptureOutcome = isOneOf(CAPTURE_OUTCOMES);
 const isCancelOutcome = isOneOf(CANCEL_OUTCOMES);
+const isRefundOutcome = isOneOf(REFUND_OUTCOMES);
 const isPaymentOrderStatus = isOneOf(PAYMENT_ORDER_STATUSES);
 
 const isOptionalString = (value: unknown) => value === undefined || typeof value === 'string';
@@ -43,6 +47,10 @@ export function isCaptureResponse(body: unknown): body is CaptureResponse {
 
 export function isCancelResponse(body: unknown): body is CancelResponse {
   return isRecord(body) && isCancelOutcome(body.outcome);
+}
+
+export function isRefundResponse(body: unknown): body is RefundResponse {
+  return isRecord(body) && isRefundOutcome(body.outcome) && isOptionalString(body.reason);
 }
 
 function isPaymentStatusEntry(entry: unknown): entry is PaymentStatusEntry {
@@ -79,6 +87,11 @@ export function captureOutcomeOf(status: number, body: unknown): CaptureOutcome 
 
 export function cancelOutcomeOf(status: number, body: unknown): CancelOutcome | undefined {
   return isCancelResponse(body) && CANCEL_OUTCOME_STATUS[body.outcome] === status ? body.outcome : undefined;
+}
+
+export function refundOutcomeOf(status: number, body: unknown): RefundResponse | undefined {
+  if (!isRefundResponse(body) || REFUND_OUTCOME_STATUS[body.outcome] !== status) return undefined;
+  return body.reason === undefined ? { outcome: body.outcome } : { outcome: body.outcome, reason: body.reason };
 }
 
 export function isProviderUnavailable(status: number, body: unknown): boolean {

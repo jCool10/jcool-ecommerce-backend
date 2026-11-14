@@ -12,6 +12,9 @@ const WIRED_TRANSITIONS: ReadonlyArray<[OrderStatus, OrderStatus]> = [
   [OrderStatus.PENDING, OrderStatus.CONFIRMING],
   [OrderStatus.CONFIRMING, OrderStatus.PAID],
   [OrderStatus.CONFIRMING, OrderStatus.FAILED],
+  [OrderStatus.PAID, OrderStatus.REFUNDING],
+  [OrderStatus.REFUNDING, OrderStatus.REFUNDED],
+  [OrderStatus.REFUNDING, OrderStatus.PAID],
 ];
 
 function isWired(from: OrderStatus, to: OrderStatus): boolean {
@@ -31,6 +34,8 @@ describe('order state machine', () => {
       'EXPIRED',
       'CANCELLED',
       'REJECTED',
+      'REFUNDING',
+      'REFUNDED',
     ]);
   });
 
@@ -48,11 +53,13 @@ describe('order state machine', () => {
       [OrderStatus.RESERVING]: false,
       [OrderStatus.PENDING]: false,
       [OrderStatus.CONFIRMING]: false,
-      [OrderStatus.PAID]: true,
+      [OrderStatus.PAID]: false,
       [OrderStatus.FAILED]: true,
       [OrderStatus.EXPIRED]: true,
       [OrderStatus.CANCELLED]: true,
       [OrderStatus.REJECTED]: true,
+      [OrderStatus.REFUNDING]: false,
+      [OrderStatus.REFUNDED]: true,
     });
   });
 
@@ -63,6 +70,13 @@ describe('order state machine', () => {
         expect(canTransition(from, to)).toBe(false);
       }
     }
+  });
+
+  // A refund leaves a paid order only through REFUNDING, and a failed one puts it back as it was.
+  it('refunds only a paid order, through REFUNDING', () => {
+    expect(canTransition(OrderStatus.PAID, OrderStatus.REFUNDED)).toBe(false);
+    expect(canTransition(OrderStatus.CONFIRMING, OrderStatus.REFUNDING)).toBe(false);
+    expect(canTransition(OrderStatus.REFUNDING, OrderStatus.CANCELLED)).toBe(false);
   });
 
   // Payment is taken only through CONFIRMING, so nothing can mark an order PAID behind the saga's back.

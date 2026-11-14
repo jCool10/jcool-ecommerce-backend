@@ -94,7 +94,11 @@ export class RunCheckoutInvariantsUseCase {
     };
   }
 
-  /** Returns how many orders it judged; one still running is its saga's business, not the checker's. */
+  /**
+   * Returns how many orders it judged. One still running is its saga's business, not the checker's,
+   * and one written to while the participants were read (a refund, say) is judged on the next run:
+   * the participants may describe a state the batch row does not.
+   */
   private async check(batch: SettledSagaOrder[], violations: CheckoutInvariantCounts): Promise<number> {
     if (batch.length === 0) return 0;
     const running = await this.engine.runningOrderIds(batch.map(({ id }) => id));
@@ -103,7 +107,13 @@ export class RunCheckoutInvariantsUseCase {
 
     const ids = settled.map(({ id }) => id);
     const [stock, payment] = await Promise.all([this.inventory.statusOf(ids), this.payment.statusOf(ids)]);
-    for (const order of settled) {
+    // Both fields: a refund that failed goes PAID → REFUNDING → PAID, which the status alone hides.
+    const now = await this.orderRepo.findStatusesByIds(ids);
+    const unmoved = settled.filter(({ id, status, updatedAt }) => {
+      const stamp = now.get(id);
+      return stamp?.status === status && stamp.updatedAt.getTime() === updatedAt.getTime();
+    });
+    for (const order of unmoved) {
       const broken = evaluateCheckoutInvariants({
         status: order.status,
         stock: stock.get(order.id) ?? null,
@@ -114,6 +124,6 @@ export class RunCheckoutInvariantsUseCase {
         this.logger.error({ orderId: order.id, kind, status: order.status }, 'checkout invariant violated');
       }
     }
-    return settled.length;
+    return unmoved.length;
   }
 }

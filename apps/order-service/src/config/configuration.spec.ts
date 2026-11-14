@@ -116,6 +116,7 @@ describe('configuration: checkout saga', () => {
       localActivityConcurrency: 2,
       temporal: { address: 'localhost:7233', namespace: 'jcool', taskQueue: 'checkout-saga', workerEnabled: true },
       overdueGraceSec: 300,
+      refund: { waitMs: 10_000, pendingPollBaseMs: 60_000, pendingPollMaxMs: 3_600_000 },
       invariant: {
         enabled: true,
         intervalMs: 60_000,

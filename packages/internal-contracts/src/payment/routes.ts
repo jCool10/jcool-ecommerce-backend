@@ -1,4 +1,4 @@
-import type { CancelOutcome, CaptureOutcome, SessionOutcome } from './types';
+import type { CancelOutcome, CaptureOutcome, RefundOutcome, SessionOutcome } from './types';
 
 export const PAYMENTS_PREFIX = 'internal/v1/payments';
 
@@ -8,6 +8,7 @@ export const paymentRoutes = {
   session: (orderId: string) => orderPath(orderId, 'session'),
   capture: (orderId: string) => orderPath(orderId, 'capture'),
   cancel: (orderId: string) => orderPath(orderId, 'cancel'),
+  refund: (orderId: string) => orderPath(orderId, 'refund'),
   status: `/${PAYMENTS_PREFIX}/status`,
 };
 
@@ -32,4 +33,12 @@ export const CANCEL_OUTCOME_STATUS: Record<CancelOutcome, 200 | 409> = {
   FENCED: 200,
   IDEMPOTENT: 200,
   CAPTURED_CONFLICT: 409,
+};
+
+export const REFUND_OUTCOME_STATUS: Record<RefundOutcome, 200 | 202 | 409> = {
+  REFUNDED: 200,
+  IDEMPOTENT: 200,
+  PENDING: 202,
+  REFUND_FAILED: 409,
+  NOT_REFUNDABLE: 409,
 };

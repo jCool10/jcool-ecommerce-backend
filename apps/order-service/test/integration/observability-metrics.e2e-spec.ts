@@ -40,6 +40,7 @@ const OWNED = [
   'orders_created_total',
   'order_value_minor',
   'checkout_sagas_open',
+  'order_refunding_oldest_seconds',
   ...SAGA_ALERTED,
 ];
 
@@ -67,6 +68,13 @@ describe('Metrics endpoint (integration)', () => {
     const described = new Set([...res.text.matchAll(/^# HELP (\S+)/gm)].map((match) => match[1]));
     expect(owned).toEqual(expect.arrayContaining(['http_requests_total', ...SAGA_ALERTED]));
     expect(owned.filter((name) => !described.has(name))).toEqual([]);
+  });
+
+  it('reports the stuck-refund gauge at 0 when no order is refunding', async () => {
+    const res = await scrape();
+
+    expect(res.text).toContain('# HELP order_refunding_oldest_seconds');
+    expect(res.text).toMatch(/^order_refunding_oldest_seconds 0$/m);
   });
 
   it('labels the RED metric with the route template, never the concrete id', async () => {

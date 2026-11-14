@@ -38,13 +38,20 @@ describe('Payment contract over the internal API (fake Stripe)', () => {
         const { providerSessionId } = await readPayment(app, orderId);
         await authorizeSession(app, providerSessionId, orderId);
       },
-      stripeFailsCapture: async (orderId) => {
-        const { providerIntentId } = await readPayment(app, orderId);
-        if (!providerIntentId) throw new Error(`order ${orderId} has no intent to fail`);
-        gateway.failCapture(providerIntentId, 'timeout');
+      stripeFailsCapture: async (orderId) => gateway.failCapture(await intentOf(orderId), 'timeout'),
+      stripeRefundPending: async (orderId) => gateway.failRefund(await intentOf(orderId), 'refund_pending'),
+      stripeFailsRefund: async (orderId) => gateway.failRefund(await intentOf(orderId), 'refund_fails'),
+      refundOutOfBand: async (orderId) => {
+        gateway.outOfBandRefund(await intentOf(orderId));
       },
     });
   });
+
+  async function intentOf(orderId: string): Promise<string> {
+    const { providerIntentId } = await readPayment(app, orderId);
+    if (!providerIntentId) throw new Error(`order ${orderId} has no intent yet`);
+    return providerIntentId;
+  }
   closeAppAfterAll(() => app);
   resetDatabaseBeforeEach(() => pool);
 

@@ -1,0 +1,1027 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-11-09T03:56:06.324274248Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1048672",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "RefundOrder"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYzBmMzllZTUtZjkyNS00MmU4LTg2N2YtZGE4N2Y1Yjc5NWRiIiwicmVxdWVzdGVkQnkiOiIxMzc0NjU3OTcwMjAzOTcxODIiLCJzZXR0aW5ncyI6eyJhY3Rpdml0eVRpbWVvdXRNcyI6MjAwMCwicmV0cnlCYXNlTXMiOjUwLCJyZXRyeUNhcE1zIjoyMDAsInBlbmRpbmdQb2xsQmFzZU1zIjoxMDAsInBlbmRpbmdQb2xsTWF4TXMiOjE1MH19"
+            }
+          ]
+        },
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a1be72-f134-742d-879a-252da723ceee",
+        "identity": "71200@replay-host",
+        "firstExecutionRunId": "01a1be72-f134-742d-879a-252da723ceee",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "e30="
+            }
+          }
+        },
+        "workflowId": "refund-c0f39ee5-f925-42e8-867f-da87f5b795db"
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-11-09T03:56:06.324312040Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048673",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-11-09T03:56:06.325834504Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048678",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "71200@replay-host",
+        "requestId": "bc06fafd-a8bf-4d41-959e-92c4f62ad0c1",
+        "historySizeBytes": "612",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-11-09T03:56:06.332167569Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048682",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            4,
+            1,
+            2,
+            3
+          ],
+          "sdkName": "temporal-typescript",
+          "sdkVersion": "1.25.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-11-09T03:56:06.332239195Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048683",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "1",
+        "activityType": {
+          "name": "beginRefund"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0cmFjZXBhcmVudCI6IjAwLTkyNWFmNjAyMDJhMmZlNjhhNjFhOTI5YWQ1OWM2YmExLTQ3NDY5MDVhZGZhMGIzNmYtMDEifQ=="
+            }
+          }
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYzBmMzllZTUtZjkyNS00MmU4LTg2N2YtZGE4N2Y1Yjc5NWRiIn0="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "2s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "4",
+        "retryPolicy": {
+          "initialInterval": "0.050s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "0.200s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-11-09T03:56:06.334795496Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048690",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "71200@replay-host",
+        "requestId": "53b8f157-1d41-4a5f-b066-9c7c39d7cb85",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-11-09T03:56:06.337135671Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048691",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "InN0YXJ0ZWQi"
+            }
+          ]
+        },
+        "scheduledEventId": "5",
+        "startedEventId": "6",
+        "identity": "71200@replay-host"
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-11-09T03:56:06.337162172Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048692",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-11-09T03:56:06.337955133Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048696",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "71200@replay-host",
+        "requestId": "76f14628-931f-48a6-b493-fa1f0984edd4",
+        "historySizeBytes": "1765",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-11-09T03:56:06.341064145Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048700",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "startedEventId": "9",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-11-09T03:56:06.341094103Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048701",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "2",
+        "activityType": {
+          "name": "refundPayment"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0cmFjZXBhcmVudCI6IjAwLTkyNWFmNjAyMDJhMmZlNjhhNjFhOTI5YWQ1OWM2YmExLTRlOTY1N2FjM2ZlOGZkZDAtMDEifQ=="
+            }
+          }
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYzBmMzllZTUtZjkyNS00MmU4LTg2N2YtZGE4N2Y1Yjc5NWRiIiwicmVxdWVzdGVkQnkiOiIxMzc0NjU3OTcwMjAzOTcxODIifQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "2s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "10",
+        "retryPolicy": {
+          "initialInterval": "0.050s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "0.200s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "12",
+      "eventTime": "2026-11-09T03:56:06.341770731Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048707",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "11",
+        "identity": "71200@replay-host",
+        "requestId": "8ad145cb-339a-422a-883b-049ff3303ea5",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "13",
+      "eventTime": "2026-11-09T03:56:06.343162986Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048708",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvdXRjb21lIjoiUEVORElORyJ9"
+            }
+          ]
+        },
+        "scheduledEventId": "11",
+        "startedEventId": "12",
+        "identity": "71200@replay-host"
+      }
+    },
+    {
+      "eventId": "14",
+      "eventTime": "2026-11-09T03:56:06.343172361Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048709",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "15",
+      "eventTime": "2026-11-09T03:56:06.343943780Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048713",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "14",
+        "identity": "71200@replay-host",
+        "requestId": "b891c9a2-acd4-4a60-8049-dd3801eb0c5f",
+        "historySizeBytes": "2932",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "16",
+      "eventTime": "2026-11-09T03:56:06.347045042Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048717",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "14",
+        "startedEventId": "15",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "17",
+      "eventTime": "2026-11-09T03:56:06.347094376Z",
+      "eventType": "EVENT_TYPE_TIMER_STARTED",
+      "taskId": "1048718",
+      "timerStartedEventAttributes": {
+        "timerId": "1",
+        "startToFireTimeout": "0.100s",
+        "workflowTaskCompletedEventId": "16"
+      }
+    },
+    {
+      "eventId": "18",
+      "eventTime": "2026-11-09T03:56:07.348088527Z",
+      "eventType": "EVENT_TYPE_TIMER_FIRED",
+      "taskId": "1048721",
+      "timerFiredEventAttributes": {
+        "timerId": "1",
+        "startedEventId": "17"
+      }
+    },
+    {
+      "eventId": "19",
+      "eventTime": "2026-11-09T03:56:07.348353695Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048722",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "20",
+      "eventTime": "2026-11-09T03:56:07.352832170Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048726",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "19",
+        "identity": "71200@replay-host",
+        "requestId": "0e4acc9c-f2cf-42d8-aa28-fcc2ffa303df",
+        "historySizeBytes": "3498",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "21",
+      "eventTime": "2026-11-09T03:56:07.366713347Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048730",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "19",
+        "startedEventId": "20",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "22",
+      "eventTime": "2026-11-09T03:56:07.366844806Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048731",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "3",
+        "activityType": {
+          "name": "refundPayment"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0cmFjZXBhcmVudCI6IjAwLTkyNWFmNjAyMDJhMmZlNjhhNjFhOTI5YWQ1OWM2YmExLTM4MjM5ZjA1ZDFlZTQwNzItMDEifQ=="
+            }
+          }
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYzBmMzllZTUtZjkyNS00MmU4LTg2N2YtZGE4N2Y1Yjc5NWRiIiwicmVxdWVzdGVkQnkiOiIxMzc0NjU3OTcwMjAzOTcxODIifQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "2s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "21",
+        "retryPolicy": {
+          "initialInterval": "0.050s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "0.200s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "23",
+      "eventTime": "2026-11-09T03:56:07.370367903Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048737",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "22",
+        "identity": "71200@replay-host",
+        "requestId": "7a04dbd4-46e3-4260-9c97-36042a00eac6",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "24",
+      "eventTime": "2026-11-09T03:56:07.374342918Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048738",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvdXRjb21lIjoiUEVORElORyJ9"
+            }
+          ]
+        },
+        "scheduledEventId": "22",
+        "startedEventId": "23",
+        "identity": "71200@replay-host"
+      }
+    },
+    {
+      "eventId": "25",
+      "eventTime": "2026-11-09T03:56:07.374359543Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048739",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "26",
+      "eventTime": "2026-11-09T03:56:07.376000174Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048743",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "25",
+        "identity": "71200@replay-host",
+        "requestId": "4b0cb4f9-9ef5-45b6-b9d7-77d50a3ad89e",
+        "historySizeBytes": "4665",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "27",
+      "eventTime": "2026-11-09T03:56:07.381010776Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048747",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "25",
+        "startedEventId": "26",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "28",
+      "eventTime": "2026-11-09T03:56:07.381048943Z",
+      "eventType": "EVENT_TYPE_TIMER_STARTED",
+      "taskId": "1048748",
+      "timerStartedEventAttributes": {
+        "timerId": "2",
+        "startToFireTimeout": "0.150s",
+        "workflowTaskCompletedEventId": "27"
+      }
+    },
+    {
+      "eventId": "29",
+      "eventTime": "2026-11-09T03:56:08.381400051Z",
+      "eventType": "EVENT_TYPE_TIMER_FIRED",
+      "taskId": "1048751",
+      "timerFiredEventAttributes": {
+        "timerId": "2",
+        "startedEventId": "28"
+      }
+    },
+    {
+      "eventId": "30",
+      "eventTime": "2026-11-09T03:56:08.381429426Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048752",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "31",
+      "eventTime": "2026-11-09T03:56:08.384724063Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048756",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "30",
+        "identity": "71200@replay-host",
+        "requestId": "79319e68-e783-449c-9ba4-d80850dba857",
+        "historySizeBytes": "5231",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "32",
+      "eventTime": "2026-11-09T03:56:08.391544089Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048760",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "30",
+        "startedEventId": "31",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "33",
+      "eventTime": "2026-11-09T03:56:08.391574964Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048761",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "4",
+        "activityType": {
+          "name": "refundPayment"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0cmFjZXBhcmVudCI6IjAwLTkyNWFmNjAyMDJhMmZlNjhhNjFhOTI5YWQ1OWM2YmExLTU3NjAzZmMwZjlkZDcwMWYtMDEifQ=="
+            }
+          }
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYzBmMzllZTUtZjkyNS00MmU4LTg2N2YtZGE4N2Y1Yjc5NWRiIiwicmVxdWVzdGVkQnkiOiIxMzc0NjU3OTcwMjAzOTcxODIifQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "2s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "32",
+        "retryPolicy": {
+          "initialInterval": "0.050s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "0.200s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "34",
+      "eventTime": "2026-11-09T03:56:08.393086428Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048767",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "33",
+        "identity": "71200@replay-host",
+        "requestId": "ddb46c75-d525-48e3-ac63-1b1bc9395683",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "35",
+      "eventTime": "2026-11-09T03:56:08.395947855Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048768",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvdXRjb21lIjoiUkVGVU5ERUQifQ=="
+            }
+          ]
+        },
+        "scheduledEventId": "33",
+        "startedEventId": "34",
+        "identity": "71200@replay-host"
+      }
+    },
+    {
+      "eventId": "36",
+      "eventTime": "2026-11-09T03:56:08.395958272Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048769",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "37",
+      "eventTime": "2026-11-09T03:56:08.397072318Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048773",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "36",
+        "identity": "71200@replay-host",
+        "requestId": "451e8493-78c9-42fc-ad50-3ba1baa17ce8",
+        "historySizeBytes": "6399",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "38",
+      "eventTime": "2026-11-09T03:56:08.401318751Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048777",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "36",
+        "startedEventId": "37",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "39",
+      "eventTime": "2026-11-09T03:56:08.401351251Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048778",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "5",
+        "activityType": {
+          "name": "restockRefundedOrder"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0cmFjZXBhcmVudCI6IjAwLTkyNWFmNjAyMDJhMmZlNjhhNjFhOTI5YWQ1OWM2YmExLTcyNzVhMzY4OTdmMzc5ZTMtMDEifQ=="
+            }
+          }
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYzBmMzllZTUtZjkyNS00MmU4LTg2N2YtZGE4N2Y1Yjc5NWRiIn0="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "2s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "38",
+        "retryPolicy": {
+          "initialInterval": "0.050s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "0.200s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "40",
+      "eventTime": "2026-11-09T03:56:08.402688839Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048784",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "39",
+        "identity": "71200@replay-host",
+        "requestId": "8259661c-283c-4eed-a7fc-239fb8f86629",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "41",
+      "eventTime": "2026-11-09T03:56:08.405247849Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048785",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "IkFQUExJRUQi"
+            }
+          ]
+        },
+        "scheduledEventId": "39",
+        "startedEventId": "40",
+        "identity": "71200@replay-host"
+      }
+    },
+    {
+      "eventId": "42",
+      "eventTime": "2026-11-09T03:56:08.405258516Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048786",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "43",
+      "eventTime": "2026-11-09T03:56:08.406188686Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048790",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "42",
+        "identity": "71200@replay-host",
+        "requestId": "05ee2f7b-6c61-4e53-8354-c8829fcf5af2",
+        "historySizeBytes": "7526",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "44",
+      "eventTime": "2026-11-09T03:56:08.410533160Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048794",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "42",
+        "startedEventId": "43",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "45",
+      "eventTime": "2026-11-09T03:56:08.410566452Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048795",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "6",
+        "activityType": {
+          "name": "completeRefund"
+        },
+        "taskQueue": {
+          "name": "checkout-saga-w1-refund-order-workflow",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {
+          "fields": {
+            "_tracer-data": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0cmFjZXBhcmVudCI6IjAwLTkyNWFmNjAyMDJhMmZlNjhhNjFhOTI5YWQ1OWM2YmExLTQ3NzdhZGQxN2FiNDBiNWYtMDEifQ=="
+            }
+          }
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvcmRlcklkIjoiYzBmMzllZTUtZjkyNS00MmU4LTg2N2YtZGE4N2Y1Yjc5NWRiIiwicmVxdWVzdGVkQnkiOiIxMzc0NjU3OTcwMjAzOTcxODIifQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "2s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "44",
+        "retryPolicy": {
+          "initialInterval": "0.050s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "0.200s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "46",
+      "eventTime": "2026-11-09T03:56:08.411617165Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048801",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "45",
+        "identity": "71200@replay-host",
+        "requestId": "baacb677-30c6-49d2-a0d1-aeaacb5bb8ce",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "47",
+      "eventTime": "2026-11-09T03:56:08.413454755Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048802",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "ImFwcGxpZWQi"
+            }
+          ]
+        },
+        "scheduledEventId": "45",
+        "startedEventId": "46",
+        "identity": "71200@replay-host"
+      }
+    },
+    {
+      "eventId": "48",
+      "eventTime": "2026-11-09T03:56:08.413488130Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048803",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "71200@replay-host-3a898dedca804aaabe9e68aeb837273c",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "checkout-saga-w1-refund-order-workflow"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "49",
+      "eventTime": "2026-11-09T03:56:08.414355717Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048807",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "48",
+        "identity": "71200@replay-host",
+        "requestId": "07791267-4e64-4b6c-8f44-43650ca4a085",
+        "historySizeBytes": "8682",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        }
+      }
+    },
+    {
+      "eventId": "50",
+      "eventTime": "2026-11-09T03:56:08.416974476Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048811",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "48",
+        "startedEventId": "49",
+        "identity": "71200@replay-host",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.25.0+81d7ced30b7c3f7e9290141ad321bfef9952949b193b9ab999cf07ee2750b83f"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "51",
+      "eventTime": "2026-11-09T03:56:08.417005435Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED",
+      "taskId": "1048812",
+      "workflowExecutionCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJvdXRjb21lIjoiUkVGVU5ERUQiLCJyZXF1ZXN0ZWRCeSI6IjEzNzQ2NTc5NzAyMDM5NzE4MiJ9"
+            }
+          ]
+        },
+        "workflowTaskCompletedEventId": "50"
+      }
+    }
+  ]
+}

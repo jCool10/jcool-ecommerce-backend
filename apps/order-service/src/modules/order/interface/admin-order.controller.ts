@@ -1,5 +1,6 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseFilters, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query, Res, UseFilters, UseGuards } from '@nestjs/common';
 import {
+  ApiAcceptedResponse,
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
@@ -11,10 +12,11 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { ORDER_THROTTLE, UserThrottlerGuard } from '@jcool/platform/throttler';
-import { Role, Roles } from '@jcool/platform/rbac';
+import { CurrentUser, Role, Roles, type AuthenticatedUser } from '@jcool/platform/rbac';
 import { ParseSnowflakeIdPipe } from '@jcool/platform/interface';
-import { CancelOrderUseCase } from '../application/use-cases';
+import { CancelOrderUseCase, RefundOrderUseCase } from '../application/use-cases';
 import { OrderQueryService } from '../application/order-query.service';
 import { ApiCheckoutUnavailableResponse, CheckoutUnavailableFilter } from './checkout-unavailable.filter';
 import { ListAdminOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -22,7 +24,7 @@ import { OrderResponseDto } from './dto/order-response.dto';
 import { PaginatedOrdersResponseDto } from './dto/paginated-orders-response.dto';
 
 // Force-cancel is the same `CancelOrderUseCase` as the buyer's, differing only in the audit reason
-// it stamps, so an admin cannot reach an outcome a buyer's own cancel could not.
+// it stamps, so an admin cannot reach an outcome a buyer's own cancel could not. Refund is admin-only.
 @ApiTags('admin-orders')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ description: 'Missing, expired, or invalid access token' })
@@ -35,6 +37,7 @@ export class AdminOrderController {
   constructor(
     private readonly orderQueryService: OrderQueryService,
     private readonly cancelOrder: CancelOrderUseCase,
+    private readonly refundOrder: RefundOrderUseCase,
   ) {}
 
   @Get()
@@ -72,5 +75,35 @@ export class AdminOrderController {
   @ApiCheckoutUnavailableResponse('The cancel could not be confirmed in time; retry')
   async cancel(@Param('id', ParseSnowflakeIdPipe) id: string): Promise<OrderResponseDto> {
     return OrderResponseDto.fromView(await this.cancelOrder.cancelAsAdmin(id));
+  }
+
+  // Throttled like cancel: each refund that lands ends in a provider refund and a restock.
+  // `@Res()` without passthrough: Nest would otherwise reset a 202 to the route's default.
+  @Post(':id/refund')
+  @Throttle(ORDER_THROTTLE)
+  @UseGuards(UserThrottlerGuard)
+  @ApiParam({ name: 'id', example: '137465797020397179' })
+  @ApiOkResponse({
+    type: OrderResponseDto,
+    description: 'Refunded: the money is back with the buyer, the stock restocked',
+  })
+  @ApiAcceptedResponse({
+    type: OrderResponseDto,
+    description:
+      'The refund is still running, e.g. the provider holds it; it finishes on its own. The order reads REFUNDING, or still PAID when the run has not begun yet; calling again joins the same run',
+  })
+  @ApiNotFoundResponse({ description: 'Order not found' })
+  @ApiConflictResponse({
+    description:
+      'Order is not paid, or the provider refused or failed the refund (`message: { code: "REFUND_FAILED", reason }`); the order stays PAID',
+  })
+  @ApiCheckoutUnavailableResponse('The refund could not be started in time and the order did not move; retry')
+  async refund(
+    @Param('id', ParseSnowflakeIdPipe) id: string,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { order, settled } = await this.refundOrder.refundAsAdmin(id, admin.userId);
+    res.status(settled ? HttpStatus.OK : HttpStatus.ACCEPTED).json(OrderResponseDto.fromView(order));
   }
 }

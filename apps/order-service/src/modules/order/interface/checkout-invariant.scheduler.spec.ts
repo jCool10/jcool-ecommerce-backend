@@ -16,6 +16,8 @@ const CLEAN: CheckoutInvariantRun = {
     paid_without_commit: 0,
     orphan_hold: 0,
     authorized_on_dead_order: 0,
+    refunded_without_refund: 0,
+    refunded_without_restock: 0,
   },
 };
 

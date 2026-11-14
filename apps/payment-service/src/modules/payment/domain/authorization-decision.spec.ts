@@ -41,12 +41,15 @@ describe('decideAuthorization', () => {
     expect(decideAuthorization(facts({ header: { authorizedAt: new Date() } }))).toBe('STRAY');
   });
 
-  it.each([PaymentOrderStatus.AUTHORIZED, PaymentOrderStatus.CAPTURED])(
-    'calls a hold stray under a header already %s',
-    (status) => {
-      expect(decideAuthorization(facts({ header: { status } }))).toBe('STRAY');
-    },
-  );
+  it.each([
+    PaymentOrderStatus.AUTHORIZED,
+    PaymentOrderStatus.CAPTURED,
+    PaymentOrderStatus.REFUNDING,
+    PaymentOrderStatus.REFUNDED,
+    PaymentOrderStatus.REFUND_FAILED,
+  ])('calls a hold stray under a header already %s', (status) => {
+    expect(decideAuthorization(facts({ header: { status } }))).toBe('STRAY');
+  });
 
   it('ranks a retired attempt above a wrong amount', () => {
     expect(decideAuthorization(facts({ payment: { status: PaymentStatus.EXPIRED }, charge: { amountMinor: 1 } }))).toBe(

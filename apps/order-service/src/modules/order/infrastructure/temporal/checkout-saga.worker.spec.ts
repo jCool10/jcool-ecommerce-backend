@@ -6,6 +6,7 @@ import { NativeConnection, Worker } from '@temporalio/worker';
 import type { PinoLogger } from 'nestjs-pino';
 import { SHUTDOWN_STEP_ORDER, type ShutdownService, type ShutdownStep } from '@jcool/platform/health';
 import type { CheckoutSagaActivities } from './checkout-saga.activities';
+import type { RefundOrderActivities } from './refund-order.activities';
 import { CheckoutSagaWorker, workerBackoffMs } from './checkout-saga.worker';
 import { installTemporalRuntime } from './temporal-runtime';
 import { checkoutSagaWorkflowsPath } from './workflow-bundle';
@@ -87,7 +88,9 @@ describe('CheckoutSagaWorker', () => {
     const steps: ShutdownStep[] = [];
     const shutdown = { registerStep: vi.fn((step: ShutdownStep) => steps.push(step)) };
     const logger = { setContext: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const activities = { commitStock: vi.fn() } as unknown as CheckoutSagaActivities;
+    const checkoutActivities = { commitStock: vi.fn() };
+    const refundActivities = { beginRefund: vi.fn() };
+    const activities = { ...checkoutActivities, ...refundActivities };
     const connection = { close: vi.fn(() => Promise.resolve()) };
     const connect = vi.spyOn(NativeConnection, 'connect').mockResolvedValue(connection as never);
     const workers = [fakeWorker(), fakeWorker(), fakeWorker()];
@@ -95,7 +98,8 @@ describe('CheckoutSagaWorker', () => {
     for (const { worker } of workers) create.mockResolvedValueOnce(worker as never);
 
     const supervisor = new CheckoutSagaWorker(
-      activities,
+      checkoutActivities as unknown as CheckoutSagaActivities,
+      refundActivities as unknown as RefundOrderActivities,
       config as unknown as ConfigService,
       shutdown as unknown as ShutdownService,
       logger as unknown as PinoLogger,
@@ -140,7 +144,7 @@ describe('CheckoutSagaWorker', () => {
     expect(supervisor.status().state).toBe('CONNECTING');
   });
 
-  it('runs a traced worker on the configured queue with both activity pools and the shutdown budget', async () => {
+  it('runs a traced worker on the configured queue with both workflows’ activities, both pools and the shutdown budget', async () => {
     const { supervisor, boot, activities, connection, connect, create } = build();
 
     await boot();

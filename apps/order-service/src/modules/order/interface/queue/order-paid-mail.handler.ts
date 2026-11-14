@@ -1,10 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { MAIL_TRANSPORT, type MailMessage, type MailTransportPort } from '@jcool/platform/mail';
-import { type DomainEventJob, PermanentError, type PostCommitEffect } from '@jcool/messaging';
-import { toError } from '@jcool/kernel';
+import type { DomainEventJob, PostCommitEffect } from '@jcool/messaging';
 import { METRICS, type MetricsPort } from '@jcool/metrics-port';
 import { USER_CONTACT, type UserContactPort } from '../../application/ports/user-contact.port';
+import { formatTotal, recipientOf, sendOnceAfterCommit } from './order-mail';
 
 const LOG_CONTEXT = 'OrderPaidMailHandler';
 
@@ -27,31 +27,13 @@ export class OrderPaidMailHandler {
 
   /** A directory that could not answer throws through, so the delivery goes back on its retry ladder. */
   async prepare(job: DomainEventJob): Promise<PostCommitEffect> {
-    const { orderId, userId } = job.payload;
-    // Permanent: the payload is byte-identical on every redelivery, so retrying changes nothing.
-    if (typeof orderId !== 'string' || typeof userId !== 'string') {
-      throw new PermanentError(`order.paid without an orderId/userId to confirm (message ${job.outboxId})`);
-    }
-
-    // The event deliberately carries no email address: the outbox is jsonb in Postgres, and a
-    // deleted account must not leave its address behind in it.
-    const user = await this.userContact.find(userId, new Date(job.occurredAt));
-    if (!user) {
-      throw new PermanentError(`order.paid for order ${orderId} names a user that no longer exists`);
-    }
-
-    const message = buildMessage(orderId, user.email, job.payload);
-    return async () => {
-      try {
-        await this.mailTransport.sendMail(message);
-      } catch (error: unknown) {
-        this.metrics.recordMailSendFailure('order_paid');
-        this.logger.error(
-          { orderId, messageId: job.outboxId, err: toError(error) },
-          'order confirmation mail was not delivered and will not be retried',
-        );
-      }
-    };
+    const { orderId, email } = await recipientOf(job, this.userContact);
+    const { mailTransport, metrics, logger } = this;
+    return sendOnceAfterCommit({ mailTransport, metrics, logger }, buildMessage(orderId, email, job.payload), {
+      kind: 'order_paid',
+      context: { orderId, messageId: job.outboxId },
+      message: 'order confirmation mail was not delivered and will not be retried',
+    });
   }
 }
 
@@ -64,13 +46,4 @@ function buildMessage(orderId: string, to: string, payload: Record<string, unkno
       '\n',
     ),
   };
-}
-
-/** Null rather than a guess when the payload cannot be read: a wrong total is worse than none. */
-function formatTotal(amountMinor: unknown, currency: unknown): string | null {
-  if (typeof amountMinor !== 'number' || !Number.isFinite(amountMinor)) return null;
-  if (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) return null;
-  const format = new Intl.NumberFormat('en-US', { style: 'currency', currency });
-  // Minor units per major unit read off the currency itself — 1 for VND, 100 for USD.
-  return format.format(amountMinor / 10 ** (format.resolvedOptions().maximumFractionDigits ?? 0));
 }

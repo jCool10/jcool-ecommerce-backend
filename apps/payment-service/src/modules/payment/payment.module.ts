@@ -7,6 +7,7 @@ import { WEBHOOK_EVENT_REPOSITORY } from './application/ports/webhook-event-repo
 import { PAYMENT_GATEWAY, type PaymentGatewayPort } from './application/ports/payment-gateway.port';
 import { TRANSACTION_RUNNER } from './application/ports/transaction-runner.port';
 import { PAYMENT_ORDER_REPOSITORY } from './application/ports/payment-order-repository.port';
+import { PAYMENT_REFUND_REPOSITORY } from './application/ports/payment-refund-repository.port';
 import { PAYMENT_PARTICIPANT } from './application/public/payment-participant.port';
 import { PaymentParticipantFacade } from './application/payment-participant.facade';
 import {
@@ -14,14 +15,17 @@ import {
   CapturePaymentUseCase,
   HandlePaymentWebhookUseCase,
   OpenPaymentSessionUseCase,
+  ProcessRefundWebhookEventUseCase,
   ProcessTccWebhookEventUseCase,
   ProcessWebhookEventUseCase,
   ReconcileTccPaymentsUseCase,
   RecordAuthorizationUseCase,
+  RefundPaymentUseCase,
   SweepWebhookEventsUseCase,
 } from './application/use-cases';
 import { DrizzlePaymentRepository } from './infrastructure/payment.repository';
 import { DrizzlePaymentOrderRepository } from './infrastructure/payment-order.repository';
+import { DrizzlePaymentRefundRepository } from './infrastructure/payment-refund.repository';
 import { DrizzleWebhookEventRepository } from './infrastructure/webhook-event.repository';
 import { DrizzleTransactionRunner } from './infrastructure/drizzle-transaction-runner';
 import { PAYMENT_AUTHORIZATION_COLLECTOR_PROVIDERS } from './infrastructure/payment-authorization.collector';
@@ -53,7 +57,7 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     apiAddress: config.get<StripeGatewayOptions['apiAddress']>('payment.apiAddress'),
   });
   const breaker = breakers.create(PAYMENT_GATEWAY_BREAKER, { isDownstreamFault: isStripeUnavailable });
-  // A capture or void can spend up to 2T on the call plus its read-back; the shared 3s budget would
+  // A capture, void or refund can spend up to 2T on the call plus its read-back; the shared 3s budget would
   // cut it off mid-flight and count a slow-but-healthy Stripe as an outage.
   const captureBreaker = breakers.create(PAYMENT_CAPTURE_BREAKER, {
     isDownstreamFault: isStripeUnavailable,
@@ -73,8 +77,10 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     { provide: PAYMENT_GATEWAY, useFactory: createPaymentGateway, inject: [ConfigService, CircuitBreakerFactory] },
     { provide: TRANSACTION_RUNNER, useClass: DrizzleTransactionRunner },
     { provide: PAYMENT_ORDER_REPOSITORY, useClass: DrizzlePaymentOrderRepository },
+    { provide: PAYMENT_REFUND_REPOSITORY, useClass: DrizzlePaymentRefundRepository },
     ProcessWebhookEventUseCase,
     ProcessTccWebhookEventUseCase,
+    ProcessRefundWebhookEventUseCase,
     HandlePaymentWebhookUseCase,
     ReconcileTccPaymentsUseCase,
     ReconciliationScheduler,
@@ -82,6 +88,7 @@ function createPaymentGateway(config: ConfigService, breakers: CircuitBreakerFac
     OpenPaymentSessionUseCase,
     CapturePaymentUseCase,
     CancelPaymentUseCase,
+    RefundPaymentUseCase,
     { provide: PAYMENT_PARTICIPANT, useClass: PaymentParticipantFacade },
     ...PAYMENT_AUTHORIZATION_COLLECTOR_PROVIDERS,
     // Registers itself with the shared retention registry on init; nothing here drives it.

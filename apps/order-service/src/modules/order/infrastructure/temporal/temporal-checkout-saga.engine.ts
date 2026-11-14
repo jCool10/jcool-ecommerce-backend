@@ -2,12 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   ApplicationFailure,
-  ServiceError,
   WithStartWorkflowOperation,
   WorkflowExecutionAlreadyStartedError,
   WorkflowNotFoundError,
   WorkflowUpdateFailedError,
-  WorkflowUpdateRPCTimeoutOrCancelledError,
   type Client,
   type WorkflowStartOptions,
 } from '@temporalio/client';
@@ -15,8 +13,6 @@ import { isRoutableId } from '@jcool/id-codec';
 import type { CheckoutSagaConfig } from '../../../../config/checkout-saga.config';
 import {
   CheckoutCancelRejectedError,
-  CheckoutEngineUnavailableError,
-  CheckoutSagaClosedError,
   type CheckoutSagaEnginePort,
   type CheckoutSagaStart,
 } from '../../application/ports/checkout-saga-engine.port';
@@ -39,23 +35,15 @@ import {
   reserveUpdate,
   type CheckoutSagaInput,
 } from './checkout-saga.contract';
+import { type ClosedRunError, toEngineError, withinDeadline } from './temporal-engine-call';
 import { TEMPORAL_CLIENT } from './temporal.providers';
 import type { CheckoutSaga } from './workflows/checkout-saga.workflow';
 
 // Not a config knob: every caller retries on its own, a queue job or the next reaper or checker tick.
-const START_WAIT_MS = 5000;
+export const START_WAIT_MS = 5000;
 const VISIBILITY_WAIT_MS = 5000;
 // The checker's batch cap, so one `WorkflowId IN (...)` stays a short query.
 export const MAX_VISIBILITY_IDS = 200;
-
-// What a ServiceError's cause carries when Temporal cannot answer now. FAILED_PRECONDITION from
-// Update-with-Start means the workflow task keeps failing: retry or investigate, never a refusal.
-const UNAVAILABLE_GRPC_CODES = new Set<unknown>([
-  4, // DEADLINE_EXCEEDED
-  8, // RESOURCE_EXHAUSTED
-  9, // FAILED_PRECONDITION
-  14, // UNAVAILABLE
-]);
 
 const CHECKOUT_STEPS = new Set<unknown>(Object.values(CheckoutStep));
 
@@ -175,17 +163,15 @@ export class TemporalCheckoutSagaEngine implements CheckoutSagaEnginePort {
   }
 
   /** `closedBy`: the error this call gets from a closed run; the same class elsewhere means something else. */
-  private async call<T>(
+  private call<T>(
     orderId: string,
     waitMs: number,
     closedBy: ClosedRunError | null,
     send: () => Promise<T>,
   ): Promise<T> {
-    try {
-      return await this.client.connection.withDeadline(Date.now() + waitMs, send);
-    } catch (error) {
-      throw toEngineError(error, orderId, closedBy);
-    }
+    return withinDeadline(this.client, waitMs, send, (error) =>
+      isCancelRejection(error) ? cancelRejectedOf(error, orderId) : toEngineError(error, orderId, closedBy),
+    );
   }
 }
 
@@ -194,27 +180,17 @@ export function checkoutSagaRunsOf(taskQueue: string): string {
   return `WorkflowType = '${CHECKOUT_SAGA_WORKFLOW}' AND TaskQueue = '${taskQueue}'`;
 }
 
-type ClosedRunError = typeof WorkflowNotFoundError | typeof WorkflowExecutionAlreadyStartedError;
+type CancelRejection = WorkflowUpdateFailedError & { cause: ApplicationFailure };
 
-// By class first: SDK 1.24 wraps gRPC errors in ServiceError and throws an update past its deadline
-// as WorkflowUpdateRPCTimeoutOrCancelledError, with no code on the error itself.
-function toEngineError(error: unknown, orderId: string, closedBy: ClosedRunError | null): unknown {
-  if (error instanceof WorkflowUpdateRPCTimeoutOrCancelledError) {
-    return new CheckoutEngineUnavailableError({ cause: error });
-  }
-  if (error instanceof ServiceError) {
-    return UNAVAILABLE_GRPC_CODES.has((error.cause as { code?: unknown } | undefined)?.code)
-      ? new CheckoutEngineUnavailableError({ cause: error })
-      : error;
-  }
-  if (
+function isCancelRejection(error: unknown): error is CancelRejection {
+  return (
     error instanceof WorkflowUpdateFailedError &&
     error.cause instanceof ApplicationFailure &&
     error.cause.type === CANCEL_REJECTED_FAILURE
-  ) {
-    const step = error.cause.details?.[0];
-    return new CheckoutCancelRejectedError(orderId, CHECKOUT_STEPS.has(step) ? (step as CheckoutStep) : null);
-  }
-  if (closedBy && error instanceof closedBy) return new CheckoutSagaClosedError(orderId);
-  return error;
+  );
+}
+
+function cancelRejectedOf(error: CancelRejection, orderId: string): CheckoutCancelRejectedError {
+  const step = error.cause.details?.[0];
+  return new CheckoutCancelRejectedError(orderId, CHECKOUT_STEPS.has(step) ? (step as CheckoutStep) : null);
 }

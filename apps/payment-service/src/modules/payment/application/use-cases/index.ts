@@ -6,4 +6,6 @@ export * from './open-payment-session.use-case';
 export * from './capture-payment.use-case';
 export * from './cancel-payment.use-case';
 export * from './process-tcc-webhook-event.use-case';
+export * from './process-refund-webhook-event.use-case';
+export * from './refund-payment.use-case';
 export * from './reconcile-tcc-payments.use-case';

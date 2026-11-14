@@ -53,6 +53,7 @@ export const SESSION_EPOCH_LOOKUPS_TOTAL = 'session_epoch_lookups_total';
 
 export const TCC_BRANCH_TOTAL = 'tcc_branch_total';
 export const PAYMENT_CAPTURE_CONFLICT_TOTAL = 'payment_capture_conflict_total';
+export const PAYMENT_REFUND_UNTRACKED_TOTAL = 'payment_refund_untracked_total';
 
 // Latency buckets (seconds). Tuned to a k6 baseline (2026-08-15, ~21 req/s): global p99 ≈ 22ms;
 // the argon2 auth routes are the tail (register ≈ 98ms, from a small sample). Dense resolution
@@ -155,7 +156,7 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: SAGA_STEP_TOTAL,
-    help: 'Checkout saga participant calls, per attempt, by step (try_reserve/commit_stock/capture_payment/release_stock/restock/cancel_payment) and outcome (the participant answer lower-cased, or error when the call threw and will be retried). A retried step counts every attempt, so idempotent next to applied is a retry that found its work done; conflict on a compensation step is retried until a human resolves it.',
+    help: 'Checkout saga and admin refund participant calls, per attempt, by step (try_reserve/commit_stock/capture_payment/release_stock/restock/cancel_payment/refund_payment; restock also counts a refund putting stock back) and outcome (the participant answer lower-cased, refund_pending/refund_failed for a refund Stripe holds or failed, or error when the call threw and will be retried). A retried step counts every attempt, so idempotent next to applied is a retry that found its work done; conflict on a compensation or refund step is retried until a human resolves it.',
     labelNames: ['step', 'outcome'],
   }),
   makeCounterProvider({
@@ -165,7 +166,7 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: PAYMENT_REFUND_OWED_TOTAL,
-    help: 'Times a path found money on an order that will never be fulfilled, labelled by which path saw it: webhook_direct = a paid checkout session no payment header owns, so no saga will capture or void it. Observations, not refunds, so alert on any increase and get the count from the database, never by summing this.',
+    help: 'Times a path found money the buyer is owed that nothing will return, labelled by which path saw it: webhook_direct = a paid checkout session no payment header owns, so no saga will capture or void it; refund_failed = a refund Stripe refused or failed, at once or after reporting it done. Observations, not refunds, so alert on any increase and get the count from the database, never by summing this.',
     labelNames: ['source'],
   }),
   makeGaugeProvider({
@@ -180,7 +181,7 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   }),
   makeCounterProvider({
     name: MAIL_SEND_FAILURES_TOTAL,
-    help: 'Messages the transport refused or could not deliver, by kind. Nothing retries them: the auth kinds are re-triggerable by the user (resend verification, ask for another reset link), order_paid is a confirmation simply lost.',
+    help: 'Messages the transport refused or could not deliver, by kind. Nothing retries them: the auth kinds are re-triggerable by the user (resend verification, ask for another reset link), order_paid and order_refunded are a confirmation and a refund notice simply lost.',
     labelNames: ['kind'],
   }),
   makeCounterProvider({
@@ -216,6 +217,10 @@ export const BUSINESS_METRIC_PROVIDERS: Provider[] = [
   makeCounterProvider({
     name: PAYMENT_CAPTURE_CONFLICT_TOTAL,
     help: 'Captures that landed on a payment whose order had already been cancelled: the buyer was charged for an order that will not ship. Any increase needs a refund decision by a human.',
+  }),
+  makeCounterProvider({
+    name: PAYMENT_REFUND_UNTRACKED_TOTAL,
+    help: 'Refunds the shop did not issue (the Stripe dashboard, another API key) that landed on a captured order. The order still reads paid and its stock stays sold until an admin refunds it, which adopts the refund instead of sending a second one.',
   }),
   makeHistogramProvider({
     name: CACHE_REBUILD_DURATION_SECONDS,

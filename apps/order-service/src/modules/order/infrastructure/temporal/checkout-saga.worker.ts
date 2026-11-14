@@ -9,6 +9,7 @@ import { SHUTDOWN_STEP_ORDER, ShutdownService } from '@jcool/platform/health';
 import { toError } from '@jcool/kernel';
 import type { CheckoutSagaConfig } from '../../../../config/checkout-saga.config';
 import { CheckoutSagaActivities } from './checkout-saga.activities';
+import { RefundOrderActivities } from './refund-order.activities';
 import { installTemporalRuntime } from './temporal-runtime';
 import { CHECKOUT_SAGA_BUNDLE_FILE, checkoutSagaWorkflowsPath } from './workflow-bundle';
 import { workflowTracingInterceptors, workflowTracingSinks } from './workflow-tracing';
@@ -55,7 +56,8 @@ export class CheckoutSagaWorker implements OnModuleInit, OnApplicationBootstrap 
   private readonly production: boolean;
 
   constructor(
-    private readonly activities: CheckoutSagaActivities,
+    private readonly checkoutActivities: CheckoutSagaActivities,
+    private readonly refundActivities: RefundOrderActivities,
     config: ConfigService,
     private readonly shutdown: ShutdownService,
     private readonly logger: PinoLogger,
@@ -131,7 +133,8 @@ export class CheckoutSagaWorker implements OnModuleInit, OnApplicationBootstrap 
       ...workflows,
       interceptors: workflowTracingInterceptors({ bundling: workflows.workflowsPath !== undefined }),
       sinks: workflowTracingSinks(),
-      activities: this.activities,
+      // One queue for both workflows; the refund activities' spec keeps the two name sets apart.
+      activities: { ...this.checkoutActivities, ...this.refundActivities },
       maxConcurrentActivityTaskExecutions: this.settings.activityConcurrency,
       maxConcurrentLocalActivityExecutions: this.settings.localActivityConcurrency,
       shutdownGraceTime: temporal.workerShutdownGraceMs,

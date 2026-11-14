@@ -20,6 +20,8 @@ const OWNED = [
   'circuit_breaker_state',
   'circuit_breaker_calls_total',
   'tcc_branch_total',
+  'payment_refund_owed_total',
+  'payment_refund_untracked_total',
   'outbox_backlog_pending',
   'outbox_oldest_age_seconds',
   'nodejs_eventloop_lag_seconds',
@@ -53,6 +55,14 @@ describe('Metrics endpoint (integration)', () => {
     const described = new Set([...res.text.matchAll(/^# HELP (\S+)/gm)].map((match) => match[1]));
     expect(owned).toEqual(expect.arrayContaining(['http_requests_total', UNCAPTURED_OLDEST]));
     expect(owned.filter((name) => !described.has(name))).toEqual([]);
+  });
+
+  // Alerting on any increase needs the series before the first refund goes wrong.
+  it('describes the refund counters before any refund, the untracked one at zero', async () => {
+    const scrape = await scrapeMetrics(app);
+
+    expect(scrape.text).toMatch(/^# HELP payment_refund_owed_total .*refund_failed/m);
+    expect(scrape.value('payment_refund_untracked_total')).toBe(0);
   });
 
   it('reports how long the oldest authorization has waited for its capture', async () => {

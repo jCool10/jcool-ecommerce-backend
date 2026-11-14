@@ -1,6 +1,7 @@
 import { Client, Connection } from '@temporalio/client';
 import { Queue } from 'bullmq';
 import { checkoutWorkflowId } from '../../src/modules/order/infrastructure/temporal/checkout-saga.contract';
+import { refundOrderWorkflowId } from '../../src/modules/order/infrastructure/temporal/refund-order.contract';
 
 export interface SagaRun {
   runId: string;
@@ -28,9 +29,17 @@ export class SagaObserver {
     return new SagaObserver(connection, new Client({ connection, namespace: 'jcool' }));
   }
 
-  async runs(orderId: string): Promise<SagaRun[]> {
+  runs(orderId: string): Promise<SagaRun[]> {
+    return this.list(checkoutWorkflowId(orderId));
+  }
+
+  refundRuns(orderId: string): Promise<SagaRun[]> {
+    return this.list(refundOrderWorkflowId(orderId));
+  }
+
+  private async list(workflowId: string): Promise<SagaRun[]> {
     const runs: SagaRun[] = [];
-    for await (const run of this.client.workflow.list({ query: `WorkflowId = '${checkoutWorkflowId(orderId)}'` })) {
+    for await (const run of this.client.workflow.list({ query: `WorkflowId = '${workflowId}'` })) {
       runs.push({ runId: run.runId, status: run.status.name });
     }
     return runs;

@@ -17,6 +17,7 @@ import {
   CANCEL_OUTCOME_STATUS,
   CAPTURE_OUTCOME_STATUS,
   PAYMENTS_PREFIX,
+  REFUND_OUTCOME_STATUS,
   SESSION_OUTCOME_STATUS,
   type PaymentStatusResponse,
 } from '@jcool/internal-contracts';
@@ -27,7 +28,7 @@ import {
   PaymentGatewayError,
   type PaymentParticipant,
 } from '../../application/public/payment-participant.port';
-import { OpenSessionDto, PaymentStatusDto } from './dto';
+import { OpenSessionDto, PaymentStatusDto, RefundDto } from './dto';
 import { ProviderUnavailableFilter, RETRY_AFTER_SEC } from './provider-unavailable.filter';
 
 /**
@@ -76,6 +77,16 @@ export class PaymentsController {
   async cancel(@Param('orderId', ParseSnowflakeIdPipe) orderId: string, @Res() res: Response): Promise<void> {
     const outcome = await this.orRetry(res, () => this.participant.cancel({ orderId }));
     res.status(CANCEL_OUTCOME_STATUS[outcome]).json({ outcome });
+  }
+
+  @Post(':orderId/refund')
+  async refund(
+    @Param('orderId', ParseSnowflakeIdPipe) orderId: string,
+    @Body() { requestedBy }: RefundDto,
+    @Res() res: Response,
+  ): Promise<void> {
+    const result = await this.orRetry(res, () => this.participant.refund({ orderId, requestedBy }));
+    res.status(REFUND_OUTCOME_STATUS[result.outcome]).json(result);
   }
 
   private async orRetry<T>(res: Response, run: () => Promise<T>): Promise<T> {

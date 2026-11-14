@@ -82,6 +82,25 @@ export class DrizzlePaymentRepository implements PaymentRepositoryPort {
     return row ? toDomain(row) : null;
   }
 
+  async findSucceededByOrderId(orderId: string, tx?: DrizzleTx): Promise<Payment | null> {
+    const [row] = await (tx ?? this.db)
+      .select()
+      .from(payments)
+      .where(and(eq(payments.orderId, orderId), eq(payments.status, PaymentStatus.SUCCEEDED)))
+      .limit(1);
+    return row ? toDomain(row) : null;
+  }
+
+  async findByProviderIntentId(providerIntentId: string, tx?: DrizzleTx): Promise<Payment | null> {
+    const [row] = await (tx ?? this.db)
+      .select()
+      .from(payments)
+      .where(eq(payments.providerIntentId, providerIntentId))
+      .orderBy(desc(payments.createdAt), desc(payments.id))
+      .limit(1);
+    return row ? toDomain(row) : null;
+  }
+
   async updateStatus(
     id: string,
     status: PaymentStatus,

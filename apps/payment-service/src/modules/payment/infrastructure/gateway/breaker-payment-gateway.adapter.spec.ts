@@ -8,6 +8,7 @@ import {
   PaymentGatewayError,
   type GatewaySession,
   type PaymentGatewayPort,
+  type ProviderRefund,
 } from '../../application/ports/payment-gateway.port';
 import {
   BreakerPaymentGateway,
@@ -17,6 +18,16 @@ import {
 
 const SESSION: GatewaySession = { providerSessionId: 'cs_test_1', redirectUrl: 'https://pay.test/1' };
 const CHECKOUT = { orderId: 'o1', amountMinor: 100, currency: 'usd' };
+const REFUND_INPUT = { intentId: 'pi_1', amountMinor: 100, currency: 'usd', orderId: 'o1', requestedBy: 'u1' };
+const REFUND: ProviderRefund = {
+  refundId: 're_1',
+  intentId: 'pi_1',
+  metadataOrderId: 'o1',
+  amountMinor: 100,
+  currency: 'usd',
+  status: 'succeeded',
+  failureReason: null,
+};
 
 function build(breaker: OutboundCall, captureBreaker: OutboundCall = breaker) {
   const inner = {
@@ -29,6 +40,8 @@ function build(breaker: OutboundCall, captureBreaker: OutboundCall = breaker) {
     retrieveAuthorization: vi.fn().mockResolvedValue({ sessionStatus: 'open' }),
     captureIntent: vi.fn().mockResolvedValue({ kind: 'captured' }),
     voidIntent: vi.fn().mockResolvedValue('voided'),
+    refundIntent: vi.fn().mockResolvedValue(REFUND),
+    retrieveRefund: vi.fn().mockResolvedValue(REFUND),
   } satisfies PaymentGatewayPort;
   return { inner, gateway: new BreakerPaymentGateway(inner, breaker, captureBreaker) };
 }
@@ -73,14 +86,26 @@ describe('BreakerPaymentGateway', () => {
     expect(inner.retrieveAuthorization).not.toHaveBeenCalled();
   });
 
-  it('keeps capture and void on their own breaker, apart from checkout and webhooks', async () => {
+  it('keeps capture, void and refund on their own breaker, apart from checkout and webhooks', async () => {
     const { inner, gateway } = build(passThrough, refusing(PAYMENT_CAPTURE_BREAKER));
 
     await expect(gateway.captureIntent('pi_1', 'capture:1:0')).rejects.toBeInstanceOf(PaymentGatewayError);
     await expect(gateway.voidIntent('pi_1', 'void:1:0')).rejects.toBeInstanceOf(PaymentGatewayError);
+    await expect(gateway.refundIntent(REFUND_INPUT, 'refund:1:0')).rejects.toBeInstanceOf(PaymentGatewayError);
+    await expect(gateway.retrieveRefund('re_1')).rejects.toBeInstanceOf(PaymentGatewayError);
     await expect(gateway.createSession(CHECKOUT)).resolves.toEqual(SESSION);
     expect(inner.captureIntent).not.toHaveBeenCalled();
     expect(inner.voidIntent).not.toHaveBeenCalled();
+    expect(inner.refundIntent).not.toHaveBeenCalled();
+    expect(inner.retrieveRefund).not.toHaveBeenCalled();
+  });
+
+  it('passes a refund and its read-back through to the provider while the circuit is closed', async () => {
+    const { inner, gateway } = build(refusing(PAYMENT_GATEWAY_BREAKER), passThrough);
+
+    await expect(gateway.refundIntent(REFUND_INPUT, 'refund:1:0')).resolves.toEqual(REFUND);
+    await expect(gateway.retrieveRefund('re_1')).resolves.toEqual(REFUND);
+    expect(inner.refundIntent).toHaveBeenCalledWith(REFUND_INPUT, 'refund:1:0');
   });
 
   // Re-wrapping would bury the provider detail the checkout log needs to diagnose an outage.

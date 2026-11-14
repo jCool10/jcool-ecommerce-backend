@@ -1,5 +1,14 @@
 /** Declaration order matches payment's `payment_order_status` enum. */
-export const PAYMENT_ORDER_STATUSES = ['OPEN', 'AUTHORIZED', 'CAPTURED', 'CANCELLED', 'FENCED'] as const;
+export const PAYMENT_ORDER_STATUSES = [
+  'OPEN',
+  'AUTHORIZED',
+  'CAPTURED',
+  'CANCELLED',
+  'FENCED',
+  'REFUNDING',
+  'REFUNDED',
+  'REFUND_FAILED',
+] as const;
 export type PaymentOrderStatus = (typeof PAYMENT_ORDER_STATUSES)[number];
 
 export const SESSION_OUTCOMES = ['OPENED', 'CLOSED'] as const;
@@ -10,6 +19,10 @@ export type CaptureOutcome = (typeof CAPTURE_OUTCOMES)[number];
 
 export const CANCEL_OUTCOMES = ['CANCELLED', 'FENCED', 'IDEMPOTENT', 'CAPTURED_CONFLICT'] as const;
 export type CancelOutcome = (typeof CANCEL_OUTCOMES)[number];
+
+/** `PENDING`: Stripe holds the refund and the caller asks again later. */
+export const REFUND_OUTCOMES = ['REFUNDED', 'IDEMPOTENT', 'PENDING', 'REFUND_FAILED', 'NOT_REFUNDABLE'] as const;
+export type RefundOutcome = (typeof REFUND_OUTCOMES)[number];
 
 /** Stripe failed or its breaker is open. Not an outcome: the caller retries, as on any 503. */
 export const PROVIDER_UNAVAILABLE = 'PROVIDER_UNAVAILABLE';
@@ -47,6 +60,18 @@ export interface CaptureResponse {
 
 export interface CancelResponse {
   outcome: CancelOutcome;
+}
+
+/** No amount: the participant refunds exactly what it captured. */
+export interface RefundBody {
+  /** The admin who asked, a user id. Recorded once; a repeat by someone else keeps the first. */
+  requestedBy: string;
+}
+
+export interface RefundResponse {
+  outcome: RefundOutcome;
+  /** Stripe's failure reason or error code, on `REFUND_FAILED`. */
+  reason?: string;
 }
 
 export interface PaymentStatusBody {

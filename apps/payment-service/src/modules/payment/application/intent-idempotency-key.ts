@@ -10,7 +10,7 @@ import type { PaymentRepositoryPort } from './ports/payment-repository.port';
 export async function withIntentKey<T>(
   payments: PaymentRepositoryPort,
   payment: Payment,
-  op: 'capture' | 'void',
+  op: 'capture' | 'void' | 'refund',
   call: (idempotencyKey: string) => Promise<T>,
 ): Promise<T> {
   const id = payment.id as string;

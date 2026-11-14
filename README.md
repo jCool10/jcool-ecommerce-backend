@@ -23,10 +23,10 @@ Four invariants drive nearly every design decision:
 | --- | --- |
 | **Never oversell** | Stock is held in the inventory-service's own transaction, fenced per order, with three Postgres `CHECK` constraints as the backstop |
 | **Never double-charge** | A client `Idempotency-Key`, a unique index on active payments, webhook dedup, and a manual-capture charge captured once, only after its stock has committed |
-| **Money and stock stay consistent with order state** | A Temporal saga is the order's only writer; every step before the capture is compensated (release the stock, void the card hold) until it lands |
+| **Money and stock stay consistent with order state** | A Temporal saga is the order's only writer; every step before the capture is compensated (release the stock, void the card hold) until it lands, and an admin's refund returns the money first, then the stock |
 | **The order is the transaction source of truth** | Each line snapshots its price and name, so a later reprice cannot move a placed order |
 
-**Not in scope, deliberately:** multi-vendor and automatic refunds. Where a guarantee is weaker than it looks, [Known limits](#known-limits) says so.
+**Not in scope, deliberately:** multi-vendor, and automatic or partial refunds. An admin can fully refund a `PAID` order. Where a guarantee is weaker than it looks, [Known limits](#known-limits) says so.
 
 ## Architecture
 
@@ -153,7 +153,9 @@ A cached catalog read sits within about 1.5 ms of the floor, and a 32× rise in 
 Stated plainly, because a reviewer will find them anyway. The reasoning behind each is in [system-architecture.md](./docs/system-architecture.md#known-limits).
 
 - **Every write waits on the id-service.** No service mints ids in process, so a write answers `503` while the id-service is unreachable.
-- **Order confirmation mail is at-most-once.** A failed send is counted, not retried, because a retry could send up to eight.
+- **Order confirmation and refund mail are at-most-once.** A failed send is counted, not retried, because a retry could send up to eight.
+- **Refunds are full, admin-initiated and Stripe-only; a refund Stripe fails is a person's job.** The order goes back to `PAID`, or stays `REFUNDED` when Stripe fails the refund after it had succeeded; the money is counted as owed, and the shop cannot retry it.
+- **A pending refund is checked at most hourly.** The run asks Stripe again with backoff capped at an hour, so an order can read `REFUNDING` for up to an hour after Stripe settles its refund, even when the `refund.*` webhook already settled the payment side.
 - **Auth mail is sent synchronously, outside the outbox**, so its raw token never lands in Postgres.
 - **Checkout needs the api, stock, payment, the id-service and Temporal at once.** Temporal is one self-hosted server; while it is down, checkout and cancel answer `503` and catalog and cart keep serving.
 - **The strongest checkout test runs locally only.** The fault-injecting system test needs several GB of RAM, so CI runs the integration tier instead.

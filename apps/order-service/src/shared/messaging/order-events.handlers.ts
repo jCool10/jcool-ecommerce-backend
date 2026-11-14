@@ -8,6 +8,7 @@ import {
 } from '@jcool/messaging';
 import type { DrizzleTx } from '../../database';
 import { OrderPaidMailHandler } from '../../modules/order/interface/queue/order-paid-mail.handler';
+import { OrderRefundedMailHandler } from '../../modules/order/interface/queue/order-refunded-mail.handler';
 import { PaymentAuthorizedHandler } from '../../modules/order/interface/queue/payment-authorized.handler';
 
 const LOG_CONTEXT = 'OrderEventsAudit';
@@ -53,24 +54,26 @@ export class OrderEventsDispatcher implements DomainEventDispatcherPort {
     audit: OrderEventsAudit,
     paymentAuthorized: PaymentAuthorizedHandler,
     orderPaidMail: OrderPaidMailHandler,
+    orderRefundedMail: OrderRefundedMailHandler,
   ) {
     const recordOnly: PreparedHandler = (job) => Promise.resolve(() => audit.record(job));
+    // The buyer's mail is still owed, so it comes back as a post-commit effect.
+    const recordThenMail =
+      (mail: { prepare(job: DomainEventJob): Promise<PostCommitEffect> }): PreparedHandler =>
+      async (job) => {
+        const message = await mail.prepare(job);
+        return async () => {
+          await audit.record(job);
+          return message;
+        };
+      };
     this.handlers = new Map<string, PreparedHandler>([
       ['order.placed', recordOnly],
-      // The confirmation mail is still owed, so it comes back as a post-commit effect.
-      [
-        'order.paid',
-        async (job) => {
-          const confirmation = await orderPaidMail.prepare(job);
-          return async () => {
-            await audit.record(job);
-            return confirmation;
-          };
-        },
-      ],
+      ['order.paid', recordThenMail(orderPaidMail)],
       ['order.failed', recordOnly],
       ['order.expired', recordOnly],
       ['order.cancelled', recordOnly],
+      ['order.refunded', recordThenMail(orderRefundedMail)],
       // Signals the order's saga, which treats a repeat as a no-op.
       ['payment.authorized', beforeClaim((job) => paymentAuthorized.forward(job))],
     ]);

@@ -7,6 +7,8 @@ import {
   type GatewayPaymentStatus,
   type GatewaySession,
   type PaymentGatewayPort,
+  type ProviderRefund,
+  type RefundIntentInput,
   type RetrievedSession,
   type SessionAuthorization,
   type VerifiedEvent,
@@ -21,8 +23,8 @@ export const PAYMENT_CAPTURE_BREAKER = 'payment_capture';
  * work: guarding it would let an outage of the gateway's API stop us verifying the webhooks that same
  * gateway is still delivering — the one path that still settles orders while it is down.
  *
- * Capture and void get their own breaker with a longer timeout: a slow capture still inside its budget
- * must not be cut off (the money may have moved), nor trip the circuit checkout and webhooks share.
+ * Capture, void and refund get their own breaker with a longer timeout: a slow capture still inside its
+ * budget must not be cut off (the money may have moved), nor trip the circuit checkout and webhooks share.
  *
  * A refusal comes back out as `PaymentGatewayError`, so every caller keeps the handling it already has.
  * Nothing degrades into a value: a fabricated `UNKNOWN` from `getPaymentStatus` would let the reconcile
@@ -71,6 +73,14 @@ export class BreakerPaymentGateway implements PaymentGatewayPort {
 
   voidIntent(intentId: string, idempotencyKey: string): Promise<VoidIntentOutcome> {
     return this.guard(this.captureBreaker, 'void a payment', () => this.inner.voidIntent(intentId, idempotencyKey));
+  }
+
+  refundIntent(input: RefundIntentInput, idempotencyKey: string): Promise<ProviderRefund> {
+    return this.guard(this.captureBreaker, 'refund a payment', () => this.inner.refundIntent(input, idempotencyKey));
+  }
+
+  retrieveRefund(refundId: string): Promise<ProviderRefund> {
+    return this.guard(this.captureBreaker, 'read a refund', () => this.inner.retrieveRefund(refundId));
   }
 
   private async guard<T>(breaker: OutboundCall, what: string, call: () => Promise<T>): Promise<T> {

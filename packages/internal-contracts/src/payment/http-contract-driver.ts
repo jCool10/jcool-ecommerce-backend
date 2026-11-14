@@ -4,6 +4,7 @@ import {
   captureOutcomeOf,
   isProviderUnavailable,
   paymentStatusesOf,
+  refundOutcomeOf,
   sessionOutcomeOf,
 } from './guards';
 import { paymentRoutes } from './routes';
@@ -18,6 +19,9 @@ export interface PaymentHttpContractDriverOptions {
   authorize(orderId: string): Promise<void>;
   /** Stripe sits behind the API too, so each runner fails it its own way. */
   stripeFailsCapture(orderId: string): Promise<void>;
+  stripeRefundPending(orderId: string): Promise<void>;
+  stripeFailsRefund(orderId: string): Promise<void>;
+  refundOutOfBand(orderId: string): Promise<void>;
 }
 
 interface Answer {
@@ -72,6 +76,12 @@ export function paymentHttpContractDriver({
       ),
     cancel: (orderId) =>
       expectOutcome(paymentRoutes.cancel(orderId), ({ status, body }) => cancelOutcomeOf(status, body)),
+    refund: (orderId, requestedBy) =>
+      expectOutcome(
+        paymentRoutes.refund(orderId),
+        (answer) => refundOutcomeOf(answer.status, answer.body)?.outcome ?? providerDownOf(answer),
+        { requestedBy },
+      ),
     statusOf: (orderIds) =>
       expectOutcome(
         paymentRoutes.status,

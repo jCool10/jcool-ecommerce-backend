@@ -46,7 +46,22 @@ export interface SettledSagaOrder {
   id: string;
   status: TerminalSagaStatus;
   finalizedAt: Date;
+  /** Moves on every write, so a refund that left and came back between two reads still shows. */
+  updatedAt: Date;
 }
+
+/** The order as one read saw it, for comparing against an earlier read. */
+export interface OrderStatusStamp {
+  status: OrderStatus;
+  updatedAt: Date;
+}
+
+/** The three refund edges; `requestedBy` lands in the `order.refunded` event. */
+export type ApplyRefundChangeInput = { orderId: string } & (
+  | { from: typeof OrderStatus.PAID; to: typeof OrderStatus.REFUNDING }
+  | { from: typeof OrderStatus.REFUNDING; to: typeof OrderStatus.PAID }
+  | { from: typeof OrderStatus.REFUNDING; to: typeof OrderStatus.REFUNDED; requestedBy: string }
+);
 
 /** Where a scan stopped: the last row it read. */
 export type SettledSagaOrderCursor = Pick<SettledSagaOrder, 'id' | 'finalizedAt'>;
@@ -85,6 +100,15 @@ export interface OrderRepositoryPort {
 
   /** One saga status change, compare-and-set on `from`, with the target status's event if it has one. */
   applyOrderChange(input: ApplyOrderChangeInput): Promise<SagaWriteResult>;
+
+  /**
+   * One refund status change, compare-and-set on `from`. Only REFUNDED emits an event
+   * (`order.refunded`) and restamps the settlement; the other two edges leave both alone.
+   */
+  applyRefundChange(input: ApplyRefundChangeInput): Promise<SagaWriteResult>;
+
+  /** `(status, updated_at)` of each order that still exists; a deleted one has no key. */
+  findStatusesByIds(orderIds: string[]): Promise<Map<string, OrderStatusStamp>>;
 
   /**
    * Null when the order is absent, someone else's, RESERVING or REJECTED — all indistinguishable, so

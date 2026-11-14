@@ -4,7 +4,7 @@ This document owns product intent, domain terminology, and business rules the co
 
 ## Intent and non-goals
 
-The product intent, the four invariants that drive the design, and the deliberate non-goals (multi-vendor, automatic refunds) are stated in [`README.md#what-this-is`](../README.md#what-this-is).
+The product intent, the four invariants that drive the design, and the deliberate non-goals (multi-vendor, automatic or partial refunds; an admin fully refunds a `PAID` order) are stated in [`README.md#what-this-is`](../README.md#what-this-is).
 
 Single-store is structural, not a flag: no table carries a seller, vendor, store or tenant key, so multi-vendor would be a schema change across every context rather than a feature.
 
@@ -41,4 +41,4 @@ Each rule below is enforced by the linked constant or file; verify there before 
 - **A user may have at most 3 orders in flight (`RESERVING`, `PENDING`, `CONFIRMING`).** `MAX_PENDING_ORDERS_PER_USER` in `apps/order-service/src/modules/order/order.constants.ts`, so cycling fresh idempotency keys cannot hold stock indefinitely behind orders nobody pays.
 - **Currencies are integer minor units, never a float.** Enforced by the `Money` value object, which throws rather than coerces across a currency mismatch (`packages/kernel/src/money.vo.ts`).
 - **An order snapshots its line's price and name at checkout.** `OrderItem.of` copies `productName` and `unitPriceMinor` once, at creation; a later Catalog price or name change never reaches a placed order (`apps/order-service/src/modules/order/domain/order-item.entity.ts`).
-- **No automatic refunds.** A stranded successful payment on a dead order is counted, never refunded automatically (`payment_refund_owed_total`, raised by the payment-service from `apps/payment-service/src/modules/payment/application/use-cases/handle-payment-webhook.use-case.ts` when cleared money arrives for a session no checkout owns); resolving one is a person's job, detailed in [`RUNBOOK.md#a-refund-is-owed`](../RUNBOOK.md#a-refund-is-owed).
+- **No automatic or partial refunds; an admin fully refunds a `PAID` order.** `POST /admin/orders/:id/refund` returns the whole captured amount, then the stock, through a `RefundOrder` workflow (`apps/order-service/src/modules/order/infrastructure/temporal/workflows/refund-order.workflow.ts`); only `PAID` is refundable, and a refund Stripe fails leaves the order `PAID` (or `REFUNDED`, when Stripe fails it after it had succeeded) with the money counted as owed ([`RUNBOOK.md#refunds`](../RUNBOOK.md#refunds)). A stranded successful payment on a dead order is counted, never refunded automatically (`payment_refund_owed_total`, raised by the payment-service from `apps/payment-service/src/modules/payment/application/use-cases/handle-payment-webhook.use-case.ts` when cleared money arrives for a session no checkout owns); resolving one is a person's job, detailed in [`RUNBOOK.md#a-refund-is-owed`](../RUNBOOK.md#a-refund-is-owed).

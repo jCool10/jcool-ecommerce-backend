@@ -12,6 +12,7 @@ import {
   ForwardPaymentAuthorizationUseCase,
   PayOrderUseCase,
   ReapReservingOrdersUseCase,
+  RefundOrderUseCase,
   RunCheckoutInvariantsUseCase,
   SweepIdempotencyKeysUseCase,
   SweepRejectedOrdersUseCase,
@@ -19,6 +20,7 @@ import {
 import { OrderQueryService } from './application/order-query.service';
 import { ORDER_REPOSITORY } from './application/ports/order-repository.port';
 import { CHECKOUT_SAGA_ENGINE } from './application/ports/checkout-saga-engine.port';
+import { ORDER_REFUND_ENGINE } from './application/ports/order-refund-engine.port';
 import { CART_SNAPSHOT_READER } from './application/ports/cart-snapshot.port';
 import { CATALOG_QUERY } from './application/ports/catalog-query.port';
 import { IDEMPOTENCY_STORE } from './application/ports/idempotency-store.port';
@@ -33,11 +35,14 @@ import { CatalogQueryHttpAdapter } from './infrastructure/catalog-query.http-ada
 import { createInventoryServiceAdapter } from './infrastructure/order-inventory-participant.http-adapter';
 import { createPaymentServiceAdapter } from './infrastructure/order-payment-participant.http-adapter';
 import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempotency-key.repository';
+import { ORDER_REFUNDING_COLLECTOR_PROVIDERS } from './infrastructure/order-refunding.collector';
 import { CheckoutSagaActivities } from './infrastructure/temporal/checkout-saga.activities';
 import { CHECKOUT_SAGA_COLLECTOR_PROVIDERS } from './infrastructure/temporal/checkout-saga.collector';
 import { CheckoutSagaWorker } from './infrastructure/temporal/checkout-saga.worker';
+import { RefundOrderActivities } from './infrastructure/temporal/refund-order.activities';
 import { TemporalReadinessCheck } from './infrastructure/temporal/temporal-readiness.check';
 import { TemporalCheckoutSagaEngine } from './infrastructure/temporal/temporal-checkout-saga.engine';
+import { TemporalRefundOrderEngine } from './infrastructure/temporal/temporal-refund-order.engine';
 import { temporalProviders } from './infrastructure/temporal/temporal.providers';
 import { AdminOrderController } from './interface/admin-order.controller';
 import { CheckoutInvariantScheduler } from './interface/checkout-invariant.scheduler';
@@ -45,6 +50,7 @@ import { CheckoutReservingReaperScheduler } from './interface/checkout-reserving
 import { OrderController } from './interface/order.controller';
 import { IdempotencyInterceptor } from './interface/idempotency.interceptor';
 import { OrderPaidMailHandler } from './interface/queue/order-paid-mail.handler';
+import { OrderRefundedMailHandler } from './interface/queue/order-refunded-mail.handler';
 import { PaymentAuthorizedHandler } from './interface/queue/payment-authorized.handler';
 import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.guard';
 
@@ -61,6 +67,7 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     CancelOrderUseCase,
     ForwardPaymentAuthorizationUseCase,
     ReapReservingOrdersUseCase,
+    RefundOrderUseCase,
     RunCheckoutInvariantsUseCase,
     // These register themselves with the shared retention registry on init; nothing here drives them.
     SweepIdempotencyKeysUseCase,
@@ -106,16 +113,20 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     IdempotencyInterceptor,
     PaymentAuthorizedHandler,
     OrderPaidMailHandler,
+    OrderRefundedMailHandler,
     CheckoutReservingReaperScheduler,
     CheckoutInvariantScheduler,
     ...temporalProviders,
     { provide: CHECKOUT_SAGA_ENGINE, useClass: TemporalCheckoutSagaEngine },
+    { provide: ORDER_REFUND_ENGINE, useClass: TemporalRefundOrderEngine },
     CheckoutSagaActivities,
+    RefundOrderActivities,
     CheckoutSagaWorker,
     TemporalReadinessCheck,
     ...CHECKOUT_SAGA_COLLECTOR_PROVIDERS,
+    ...ORDER_REFUNDING_COLLECTOR_PROVIDERS,
   ],
-  // For the shared event consumer, which routes an authorization and a confirmation back here.
-  exports: [PaymentAuthorizedHandler, OrderPaidMailHandler],
+  // For the shared event consumer, which routes an authorization, a confirmation and a refund back here.
+  exports: [PaymentAuthorizedHandler, OrderPaidMailHandler, OrderRefundedMailHandler],
 })
 export class OrderModule {}

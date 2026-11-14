@@ -7,7 +7,9 @@ import {
   isProviderUnavailable,
   paymentRoutes,
   paymentStatusesOf,
+  refundOutcomeOf,
   sessionOutcomeOf,
+  type RefundBody,
 } from '@jcool/internal-contracts';
 import { correlationHeaders } from '@jcool/platform/observability';
 import type { CircuitBreakerFactory, OutboundCall } from '@jcool/platform/resilience';
@@ -17,6 +19,7 @@ import {
   type OrderPaymentStatus,
   type PaymentCancelOutcome,
   type PaymentCaptureOutcome,
+  type PaymentRefundResult,
   type PaymentSessionInput,
   type PaymentSessionResult,
 } from '../application/ports/order-payment-participant.port';
@@ -92,6 +95,11 @@ export class OrderPaymentParticipantHttpAdapter implements OrderPaymentParticipa
 
   cancel(orderId: string, { signal }: CallOptions = {}): Promise<PaymentCancelOutcome> {
     return this.post(paymentRoutes.cancel(orderId), undefined, signal, cancelOutcomeOf);
+  }
+
+  refund(orderId: string, requestedBy: string, { signal }: CallOptions = {}): Promise<PaymentRefundResult> {
+    const body: RefundBody = { requestedBy };
+    return this.post(paymentRoutes.refund(orderId), body, signal, refundOutcomeOf);
   }
 
   statusOf(orderIds: string[], { signal }: CallOptions = {}): Promise<Map<string, OrderPaymentStatus>> {

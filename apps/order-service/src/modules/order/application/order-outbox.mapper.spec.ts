@@ -3,7 +3,8 @@ import { OrderPaidEvent } from '../domain/events/order-paid.event';
 import { OrderFailedEvent } from '../domain/events/order-failed.event';
 import { OrderExpiredEvent } from '../domain/events/order-expired.event';
 import { OrderCancelledEvent } from '../domain/events/order-cancelled.event';
-import { toFinalizedOutboxRecord } from './order-outbox.mapper';
+import { OrderRefundedEvent } from '../domain/events/order-refunded.event';
+import { toFinalizedOutboxRecord, toRefundedOutboxRecord } from './order-outbox.mapper';
 
 const ORDER_ID = '01a03000-0000-7000-8000-000000000001';
 const USER_ID = '01a03000-0000-7000-8000-000000000002';
@@ -35,6 +36,28 @@ describe('order outbox mapper', () => {
     const record = toFinalizedOutboxRecord(new OrderPaidEvent(ORDER_ID, USER_ID, 300_000, 'VND', null, AT));
 
     expect(record.payload).toMatchObject({ paymentRef: null });
+  });
+
+  it('maps a refund to order.refunded with the money returned, the payment and the admin who asked', () => {
+    const record = toRefundedOutboxRecord(
+      new OrderRefundedEvent(ORDER_ID, USER_ID, 300_000, 'VND', 'pi_123', '137465797020397182', 'admin:refund', AT),
+    );
+
+    expect(record).toEqual({
+      aggregateType: 'Order',
+      aggregateId: ORDER_ID,
+      eventType: 'order.refunded',
+      payload: {
+        orderId: ORDER_ID,
+        userId: USER_ID,
+        occurredAt: ISO,
+        totalAmountMinor: 300_000,
+        currency: 'VND',
+        paymentRef: 'pi_123',
+        requestedBy: '137465797020397182',
+        reason: 'admin:refund',
+      },
+    });
   });
 
   it('maps the other outcomes to their own events carrying the reason, not money', () => {

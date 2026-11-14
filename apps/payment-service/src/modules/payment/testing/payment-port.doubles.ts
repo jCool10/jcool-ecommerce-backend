@@ -16,6 +16,8 @@ export function fakePaymentRepository(overrides: Partial<PaymentRepositoryPort> 
     create: vi.fn(),
     findByOrderId: vi.fn(),
     findByProviderSessionId: vi.fn(),
+    findSucceededByOrderId: vi.fn(),
+    findByProviderIntentId: vi.fn(),
     updateStatus: vi.fn(),
     findActiveByOrderIdForUpdate: vi.fn(),
     findStaleTcc: vi.fn(),
@@ -36,6 +38,8 @@ export function fakePaymentGateway(overrides: Partial<PaymentGatewayPort> = {}):
     retrieveAuthorization: vi.fn(),
     captureIntent: vi.fn(),
     voidIntent: vi.fn(),
+    refundIntent: vi.fn(),
+    retrieveRefund: vi.fn(),
     ...overrides,
   };
 }
