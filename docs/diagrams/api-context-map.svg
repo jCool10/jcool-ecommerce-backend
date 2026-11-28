@@ -43,7 +43,7 @@
         <rect x="320" y="496" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
         <text x="400" y="520" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Payment</text>
         <text x="400" y="538" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>
-      </g><g class="ak-node" data-node-id="product" data-label="Product" data-role="backend" data-desc="Catalog and stock, two aggregate groups meeting only by variantId. Publishes PRODUCT_SKU_QUERY and INVENTORY_PARTICIPANT (Try, commit, release, fenced by reservation_orders)." tabindex="0">
+      </g><g class="ak-node" data-node-id="product" data-label="Product" data-role="backend" data-desc="Catalog and stock, two aggregate groups meeting only by variantId. Publishes INVENTORY_PARTICIPANT (Try, commit, release, fenced by reservation_orders)." tabindex="0">
         <rect x="580" y="392" width="160" height="64" rx="8" fill="var(--ak-node-bg)" stroke="var(--ak-node-border)" stroke-width="1.5" />
         <text x="660" y="416" font-size="12" font-weight="600" fill="var(--ak-text-primary)" text-anchor="middle" font-family="var(--ak-font-sans)">Product</text>
         <text x="660" y="434" font-size="10" fill="var(--ak-text-muted)" text-anchor="middle" font-family="var(--ak-font-sans)">backend</text>

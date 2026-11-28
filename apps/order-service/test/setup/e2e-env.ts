@@ -10,8 +10,6 @@ export const E2E_BASE_ENV: Record<string, string> = {
   USER_SERVICE_URL: NOTHING_LISTENS,
   USER_SERVICE_TOKEN: 'e2e-user-service-token-not-a-real-secret',
   ID_SERVICE_URL: NOTHING_LISTENS,
-  API_SERVICE_URL: NOTHING_LISTENS,
-  API_SERVICE_TOKEN: 'e2e-api-service-token-not-a-real-secret-0',
   INVENTORY_SERVICE_URL: NOTHING_LISTENS,
   INVENTORY_SERVICE_TOKEN: 'e2e-inventory-service-token-not-a-secret-0',
   PAYMENT_SERVICE_URL: NOTHING_LISTENS,

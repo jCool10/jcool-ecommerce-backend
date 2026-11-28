@@ -19,6 +19,7 @@ export const coverageScope = {
     // Run in globalSetup or as a process of their own, outside the measured workers.
     'src/shared/infrastructure/database/{migrate,migrate-cli,seed}.ts',
     'src/shared/infrastructure/storage/verify-storage-orphans.cli.ts',
+    'src/modules/product/infrastructure/catalog/sku-snapshot/publish-sku-snapshots.cli.ts',
   ],
 };
 

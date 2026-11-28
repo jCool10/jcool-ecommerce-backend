@@ -6,7 +6,9 @@ import {
   type PostCommitEffect,
   UnhandledEventError,
 } from '@jcool/messaging';
+import { CATALOG_SKU_SNAPSHOT_EVENT } from '@jcool/internal-contracts/events/catalog-sku-snapshot';
 import type { DrizzleTx } from '../../database';
+import { CatalogSkuSnapshotHandler } from '../../modules/catalog/interface/queue/catalog-sku-snapshot.handler';
 import { OrderPaidMailHandler } from '../../modules/order/interface/queue/order-paid-mail.handler';
 import { OrderRefundedMailHandler } from '../../modules/order/interface/queue/order-refunded-mail.handler';
 import { PaymentAuthorizedHandler } from '../../modules/order/interface/queue/payment-authorized.handler';
@@ -55,6 +57,7 @@ export class OrderEventsDispatcher implements DomainEventDispatcherPort {
     paymentAuthorized: PaymentAuthorizedHandler,
     orderPaidMail: OrderPaidMailHandler,
     orderRefundedMail: OrderRefundedMailHandler,
+    catalogSkuSnapshot: CatalogSkuSnapshotHandler,
   ) {
     const recordOnly: PreparedHandler = (job) => Promise.resolve(() => audit.record(job));
     // The buyer's mail is still owed, so it comes back as a post-commit effect.
@@ -76,6 +79,8 @@ export class OrderEventsDispatcher implements DomainEventDispatcherPort {
       ['order.refunded', recordThenMail(orderRefundedMail)],
       // Signals the order's saga, which treats a repeat as a no-op.
       ['payment.authorized', beforeClaim((job) => paymentAuthorized.forward(job))],
+      // The api's catalog, upserted next to the inbox claim so a redelivery cannot apply it twice.
+      [CATALOG_SKU_SNAPSHOT_EVENT, (job) => catalogSkuSnapshot.prepare(job)],
     ]);
   }
 

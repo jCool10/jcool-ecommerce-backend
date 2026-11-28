@@ -1,6 +1,19 @@
 module.exports = {
   forbidden: [
     {
+      name: 'no-cross-context-internals',
+      severity: 'error',
+      comment:
+        'A bounded context may reach another context only through its application/public surface — never its domain, infrastructure, or schema.',
+      from: { path: '^src/modules/([^/]+)/' },
+      to: {
+        // `application` is listed so a context cannot import another's internal use cases and pass.
+        // One alternation string: `$1` interpolation is only documented for the scalar form.
+        path: '^src/modules/[^/]+/(domain|infrastructure|application)/',
+        pathNot: '^(src/modules/$1/|src/modules/[^/]+/application/public/)',
+      },
+    },
+    {
       name: 'no-local-id-generator',
       severity: 'error',
       comment:

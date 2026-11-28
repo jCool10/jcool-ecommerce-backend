@@ -8,12 +8,12 @@ const MAX_AMOUNT_MINOR = 2_147_483_647;
 export class SetPriceDto {
   @ApiProperty({
     example: 2490000,
-    minimum: 0,
+    minimum: 1,
     maximum: MAX_AMOUNT_MINOR,
-    description: 'Amount in minor units (integer)',
+    description: 'Amount in minor units (integer, at least 1)',
   })
   @IsInt()
-  @Min(0)
+  @Min(1)
   @Max(MAX_AMOUNT_MINOR)
   amountMinor!: number;
 

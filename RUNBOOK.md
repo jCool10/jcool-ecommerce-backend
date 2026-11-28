@@ -21,6 +21,7 @@ Conventions used below:
     - [Restore](#restore)
     - [Restoring a dump taken under a different layout](#restoring-a-dump-taken-under-a-different-layout)
   - [Rebuild the search index](#rebuild-the-search-index)
+  - [Sync the catalog read model](#sync-the-catalog-read-model)
   - [Reconcile the bucket against `media_assets`](#reconcile-the-bucket-against-media_assets)
     - [CORS, content sniffing and downloads are bucket configuration, not app code](#cors-content-sniffing-and-downloads-are-bucket-configuration-not-app-code)
   - [Outbox relay is not draining](#outbox-relay-is-not-draining)
@@ -92,6 +93,8 @@ Conventions used below:
       - [Check that no two tokens match](#check-that-no-two-tokens-match)
     - [Cut checkout over to the order-service](#cut-checkout-over-to-the-order-service)
     - [The contract step](#the-contract-step)
+    - [Move the cart to the order-service](#move-the-cart-to-the-order-service)
+    - [Retire the api's cart](#retire-the-apis-cart)
     - [Rollback rules](#rollback-rules)
     - [Redeploy Prometheus](#redeploy-prometheus)
     - [Run the system test](#run-the-system-test)
@@ -123,7 +126,6 @@ Conventions used below:
     - [Seed stock](#seed-stock)
   - [The payment-service](#the-payment-service)
   - [The order-service](#the-order-service)
-    - [Checkout answers 503 with the api up](#checkout-answers-503-with-the-api-up)
     - [`order.paid` waits for the user-service](#orderpaid-waits-for-the-user-service)
   - [Standing exceptions](#standing-exceptions)
 
@@ -191,7 +193,7 @@ ALTER TABLE node_leases ADD CONSTRAINT node_leases_node_id_range CHECK (node_id 
 
 ## Backup and restore
 
-Each service owns one database and is backed up on its own: the api's (catalog, cart, media and messaging), the user-service's (accounts, tokens, the layout pin), the order-service's `order-postgres` (orders, idempotency keys, its outbox and inbox), the inventory-service's `inventory-postgres` (stock levels, holds and their per-order headers) and the payment-service's `payment-postgres` (payment headers, attempts, the webhook ledger and its outbox). They share no foreign keys, so a restore cannot break a constraint; but the order-service's orders and the two participants' headers describe the same checkouts, so restoring one to another point in time than the others shows up as [CheckoutInvariantViolation](#checkoutinvariantviolation) on the orders in between. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
+Each service owns one database and is backed up on its own: the api's (catalog, media and messaging), the user-service's (accounts, tokens, the layout pin), the order-service's `order-postgres` (carts, orders, idempotency keys, the catalog read model, its outbox and inbox), the inventory-service's `inventory-postgres` (stock levels, holds and their per-order headers) and the payment-service's `payment-postgres` (payment headers, attempts, the webhook ledger and its outbox). They share no foreign keys, so a restore cannot break a constraint; but the order-service's orders and the two participants' headers describe the same checkouts, so restoring one to another point in time than the others shows up as [CheckoutInvariantViolation](#checkoutinvariantviolation) on the orders in between. The id-service has no database: its node floors live in etcd, which is never backed up but rebuilt from the clock ([The keyspace is lost](#the-keyspace-is-lost)).
 
 ### Back up
 
@@ -213,6 +215,8 @@ A user-service dump then needs the service booted against it by a build with the
 After restoring the api's database, [rebuild the search index](#rebuild-the-search-index) before
 catalog writes resume. A restore rewinds `products.search_version`, so the engine holds versions the
 database no longer reaches and would ignore every later write to those products until they caught up.
+
+The order-service's copy of the catalog has the same problem, so [sync the catalog read model](#sync-the-catalog-read-model) after restoring the api's database (truncate first) or `order-postgres` (no truncate).
 
 ### Restoring a dump taken under a different layout
 
@@ -278,6 +282,47 @@ es '/_cat/count/products?v'      # documents plus tombstones
 
 ---
 
+## Sync the catalog read model
+
+The order-service keeps its own copy of every SKU as the catalog sells it (name, VND price, `isActive`) in `catalog_sku_views` on `order-postgres` ([decision record](./docs/system-architecture.md#the-order-service-keeps-a-versioned-copy-of-the-catalogs-sku-views)). Every admin product, SKU or price write appends a `catalog.product.sku-snapshot` of its product in the same transaction, the api's relay puts it on `order-events`, and the order-service overwrites a row only from a higher `products.search_version`. The cart prices every view from the copy and checkout freezes every order line from it, so a SKU the copy lacks cannot be added to a cart (`404`) and fails a checkout that holds it (`400`). A sync only adds and raises rows, so it needs no freeze; an emptied copy (step 1) does: [freeze checkout](#freeze-checkout) before the truncate and unfreeze once step 4's diff is empty. The freeze does not cover the cart: until then a cart add answers `404` and a cart view shows its lines unpriced and inactive, with a subtotal of 0. Sync when one of these happened:
+
+- **The first release, or an environment that was never synced.** Products written before the producer existed have no snapshot.
+- **The catalog was seeded.** `db:seed` and `db:seed:perf` write the catalog without the outbox.
+- **The api's database was restored or reset, or `db:seed:perf --clean` ran.** Truncate first (step 1). A restore rewinds `search_version`, so the copy holds versions the api no longer reaches and refuses every later snapshot of those products until they catch up. A snapshot never deletes a row, so the SKUs `--clean` deleted would stay in the copy.
+- **`order-postgres` was restored.** The copy rewinds to the dump; a sync brings it forward, no truncate.
+- **A snapshot was dropped from `order-events-dlq`** instead of replayed.
+- **The diff below is not empty.**
+
+1. Only in the cases that say so above, empty the copy. After a restore, snapshots published before it carry versions of the discarded history, and one applied after the truncate pins its rows again. So first leave unreplayed every `catalog.product.sku-snapshot` that `order-events-dlq` held before the restore, and wait until the order-service's `/metrics` shows `messaging_queue_jobs{queue="order-events",state="delayed"}` at 0, which means no job is waiting out a retry. Then `railway connect order-postgres` and `TRUNCATE catalog_sku_views;`.
+
+2. Append a snapshot of every product. The command only writes the api's outbox; the running api's relay ships it, so the api must be up.
+
+   ```bash
+   # local — DATABASE_URL and ID_SERVICE_URL of the api you mean
+   pnpm catalog:publish-sku-snapshots
+
+   # container — railway ssh --service jcool-ecommerce-backend
+   npm run catalog:publish-sku-snapshots:prod
+   ```
+
+   It prints `Published <n> SKU snapshots`. It is safe to run again and safe during live catalog writes: each page is read in one snapshot of the database, and a write that lands meanwhile publishes a higher version of its own. Ctrl-C stops after the current page; what it appended stays and is harmless. `--page-size` (100 by default) sizes the pages (`npm run catalog:publish-sku-snapshots:prod -- --page-size 500`). The api's relay ships about 100 outbox rows a second, so a sync of `<n>` products holds the api's own search updates back by about `<n>/100` seconds. Past about 18,000 products the outbox's oldest row stays over a minute old long enough to page `OutboxMessageStale`.
+
+3. Wait until the order-service's `/metrics` shows `messaging_consume_total{event_type="catalog.product.sku-snapshot",result="processed"}` up by `<n>`, and `order-events-dlq` holds no `catalog.product.sku-snapshot` ([Dead-letter queues](#dead-letter-queues)).
+
+4. Verify with two exports and a diff. Each `\copy` runs in the `psql` that `railway connect` opens, so the file lands on your machine:
+
+   ```sql
+   -- railway connect Postgres (the api's database)
+   \copy (SELECT v.id, p.id, p.name, CASE WHEN pr.amount_minor >= 1 THEN pr.amount_minor END, 'VND', p.status = 'ACTIVE' AND v.archived_at IS NULL FROM product_variants v JOIN products p ON p.id = v.product_id LEFT JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'VND' ORDER BY v.id) TO 'api-skus.csv' CSV
+
+   -- railway connect order-postgres
+   \copy (SELECT sku_id, product_id, product_name, unit_price_minor, currency, is_active FROM catalog_sku_views ORDER BY sku_id) TO 'order-skus.csv' CSV
+   ```
+
+   `diff api-skus.csv order-skus.csv` prints nothing when they agree. A line for a product written in the last few seconds is a snapshot still in flight: export both again. A line that stays means a missed sync: run step 2 again. A line that survives that re-run is a row the copy holds at a version the api's current state does not pass: an edit of the api's database by hand that left `search_version` alone, a restore, or a forged snapshot. The api's snapshots are refused there until a write takes the product past that version, so truncate (step 1) and sync again. A price below 1 reads as unpriced on both sides on purpose, since the api publishes it as `null` rather than have the order-service refuse the product.
+
+---
+
 ## Reconcile the bucket against `media_assets`
 
 Stores that must agree and cannot all be kept in one transaction. Three ways they can disagree:
@@ -339,18 +384,18 @@ A row here has **not** been dead-lettered — it was never delivered at all, so 
 
 ## Replay the dead-letter queue
 
-Each queue has one consumer and a dead-letter queue of its own. A message reaches it after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for the events on the long ladder: `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service), `payment.authorized`, which waits out a Temporal outage, and `catalog.*`, which wait out a search engine outage. A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
+Each queue has one consumer and a dead-letter queue of its own. A message reaches it after `QUEUE_CONSUMER_ATTEMPTS` (default 8) deliveries fail, or `ORDER_PAID_CONSUMER_ATTEMPTS` (default 15) for the events on the long ladder: `order.paid`, which [waits out a user-service outage](#orderpaid-waits-for-the-user-service), `payment.authorized`, which waits out a Temporal outage, `catalog.product.sku-snapshot`, which waits out an `order-postgres` outage, and the `catalog.*` events on `api-events`, which wait out a search engine outage. A replay puts each message back on its own ladder. **Nothing consumes the DLQ** — that is deliberate. A queue that drains itself hides the outage that filled it.
 
 ### Dead-letter queues
 
 The `DeadLetterQueued` page names the service (`job`) and the event type (`messaging_dlq_total{event_type}`), which say which replay to run. Each service's CLI knows only its own queue, because the inbox it checks is in that service's database:
 
-| Queue          | Dead-letter queue  | Producers                                                                                                                              | Consumer service (`job`)      | Replay, local                                      | Replay, container                                                                                           |
-| -------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `order-events` | `order-events-dlq` | order-service: `order.placed`, `order.paid`, `order.failed`, `order.expired`, `order.cancelled`; payment-service: `payment.authorized` | order-service (`jcool-order`) | `pnpm queue:replay-dlq:order --queue order-events` | `npm run queue:replay-dlq:prod -- --queue order-events` after `railway ssh --service order-service`         |
-| `api-events`   | `api-events-dlq`   | api: `catalog.product.changed`, `catalog.category.renamed`                                                                             | api (`jcool-api`)             | `pnpm queue:replay-dlq --queue api-events`         | `npm run queue:replay-dlq:prod -- --queue api-events` after `railway ssh --service jcool-ecommerce-backend` |
+| Queue          | Dead-letter queue  | Producers                                                                                                                                                                   | Consumer service (`job`)      | Replay, local                                      | Replay, container                                                                                           |
+| -------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `order-events` | `order-events-dlq` | order-service: `order.placed`, `order.paid`, `order.failed`, `order.expired`, `order.cancelled`; payment-service: `payment.authorized`; api: `catalog.product.sku-snapshot` | order-service (`jcool-order`) | `pnpm queue:replay-dlq:order --queue order-events` | `npm run queue:replay-dlq:prod -- --queue order-events` after `railway ssh --service order-service`         |
+| `api-events`   | `api-events-dlq`   | api: `catalog.product.changed`, `catalog.category.renamed`                                                                                                                  | api (`jcool-api`)             | `pnpm queue:replay-dlq --queue api-events`         | `npm run queue:replay-dlq:prod -- --queue api-events` after `railway ssh --service jcool-ecommerce-backend` |
 
-`--queue` is required even though each CLI has one queue: a value for the other service's queue exits 1 instead of draining a DLQ against the wrong inbox. The payment-service publishes `payment.authorized` but never consumes it, so it has no DLQ: that job fails in the order-service's worker and lands in `order-events-dlq`, and the replay runs in the order-service. The order-service's CLI runs compiled even locally, so `pnpm --filter @jcool/order-service build` comes first.
+`--queue` is required even though each CLI has one queue: a value for the other service's queue exits 1 instead of draining a DLQ against the wrong inbox. The payment-service publishes `payment.authorized` but never consumes it, so it has no DLQ: that job fails in the order-service's worker and lands in `order-events-dlq`, and the replay runs in the order-service. The same holds for the api's `catalog.product.sku-snapshot`. Replaying a snapshot is harmless, since an older or equal version changes nothing, with one exception: after a restore of the api's database, never replay a snapshot parked before it ([Sync the catalog read model](#sync-the-catalog-read-model), step 1). One parked as `Unusable catalog.product.sku-snapshot event` broke the order-service's bounds (currency, price, version, ids) and fails them again on every replay, so drop it and [sync the catalog read model](#sync-the-catalog-read-model) instead. The order-service's CLI runs compiled even locally, so `pnpm --filter @jcool/order-service build` comes first.
 
 ### The inbox guard
 
@@ -391,7 +436,7 @@ npm run queue:replay-dlq:prod -- --queue order-events --apply
 
 The guard runs on a dry run too, so the listing is what `--apply` would actually do rather than a promise it would then refuse.
 
-**A `catalog.*` message is always safe to replay, `--force` included.** Its handler re-reads the product from Postgres and writes it as it is now, and the engine ignores any version it already holds, so a second application changes nothing. A `catalog.category.renamed` can also land here as permanent without any engine fault: a deploy that outlasts the worker's 10 s close window interrupts its fan-out, and a second such interruption exceeds BullMQ's stall limit. Replaying it restarts the fan-out from the first page. Dropping catalog messages instead of replaying them is fine too, provided a [rebuild](#rebuild-the-search-index) follows.
+**A `catalog.*` message on `api-events` is always safe to replay, `--force` included.** Its handler re-reads the product from Postgres and writes it as it is now, and the engine ignores any version it already holds, so a second application changes nothing. A `catalog.category.renamed` can also land here as permanent without any engine fault: a deploy that outlasts the worker's 10 s close window interrupts its fan-out, and a second such interruption exceeds BullMQ's stall limit. Replaying it restarts the fan-out from the first page. Dropping catalog messages instead of replaying them is fine too, provided a [rebuild](#rebuild-the-search-index) follows.
 
 The CLI reads its Redis URL, queue prefix **and inbox window** through the app's own config factory rather than re-reading the environment, so it cannot report a reassuringly empty queue by looking under a different prefix than the app writes to, nor draw the horizon in a different place than the sweep does. It boots no Nest context at all — a replay is something you want to be able to run while the app itself is the thing that is broken. It now needs **Postgres as well as Redis**, the consumer's own, since the inbox lives there: the inbox check is not optional, so a replay cannot be performed while the database is down.
 
@@ -634,7 +679,7 @@ The payment-service creates a Stripe Checkout Session when the order-service ask
 
 ## Freeze checkout
 
-`CHECKOUT_WRITE_FREEZE=true` makes the gateway answer every `POST` to `/orders` and `/orders/*` (create, `/pay`, `/cancel`) with `503` and `Retry-After: 120`, before the request reaches the order-service. Reads, `/admin/orders/*` and `/webhooks/payment` are untouched, so a payment already in flight still lands and an admin can still cancel. Use it while a change must not race an order write. It is off unless set, is set by hand, and is kept across every apply. The value is read when the gateway starts, so each change redeploys it; the gateway's healthcheck goes to the api, so that works while Temporal or the order-service is down.
+`CHECKOUT_WRITE_FREEZE=true` makes the gateway answer every `POST` to `/orders` and `/orders/*` (create, `/pay`, `/cancel`) with `503` and `Retry-After: 120`, before the request reaches the order-service. Reads, the cart, `/admin/orders/*` and `/webhooks/payment` are untouched, so a payment already in flight still lands, a buyer can still fill a cart and an admin can still cancel. Use it while a change must not race an order write. It is off unless set, is set by hand, and is kept across every apply. The value is read when the gateway starts, so each change redeploys it; the gateway's healthcheck goes to the api, so that works while Temporal or the order-service is down.
 
 The freeze is its own top-level `handle` in `apps/gateway/Caddyfile`, placed before the order route's: a request enters only one `handle`, so a freeze matcher below `handle @orders` would never see a `POST /orders`. `order-routing.system-spec.ts` checks the order upstream gets no request while frozen.
 
@@ -982,7 +1027,7 @@ The merge that brings etcd deletes `id-postgres`. The two stores do not see each
 
 4. **Deploy etcd**: `railway up --ci --service id-etcd`, then wait until the deployment is live (its healthcheck is etcd's `/health`).
 5. **Deploy the rest**: approve the waiting CD run. The plan is now empty, so it skips the apply. The id-service's pre-deploy step finds a keyspace with no floors and lifts all 254 to its clock (`floors under /jcool/id-service/ lifted to …` in the deploy logs). The replicas then claim their nodes, and the api, the gateway and the user-service follow as usual.
-6. **Verify.** Each of the three replicas logs `node lease acquired` with its own `nodeId`, and a write through the api (add a cart item) answers 2xx.
+6. **Verify.** Each of the three replicas logs `node lease acquired` with its own `nodeId`, and a write through the api (an admin catalog write, such as a SKU rename) answers 2xx.
 
 ### Roll back the cut-over
 
@@ -1438,9 +1483,9 @@ No process sees both values of a rule below, so nothing checks it at boot, with 
 | inventory-service `INVENTORY_TRY_LOCK_TIMEOUT_MS` (2000) + 250 + the id mint < order-service `CHECKOUT_TRY_TIMEOUT_MS` (3000)                                                                                                     | The order-service gives a Try that long over HTTP, then aborts it and fences the hold with a release. The inventory-service starts its lock budget after minting the hold ids, and lets each statement run 250 ms past it so that a lock wait surfaces as `LOCK_BUDGET_EXHAUSTED` rather than a slow statement. A budget that reaches the order-service's turns contended Tries into timeouts the service would have answered                                                                   |
 | 4 × payment-service `PAYMENT_CAPTURE_TIMEOUT_MS` (10000) + 1000 ≤ order-service `PAYMENT_COMMAND_TIMEOUT_MS` (45000)                                                                                                              | A cancel there chains up to four Stripe calls, each bounded by `PAYMENT_CAPTURE_TIMEOUT_MS`. A command timeout under that sum aborts a cancel on the order-service's side while the payment-service is still carrying it out                                                                                                                                                                                                                                                                    |
 | order-service `CHECKOUT_PAY_CUTOFF_SEC` (1980) ≥ payment-service `PAYMENT_SESSION_MIN_TTL_SEC` (1800) + `PAYMENT_SESSION_EXPIRY_MARGIN_SEC` (120) + 60                                                                            | `/pay` opens a session only while the cutoff of the payment window remains. A smaller cutoff lets `/pay` ask for a session that expires sooner than Stripe allows, which the payment-service refuses as `CLOSED`                                                                                                                                                                                                                                                                                |
-| payment-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15) = order-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15)                                                                                                                           | BullMQ stamps the attempts on a job when it is added, so the payment-service's value is how many deliveries `payment.authorized` gets, while the order-service's worker alone decides the delays. Every relay onto `order-events` reads this variable: the payment-service adds `payment.authorized` and the order-service adds `order.*`. The order-service runs on its code default and `.railway/railway.ts` sets the payment-service's as a literal, so change one and you change the other |
-| `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` set on the order-service only                                                                                                                                                                | The cap is read by the consuming worker, not stamped on the job. The payment-service does not read it, so setting it there changes nothing; the api reads its own for the `catalog.*` ladder                                                                                                                                                                                                                                                                                                    |
-| payment-service `QUEUE_PREFIX` = order-service `QUEUE_PREFIX` (`bull`)                                                                                                                                                            | A different prefix makes the relay write jobs under keys the order-service's worker never reads                                                                                                                                                                                                                                                                                                                                                                                                 |
+| payment-service and api `ORDER_PAID_CONSUMER_ATTEMPTS` (15) = order-service `ORDER_PAID_CONSUMER_ATTEMPTS` (15)                                                                                                                   | BullMQ stamps the attempts on a job when it is added, so the producer's value is how many deliveries its event gets, while the order-service's worker alone decides the delays. Every relay onto `order-events` reads this variable: the payment-service adds `payment.authorized`, the api adds `catalog.product.sku-snapshot` and the order-service adds `order.*`. The api and the order-service run on their code defaults and `.railway/railway.ts` sets the payment-service's as a literal, so change one and you change the others |
+| `ORDER_PAID_CONSUMER_BACKOFF_CAP_MS` set on the order-service only                                                                                                                                                                | The cap is read by the consuming worker, not stamped on the job. The payment-service does not read it, so setting it there changes nothing; the api reads its own for the `catalog.*` ladder of `api-events`, never for the snapshots it adds to `order-events`                                                                                                                                                                                                                                  |
+| payment-service and api `QUEUE_PREFIX` = order-service `QUEUE_PREFIX` (`bull`)                                                                                                                                                    | A different prefix makes the relay write jobs under keys the order-service's worker never reads                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `N` × `QUEUE_WORKER_CONCURRENCY` + `SAGA_ACTIVITY_CONCURRENCY` + `SAGA_LOCAL_ACTIVITY_CONCURRENCY` + 5 ≤ `DB_POOL_MAX`, with `N` the number of queues the service consumes                                                        | Each job in flight and each activity slot can hold a connection while HTTP and the schedulers keep the 5 spare. The order-service consumes `order-events` and the api `api-events`, so `N` is 1 in both, and their env validation refuses a boot that breaks it (the api has no saga slots). The order-service's `DB_POOL_MAX` defaults to 16, above the platform's 10: 5 + 2 + 2 + 5 = 14. Raise `N` when a service takes a second queue                                                       |
 | order-service `SHUTDOWN_GRACE_PERIOD_MS` (5000) + `TEMPORAL_WORKER_SHUTDOWN_GRACE_MS` (4000) + `TEMPORAL_WORKER_SHUTDOWN_FORCE_MS` (4000) + 1000 + the BullMQ close (2 × 5000) = 24000 ≤ its `drainingSeconds` (30) × 1000 − 1000 | `drainingSeconds` lives in `.railway/railway.ts`, the rest in the environment, so nothing compares them. Past it, Railway kills the process mid-drain ([The shutdown budget](#the-shutdown-budget)). The 1000 is the Temporal worker's stop slack                                                                                                                                                                                                                                               |
 | `TEMPORAL_NAMESPACE_RETENTION` on `temporal` (7d) > order-service `CHECKOUT_INVARIANT_WINDOW_SEC` (86400)                                                                                                                         | A shorter retention deletes a closed run's history while the checker can still flag its order ([Retention and the checker window](#retention-and-the-checker-window)). The order-service checks the window against its settle time, not against Temporal                                                                                                                                                                                                                                        |
@@ -1455,11 +1500,10 @@ Every internal API admits each caller by a token of its own, and each route list
 | user-service      | api               | `INTERNAL_API_TOKEN` (+ `_PREVIOUS`)                      | `INTERNAL_API_TOKEN` (reference)      | `sessions/:userId/epoch`, `cutover/digest`                           |
 | user-service      | inventory-service | `INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE` (+ `_PREVIOUS`) | `USER_SERVICE_TOKEN` (reference)      | `sessions/:userId/epoch`                                             |
 | user-service      | order-service     | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`)     | `USER_SERVICE_TOKEN` (reference)      | `sessions/:userId/epoch`, `users/:id/summary`                        |
-| api               | order-service     | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`)     | `API_SERVICE_TOKEN` (reference)       | `/internal/v1/carts/:userId/lines`, `/internal/v1/catalog/sku-views` |
 | inventory-service | order-service     | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`)     | `INVENTORY_SERVICE_TOKEN` (reference) | `/internal/v1/reservations/*`                                        |
 | payment-service   | order-service     | `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` (+ `_PREVIOUS`)     | `PAYMENT_SERVICE_TOKEN` (reference)   | `/internal/v1/payments/*`                                            |
 
-The caller's variable is a reference to the callee's in `.railway/railway.ts`, so only the callee's is ever set by hand. A callee refuses to boot with no caller token at all, or with two callers sharing one. The inventory-service and the payment-service admit the order-service alone: they hold no token for the api, and a token the api once called with is answered `401`. The user-service's `users/:id/summary` admits the order-service alone, so the api's token on it is answered `403`; the api keeps `sessions/:userId/epoch` and `cutover/digest`.
+The caller's variable is a reference to the callee's in `.railway/railway.ts`, so only the callee's is ever set by hand. A callee refuses to boot with no caller token at all, or with two callers sharing one. The inventory-service and the payment-service admit the order-service alone: they hold no token for the api, and a token the api once called with is answered `401`. The user-service's `users/:id/summary` admits the order-service alone, so the api's token on it is answered `403`; the api keeps `sessions/:userId/epoch` and `cutover/digest`. The api is the callee of nothing: it serves no internal route and holds no `INTERNAL_CALLER_TOKEN_*`.
 
 #### Set one
 
@@ -1468,7 +1512,7 @@ Each value is generated on its own and goes in through stdin, so it is never on 
 ```bash
 # local, after `railway link`
 openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_INVENTORY_SERVICE --stdin --service user-service --skip-deploys
-for s in jcool-ecommerce-backend inventory-service payment-service user-service; do
+for s in inventory-service payment-service user-service; do
   openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_ORDER_SERVICE --stdin --service "$s" --skip-deploys
 done
 ```
@@ -1487,10 +1531,10 @@ Rotate one pair at a time, so a refusal names the pair that is behind. Take the 
    openssl rand -hex 32 | tr -d '\n' | railway variable set INTERNAL_CALLER_TOKEN_ORDER_SERVICE --stdin --service payment-service --skip-deploys
    ```
 
-2. Redeploy the caller: it now sends the new value. The order-service holds one reference per callee, so this redeploys it for its other three pairs too, which is harmless.
+2. Redeploy the caller: it now sends the new value. The order-service holds one reference per callee, so this redeploys it for its other two pairs too, which is harmless.
 3. Once no request carries the old one (the callee logs `internal caller token not recognized` for a value it does not know), unset `_PREVIOUS` as [Change Railway service config](#change-railway-service-config) removes a variable, and redeploy the callee. Never set it to an empty string: a `_PREVIOUS` under 32 characters stops the callee from booting.
 
-The api and the user-service pair on `INTERNAL_API_TOKEN` rotates the same way ([Rotate `INTERNAL_API_TOKEN`](#rotate-internal_api_token)). Each service holds one `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` of its own, as the callee, so rotating the order-service's pair with the payment-service never changes what the inventory-service, the api or the user-service holds.
+The api and the user-service pair on `INTERNAL_API_TOKEN` rotates the same way ([Rotate `INTERNAL_API_TOKEN`](#rotate-internal_api_token)). Each service holds one `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` of its own, as the callee, so rotating the order-service's pair with the payment-service never changes what the inventory-service or the user-service holds.
 
 #### A caller answered `401` or `403`
 
@@ -1500,7 +1544,7 @@ The callee logs each refusal at warn as `request rejected`, with the reason in `
 - **`401`, `missing internal caller bearer token`.** The caller sends none; its `*_SERVICE_TOKEN` is empty.
 - **`403`, `internal caller <name> is not allowed on this route`.** The token is valid, but that caller is not on the route's list. That is a code change, not a variable: the route's `@InternalCallers(...)` decides.
 
-On the order-service's side a refused Try or cart read is a checkout `503`, a refused `/pay` is a `502`, a refused user-service read leaves `order.paid` on its ladder, and refused commands keep retrying in their saga until the token is put right.
+On the order-service's side a refused Try is a checkout `503`, a refused `/pay` is a `502`, a refused user-service read leaves `order.paid` on its ladder, and refused commands keep retrying in their saga until the token is put right.
 
 #### Check that no two tokens match
 
@@ -1509,7 +1553,6 @@ Run on a local machine, never in CI: `--kv` prints raw values. Each line prints 
 ```bash
 # local, after `railway link`
 fp() { railway variable list --service "$1" --kv | grep "^$2=" | cut -d= -f2- | tr -d '\n' | shasum -a 256 | cut -c1-12; }
-for v in INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "api $v $(fp jcool-ecommerce-backend $v)"; done
 for s in inventory-service payment-service; do
   for v in INTERNAL_CALLER_TOKEN_ORDER_SERVICE INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS; do echo "$s $v $(fp $s $v)"; done
 done
@@ -1576,6 +1619,33 @@ The last change of the extraction deletes what the order-service made unnecessar
 5. **Check.** Every service passed `/health/ready` in CD. Check out once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID` with its mail. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations` reads 0 for every `kind`, and `up{job="jcool-api"}` and `up{job="jcool-order"}` are 1. A token of the api's on an inventory-service or payment-service route is now answered `401`, and on `users/:id/summary` `403` ([A caller answered `401` or `403`](#a-caller-answered-401-or-403)).
 
 The change touches nothing under `infra/prometheus/`, so Prometheus is not redeployed. After this step the failure rules are those of [Rollback rules](#rollback-rules).
+
+### Move the cart to the order-service
+
+The one-time move of the cart from the api to the order-service, which takes the api off the checkout path: the five `/cart` routes keep their contract, the order-service prices them and checkout from its [catalog read model](#sync-the-catalog-read-model), and the gateway sends `/cart` and `/cart/*` to it. **Carts reset**: the order-service starts with no cart, and the api's carts stay in its database unread (demo data) until [the api's cart is retired](#retire-the-apis-cart). The merge changes no Railway variable, so CD plans nothing and needs no review. CD deploys the order-service before the gateway, so between the two a checkout would read the new, empty cart while `/cart` still reaches the api: the freeze turns that window into a retryable `503` instead of `400 Cart is empty`.
+
+1. **Preconditions.** The api's direct domain is gone: `curl -s -o /dev/null -w '%{http_code}' https://jcool-ecommerce-direct.up.railway.app/health/live` must not print `200`, or stop. The read model is complete: [Sync the catalog read model](#sync-the-catalog-read-model) step 4's diff prints nothing; if it does not, sync first.
+2. **Back up** the api's `Postgres` and `order-postgres` ([Back up](#back-up)).
+3. **Freeze** ([Freeze checkout](#freeze-checkout)) and probe `POST /orders` and `POST /orders/1/pay`: both `503` with `Retry-After: 120`.
+4. **Merge.** CD deploys the order-service (migration `0003_carts`, the cart, checkout from its own tables), the api (unchanged behavior), then the gateway (the route flip), and smokes.
+5. **Check.** With a buyer's token on the public domain, `GET /cart` answers `200` with an empty cart and `POST /cart/items` with a seeded SKU answers `200`. In Prometheus, `http_requests_total{job="jcool-order",route="/cart"}` rises while the api's `/cart` series stays flat, the api logs no request on `/internal/v1/*`, and the order-service's `/metrics` has no `api-internal` breaker series.
+6. **Unfreeze**, then check out with a test account: `POST /orders` at the read model's price, `/pay`, a Stripe test card, and the order reaches `PAID` with its mail. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations` reads 0 for every `kind`.
+
+If the order-service's deploy fails its healthcheck (Temporal down, say), production keeps the previous code and the freeze stays on: fix the cause and **Re-run all jobs**. The move has no rollback any more: [Retire the api's cart](#retire-the-apis-cart) deleted the api side it would have gone back to, so a failure is fixed forward ([Rollback rules](#rollback-rules)).
+
+### Retire the api's cart
+
+Once [the cart moved](#move-the-cart-to-the-order-service), nothing reached the api's cart or its two internal read routes, for cart lines and SKU views: the gateway sends `/cart*` to the order-service, and the order-service holds no api client. This change deletes them: the api's Cart context with its `carts` and `cart_items` ([`0036_drop_retired_cart_tables.sql`](./apps/api/src/shared/infrastructure/database/migrations/0036_drop_retired_cart_tables.sql)), both routes and the SKU read port behind them, and the token pair that guarded them. Afterwards the api is the callee of no internal route and holds no `INTERNAL_CALLER_TOKEN_*`. It needs no freeze, since checkout does not change owner and the running code reads none of what is deleted. It goes through CD like any destructive change:
+
+1. **Precondition.** The cart move is live and its checks passed, so the order-service in production runs code that reads no `API_SERVICE_*`. Prove it in Prometheus: `circuit_breaker_state{job="jcool-order",breaker="api-internal"}` returns no series, since the code before the move publishes that series from boot. The Railway plan cannot tell: the move changed no variable, so this change alone shows the same four destroys whether or not the move is deployed. If the series is there, stop; this change must land after the move, never in the same merge.
+2. **Back up** the api's `Postgres` ([Back up](#back-up)): the migration drops tables. The dump holds the old carts with their user ids, so keep it in a scratch location and delete it once the change has settled.
+3. **Plan.** From the branch rebased on `main`, `railway config plan` must show destroys only, each of them one of these four variables: on the api `INTERNAL_CALLER_TOKEN_ORDER_SERVICE` and `INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS`; on the order-service `API_SERVICE_URL` and `API_SERVICE_TOKEN`. An unset `_PREVIOUS` has nothing to destroy and is missing from the plan. Any other destroy, or any addition or change: stop. There are no additions, so nothing is applied before the merge.
+4. **Merge.** CD stops at `production-destructive`. The reviewer compares the plan summary with the list above and approves only when every destroy is on it ([Review a destructive change](#review-a-destructive-change)).
+5. **Deploy.** CD applies the change set, which redeploys the api, rebuilt from `main`, and the order-service on the image it already runs; neither reads the destroyed variables, and every service ignores a variable it does not declare, so the order of the apply and the deploys does not matter. CD then deploys id-service → user-service → inventory-service → payment-service → order-service → api → gateway and smokes the public URL. The api's pre-deploy command runs `0036`.
+6. **Check.** Every service passed `/health/ready` in CD, the api with no `INTERNAL_CALLER_TOKEN_*` set. `\dt` on the api's database lists no `carts` or `cart_items`, and `GET https://<public domain>/internal/v1/x` answers `404`. Check out once through the public domain with a test account: `POST /orders`, `POST /orders/<id>/pay`, a Stripe test card, and the order reaches `PAID` with its mail. After `CHECKOUT_INVARIANT_INTERVAL_MS` plus `CHECKOUT_INVARIANT_SETTLE_SEC`, `checkout_invariant_violations` reads 0 for every `kind`, and `up{job="jcool-api"}` and `up{job="jcool-order"}` are 1.
+7. **Redeploy Prometheus** ([Redeploy Prometheus](#redeploy-prometheus)): the `CircuitBreakerOpen` description no longer names a breaker for the api.
+
+Nothing restores the api's cart after this: the code, the tables and the token are gone, as with the order tables. A failure is fixed forward ([Rollback rules](#rollback-rules)); if the dropped tables are ever needed, restore the step 2 dump into a scratch database and copy them back by hand.
 
 ### Rollback rules
 
@@ -1998,7 +2068,7 @@ writes each epoch as a max, so a login racing it is never lowered back.
 
 If the JWKS becomes unreachable, the api keeps verifying with the last set it loaded and retries the endpoint every 30 seconds. A key dropped from the set stops verifying at the first fetch that succeeds, not before. A service that has never loaded a set, one booted while the user-service is down, answers Bearer requests `503` rather than `401`, so clients retry instead of logging in again.
 
-The api is also a callee: the order-service reads carts and SKU views from its `/internal/v1` routes with `INTERNAL_CALLER_TOKEN_ORDER_SERVICE`, so an api outage is a checkout `503` ([The order-service](#the-order-service)). The api reads nothing from the order-service: it holds no order tables and consumes no order event.
+The api is the callee of no internal route: it reaches the order-service only through `order-events`, where it puts `catalog.product.sku-snapshot`, so an api outage stops catalog writes while the cart and checkout keep working on the last snapshot ([The order-service](#the-order-service)). The api reads nothing from the order-service: it holds no order tables and consumes no order event.
 
 The order-service and the inventory-service verify tokens the same way, with variables of their own ([The order-service](#the-order-service)).
 
@@ -2046,37 +2116,19 @@ The api's payment tables were dropped by `0034_drop_retired_payment_tables.sql` 
 
 ## The order-service
 
-`apps/order-service` owns checkout and orders: `orders`, `order_items`, `idempotency_keys`, an `outbox` and an `inbox`, on its own Postgres (`order-postgres`). It runs the checkout saga's Temporal worker and client, which also run `RefundOrder` ([Refunds](#refunds)), the reaper, the saga and refunding collectors and the invariant checker, and is the only consumer of `order-events`: `payment.authorized` signals a saga, `order.paid` sends the confirmation mail and `order.refunded` the refund mail, through `SMTP_URL`. The gateway routes `/orders`, `/orders/*`, `/admin/orders` and `/admin/orders/*` to it (`ORDER_UPSTREAM`, which the gateway refuses to start without), and it has no public domain. CD deploys it after the payment-service and before the api. Its routes and variables are in its [README](./apps/order-service/README.md).
+`apps/order-service` owns the cart, checkout and orders: `carts`, `cart_items`, `orders`, `order_items`, `idempotency_keys`, an `outbox` and an `inbox`, on its own Postgres (`order-postgres`), beside its copy of the catalog's SKU views, `catalog_sku_views` ([Sync the catalog read model](#sync-the-catalog-read-model)), which prices the cart and every new order. It runs the checkout saga's Temporal worker and client, which also run `RefundOrder` ([Refunds](#refunds)), the reaper, the saga and refunding collectors and the invariant checker, and is the only consumer of `order-events`: `payment.authorized` signals a saga, `order.paid` sends the confirmation mail and `order.refunded` the refund mail, through `SMTP_URL`, and the api's `catalog.product.sku-snapshot` updates `catalog_sku_views`. The gateway routes `/cart`, `/cart/*`, `/orders`, `/orders/*`, `/admin/orders` and `/admin/orders/*` to it (`ORDER_UPSTREAM`, which the gateway refuses to start without), and it has no public domain. CD deploys it after the payment-service and before the api. Its routes and variables are in its [README](./apps/order-service/README.md). While Temporal is down a running order-service keeps serving the cart and order reads, but a new deploy of it waits, since its readiness includes Temporal.
 
-It calls four services, each with a token of its own ([Per-caller internal tokens](#per-caller-internal-tokens)), and the id-service for every row it writes (`x-caller: order-service`):
+It calls three services, each with a token of its own ([Per-caller internal tokens](#per-caller-internal-tokens)), and the id-service for every row it writes, carts and cart lines included (`x-caller: order-service`). It calls the api for nothing.
 
 | Callee            | Variables                                          | For                                                                      |
 | ----------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
-| api               | `API_SERVICE_URL`, `API_SERVICE_TOKEN`             | the cart's lines and the SKU views, read before an order is written      |
 | inventory-service | `INVENTORY_SERVICE_URL`, `INVENTORY_SERVICE_TOKEN` | the stock branch of the saga, and the checker's status reads             |
 | payment-service   | `PAYMENT_SERVICE_URL`, `PAYMENT_SERVICE_TOKEN`     | `/pay`, the payment branch, and the checker's status reads               |
 | user-service      | `USER_SERVICE_URL`, `USER_SERVICE_TOKEN`           | session epochs on a Redis miss, and the buyer's address for `order.paid` |
 
 It verifies access tokens like the api (`AUTH_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`, the shared Redis's denylist and epochs). Its readiness covers Postgres, Redis and Temporal, and the worker's `RUNNING` state when `TEMPORAL_WORKER_ENABLED` is on ([Temporal down](#temporal-down)); its shutdown is in [The shutdown budget](#the-shutdown-budget).
 
-The api's database holds no order tables: the [contract step](#the-contract-step) dropped them, and the orders that predate the move went with them (demo data).
-
-### Checkout answers 503 with the api up
-
-`POST /orders` reads the cart and the catalog from the api's internal routes before it writes anything. Anything but a `2xx` of the right shape (another status, a timeout, a network error, a body off its contract) is a `503` with `Retry-After`, and nothing has to be undone. A `4xx` or an off-contract body means configuration rather than load, so the order-service logs it at error as `api-internal answered off its contract`, with `path` and `status`:
-
-- **`404`.** `API_SERVICE_URL` names the gateway, which answers `/internal/*` with 404, or a host without the route. It must be the api's private domain and port: a reference in `.railway/railway.ts`, `http://app:3000` in compose.
-- **`401`.** `API_SERVICE_TOKEN` is not the api's `INTERNAL_CALLER_TOKEN_ORDER_SERVICE`; one of them has not redeployed since a rotation ([A caller answered `401` or `403`](#a-caller-answered-401-or-403)).
-- **`403`.** The route's `@InternalCallers(...)` does not list `order-service`: a code change.
-
-A `5xx`, a timeout or a network error counts against the `api-internal` breaker (`CircuitBreakerOpen{breaker="api-internal"}`); the `4xx`s, `429` and an off-contract body do not. To check the address and the token without touching data, ask for the SKU views of nothing, which the api refuses with `400` only once the guard has let the call through:
-
-```sh
-# container (order-service)
-node -e "fetch(process.env.API_SERVICE_URL + '/internal/v1/catalog/sku-views', { method: 'POST', headers: { authorization: 'Bearer ' + process.env.API_SERVICE_TOKEN, 'content-type': 'application/json' }, body: '{\"skuIds\":[]}' }).then(r => console.log(new URL(process.env.API_SERVICE_URL).host, r.status))"
-```
-
-`400` is right; `404`, `401` and `403` read as above.
+The api's database holds no order tables: the [contract step](#the-contract-step) dropped them, and the orders that predate the move went with them (demo data). Its `carts` and `cart_items` went the same way when [the api's cart was retired](#retire-the-apis-cart), after [the cart moved](#move-the-cart-to-the-order-service).
 
 ### `order.paid` waits for the user-service
 

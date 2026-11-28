@@ -18,6 +18,7 @@ import { ThrottlerSecurityModule } from '@jcool/platform/throttler';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 import * as schema from './database/schema';
+import { CartModule } from './modules/cart/cart.module';
 import { OrderModule } from './modules/order/order.module';
 import { IdentityModule } from './shared/identity/identity.module';
 import { OrderMessagingModule } from './shared/messaging/order-messaging.module';
@@ -46,6 +47,7 @@ import { OrderMessagingModule } from './shared/messaging/order-messaging.module'
     }),
     ScheduleModule.forRoot(),
     HealthModule,
+    CartModule,
     OrderModule,
   ],
   providers: [

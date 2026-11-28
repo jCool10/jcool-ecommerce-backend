@@ -5,6 +5,8 @@
 # API. Registering caches the epoch in Redis, so a token mismatch stays invisible until the key is gone:
 # drop it, and the guard has to ask the user-service, answering 503 if the user-service refuses. One
 # fresh user per route, since a refused lookup leaves no key behind for the next route to drop.
+# A buyer token on an api admin route proves the same read: the epoch is checked before the role, so
+# 403 means the read succeeded and a refused one stays 503.
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
@@ -15,7 +17,8 @@ base=$1
 shift
 redis=("$@")
 
-# check_route <path> <caller>. Runs under `||`, where set -e is off, so every step checks itself.
+# check_route <path> <caller> <expected status>. Runs under `||`, where set -e is off, so every step
+# checks itself.
 check_route() {
   local email body token sub deleted status
   email="internal-auth-$(date +%s)-$RANDOM@${LOAD_EMAIL_DOMAIN:-loadtest.jcool.local}"
@@ -33,14 +36,14 @@ check_route() {
     return 1
   fi
   status=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$base$1")
-  if [ "$status" != 200 ]; then
-    echo "GET $1 without a cached session epoch returned $status: $2 -> user-service internal auth is broken" >&2
+  if [ "$status" != "$3" ]; then
+    echo "GET $1 without a cached session epoch returned $status, not $3: $2 -> user-service internal auth is broken" >&2
     return 1
   fi
-  echo "GET $1 without a cached session epoch: 200 ($2 -> user-service)"
+  echo "GET $1 without a cached session epoch: $3 ($2 -> user-service)"
 }
 
 failed=0
-check_route /cart api || failed=1
-check_route /orders order-service || failed=1
+check_route /admin/products/1/images api 403 || failed=1
+check_route /orders order-service 200 || failed=1
 exit "$failed"

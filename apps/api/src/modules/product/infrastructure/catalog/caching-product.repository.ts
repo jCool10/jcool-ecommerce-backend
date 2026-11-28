@@ -8,7 +8,6 @@ import type {
   FindManyActiveResult,
   ProductRepositoryPort,
 } from '../../application/catalog/ports';
-import type { SkuView } from '../../application/public/product-sku-query.port';
 import {
   CATALOG_CACHE_VERSION_KEY,
   productDetailKey,
@@ -92,15 +91,5 @@ export class CachingProductRepository implements ProductRepositoryPort {
       () => this.source.findActiveByIdOrSlug(idOrSlug),
       { policy: this.policy, codec: DETAIL_CODEC, label: 'catalog.product_detail' },
     );
-  }
-
-  // Deliberately uncached: Cart prices a line off these reads and Order snapshots the price it
-  // charges from them, where a stale price or isActive is a wrong order, not a slow one.
-  findSkuView(skuId: string): Promise<SkuView | null> {
-    return this.source.findSkuView(skuId);
-  }
-
-  findManySkuViews(skuIds: string[]): Promise<SkuView[]> {
-    return this.source.findManySkuViews(skuIds);
   }
 }

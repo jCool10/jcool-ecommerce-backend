@@ -13,7 +13,7 @@ apps/api/
 │   ├── instrumentation.ts   # OTel + Sentry, preloaded via `node --import` before Nest boots
 │   ├── app.module.ts
 │   ├── modules/             # bounded contexts — each: domain / application / infrastructure / interface
-│   │   ├── cart/  media/  product/   # product: <layer>/catalog/
+│   │   ├── media/  product/   # product: <layer>/catalog/
 │   └── shared/
 │       ├── config/          # the api's env schema (platform fragments + its own keys) + config factory
 │       ├── messaging/       # the api's route table, queue handlers and DLQ replay CLI over @jcool/messaging
@@ -28,13 +28,13 @@ apps/api/
 │   ├── setup/               # global setup, app factory, fixtures, per-suite side containers
 │   ├── mocks/               # deterministic uuid double for the unit tier
 │   └── vitest-e2e.config.mts
-└── scripts/                 # perf-seed (catalog + cart for the load tests), trace harness
+└── scripts/                 # perf-seed (the catalog for the load tests), trace harness
 apps/id-service/             # POST /v1/ids; node lease (etcd), N replicas; unit / e2e / system tests
 apps/user-service/           # /auth, JWKS, internal user/epoch routes (own Postgres); users scripts; unit / e2e tests
 apps/inventory-service/      # stock levels, TCC holds and the per-order fence (own Postgres); /internal/v1/reservations, /admin/inventory; stock seed
 apps/payment-service/        # payments, the per-order fence, Stripe and the webhook (own Postgres); /internal/v1/payments, /webhooks/payment; publishes payment.authorized
-apps/order-service/          # orders, checkout idempotency, the CheckoutSaga workflow and worker (own Postgres); /orders, /admin/orders; consumes order-events; unit / e2e / system tests
-apps/gateway/                # Caddyfile: public site routing /auth, /admin/inventory, /webhooks/payment and the order paths, private LB over the id-service replicas
+apps/order-service/          # the cart, orders, checkout idempotency, the CheckoutSaga workflow and worker, a copy of the catalog's SKU views (own Postgres); /cart, /orders, /admin/orders; consumes order-events; unit / e2e / system tests
+apps/gateway/                # Caddyfile: public site routing /auth, /admin/inventory, /webhooks/payment and the cart and order paths, private LB over the id-service replicas
 packages/
 ├── kernel/                  # @jcool/kernel — framework-free DDD building blocks (Money, ValueObject, DomainError, Result)
 ├── id-codec/                # @jcool/id-codec — 63-bit snowflake layout
@@ -69,7 +69,7 @@ turbo.json  pnpm-workspace.yaml  Dockerfile  docker-compose.yml  .github/workflo
 | `order-service` | [`apps/order-service/src/main.ts`](../apps/order-service/src/main.ts) |
 | `gateway` | [`apps/gateway/Caddyfile`](../apps/gateway/Caddyfile) (not a Node process) |
 
-CLIs (the api's migrate, DLQ replay, search reindex and storage verify, and the order-service's DLQ replay, also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`local-development.md#scripts`](./local-development.md#scripts) for the `pnpm` names):
+CLIs (the api's migrate, DLQ replay, search reindex, SKU snapshot publish and storage verify, and the order-service's DLQ replay, also have a `:prod` twin that runs the compiled `dist/` file; the id-service floor lift only ever runs compiled — see [`local-development.md#scripts`](./local-development.md#scripts) for the `pnpm` names):
 
 | CLI | File |
 | --- | --- |
@@ -78,6 +78,7 @@ CLIs (the api's migrate, DLQ replay, search reindex and storage verify, and the 
 | DLQ replay, api (one queue per run, `--queue api-events`) | [`apps/api/src/shared/messaging/queue/replay-dlq.cli.ts`](../apps/api/src/shared/messaging/queue/replay-dlq.cli.ts) |
 | DLQ replay, order-service (one queue per run, `--queue order-events`) | [`apps/order-service/src/shared/messaging/replay-dlq.cli.ts`](../apps/order-service/src/shared/messaging/replay-dlq.cli.ts) |
 | search reindex | [`apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts`](../apps/api/src/modules/product/infrastructure/catalog/search/reindex.ts) |
+| SKU snapshot publish (the order-service's catalog copy) | [`apps/api/src/modules/product/infrastructure/catalog/sku-snapshot/publish-sku-snapshots.cli.ts`](../apps/api/src/modules/product/infrastructure/catalog/sku-snapshot/publish-sku-snapshots.cli.ts) |
 | storage verify | [`apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts`](../apps/api/src/shared/infrastructure/storage/verify-storage-orphans.cli.ts) |
 | checkout saga workflow bundle (the second half of the order-service's `pnpm build`) | [`apps/order-service/src/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.ts`](../apps/order-service/src/modules/order/infrastructure/temporal/bundle-checkout-saga-workflows.cli.ts) |
 | id-service floor lift (pre-deploy form: `--if-uninitialized`) | [`apps/id-service/src/lease/lift-floors-cli.ts`](../apps/id-service/src/lease/lift-floors-cli.ts) |
@@ -90,7 +91,7 @@ CLIs (the api's migrate, DLQ replay, search reindex and storage verify, and the 
 
 ## Bounded contexts
 
-Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`cart`, `media`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer keeps its code under `catalog/`, with the published port in `application/public/`. The other contexts left the api, each as a service with the same four layers in one module: stock is [`apps/inventory-service/src/modules/inventory`](../apps/inventory-service/src/modules/inventory), payment is [`apps/payment-service/src/modules/payment`](../apps/payment-service/src/modules/payment), and order is [`apps/order-service/src/modules/order`](../apps/order-service/src/modules/order). The order-service reaches stock through [`order-inventory-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-inventory-participant.http-adapter.ts), payment through [`order-payment-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-payment-participant.http-adapter.ts), and the api's cart and catalog through [`cart-snapshot.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/cart-snapshot.http-adapter.ts) and [`catalog-query.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/catalog-query.http-adapter.ts). What each context owns and publishes is the [bounded-context table](./system-architecture.md#bounded-contexts); this is only the path to open.
+Each is a sibling directory under [`apps/api/src/modules`](../apps/api/src/modules), one context per directory (`media`, `product`), each split into its own `domain` / `application` / `infrastructure` / `interface` layers. Inside `product`, each layer keeps its code under `catalog/`. The other contexts left the api, each as a service with the same four layers in one module: stock is [`apps/inventory-service/src/modules/inventory`](../apps/inventory-service/src/modules/inventory), payment is [`apps/payment-service/src/modules/payment`](../apps/payment-service/src/modules/payment), and order is [`apps/order-service/src/modules/order`](../apps/order-service/src/modules/order), beside the cart in [`apps/order-service/src/modules/cart`](../apps/order-service/src/modules/cart) and the order-service's copy of the catalog's SKU views in [`apps/order-service/src/modules/catalog`](../apps/order-service/src/modules/catalog). The order-service reaches stock through [`order-inventory-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-inventory-participant.http-adapter.ts) and payment through [`order-payment-participant.http-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/order-payment-participant.http-adapter.ts); checkout reads the cart through [`cart-snapshot.local-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/cart-snapshot.local-adapter.ts) and the catalog copy through [`catalog-query.read-model-adapter.ts`](../apps/order-service/src/modules/order/infrastructure/catalog-query.read-model-adapter.ts), both in process. What each context owns and publishes is the [bounded-context table](./system-architecture.md#bounded-contexts); this is only the path to open.
 
 ## Checkout saga
 
@@ -141,7 +142,7 @@ Every service composes its env schema from shared fragments in [`packages/platfo
 | Tier | Location |
 | --- | --- |
 | Unit | co-located `*.spec.ts` next to the code it tests, in every app and package |
-| Integration (e2e) | `apps/*/test/integration/*.e2e-spec.ts`; setup/harness in `apps/*/test/setup` (e.g. [`apps/api/test/setup/global-setup.ts`](../apps/api/test/setup/global-setup.ts), [`apps/api/test/setup/test-app.factory.ts`](../apps/api/test/setup/test-app.factory.ts); the order-service's suites run against stubs of the services it calls, [`inventory-service-stub.ts`](../apps/order-service/test/setup/inventory-service-stub.ts), [`payment-service-stub.ts`](../apps/order-service/test/setup/payment-service-stub.ts), [`api-internal-stub.ts`](../apps/order-service/test/setup/api-internal-stub.ts) and [`user-service-stub.ts`](../apps/order-service/test/setup/user-service-stub.ts), and a real Temporal server from [`temporal-server.ts`](../apps/order-service/test/setup/temporal-server.ts)) |
+| Integration (e2e) | `apps/*/test/integration/*.e2e-spec.ts`; setup/harness in `apps/*/test/setup` (e.g. [`apps/api/test/setup/global-setup.ts`](../apps/api/test/setup/global-setup.ts), [`apps/api/test/setup/test-app.factory.ts`](../apps/api/test/setup/test-app.factory.ts); the order-service's suites run against stubs of the services it calls, [`inventory-service-stub.ts`](../apps/order-service/test/setup/inventory-service-stub.ts), [`payment-service-stub.ts`](../apps/order-service/test/setup/payment-service-stub.ts) and [`user-service-stub.ts`](../apps/order-service/test/setup/user-service-stub.ts), and a real Temporal server from [`temporal-server.ts`](../apps/order-service/test/setup/temporal-server.ts)) |
 | Contract cases | [`packages/internal-contracts/src/testing.ts`](../packages/internal-contracts/src/testing.ts): the case tables and HTTP drivers of the internal APIs, run against the real services and the stubs alike |
 | System | `*.system-spec.ts` under `apps/gateway/test/`, `apps/id-service/test/system/` and `apps/order-service/test/system/` — real images on a Docker network, run by `pnpm turbo run test:system --concurrency=1`; the order-service's alone, with a fake Stripe and fault injection, by `pnpm --filter @jcool/order-service run test:system` ([RUNBOOK → Run the system test](../RUNBOOK.md#run-the-system-test)). Local only |
 | Load/performance | [`test/load/`](../test/load) (k6 mixes with Prometheus as the authority) and [`k6/`](../k6) |

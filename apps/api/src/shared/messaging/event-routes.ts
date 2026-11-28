@@ -1,4 +1,10 @@
-import { ORDER_PAID_BACKOFF } from '@jcool/internal-contracts/queues/order-events';
+import { CATALOG_SKU_SNAPSHOT_EVENT } from '@jcool/internal-contracts/events/catalog-sku-snapshot';
+import {
+  ORDER_EVENTS_DLQ,
+  ORDER_EVENTS_QUEUE,
+  ORDER_PAID_BACKOFF,
+  orderEventsJobOptions,
+} from '@jcool/internal-contracts/queues/order-events';
 import type { EventRoutes, QueueDefinition, QueueSpec } from '@jcool/messaging';
 import {
   CATEGORY_RENAMED_EVENT,
@@ -17,10 +23,18 @@ export const API_EVENTS: QueueSpec = {
     eventType.startsWith('catalog.') ? { attempts, backoff: { type: ORDER_PAID_BACKOFF } } : {},
 };
 
-/** Order events are published by the order-service's own outbox. */
+/**
+ * Order events are published by the order-service's own outbox. SKU snapshots go to the order-service's
+ * queue on its own job options, so this process only produces onto it and never consumes it.
+ */
 export const API_EVENT_ROUTES: EventRoutes = {
   [PRODUCT_CHANGED_EVENT]: API_EVENTS,
   [CATEGORY_RENAMED_EVENT]: API_EVENTS,
+  [CATALOG_SKU_SNAPSHOT_EVENT]: {
+    name: ORDER_EVENTS_QUEUE,
+    dlq: ORDER_EVENTS_DLQ,
+    jobOptionsFor: orderEventsJobOptions,
+  },
 };
 
 export type ApiConsumedQueue = Omit<QueueDefinition, 'dispatcher'>;

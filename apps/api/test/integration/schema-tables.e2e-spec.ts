@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import * as schema from '../../src/shared/infrastructure/database/schema';
 import { closeAppAfterAll, createTestAppWithPool } from '../setup/harness';
 
-const DECLARED = Object.values(schema)
+const DECLARED: string[] = Object.values(schema)
   .filter((value) => is(value, Table))
   .map(getTableName);
 
@@ -19,13 +19,22 @@ describe('The api database tables (integration)', () => {
   });
   closeAppAfterAll(() => app);
 
-  it('holds every table the api declares', async () => {
+  const presentTables = async (): Promise<string[]> => {
     const { rows } = await pool.query<{ tablename: string }>(
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`,
     );
-    const present = rows.map((row) => row.tablename);
+    return rows.map((row) => row.tablename);
+  };
+
+  it('holds every table the api declares', async () => {
+    const present = await presentTables();
 
     expect(DECLARED).toContain('products');
     expect(DECLARED.filter((name) => !present.includes(name))).toEqual([]);
+  });
+
+  // A table the chain left behind has no schema to keep it honest; retiring a context drops its tables.
+  it('holds no table the api does not declare', async () => {
+    expect((await presentTables()).filter((name) => !DECLARED.includes(name))).toEqual([]);
   });
 });

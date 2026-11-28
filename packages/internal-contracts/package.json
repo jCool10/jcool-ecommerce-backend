@@ -16,6 +16,10 @@
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
     },
+    "./events/catalog-sku-snapshot": {
+      "types": "./dist/events/catalog-sku-snapshot.d.ts",
+      "default": "./dist/events/catalog-sku-snapshot.js"
+    },
     "./events/payment-authorized": {
       "types": "./dist/events/payment-authorized.d.ts",
       "default": "./dist/events/payment-authorized.js"

@@ -8,12 +8,6 @@ import { testId } from '../setup/id-service-stub';
 
 const COLUMNS = [
   {
-    column: 'carts.user_id',
-    constraint: 'ck_carts_user_id_routable',
-    insert: (pool: Pool, userId: string) =>
-      pool.query(`INSERT INTO carts (id, user_id) VALUES ($2, $1)`, [userId, testId()]),
-  },
-  {
     column: 'media_assets.uploaded_by',
     constraint: 'ck_media_assets_uploaded_by_routable',
     insert: (pool: Pool, userId: string) =>

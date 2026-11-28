@@ -10,15 +10,7 @@ const ID = testId();
 
 type Route = readonly [method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string];
 
-const BUYER_ROUTES: Route[] = [
-  ['get', '/cart'],
-  ['post', '/cart/items'],
-  ['patch', `/cart/items/${ID}`],
-  ['delete', `/cart/items/${ID}`],
-  ['delete', '/cart'],
-];
-
-// The order routes are the order-service's, pinned by its own order-authz suite.
+// The cart and order routes are the order-service's, pinned by its own authz suites.
 const ADMIN_ROUTES: Route[] = [
   ['post', '/admin/categories'],
   ['patch', `/admin/categories/${ID}`],
@@ -60,10 +52,8 @@ describe('Route authorization (integration)', () => {
   const expecting = (routes: Route[], status: number): string[] =>
     routes.map(([method, path]) => `${method.toUpperCase()} ${path} ${status}`);
 
-  it('answers 401 without a token on every buyer and admin route', async () => {
-    const routes = [...BUYER_ROUTES, ...ADMIN_ROUTES];
-
-    expect(await statuses(routes)).toEqual(expecting(routes, 401));
+  it('answers 401 without a token on every admin route', async () => {
+    expect(await statuses(ADMIN_ROUTES)).toEqual(expecting(ADMIN_ROUTES, 401));
   });
 
   it('answers 403 to a signed-in buyer on every admin route', async () => {

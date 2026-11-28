@@ -54,12 +54,6 @@ export default () => ({
     // Covers the gateway's retries across replicas, not one attempt.
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
   },
-  // Cart lines and SKU views, read before tx A. The api's private address, never the gateway.
-  apiService: {
-    url: process.env.API_SERVICE_URL,
-    token: process.env.API_SERVICE_TOKEN,
-    timeoutMs: parseIntOr(process.env.API_SERVICE_TIMEOUT_MS, 2_000),
-  },
   inventoryService: {
     url: process.env.INVENTORY_SERVICE_URL,
     token: process.env.INVENTORY_SERVICE_TOKEN,

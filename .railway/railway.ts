@@ -44,9 +44,6 @@ const TRACE_EXPORT_WITH_API_CREDENTIAL = {
 // A service owns its variables: any name missing here is deleted on apply. preserve() keeps the value
 // that lives in Railway, so secrets and runtime flags never enter the repo.
 const API_VARIABLES = [
-  // The order-service's caller token, pair and rotation slot, for carts and SKU views.
-  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE',
-  'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS',
   'LOG_LEVEL',
   // Read by MetricsTokenGuard: unset, /metrics answers 404 in production and Prometheus sees nothing.
   'METRICS_TOKEN',
@@ -396,9 +393,6 @@ export default defineRailway(() => {
       // Each token is the target's INTERNAL_CALLER_TOKEN_ORDER_SERVICE, referenced so it cannot drift.
       USER_SERVICE_URL: `http://\${{user-service.RAILWAY_PRIVATE_DOMAIN}}:${USER_SERVICE_PORT}`,
       USER_SERVICE_TOKEN: '${{user-service.INTERNAL_CALLER_TOKEN_ORDER_SERVICE}}',
-      // The api's private address, never the gateway: the gateway answers /internal with 404.
-      API_SERVICE_URL: `http://\${{${API_SERVICE}.RAILWAY_PRIVATE_DOMAIN}}:${API_PORT}`,
-      API_SERVICE_TOKEN: `\${{${API_SERVICE}.INTERNAL_CALLER_TOKEN_ORDER_SERVICE}}`,
       INVENTORY_SERVICE_URL: `http://\${{inventory-service.RAILWAY_PRIVATE_DOMAIN}}:${INVENTORY_SERVICE_PORT}`,
       INVENTORY_SERVICE_TOKEN: '${{inventory-service.INTERNAL_CALLER_TOKEN_ORDER_SERVICE}}',
       PAYMENT_SERVICE_URL: `http://\${{payment-service.RAILWAY_PRIVATE_DOMAIN}}:${PAYMENT_SERVICE_PORT}`,

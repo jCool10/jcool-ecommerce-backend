@@ -15,6 +15,20 @@
       "when": 1794195526073,
       "tag": "0001_order_refund_statuses",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794495794249,
+      "tag": "0002_catalog_sku_views",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794663698754,
+      "tag": "0003_carts",
+      "breakpoints": true
     }
   ]
 }

@@ -51,8 +51,6 @@ function build() {
   const source = {
     findManyActive: vi.fn(),
     findActiveByIdOrSlug: vi.fn(),
-    findSkuView: vi.fn(),
-    findManySkuViews: vi.fn(),
   };
   const cache = {
     read: vi.fn().mockResolvedValue({ status: 'miss' }),
@@ -195,18 +193,5 @@ describe('CachingProductRepository', () => {
     await ctx.repo.findManyActive({ ...criteria, page: 2 });
 
     expect(new Set(ctx.writtenKeys()).size).toBe(4);
-  });
-
-  // Cart prices a line off these reads and Order snapshots the price it charges from them.
-  it('reads SKU views from the source, never from the cache', async () => {
-    const view = { skuId: 'v-1', productName: 'Headphones', unitPriceMinor: 199_000, currency: 'VND', isActive: true };
-    ctx.source.findSkuView.mockResolvedValue(view);
-    ctx.source.findManySkuViews.mockResolvedValue([view]);
-
-    await expect(ctx.repo.findSkuView('v-1')).resolves.toBe(view);
-    await expect(ctx.repo.findManySkuViews(['v-1'])).resolves.toEqual([view]);
-
-    expect(ctx.cache.read).not.toHaveBeenCalled();
-    expect(ctx.cache.writeMs).not.toHaveBeenCalled();
   });
 });

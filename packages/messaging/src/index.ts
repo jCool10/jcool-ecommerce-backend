@@ -5,6 +5,7 @@ export * from './messaging.module';
 export * from './messaging.options';
 export * from './messaging.tokens';
 export * from './inbox/inbox.store';
+export * from './outbox/drizzle-outbox.writer';
 export * from './outbox/outbox-relay';
 export * from './outbox/outbox-backlog.collector';
 export * from './queue/dead-letter';

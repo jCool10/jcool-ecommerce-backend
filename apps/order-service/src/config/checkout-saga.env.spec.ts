@@ -13,8 +13,6 @@ const BASE_ENV = {
   USER_SERVICE_URL: 'http://user-service.railway.internal:3000',
   USER_SERVICE_TOKEN: 'user-service-token-not-a-real-secret-00000',
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
-  API_SERVICE_URL: 'http://api.railway.internal:8080',
-  API_SERVICE_TOKEN: 'api-service-token-not-a-real-secret-000000',
   INVENTORY_SERVICE_URL: 'http://inventory-service.railway.internal:3000',
   INVENTORY_SERVICE_TOKEN: 'inventory-service-token-not-a-real-secret-00',
   PAYMENT_SERVICE_URL: 'http://payment-service.railway.internal:3000',
@@ -176,19 +174,15 @@ describe('checkout saga env', () => {
         CHECKOUT_RESERVING_ORPHAN_SEC: '10',
       });
       expectInvalid(
-        { ...SHORT_ENV, API_SERVICE_TIMEOUT_MS: '7000' },
-        /SAGA_ACTIVITY_TIMEOUT_MS \(8000\) must exceed the api-internal breaker timeout \(8000\)/,
-      );
-      expectValid({ ...SHORT_ENV, API_SERVICE_TIMEOUT_MS: '6999' });
-      expectInvalid(
         { ...SHORT_ENV, PAYMENT_COMMAND_TIMEOUT_MS: '7000' },
         /SAGA_ACTIVITY_TIMEOUT_MS \(8000\) must exceed the payment-service breaker timeout \(8000\)/,
       );
     });
 
-    // Breakers and the cart/catalog reads of the api ignore it.
-    it('boots with a BREAKER_TIMEOUT_MS no rule here reads', () => {
+    // No breaker reads the first; nothing calls the api any more, so no rule reads the second.
+    it('boots with a BREAKER_TIMEOUT_MS or an API_SERVICE_TIMEOUT_MS no rule here reads', () => {
       expectValid({ ...SHORT_ENV, BREAKER_TIMEOUT_MS: '60000' });
+      expectValid({ ...SHORT_ENV, API_SERVICE_TIMEOUT_MS: '60000' });
     });
 
     it('keeps a saga activity alive past an inventory command and five seconds', () => {

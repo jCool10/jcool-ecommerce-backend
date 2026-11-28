@@ -13,8 +13,6 @@ const BASE_ENV = {
   USER_SERVICE_URL: 'http://user-service.railway.internal:3000',
   USER_SERVICE_TOKEN: 'user-service-token-not-a-real-secret-00000',
   ID_SERVICE_URL: 'http://gateway.railway.internal:4000',
-  API_SERVICE_URL: 'http://api.railway.internal:8080',
-  API_SERVICE_TOKEN: 'api-service-token-not-a-real-secret-000000',
   INVENTORY_SERVICE_URL: 'http://inventory-service.railway.internal:3000',
   INVENTORY_SERVICE_TOKEN: 'inventory-service-token-not-a-real-secret-00',
   PAYMENT_SERVICE_URL: 'http://payment-service.railway.internal:3000',
@@ -49,8 +47,6 @@ describe('env validation', () => {
       'USER_SERVICE_URL',
       'USER_SERVICE_TOKEN',
       'ID_SERVICE_URL',
-      'API_SERVICE_URL',
-      'API_SERVICE_TOKEN',
       'INVENTORY_SERVICE_URL',
       'INVENTORY_SERVICE_TOKEN',
       'PAYMENT_SERVICE_URL',
@@ -65,20 +61,14 @@ describe('env validation', () => {
   });
 
   it('refuses an address that is not an http URL', () => {
-    const urls = [
-      'USER_SERVICE_URL',
-      'ID_SERVICE_URL',
-      'API_SERVICE_URL',
-      'INVENTORY_SERVICE_URL',
-      'PAYMENT_SERVICE_URL',
-    ];
+    const urls = ['USER_SERVICE_URL', 'ID_SERVICE_URL', 'INVENTORY_SERVICE_URL', 'PAYMENT_SERVICE_URL'];
     for (const key of urls) {
       expect(() => validate({ ...BASE_ENV, [key]: 'service:3000' }), key).toThrow(new RegExp(key));
     }
   });
 
   it('refuses a token shorter than 32 characters', () => {
-    const tokens = ['USER_SERVICE_TOKEN', 'API_SERVICE_TOKEN', 'INVENTORY_SERVICE_TOKEN', 'PAYMENT_SERVICE_TOKEN'];
+    const tokens = ['USER_SERVICE_TOKEN', 'INVENTORY_SERVICE_TOKEN', 'PAYMENT_SERVICE_TOKEN'];
     for (const key of tokens) {
       expect(() => validate({ ...BASE_ENV, [key]: 'a'.repeat(31) }), key).toThrow(new RegExp(key));
     }
@@ -86,10 +76,9 @@ describe('env validation', () => {
 
   it('bounds every outbound timeout', () => {
     const cases: Array<[string, string, boolean]> = [
-      ['API_SERVICE_TIMEOUT_MS', '99', false],
-      ['API_SERVICE_TIMEOUT_MS', '100', true],
-      ['API_SERVICE_TIMEOUT_MS', '2e3', false],
       ['ID_SERVICE_TIMEOUT_MS', '99', false],
+      ['ID_SERVICE_TIMEOUT_MS', '100', true],
+      ['ID_SERVICE_TIMEOUT_MS', '2e3', false],
       ['USER_SERVICE_TIMEOUT_MS', '99', false],
       ['INVENTORY_COMMAND_TIMEOUT_MS', '99', false],
       ['INVENTORY_COMMAND_TIMEOUT_MS', '5000', true],

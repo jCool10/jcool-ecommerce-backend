@@ -12,6 +12,8 @@ const NOT_THE_API = /^(up|loki_\w+|id_clock_\w+)$/;
 // Recorded only by the order-service or a participant, each checking them on its own /metrics.
 const OWNED_ELSEWHERE = new Set<string>([
   'payment_authorized_uncaptured_oldest_seconds',
+  'order_refunding_oldest_seconds',
+  'cart_operations_total',
   'orders_created_total',
   'order_value_minor',
   'checkout_saga_overdue',

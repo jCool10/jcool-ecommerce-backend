@@ -39,7 +39,6 @@ export function stackSecrets() {
     apiToUser: secret(),
     inventoryToUser: secret(),
     orderToUser: secret(),
-    orderToApi: secret(),
     orderToInventory: secret(),
     orderToPayment: secret(),
   };
@@ -76,7 +75,6 @@ export function serviceEnv(s: StackSecrets) {
       DATABASE_URL: databaseUrl(s, 'api'),
       USER_SERVICE_INTERNAL_URL: 'http://user-service:3000',
       INTERNAL_API_TOKEN: s.apiToUser,
-      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: s.orderToApi,
       // Nothing uploads here; the storage client only needs to be configured to boot.
       STORAGE_ENDPOINT: 'http://storage.invalid:9000',
       STORAGE_BUCKET: 'system-test',
@@ -141,8 +139,6 @@ export function serviceEnv(s: StackSecrets) {
       DATABASE_URL: databaseUrl(s, 'orders'),
       USER_SERVICE_URL: 'http://user-service:3000',
       USER_SERVICE_TOKEN: s.orderToUser,
-      API_SERVICE_URL: 'http://api:3000',
-      API_SERVICE_TOKEN: s.orderToApi,
       INVENTORY_SERVICE_URL: `http://toxiproxy:${TOXIPROXY_PORTS.inventory}`,
       INVENTORY_SERVICE_TOKEN: s.orderToInventory,
       PAYMENT_SERVICE_URL: `http://toxiproxy:${TOXIPROXY_PORTS.payment}`,

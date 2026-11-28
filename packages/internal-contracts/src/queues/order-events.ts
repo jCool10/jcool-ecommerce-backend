@@ -1,3 +1,4 @@
+import { CATALOG_SKU_SNAPSHOT_EVENT } from '../events/catalog-sku-snapshot';
 import { PAYMENT_AUTHORIZED_EVENT } from '../events/payment-authorized';
 
 // Every producer of the queue adds jobs with these options, since BullMQ stamps them at `add`: a
@@ -19,7 +20,7 @@ export interface LongLadderJobOptions {
   backoff: { type: typeof ORDER_PAID_BACKOFF };
 }
 
-const LONG_LADDER = new Set(['order.paid', 'order.refunded', PAYMENT_AUTHORIZED_EVENT]);
+const LONG_LADDER = new Set(['order.paid', 'order.refunded', PAYMENT_AUTHORIZED_EVENT, CATALOG_SKU_SNAPSHOT_EVENT]);
 
 /** Overrides of the queue defaults for events that wait on another service while they retry. */
 export function orderEventsJobOptions(

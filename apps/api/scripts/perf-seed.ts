@@ -1,8 +1,8 @@
 /**
- * Catalog + cart seeder at a scale where the Postgres planner has a real choice: below a few hundred
- * rows a Seq Scan is always cheapest, so anything measured against the demo seed is an artifact.
- * Prefixed natural keys + ON CONFLICT DO NOTHING mean a re-run tops up and `--clean` can never take
- * a real product with it.
+ * Catalog seeder at a scale where the Postgres planner has a real choice: below a few hundred rows a
+ * Seq Scan is always cheapest, so anything measured against the demo seed is an artifact. Prefixed
+ * natural keys + ON CONFLICT DO NOTHING mean a re-run tops up and `--clean` can never take a real
+ * product with it.
  *
  * `--clean` does NOT remove what a load run produces — orders, outbox rows, the
  * accounts k6 registers. For a true reset: `docker compose down -v` then `npm run db:migrate`.
@@ -10,14 +10,11 @@
  * Leaves Redis alone: the public read path is cached behind a generation counter only an admin write
  * bumps, so an app already serving pre-seed pages keeps serving them — the final log line says how.
  *
- * The perf account itself lives in user-service (`db:seed:perf-user` there); its id is read back
- * over HTTP, the way any client learns it, so user-service must be running.
- *
  * Stock lives in the inventory-service: its `db:seed` gives every variant the public catalog lists a
  * level, so it runs after this seed and the cache bump the final log line asks for.
  */
 import 'dotenv/config';
-import { and, eq, inArray, like, notInArray, sql } from 'drizzle-orm';
+import { inArray, like, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { type ScriptsMint, withScriptsMintLock } from '../src/shared/infrastructure/database/scripts-mint-lock';
@@ -28,35 +25,10 @@ import {
   products,
 } from '../src/modules/product/infrastructure/catalog/schema/catalog.schema';
 import { CATALOG_CACHE_VERSION_KEY } from '../src/modules/product/infrastructure/catalog/catalog-cache.keys';
-import { cartItems, carts } from '../src/modules/cart/infrastructure/schema/cart.schema';
 
 const CATEGORY_SLUG_PREFIX = 'perf-cat-';
 const PRODUCT_SLUG_PREFIX = 'perf-prod-';
 const SKU_PREFIX = 'PERF-';
-const PERF_USER_EMAIL = 'perf@loadtest.jcool.local';
-
-// Same default as user-service's seed; overridable because the account authenticates over HTTP.
-function perfUserPassword(): string {
-  return process.env.PERF_USER_PASSWORD ?? 'perf-load-not-a-real-secret';
-}
-
-async function perfUserId(): Promise<string> {
-  const base = process.env.USER_SERVICE_URL ?? 'http://localhost:3002';
-  const login = await fetch(new URL('/auth/login', base), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: PERF_USER_EMAIL, password: perfUserPassword() }),
-  });
-  if (!login.ok) {
-    throw new Error(
-      `Perf user login at ${base} answered ${login.status}; run \`pnpm --filter @jcool/user-service db:seed:perf-user\` first`,
-    );
-  }
-  const { accessToken } = (await login.json()) as { accessToken: string };
-  const me = await fetch(new URL('/auth/me', base), { headers: { authorization: `Bearer ${accessToken}` } });
-  if (!me.ok) throw new Error(`GET ${base}/auth/me answered ${me.status}`);
-  return ((await me.json()) as { id: string }).id;
-}
 
 const CATEGORY_COUNT = 20;
 // Two archived categories give the public read path rows it must filter out — without them the
@@ -205,65 +177,12 @@ async function seedPrices(db: Db, mint: ScriptsMint, variantIds: readonly string
   }
 }
 
-// The cart is deliberately fat, so `GET /cart` shows the per-line SKU fan-out.
-async function seedPerfUserCart(
-  db: Db,
-  mint: ScriptsMint,
-  cartLines: number,
-): Promise<{ userId: string; lines: number }> {
-  const userId = await perfUserId();
-
-  await db.insert(carts).values({ id: mint(), userId }).onConflictDoNothing();
-  const [cart] = await db.select({ id: carts.id }).from(carts).where(eq(carts.userId, userId));
-  if (!cart) throw new Error(`Seed precondition failed: cart for ${PERF_USER_EMAIL} not found`);
-
-  // Priced, live SKUs only: an unpriced or archived line still renders, but it would not exercise
-  // the price lookup the fan-out is being measured on.
-  const lineSkus = await db
-    .select({ id: productVariants.id })
-    .from(productVariants)
-    .innerJoin(products, eq(productVariants.productId, products.id))
-    .innerJoin(prices, eq(prices.variantId, productVariants.id))
-    .where(sql`${products.status} = 'ACTIVE' and ${productVariants.sku} like ${`${SKU_PREFIX}%`}`)
-    .orderBy(productVariants.sku)
-    .limit(cartLines);
-  if (lineSkus.length < cartLines) {
-    throw new Error(`Seed precondition failed: need ${cartLines} priced ACTIVE SKUs, found ${lineSkus.length}`);
-  }
-
-  const wanted = lineSkus.map((sku) => sku.id);
-  for (const chunk of chunks(
-    wanted.map((skuId, i) => ({ id: mint(), cartId: cart.id, skuId, quantity: (i % 3) + 1 })),
-    CHUNK,
-  )) {
-    await db.insert(cartItems).values(chunk).onConflictDoNothing();
-  }
-
-  // A previous run at a larger CART_LINES leaves extra lines that ON CONFLICT DO NOTHING will not
-  // remove. Cart-view cost is linear in line count, so a cart that silently kept 100 lines when 30
-  // were asked for would be measured against the wrong workload.
-  await db.delete(cartItems).where(and(eq(cartItems.cartId, cart.id), notInArray(cartItems.skuId, wanted)));
-
-  const [{ value: lines }] = await db
-    .select({ value: sql<number>`count(*)::int` })
-    .from(cartItems)
-    .where(eq(cartItems.cartId, cart.id));
-  return { userId, lines };
-}
-
 async function clean(db: Db): Promise<void> {
   const perfVariants = await db
     .select({ id: productVariants.id })
     .from(productVariants)
     .where(like(productVariants.sku, `${SKU_PREFIX}%`));
   const variantIds = perfVariants.map((v) => v.id);
-
-  // cart_items cascade from carts. The account itself is user-service's to remove.
-  const userId = await perfUserId().catch((error: unknown) => {
-    console.warn(`Perf cart left in place, its owner could not be looked up: ${String(error)}`);
-    return null;
-  });
-  if (userId) await db.delete(carts).where(eq(carts.userId, userId));
 
   // Children before parents. Their stock levels stay in the inventory-service, where nothing reads a
   // level whose variant is gone.
@@ -300,10 +219,9 @@ async function main(): Promise<void> {
     // Every row is materialized in memory before insert, so the ceiling is Node's heap, not
     // Postgres — an unbounded SCALE OOMs the script long before the database objects.
     const scale = intEnv('SCALE', 20_000, 1_000_000);
-    const cartLines = intEnv('CART_LINES', 30, 10_000);
     const startedAt = Date.now();
 
-    const cart = await withScriptsMintLock(pool, async (mint) => {
+    await withScriptsMintLock(pool, async (mint) => {
       const categoryIds = await seedCategories(db, mint);
       console.log(`  categories: ${categoryIds.size}`);
       const productIds = await seedProducts(db, mint, scale, categoryIds);
@@ -312,23 +230,21 @@ async function main(): Promise<void> {
       console.log(`  variants:   ${variantIds.length}`);
       await seedPrices(db, mint, variantIds);
       console.log(`  prices:     ${variantIds.length}`);
-      return seedPerfUserCart(db, mint, cartLines);
     });
-    console.log(`  cart:       ${cart.lines} lines for ${PERF_USER_EMAIL} (user ${cart.userId})`);
 
     // Autovacuum has not run yet, so without this the planner still describes the pre-seed table
     // and every EXPLAIN taken afterwards is read off stats for data that is no longer there.
-    await db.execute(sql`analyze categories, products, product_variants, prices, carts, cart_items`);
+    await db.execute(sql`analyze categories, products, product_variants, prices`);
     console.log('  analyzed:   planner stats refreshed');
 
     const secs = (Date.now() - startedAt) / 1000;
     console.log(
-      `\nPerf seed complete in ${secs.toFixed(1)}s (SCALE=${scale}, CART_LINES=${cartLines}).\n` +
-        `Login as ${PERF_USER_EMAIL} (password from PERF_USER_PASSWORD, or the script's default).\n` +
+      `\nPerf seed complete in ${secs.toFixed(1)}s (SCALE=${scale}).\n` +
         `Bump the catalog cache generation before measuring — a direct write does not invalidate it,\n` +
         `so reads keep being served from the generation cached before this seed:\n` +
         `  docker compose exec redis redis-cli INCR ${CATALOG_CACHE_VERSION_KEY}\n` +
         `then give the new SKUs stock: pnpm --filter @jcool/inventory-service db:seed\n` +
+        `and copy them into the order-service's catalog, or the cart answers 404: pnpm catalog:publish-sku-snapshots\n` +
         `Remove the synthetic rows with: npm run db:seed:perf -- --clean`,
     );
   } finally {

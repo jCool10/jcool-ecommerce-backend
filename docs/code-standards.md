@@ -34,7 +34,7 @@ One decision the README does not place: `Idempotency-Key` support is not a platf
 
 | Name | Used by | Persisted / on the wire |
 | --- | --- | --- |
-| `skuId` | Cart, Order, Product's catalog side and its published `PRODUCT_SKU_QUERY` port | `cart_items.sku_id`, `order_items.sku_id`; `/cart/items/:skuId`, `/admin/skus/:skuId/price` |
+| `skuId` | Cart, Order, the order-service's catalog copy, and Product's catalog side with its `catalog.product.sku-snapshot` event | `cart_items.sku_id`, `order_items.sku_id`, `catalog_sku_views.sku_id`; `/cart/items/:skuId`, `/admin/skus/:skuId/price` |
 | `variantId` | Prices, the inventory-service and its `INVENTORY_PARTICIPANT` port, and the internal reservations API | `prices.variant_id`, `stock_levels.variant_id`, `reservations.variant_id`; `/admin/inventory/:variantId`, `lines[].variantId` on `/internal/v1/reservations/:orderId/try` |
 | `sku` | `product_variants.sku` | The human-readable SKU code (`TSHIRT-RED-M`) — never an id |
 

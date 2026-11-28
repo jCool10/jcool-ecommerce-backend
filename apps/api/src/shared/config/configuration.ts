@@ -9,7 +9,6 @@ import {
   retentionConfig,
   throttleConfig,
 } from '@jcool/platform/config';
-import { callerTokensFromEnv } from '@jcool/platform/internal-api';
 
 export default () => ({
   ...appConfig(),
@@ -63,10 +62,6 @@ export default () => ({
     url: process.env.ID_SERVICE_URL,
     // Covers the gateway's retries across replicas, not one attempt.
     timeoutMs: parseIntOr(process.env.ID_SERVICE_TIMEOUT_MS, 2_000),
-  },
-  // Who may read carts and SKU views on /internal/v1.
-  internalApi: {
-    callers: callerTokensFromEnv(['order-service']),
   },
   ...throttleConfig(),
   retention: {

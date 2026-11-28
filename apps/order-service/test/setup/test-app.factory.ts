@@ -7,7 +7,6 @@ import { expect, inject } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/app.setup';
-import { apiInternalStub } from './api-internal-stub';
 import { E2E_BASE_ENV } from './e2e-env';
 import { idServiceStub } from './id-service-stub';
 import { inventoryServiceStub } from './inventory-service-stub';
@@ -39,7 +38,6 @@ export async function createTestApp(
     AUTH_JWKS_URL: userService.jwksUrl,
     USER_SERVICE_URL: userService.url,
     ID_SERVICE_URL: (await idServiceStub()).url,
-    API_SERVICE_URL: (await apiInternalStub()).url,
     INVENTORY_SERVICE_URL: (await inventoryServiceStub()).url,
     PAYMENT_SERVICE_URL: (await paymentServiceStub()).url,
     // Redis is not truncated between files, so leftover jobs would reach the next file's worker.

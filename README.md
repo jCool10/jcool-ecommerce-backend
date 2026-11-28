@@ -15,7 +15,7 @@ A single-store e-commerce backend: a NestJS modular monolith plus five services 
 
 ## What this is
 
-A backend for a **single-store** shop, not a multi-vendor marketplace. It began as one NestJS process split into bounded contexts behind a boundary the build enforces, so that each context could later leave as bounded work rather than a rewrite. Identity, id minting, stock, payment and checkout have since left; Product, Cart and Media remain in the monolith.
+A backend for a **single-store** shop, not a multi-vendor marketplace. It began as one NestJS process split into bounded contexts behind a boundary the build enforces, so that each context could later leave as bounded work rather than a rewrite. Identity, id minting, stock, payment, checkout and the cart have since left; Product and Media remain in the monolith.
 
 Four invariants drive nearly every design decision:
 
@@ -38,7 +38,7 @@ flowchart LR
   GW -- "/auth, JWKS" --> US[user-service]
   GW -- "/admin/inventory*" --> INV[inventory-service]
   GW -- "/webhooks/payment" --> PAY[payment-service]
-  GW -- "/orders*, /admin/orders*" --> ORD[order-service]
+  GW -- "/orders*, /admin/orders*, /cart*" --> ORD[order-service]
   GW -- "everything else" --> API[api]
   US --- USDB[(user Postgres)]
   INV --- INVDB[(inventory Postgres)]
@@ -47,24 +47,24 @@ flowchart LR
   API --- APIDB[(api Postgres<br/>+ Elasticsearch, S3)]
   ORD -- "Try / commit / release" --> INV
   ORD -- "session / capture / cancel" --> PAY
-  ORD -- "cart lines, SKU views" --> API
   ORD -- "session epoch, buyer address" --> US
   ORD <-- "CheckoutSaga" --> TMP[Temporal<br/>+ temporal-postgres]
   PAY -- "payment.authorized" --> OE{{order-events}}
   ORD -- "order.*" --> OE
+  API -- "catalog.product.sku-snapshot" --> OE
   OE --> ORD
-  API -- "catalog.*" --> AE{{api-events}}
+  API -- "catalog.product.changed, catalog.category.renamed" --> AE{{api-events}}
   AE --> API
   PAY <-- "sessions, webhook" --> Stripe([Stripe])
 ```
 
 | Service | Owns |
 | --- | --- |
-| [api](./apps/api/README.md) | The modular monolith: catalog and search, cart, media uploads |
+| [api](./apps/api/README.md) | The modular monolith: catalog and search, media uploads |
 | [user-service](./apps/user-service/README.md) | `/auth`, sessions, ES256 token signing and the JWKS |
 | [inventory-service](./apps/inventory-service/README.md) | Stock levels and the checkout's TCC holds |
 | [payment-service](./apps/payment-service/README.md) | Payments, the Stripe integration and its webhook |
-| [order-service](./apps/order-service/README.md) | Orders and the checkout saga's Temporal worker |
+| [order-service](./apps/order-service/README.md) | Orders, the cart, a catalog read model and the checkout saga's Temporal worker |
 | [id-service](./apps/id-service/README.md) | 63-bit snowflake ids for every service, three replicas leasing node ids from etcd |
 | gateway | Caddy: public routing as drawn, and the private load balancer over the id-service |
 
@@ -130,8 +130,10 @@ pnpm --filter @jcool/api db:seed
 # every service on the host, with rebuild on change
 pnpm dev
 
-# in a second terminal, once the api answers: stock for every listed variant
+# in a second terminal, once the api answers: stock for every listed variant, and the
+# order-service's copy of the seeded catalog
 pnpm --filter @jcool/inventory-service db:seed
+pnpm catalog:publish-sku-snapshots
 ```
 
 Then open the api on <http://localhost:3000> (Swagger at `/docs`), the gateway on <http://localhost:8080> and Mailpit on <http://localhost:8025>. Every port, how `pnpm dev` rebuilds, the full stack in Compose, the local observability stack and every script: [local-development.md](./docs/local-development.md).
@@ -157,10 +159,10 @@ Stated plainly, because a reviewer will find them anyway. The reasoning behind e
 - **Refunds are full, admin-initiated and Stripe-only; a refund Stripe fails is a person's job.** The order goes back to `PAID`, or stays `REFUNDED` when Stripe fails the refund after it had succeeded; the money is counted as owed, and the shop cannot retry it.
 - **A pending refund is checked at most hourly.** The run asks Stripe again with backoff capped at an hour, so an order can read `REFUNDING` for up to an hour after Stripe settles its refund, even when the `refund.*` webhook already settled the payment side.
 - **Auth mail is sent synchronously, outside the outbox**, so its raw token never lands in Postgres.
-- **Checkout needs the api, stock, payment, the id-service and Temporal at once.** Temporal is one self-hosted server; while it is down, checkout and cancel answer `503` and catalog and cart keep serving.
+- **Checkout needs stock, payment, the id-service and Temporal at once.** Temporal is one self-hosted server; while it is down, checkout and cancel answer `503` and catalog and cart keep serving.
 - **The strongest checkout test runs locally only.** The fault-injecting system test needs several GB of RAM, so CI runs the integration tier instead.
 - **Ids have hard ceilings.** The id `CHECK` is a floor, not a type, and 1024 ids per node-millisecond and 254 leasable nodes are real limits.
-- **Search trails writes by about 1–2 s** and is not read-your-writes.
+- **Search, the cart and checkout trail catalog writes by about 1–2 s** and are not read-your-writes.
 - **There is no API version prefix**; changes are additive-only.
 - **Traces go to Grafana Cloud, sampled and scrubbed**; viewing one needs the Grafana Cloud login, and the user-service and the id-service appear only as their callers' client spans.
 

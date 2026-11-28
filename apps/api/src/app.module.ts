@@ -21,7 +21,6 @@ import { MetricsModule } from '@jcool/platform/metrics';
 import { LoadSheddingModule } from '@jcool/platform/resilience';
 import { HttpExceptionFilter } from '@jcool/platform/interface';
 import { DebugController } from '@shared/interface/controllers/debug.controller';
-import { CartModule } from '@modules/cart/cart.module';
 import { MediaModule } from '@modules/media/media.module';
 import { ProductModule } from '@modules/product/product.module';
 
@@ -52,7 +51,6 @@ import { ProductModule } from '@modules/product/product.module';
     ScheduleModule.forRoot(),
     HealthModule,
     ProductModule,
-    CartModule,
     // Position carries no meaning here: Product reaches Media through MEDIA_FACADE in the DI graph.
     MediaModule,
   ],

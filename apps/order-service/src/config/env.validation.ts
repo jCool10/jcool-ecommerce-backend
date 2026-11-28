@@ -154,20 +154,6 @@ export class EnvironmentVariables extends CheckoutSagaEnv(PlatformEnv) {
   ID_SERVICE_TIMEOUT_MS?: number;
 
   @IsUrl(HTTP_URL)
-  API_SERVICE_URL!: string;
-
-  // The api's INTERNAL_CALLER_TOKEN_ORDER_SERVICE.
-  @IsString()
-  @MinLength(32)
-  API_SERVICE_TOKEN!: string;
-
-  @IsOptional()
-  @StrictInt()
-  @IsInt()
-  @Min(100)
-  API_SERVICE_TIMEOUT_MS?: number;
-
-  @IsUrl(HTTP_URL)
   INVENTORY_SERVICE_URL!: string;
 
   // The inventory-service's INTERNAL_CALLER_TOKEN_ORDER_SERVICE.

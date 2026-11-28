@@ -33,7 +33,7 @@ export function createOpenApiDocument(app: NestExpressApplication): OpenAPIObjec
   const swaggerConfig = new DocumentBuilder()
     .setTitle('JCool Order Service')
     .setDescription(
-      'Checkout and orders. The order, not the cart, is the source of truth for a transaction: stock is held by the inventory-service, the money by the payment-service.',
+      'Cart, checkout and orders. The cart is priced live from a read model of the catalog; the order, not the cart, is the source of truth for a transaction: stock is held by the inventory-service, the money by the payment-service.',
     )
     .addBearerAuth()
     .build();

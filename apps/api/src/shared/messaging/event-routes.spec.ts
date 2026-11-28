@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CATALOG_SKU_SNAPSHOT_EVENT } from '@jcool/internal-contracts/events/catalog-sku-snapshot';
 import { PAYMENT_AUTHORIZED_EVENT } from '@jcool/internal-contracts/events/payment-authorized';
-import { ORDER_PAID_BACKOFF } from '@jcool/internal-contracts/queues/order-events';
+import {
+  ORDER_EVENTS_DLQ,
+  ORDER_EVENTS_QUEUE,
+  ORDER_PAID_BACKOFF,
+} from '@jcool/internal-contracts/queues/order-events';
 import { cappedBackoffMs, destinationsOf, retryHorizonMs, routeOf } from '@jcool/messaging';
 import {
   CATEGORY_RENAMED_EVENT,
@@ -32,6 +37,17 @@ describe('api event routes', () => {
     }
   });
 
+  // The order-service keeps its own copy of what checkout sells, and order-events is its only queue.
+  it('sends SKU snapshots to order-events, on the long ladder the order-service retries', () => {
+    const route = routeOf(API_EVENT_ROUTES, CATALOG_SKU_SNAPSHOT_EVENT);
+
+    expect(route).toMatchObject({ name: ORDER_EVENTS_QUEUE, dlq: ORDER_EVENTS_DLQ });
+    expect(route?.jobOptionsFor(CATALOG_SKU_SNAPSHOT_EVENT, 15)).toEqual({
+      attempts: 15,
+      backoff: { type: ORDER_PAID_BACKOFF },
+    });
+  });
+
   it('routes no order or payment event, which other services publish now', () => {
     const foreign = ['order.placed', 'order.paid', 'order.failed', 'order.expired', 'order.cancelled'];
 
@@ -47,10 +63,12 @@ describe('api event routes', () => {
     }
   });
 
-  it('consumes every queue it routes to, each under its own consumer group and dead-letter queue', () => {
-    expect(destinationsOf(API_EVENT_ROUTES).map(({ name }) => name)).toEqual(
-      API_CONSUMED_QUEUES.map(({ name }) => name),
-    );
+  it('consumes every queue it routes to except order-events, which the order-service consumes', () => {
+    expect(
+      destinationsOf(API_EVENT_ROUTES)
+        .map(({ name }) => name)
+        .filter((name) => name !== ORDER_EVENTS_QUEUE),
+    ).toEqual(API_CONSUMED_QUEUES.map(({ name }) => name));
     expect(API_CONSUMED_QUEUES.map(({ consumer, dlq }) => [consumer, dlq])).toEqual([['api-events', 'api-events-dlq']]);
   });
 });

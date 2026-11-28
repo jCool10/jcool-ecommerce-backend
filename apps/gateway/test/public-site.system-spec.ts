@@ -108,10 +108,10 @@ describe('gateway: public site', () => {
   }
 
   it('passes a request to the api byte for byte', async () => {
-    const body = Buffer.from('{"skuId":"1",  "quantity": 2}\n');
+    const body = Buffer.from('{"name":"Linen shirt",  "status": "DRAFT"}\n');
 
     const echo = await echoOf(
-      direct('/cart/items?attempt=2', {
+      direct('/admin/products?attempt=2', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-request-id': 'req-1' },
         body,
@@ -121,7 +121,7 @@ describe('gateway: public site', () => {
     expect(echo).toMatchObject({
       upstream: 'api',
       method: 'POST',
-      url: '/cart/items?attempt=2',
+      url: '/admin/products?attempt=2',
       body: body.toString('base64'),
     });
     expect(echo.headers['x-request-id']).toBe('req-1');
@@ -274,7 +274,7 @@ describe('gateway: public site', () => {
       });
 
       it('leaves writes outside /auth alone', async () => {
-        expect((await echoOf(direct('/cart/items', { method: 'POST' }, frozen))).upstream).toBe('api');
+        expect((await echoOf(direct('/admin/products', { method: 'POST' }, frozen))).upstream).toBe('api');
       });
     });
   });
@@ -365,8 +365,9 @@ describe('gateway: public site', () => {
       },
     );
 
-    it('still serves reads and the payment webhook', async () => {
+    it('still serves reads, cart writes and the payment webhook', async () => {
       expect((await echoOf(direct('/orders', undefined, frozen))).upstream).toBe('order');
+      expect((await echoOf(direct('/cart/items', { method: 'POST' }, frozen))).upstream).toBe('order');
       expect((await echoOf(direct('/webhooks/payment', { method: 'POST' }, frozen))).upstream).toBe('payment');
     });
   });

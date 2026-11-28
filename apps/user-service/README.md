@@ -94,7 +94,7 @@ Run from the repo root (`pnpm <script>`), each reading `apps/user-service/.env`.
 
 | Script | |
 | --- | --- |
-| `db:seed:perf-user` | The verified load-test account; `--clean` removes it. Run before the api's `db:seed:perf`. |
+| `db:seed:perf-user` | The verified load-test account; `--clean` removes it. |
 | `seed:users:bulk` | Synthetic users for the register-uniqueness benchmark; `--clean` removes them. |
 | `db:metrics:users` | Size, cache-hit and vacuum readings for `users`. |
 | `users:set-role <email> <ADMIN\|CUSTOMER>` | Sets a user's role and, in the same statement, bumps their session epoch, then raises `auth:epoch:{userId}` in Redis (needs `DATABASE_URL` and `REDIS_URL`). The role rides in the access token, so without the bump a demoted admin keeps the old token for up to `JWT_ACCESS_TTL`. Refresh tokens are kept, and the next refresh carries the new role. If Redis is unreachable the script exits non-zero after the database write, and the reconciler publishes the epoch within one interval. |

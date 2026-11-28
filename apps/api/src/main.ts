@@ -70,10 +70,9 @@ async function bootstrap(): Promise<void> {
       .setTitle('JCool E-commerce API')
       .setDescription(
         [
-          'Single-store e-commerce backend — the catalog and the cart. Checkout is the order-service.',
+          'Single-store e-commerce backend — the catalog. The cart and checkout are the order-service.',
           '',
           '- **Catalog** — public product/SKU reads and search; admin CRUD behind `ADMIN`.',
-          '- **Cart** — per-user cart lines, priced from the catalog at read time.',
         ].join('\n'),
       )
       .setVersion(readApiVersion())

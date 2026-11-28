@@ -215,7 +215,6 @@ export function CheckoutSagaEnv<TBase extends EnvBase>(Base: TBase) {
 export const CROSS_RULE_FOREIGN_DEFAULTS = {
   PAYMENT_COMMAND_TIMEOUT_MS: 45_000,
   INVENTORY_COMMAND_TIMEOUT_MS: 5000,
-  API_SERVICE_TIMEOUT_MS: 2000,
   QUEUE_WORKER_CONCURRENCY: 5,
   DB_POOL_MAX: ORDER_DB_POOL_MAX_DEFAULT,
 } as const;
@@ -261,7 +260,6 @@ export function assertCheckoutSagaEnv(env: CrossRuleEnv): void {
       Math.max(v('CHECKOUT_TRY_TIMEOUT_MS'), v('INVENTORY_COMMAND_TIMEOUT_MS')) + BREAKER_HEADROOM_MS,
     ],
     ['payment-service', v('PAYMENT_COMMAND_TIMEOUT_MS') + BREAKER_HEADROOM_MS],
-    ['api-internal', v('API_SERVICE_TIMEOUT_MS') + BREAKER_HEADROOM_MS],
   ];
   for (const [breaker, timeoutMs] of breakers) {
     require(v('SAGA_ACTIVITY_TIMEOUT_MS') >

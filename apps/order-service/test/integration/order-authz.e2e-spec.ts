@@ -12,7 +12,7 @@ import { userServiceStub } from '../setup/user-service-stub';
 
 const ID = testId();
 
-type Route = readonly [method: 'get' | 'post', path: string];
+type Route = readonly [method: 'get' | 'post' | 'patch' | 'delete', path: string];
 
 const BUYER_ROUTES: Route[] = [
   ['post', '/orders'],
@@ -20,6 +20,11 @@ const BUYER_ROUTES: Route[] = [
   ['get', `/orders/${ID}`],
   ['post', `/orders/${ID}/cancel`],
   ['post', `/orders/${ID}/pay`],
+  ['get', '/cart'],
+  ['post', '/cart/items'],
+  ['patch', `/cart/items/${ID}`],
+  ['delete', `/cart/items/${ID}`],
+  ['delete', '/cart'],
 ];
 
 const ADMIN_ROUTES: Route[] = [

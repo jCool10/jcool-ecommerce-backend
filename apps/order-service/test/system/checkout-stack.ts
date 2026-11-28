@@ -62,6 +62,9 @@ const PRE_DEPLOY: Record<AppService, string[]> = {
   'order-service': ['node', 'dist/database/migrate-cli.js'],
 };
 
+const PUBLISH_SKU_SNAPSHOTS_CLI =
+  'dist/modules/product/infrastructure/catalog/sku-snapshot/publish-sku-snapshots.cli.js';
+
 export type ServiceName = AppService | 'gateway' | 'temporal' | 'id-service';
 
 // Dependencies first, so a restored service finds what its readiness checks.
@@ -175,6 +178,8 @@ export class CheckoutStack {
     await this.runOnce('api', ['node', 'dist/shared/infrastructure/database/seed.js']);
     await Promise.all([this.launchApp('api'), this.launchApp('user-service')]);
     await this.launch('gateway', this.gatewayEnv(), (env) => this.gatewayContainer(env).start());
+    // The seed writes no snapshot; these wait in the api's outbox until the order-service consumes them.
+    await this.runOnce('api', ['node', PUBLISH_SKU_SNAPSHOTS_CLI]);
 
     await this.runOnce('inventory-service', ['node', 'dist/database/seed-stock.js']);
     this.skus = await this.catalogVariantIds();
@@ -203,6 +208,15 @@ export class CheckoutStack {
     await this.launchApp('payment-service');
     await this.launchApp('order-service');
     this.sagaObserver = await SagaObserver.connect(this.address('temporal', TEMPORAL_PORT));
+    // Buyers add to the order-service's cart, which knows only the SKUs its read model holds.
+    await waitFor(
+      async () =>
+        (await this.sql<{ count: number }>('orders', 'select count(*)::int as count from catalog_sku_views'))[0].count,
+      (count) => count === this.skus.length,
+      60_000,
+      'catalog read model',
+      500,
+    );
   }
 
   async stop(): Promise<void> {

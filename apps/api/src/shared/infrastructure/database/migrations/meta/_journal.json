@@ -253,6 +253,13 @@
       "when": 1793335856045,
       "tag": "0035_drop_retired_order_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1794759216323,
+      "tag": "0036_drop_retired_cart_tables",
+      "breakpoints": true
     }
   ]
 }

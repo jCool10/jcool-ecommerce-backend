@@ -11,10 +11,8 @@ import {
   PRODUCT_SEARCH_STATE,
 } from './application/catalog/ports';
 import { CatalogAdminService } from './application/catalog/services/catalog-admin.service';
-import { CatalogSkuQueryService } from './application/catalog/services/catalog-sku-query.service';
 import { ProductSearchSyncService } from './application/catalog/services/product-search-sync.service';
 import { GetProductDetailUseCase, ListProductsUseCase, SearchProductsUseCase } from './application/catalog/use-cases';
-import { PRODUCT_SKU_QUERY } from './application/public/product-sku-query.port';
 import {
   CachingCatalogAdminRepository,
   CachingProductRepository,
@@ -26,12 +24,12 @@ import {
   SEARCH_READ_BREAKER,
   SEARCH_WRITE_BREAKER,
   SearchIndexBootstrap,
+  SkuSnapshotPublisher,
   isSearchEngineFault,
   type SearchEngineCalls,
 } from './infrastructure/catalog';
 import { AdminCatalogController } from './interface/catalog/admin-catalog.controller';
 import { CatalogController } from './interface/catalog/catalog.controller';
-import { SkuViewsInternalController } from './interface/catalog/internal/sku-views.internal.controller';
 import { CategoryRenamedHandler } from './interface/catalog/queue/category-renamed.handler';
 import { ProductChangedHandler } from './interface/catalog/queue/product-changed.handler';
 
@@ -39,18 +37,18 @@ import { ProductChangedHandler } from './interface/catalog/queue/product-changed
 @Module({
   // MediaModule for `MEDIA_FACADE` only — image bytes and their lifecycle stay entirely over there.
   imports: [CacheModule, MediaModule, ResilienceModule],
-  controllers: [CatalogController, AdminCatalogController, SkuViewsInternalController],
+  controllers: [CatalogController, AdminCatalogController],
   providers: [
     ListProductsUseCase,
     GetProductDetailUseCase,
     SearchProductsUseCase,
     CatalogAdminService,
     DrizzleProductRepository,
+    SkuSnapshotPublisher,
     DrizzleCatalogAdminRepository,
     { provide: PRODUCT_REPOSITORY, useClass: CachingProductRepository },
     { provide: PRODUCT_SEARCH_STATE, useExisting: DrizzleProductRepository },
     { provide: CATALOG_ADMIN_REPOSITORY, useClass: CachingCatalogAdminRepository },
-    { provide: PRODUCT_SKU_QUERY, useClass: CatalogSkuQueryService },
     {
       provide: SEARCH_ENGINE_CALLS,
       inject: [ConfigService, CircuitBreakerFactory],
@@ -72,6 +70,6 @@ import { ProductChangedHandler } from './interface/catalog/queue/product-changed
     ProductChangedHandler,
     CategoryRenamedHandler,
   ],
-  exports: [PRODUCT_SKU_QUERY, ProductChangedHandler, CategoryRenamedHandler],
+  exports: [ProductChangedHandler, CategoryRenamedHandler],
 })
 export class ProductModule {}

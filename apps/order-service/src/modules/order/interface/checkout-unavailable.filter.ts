@@ -6,7 +6,7 @@ import { ClsService } from 'nestjs-cls';
 import { PinoLogger } from 'nestjs-pino';
 import { HttpExceptionFilter } from '@jcool/platform/interface';
 import type { CheckoutSagaConfig } from '../../../config/checkout-saga.config';
-import { CheckoutReadUnavailableError, CheckoutUnavailableError } from '../application/checkout-unavailable.error';
+import { CheckoutUnavailableError } from '../application/checkout-unavailable.error';
 
 export const ApiCheckoutUnavailableResponse = (description: string) =>
   ApiServiceUnavailableResponse({
@@ -15,7 +15,7 @@ export const ApiCheckoutUnavailableResponse = (description: string) =>
   });
 
 /** 503 + Retry-After for a checkout or cancel without a definite answer; envelope and logging stay the global filter's. */
-@Catch(CheckoutUnavailableError, CheckoutReadUnavailableError)
+@Catch(CheckoutUnavailableError)
 @Injectable()
 export class CheckoutUnavailableFilter extends HttpExceptionFilter {
   private readonly retryAfter: string;
@@ -25,7 +25,7 @@ export class CheckoutUnavailableFilter extends HttpExceptionFilter {
     this.retryAfter = String(config.getOrThrow<CheckoutSagaConfig>('checkoutSaga').retryAfterSec);
   }
 
-  override catch(exception: CheckoutUnavailableError | CheckoutReadUnavailableError, host: ArgumentsHost): void {
+  override catch(exception: CheckoutUnavailableError, host: ArgumentsHost): void {
     host.switchToHttp().getResponse<Response>().setHeader('Retry-After', this.retryAfter);
     super.catch(new ServiceUnavailableException(undefined, { cause: exception }), host);
   }

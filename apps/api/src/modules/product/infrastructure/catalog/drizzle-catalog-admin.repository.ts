@@ -20,6 +20,7 @@ import type {
   UpdateProductData,
   UpdateSkuData,
 } from '../../application/catalog/ports';
+import { SkuSnapshotPublisher } from './sku-snapshot/sku-snapshot.publisher';
 
 // Catch the unique-constraint hit (the only race-safe check) rather than pre-SELECT;
 // drizzle wraps the driver error, so the pg `code` lives down the `.cause` chain.
@@ -39,6 +40,11 @@ function isUniqueViolation(error: unknown): boolean {
   return false;
 }
 
+interface ProductEventIds {
+  changed: string;
+  snapshot: string;
+}
+
 @Injectable()
 export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort {
   constructor(
@@ -46,11 +52,23 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     @Inject(MEDIA_FACADE) private readonly mediaFacade: MediaFacade,
     @Inject(OUTBOX_WRITER) private readonly outboxWriter: OutboxWriterPort,
     @Inject(ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
+    // Every write that appends catalog.product.changed calls it as its last statement.
+    @Inject(SkuSnapshotPublisher) private readonly skuSnapshots: SkuSnapshotPublisher,
   ) {}
 
   // Minted before a transaction opens, so no lock is held across the call.
   private mintId(): Promise<string> {
     return mintOne(this.idGenerator);
+  }
+
+  private async mintProductEventIds(): Promise<ProductEventIds> {
+    const [changed, snapshot] = await this.idGenerator.mint(2);
+    return { changed, snapshot };
+  }
+
+  private async mintIdWithProductEventIds(): Promise<[string, ProductEventIds]> {
+    const [id, changed, snapshot] = await this.idGenerator.mint(3);
+    return [id, { changed, snapshot }];
   }
 
   private async guardUnique<T>(op: () => Promise<T>, conflictMessage: string): Promise<T> {
@@ -156,19 +174,19 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
 
   // Called before the SKU or price row is touched: a catalog write then locks at most one product,
   // always ahead of its children, so two writes cannot deadlock.
-  private markProductChanged(tx: DrizzleTx, productId: string): Promise<string | null> {
-    return this.bumpSearchVersion(tx, eq(products.id, productId));
+  private markProductChanged(tx: DrizzleTx, productId: string, eventId: string): Promise<string | null> {
+    return this.bumpSearchVersion(tx, eq(products.id, productId), eventId);
   }
 
-  private markSkuProductChanged(tx: DrizzleTx, skuId: string): Promise<string | null> {
+  private markSkuProductChanged(tx: DrizzleTx, skuId: string, eventId: string): Promise<string | null> {
     const parent = tx
       .select({ id: productVariants.productId })
       .from(productVariants)
       .where(eq(productVariants.id, skuId));
-    return this.bumpSearchVersion(tx, inArray(products.id, parent));
+    return this.bumpSearchVersion(tx, inArray(products.id, parent), eventId);
   }
 
-  private async bumpSearchVersion(tx: DrizzleTx, where: SQL): Promise<string | null> {
+  private async bumpSearchVersion(tx: DrizzleTx, where: SQL, eventId: string): Promise<string | null> {
     const [row] = await tx
       .update(products)
       .set({ searchVersion: sql`${products.searchVersion} + 1` })
@@ -177,7 +195,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     if (!row) {
       return null;
     }
-    await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
+    await this.outboxWriter.append(tx, toProductChangedRecord(row.id), { id: eventId });
     return row.id;
   }
 
@@ -187,7 +205,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   async createProduct(data: CreateProductData): Promise<AdminProduct> {
-    const id = await this.mintId();
+    const [id, eventIds] = await this.mintIdWithProductEventIds();
     return this.db.transaction(async (tx) => {
       await this.lockLiveCategory(tx, data.categoryId);
       const [row] = await this.guardUnique(
@@ -205,9 +223,14 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
             .returning(),
         'Product slug already exists',
       );
-      await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
+      await this.appendProductEvents(tx, row.id, eventIds);
       return toProduct(row);
     });
+  }
+
+  private async appendProductEvents(tx: DrizzleTx, productId: string, eventIds: ProductEventIds): Promise<void> {
+    await this.outboxWriter.append(tx, toProductChangedRecord(productId), { id: eventIds.changed });
+    await this.skuSnapshots.append(tx, productId, { id: eventIds.snapshot });
   }
 
   async updateProduct(id: string, data: UpdateProductData): Promise<AdminProduct | null> {
@@ -221,6 +244,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
       return this.findProductById(id);
     }
     const movedTo = patch.categoryId;
+    const eventIds = await this.mintProductEventIds();
     return this.db.transaction(async (tx) => {
       if (movedTo !== undefined) {
         await this.lockLiveCategory(tx, movedTo);
@@ -237,12 +261,13 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
       if (!row) {
         return null;
       }
-      await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
+      await this.appendProductEvents(tx, row.id, eventIds);
       return toProduct(row);
     });
   }
 
   async archiveProduct(id: string): Promise<AdminProduct | null> {
+    const eventIds = await this.mintProductEventIds();
     return this.db.transaction(async (tx) => {
       const [row] = await tx
         .update(products)
@@ -252,7 +277,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
       if (!row) {
         return null;
       }
-      await this.outboxWriter.append(tx, toProductChangedRecord(row.id));
+      await this.appendProductEvents(tx, row.id, eventIds);
       return toProduct(row);
     });
   }
@@ -263,13 +288,14 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
   }
 
   async createSku(productId: string, data: CreateSkuData): Promise<Sku> {
-    const id = await this.mintId();
+    const [id, eventIds] = await this.mintIdWithProductEventIds();
     return this.db.transaction(async (tx) => {
-      await this.markProductChanged(tx, productId);
+      const changed = await this.markProductChanged(tx, productId, eventIds.changed);
       const [row] = await this.guardUnique(
         () => tx.insert(productVariants).values({ id, sku: data.sku, name: data.name, productId }).returning(),
         'SKU code already exists',
       );
+      if (changed) await this.skuSnapshots.append(tx, changed, { id: eventIds.snapshot });
       return toSku(row);
     });
   }
@@ -281,21 +307,26 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     if (Object.keys(patch).length === 0) {
       return this.findSkuById(id);
     }
+    const eventIds = await this.mintProductEventIds();
     return this.db.transaction(async (tx) => {
-      if (!(await this.markSkuProductChanged(tx, id))) {
+      const changed = await this.markSkuProductChanged(tx, id, eventIds.changed);
+      if (!changed) {
         return null;
       }
       const [row] = await this.guardUnique(
         () => tx.update(productVariants).set(patch).where(eq(productVariants.id, id)).returning(),
         'SKU code already exists',
       );
+      await this.skuSnapshots.append(tx, changed, { id: eventIds.snapshot });
       return toSku(row);
     });
   }
 
   async archiveSku(id: string): Promise<Sku | null> {
+    const eventIds = await this.mintProductEventIds();
     return this.db.transaction(async (tx) => {
-      if (!(await this.markSkuProductChanged(tx, id))) {
+      const changed = await this.markSkuProductChanged(tx, id, eventIds.changed);
+      if (!changed) {
         return null;
       }
       const [row] = await tx
@@ -303,6 +334,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
         .set({ archivedAt: sql`coalesce(${productVariants.archivedAt}, now())` })
         .where(eq(productVariants.id, id))
         .returning();
+      await this.skuSnapshots.append(tx, changed, { id: eventIds.snapshot });
       return toSku(row);
     });
   }
@@ -396,9 +428,9 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
     // Re-check the Money invariant at the write boundary so a malformed price can never persist and
     // later 500 the read path, which parses the same row back through Money.
     const money = Money.of(data.amountMinor, data.currency);
-    const id = await this.mintId();
+    const [id, eventIds] = await this.mintIdWithProductEventIds();
     return this.db.transaction(async (tx) => {
-      await this.markSkuProductChanged(tx, variantId);
+      const changed = await this.markSkuProductChanged(tx, variantId, eventIds.changed);
       const [row] = await tx
         .insert(prices)
         .values({ id, variantId, currency: money.currency, amountMinor: money.amountMinor })
@@ -408,6 +440,7 @@ export class DrizzleCatalogAdminRepository implements CatalogAdminRepositoryPort
           set: { amountMinor: money.amountMinor, updatedAt: new Date() },
         })
         .returning();
+      if (changed) await this.skuSnapshots.append(tx, changed, { id: eventIds.snapshot });
       return { variantId: row.variantId, currency: row.currency, amountMinor: row.amountMinor };
     });
   }

@@ -1,15 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
-import { type DomainEventJob, UnhandledEventError, eventLabel } from '@jcool/messaging';
+import { CATALOG_SKU_SNAPSHOT_EVENT } from '@jcool/internal-contracts/events/catalog-sku-snapshot';
+import { type DomainEventJob, PermanentError, UnhandledEventError, eventLabel } from '@jcool/messaging';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
 import type { DrizzleTx } from '../../database';
+import type { CatalogSkuViewWriterPort } from '../../modules/catalog/application/ports/catalog-sku-view-writer.port';
+import { CatalogSkuSnapshotHandler } from '../../modules/catalog/interface/queue/catalog-sku-snapshot.handler';
 import type { OrderRefundedEvent } from '../../modules/order/domain/events/order-refunded.event';
 import type { OrderFinalizedEvent } from '../../modules/order/domain/order.entity';
 import type { OrderPaidMailHandler } from '../../modules/order/interface/queue/order-paid-mail.handler';
 import type { OrderRefundedMailHandler } from '../../modules/order/interface/queue/order-refunded-mail.handler';
 import type { PaymentAuthorizedHandler } from '../../modules/order/interface/queue/payment-authorized.handler';
+import { sampleId } from '../testing/id-generator.double';
 import { OrderEventsAudit, OrderEventsDispatcher } from './order-events.handlers';
 
 const tx = Symbol('tx') as unknown as DrizzleTx;
+
+const SNAPSHOT = {
+  productId: sampleId(1),
+  version: 2,
+  productName: 'Linen shirt',
+  skus: [{ skuId: sampleId(2), unitPriceMinor: 249_000, currency: 'VND', isActive: true }],
+};
+
+const snapshotJob = (payload: Record<string, unknown> = SNAPSHOT): DomainEventJob => ({
+  ...job(CATALOG_SKU_SNAPSHOT_EVENT),
+  aggregateType: 'Product',
+  aggregateId: SNAPSHOT.productId,
+  payload,
+});
 
 function job(eventType: string): DomainEventJob {
   return {
@@ -23,7 +41,7 @@ function job(eventType: string): DomainEventJob {
   };
 }
 
-// Everything order-events carries: this service's own events and the payment-service's.
+// Everything order-events carries: this service's own events, the payment-service's and the api's.
 const DELIVERED_EVENT_TYPES = Object.keys({
   'order.placed': true,
   'order.paid': true,
@@ -32,8 +50,13 @@ const DELIVERED_EVENT_TYPES = Object.keys({
   'order.cancelled': true,
   'order.refunded': true,
   'payment.authorized': true,
+  'catalog.product.sku-snapshot': true,
 } satisfies Record<
-  OrderFinalizedEvent['eventName'] | OrderRefundedEvent['eventName'] | 'order.placed' | 'payment.authorized',
+  | OrderFinalizedEvent['eventName']
+  | OrderRefundedEvent['eventName']
+  | 'order.placed'
+  | 'payment.authorized'
+  | typeof CATALOG_SKU_SNAPSHOT_EVENT,
   true
 >);
 
@@ -42,24 +65,51 @@ interface Doubles {
   forwardAuthorization?: PaymentAuthorizedHandler['forward'];
   prepareMail?: OrderPaidMailHandler['prepare'];
   prepareRefundMail?: OrderRefundedMailHandler['prepare'];
+  applySnapshot?: CatalogSkuViewWriterPort['applySnapshot'];
 }
 
-const dispatcherWith = ({ audit, forwardAuthorization, prepareMail, prepareRefundMail }: Doubles = {}) =>
+const dispatcherWith = ({ audit, forwardAuthorization, prepareMail, prepareRefundMail, applySnapshot }: Doubles = {}) =>
   new OrderEventsDispatcher(
     audit ?? new OrderEventsAudit(fakePinoLogger()),
     { forward: forwardAuthorization ?? vi.fn() } as unknown as PaymentAuthorizedHandler,
     { prepare: prepareMail ?? vi.fn() } as unknown as OrderPaidMailHandler,
     { prepare: prepareRefundMail ?? vi.fn() } as unknown as OrderRefundedMailHandler,
+    new CatalogSkuSnapshotHandler({ applySnapshot: applySnapshot ?? vi.fn() }),
   );
 
 const run = async (dispatcher: OrderEventsDispatcher, event: DomainEventJob) => (await dispatcher.prepare(event))(tx);
 
 describe('OrderEventsDispatcher', () => {
-  it('handles every event order-events delivers, and no catalog event', () => {
+  it('handles every event order-events delivers, and not the thin catalog.product.changed', () => {
     const dispatcher = dispatcherWith();
 
     expect(DELIVERED_EVENT_TYPES.filter((type) => !dispatcher.handles(type))).toEqual([]);
     expect(dispatcher.handles('catalog.product.changed')).toBe(false);
+  });
+
+  // The upsert is the effect the inbox claim fences, so it must share the claim's transaction.
+  it('applies a catalog SKU snapshot inside the transaction, not before the claim', async () => {
+    const applySnapshot = vi.fn<CatalogSkuViewWriterPort['applySnapshot']>().mockResolvedValue(undefined);
+    const info = vi.fn();
+
+    const step = await dispatcherWith({
+      audit: new OrderEventsAudit(fakePinoLogger({ info })),
+      applySnapshot,
+    }).prepare(snapshotJob());
+    expect(applySnapshot).not.toHaveBeenCalled();
+
+    await expect(step(tx)).resolves.toBeUndefined();
+    expect(applySnapshot).toHaveBeenCalledExactlyOnceWith(tx, SNAPSHOT);
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it('fails the prepare of a snapshot outside the contract, before any write', async () => {
+    const applySnapshot = vi.fn<CatalogSkuViewWriterPort['applySnapshot']>();
+
+    await expect(
+      dispatcherWith({ applySnapshot }).prepare(snapshotJob({ ...SNAPSHOT, version: -1 })),
+    ).rejects.toBeInstanceOf(PermanentError);
+    expect(applySnapshot).not.toHaveBeenCalled();
   });
 
   // A signal to Temporal cannot roll back with the claim; it must land before the claim commits.

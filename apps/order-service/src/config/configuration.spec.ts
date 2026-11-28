@@ -28,9 +28,6 @@ describe('configuration', () => {
   isolateEnv([
     'ID_SERVICE_URL',
     'ID_SERVICE_TIMEOUT_MS',
-    'API_SERVICE_URL',
-    'API_SERVICE_TOKEN',
-    'API_SERVICE_TIMEOUT_MS',
     'INVENTORY_SERVICE_URL',
     'INVENTORY_SERVICE_TOKEN',
     'INVENTORY_COMMAND_TIMEOUT_MS',
@@ -47,13 +44,6 @@ describe('configuration', () => {
     process.env.ID_SERVICE_URL = 'http://gateway:4000';
 
     expect(configuration().idService).toEqual({ url: 'http://gateway:4000', timeoutMs: 2_000 });
-  });
-
-  it('reads the api address and token, and gives a cart or catalog read 2s by default', () => {
-    process.env.API_SERVICE_URL = 'http://api:8080';
-    process.env.API_SERVICE_TOKEN = 'a-token';
-
-    expect(configuration().apiService).toEqual({ url: 'http://api:8080', token: 'a-token', timeoutMs: 2_000 });
   });
 
   it('reads the inventory-service address and token, and gives a command 5s by default', () => {
@@ -146,7 +136,6 @@ describe('configuration: checkout saga', () => {
     expect({
       PAYMENT_COMMAND_TIMEOUT_MS: config.paymentService.commandTimeoutMs,
       INVENTORY_COMMAND_TIMEOUT_MS: config.inventoryService.commandTimeoutMs,
-      API_SERVICE_TIMEOUT_MS: config.apiService.timeoutMs,
       QUEUE_WORKER_CONCURRENCY: config.queue.workerConcurrency,
       DB_POOL_MAX: config.database.poolMax,
     }).toEqual(CROSS_RULE_FOREIGN_DEFAULTS);

@@ -3,7 +3,9 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
 import { DEFAULT_THROTTLER, GLOBAL_THROTTLERS } from '@jcool/platform/throttler';
+import { adminProbePath } from '../setup/admin-probe.helper';
 import { authHeader } from '../setup/bearer.helper';
+import { testId } from '../setup/id-service-stub';
 import { createTestApp } from '../setup/test-app.factory';
 
 const DEFAULT_LIMIT = GLOBAL_THROTTLERS.find((tier) => tier.name === DEFAULT_THROTTLER)?.limit;
@@ -30,7 +32,7 @@ describe('Global guard order (integration, real Redis)', () => {
 
   it('sheds a flood of forged bearers with 429, not an endless stream of 401s', async () => {
     if (typeof DEFAULT_LIMIT !== 'number') throw new Error('the default tier has no static limit');
-    const forged = () => request(app.getHttpServer()).get('/cart').set(authHeader('not.a.token'));
+    const forged = () => request(app.getHttpServer()).get(adminProbePath(testId())).set(authHeader('not.a.token'));
 
     for (let attempt = 0; attempt < DEFAULT_LIMIT; attempt++) {
       expect((await forged()).status).toBe(401);

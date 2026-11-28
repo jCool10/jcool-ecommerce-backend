@@ -17,7 +17,9 @@
 // Preconditions: stack up (docker compose --profile observability up -d), DB seeded
 // (pnpm db:seed — the api's catalog, then the inventory-service's stock top-up, which gives every
 // listed variant 1e9 on hand so placement stays on the success path; it reads the catalog through
-// the gateway, so the stack must be up first), THROTTLE_ENABLED=false (single-host load would otherwise
+// the gateway, so the stack must be up first), then pnpm catalog:publish-sku-snapshots and a wait until
+// the order-service's catalog_sku_views holds every variant (the cart lives there, so an unsynced SKU
+// answers 404 on add to cart), THROTTLE_ENABLED=false (single-host load would otherwise
 // hit the 100 req/60s limiter), and auth.requireVerifiedEmail=false (the default) so login
 // returns a token with no email step.
 

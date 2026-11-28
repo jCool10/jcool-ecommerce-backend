@@ -1,10 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { decodeJwt } from 'jose';
 import request from 'supertest';
 import { DRIZZLE, type DrizzleDB } from '../../../src/database';
 import * as schema from '../../../src/database/schema';
-import { apiInternalStub } from '../api-internal-stub';
 import { authHeader } from '../bearer.helper';
 import { eventually } from '../eventually';
 import { idempotencyKeyHeader } from '../idempotency.helper';
@@ -41,11 +39,8 @@ export async function seedSellableSku(
   return { variantId, priceMinor, onHand: options.onHand };
 }
 
-/** The cart is the api's: the line goes onto the stub, under the user the token names. */
-export async function addToCart(_app: INestApplication, token: string, skuId: string, quantity = 1): Promise<void> {
-  const { sub } = decodeJwt(token);
-  if (!sub) throw new Error('addToCart: the token names no user');
-  (await apiInternalStub()).addLine(sub, skuId, quantity);
+export async function addToCart(app: INestApplication, token: string, skuId: string, quantity = 1): Promise<void> {
+  await request(app.getHttpServer()).post('/cart/items').set(authHeader(token)).send({ skuId, quantity }).expect(200);
 }
 
 /** Checkout isolates by user, so each buyer races alone. */

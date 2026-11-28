@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Job, Queue } from 'bullmq';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -206,7 +206,7 @@ describe('Catalog search sync (integration, real Postgres + Redis + Elasticsearc
     const events = await db
       .select({ eventType: schema.outbox.eventType, publishedAt: schema.outbox.publishedAt })
       .from(schema.outbox)
-      .where(eq(schema.outbox.aggregateId, productId));
+      .where(and(eq(schema.outbox.aggregateId, productId), eq(schema.outbox.eventType, 'catalog.product.changed')));
     expect(events).toEqual([{ eventType: 'catalog.product.changed', publishedAt: null }]);
 
     await converge();

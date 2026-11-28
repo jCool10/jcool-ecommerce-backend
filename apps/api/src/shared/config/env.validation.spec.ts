@@ -105,13 +105,6 @@ describe('env validation', () => {
     expect(() => validate({ ...BASE_ENV, ORDER_PAID_CONSUMER_ATTEMPTS: '15' })).not.toThrow();
   });
 
-  it('accepts the order-service caller token only at full length', () => {
-    for (const key of ['INTERNAL_CALLER_TOKEN_ORDER_SERVICE', 'INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS']) {
-      expect(() => validate({ ...BASE_ENV, [key]: 'a'.repeat(31) }), key).toThrow(new RegExp(key));
-      expect(() => validate({ ...BASE_ENV, [key]: 'a'.repeat(32) }), key).not.toThrow();
-    }
-  });
-
   // The platform injects its own variables, and a retired key can linger in a deployment.
   it('boots with env keys the schema does not declare', () => {
     expect(() => validate({ ...BASE_ENV, RAILWAY_DEPLOYMENT_DRAINING_SECONDS: 'not-a-number' })).not.toThrow();

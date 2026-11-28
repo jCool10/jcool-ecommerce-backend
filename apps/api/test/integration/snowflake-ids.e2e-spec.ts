@@ -5,9 +5,8 @@ import request from 'supertest';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { decode } from '@jcool/id-codec';
 import { authHeader } from '../setup/bearer.helper';
-import { addToCart } from '../setup/cart.helper';
-import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { createTestAdminPrincipal, createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestCategory } from '../setup/fixtures/catalog.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { closeAppAfterAll, createTestAppWithPool, resetDatabaseBeforeEach } from '../setup/harness';
 import { STUB_NODE_ID, idServiceStub, testId } from '../setup/id-service-stub';
 
@@ -28,16 +27,6 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
     expect(rows.length).toBeGreaterThan(0);
     for (const { id } of rows) expect(decode(id).nodeId, id).toBe(STUB_NODE_ID);
   };
-
-  it('mints the cart and its lines through the id-service', async () => {
-    const sku = await createTestProduct(app);
-    const { accessToken } = await createTestPrincipal(app);
-
-    await addToCart(app, accessToken, sku.variantId, 2);
-
-    await expectMintedIds('SELECT id FROM carts');
-    await expectMintedIds('SELECT id FROM cart_items');
-  });
 
   it('mints catalog ids through the id-service', async () => {
     const admin = await createTestAdminPrincipal(app);
@@ -63,31 +52,31 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
   });
 
   it('refuses a uuid where an id belongs, and 404s a routable id nobody minted', async () => {
-    const { accessToken } = await createTestPrincipal(app);
-    const line = (skuId: string) =>
-      request(app.getHttpServer()).patch(`/cart/items/${skuId}`).set(authHeader(accessToken)).send({ quantity: 1 });
+    const { accessToken } = await createTestAdminPrincipal(app);
+    const rename = (skuId: string) =>
+      request(app.getHttpServer()).patch(`/admin/skus/${skuId}`).set(authHeader(accessToken)).send({ name: 'Renamed' });
 
-    await line(randomUUID()).expect(400);
-    await line(testId()).expect(404);
+    await rename(randomUUID()).expect(400);
+    await rename(testId()).expect(404);
     await request(app.getHttpServer())
-      .post('/cart/items')
+      .post('/admin/products')
       .set(authHeader(accessToken))
-      .send({ skuId: randomUUID(), quantity: 1 })
+      .send({ name: 'Uuid category', slug: 'uuid-category', categoryId: randomUUID() })
       .expect(400);
   });
 
   it('answers 503 and writes nothing when the id service cannot mint', async () => {
-    const sku = await createTestProduct(app);
-    const { accessToken } = await createTestPrincipal(app);
+    const { id: categoryId } = await createTestCategory(app);
+    const { accessToken } = await createTestAdminPrincipal(app);
     (await idServiceStub()).fail(503);
 
     await request(app.getHttpServer())
-      .post('/cart/items')
+      .post('/admin/products')
       .set(authHeader(accessToken))
-      .send({ skuId: sku.variantId, quantity: 1 })
+      .send({ name: 'Unminted', slug: 'unminted', categoryId })
       .expect(503);
 
-    const { rows } = await pool.query('SELECT 1 FROM cart_items');
-    expect(rows).toEqual([]);
+    expect((await pool.query('SELECT 1 FROM products')).rows).toEqual([]);
+    expect((await pool.query('SELECT 1 FROM outbox')).rows).toEqual([]);
   });
 });

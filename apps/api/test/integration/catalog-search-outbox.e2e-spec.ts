@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import request from 'supertest';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -41,6 +41,11 @@ describe('Catalog search outbox emission (integration, real Postgres)', () => {
     return body ? req.send(body) : req;
   };
 
+  // The search sync's events only; the SKU snapshots beside them have their own suite.
+  const searchEvents = inArray(schema.outbox.eventType, [PRODUCT_CHANGED.eventType, CATEGORY_RENAMED.eventType]);
+
+  const searchEventRows = () => db.select().from(schema.outbox).where(searchEvents);
+
   const eventsFor = (aggregateId: string) =>
     db
       .select({
@@ -49,7 +54,7 @@ describe('Catalog search outbox emission (integration, real Postgres)', () => {
         payload: schema.outbox.payload,
       })
       .from(schema.outbox)
-      .where(eq(schema.outbox.aggregateId, aggregateId))
+      .where(and(eq(schema.outbox.aggregateId, aggregateId), searchEvents))
       .orderBy(asc(schema.outbox.createdAt), asc(schema.outbox.id));
 
   async function versionOf(productId: string): Promise<number> {
@@ -148,12 +153,12 @@ describe('Catalog search outbox emission (integration, real Postgres)', () => {
 
     it('appends nothing when an unknown SKU is updated or archived', async () => {
       await send('patch', `/admin/skus/${product.variantId}`, { name: 'Known variant' }).expect(200);
-      expect(await db.select().from(schema.outbox)).toHaveLength(1);
+      expect(await searchEventRows()).toHaveLength(1);
 
       await send('patch', `/admin/skus/${ABSENT_ID}`, { name: 'Nobody' }).expect(404);
       await send('delete', `/admin/skus/${ABSENT_ID}`).expect(404);
 
-      expect(await db.select().from(schema.outbox)).toHaveLength(1);
+      expect(await searchEventRows()).toHaveLength(1);
       expect(await trail(product.productId)).toEqual({ events: 1, version: 1 });
     });
 
@@ -270,7 +275,7 @@ describe('Catalog search outbox emission (integration, real Postgres)', () => {
       await send('delete', `/admin/products/${product.productId}/images/${images[0]}`).expect(204);
 
       expect(await trail(product.productId)).toEqual({ events: 1, version: 1 });
-      expect(await db.select().from(schema.outbox)).toHaveLength(1);
+      expect(await searchEventRows()).toHaveLength(1);
     });
   });
 });

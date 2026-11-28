@@ -26,13 +26,18 @@ describe('Published API document (integration)', () => {
       HTTP_METHODS.filter((method) => item[method]).map((method) => `${method.toUpperCase()} ${path}`),
     );
 
-  it('documents exactly the nine order routes besides the platform ones', () => {
+  it('documents exactly the nine order routes and the five cart routes besides the platform ones', () => {
     expect(
       operations()
         .filter((operation) => !PLATFORM_ROUTE.test(operation))
         .sort(),
     ).toEqual(
       [
+        'DELETE /cart',
+        'DELETE /cart/items/{skuId}',
+        'GET /cart',
+        'PATCH /cart/items/{skuId}',
+        'POST /cart/items',
         'GET /admin/orders',
         'GET /admin/orders/{id}',
         'GET /orders',

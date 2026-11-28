@@ -24,8 +24,6 @@ export default defineConfig({
       USER_SERVICE_INTERNAL_URL: 'http://127.0.0.1:1',
       ID_SERVICE_URL: 'http://127.0.0.1:1',
       INTERNAL_API_TOKEN: 'e2e-internal-api-token-not-a-real-secret-0',
-      // The guard on the cart and catalog reads refuses to boot without a caller token.
-      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: 'e2e-order-service-caller-token-not-a-secret',
       JWT_ISSUER: 'https://users.jcool.test',
       JWT_AUDIENCE: 'jcool-api',
       // The production default, so the suite runs against the pool the api actually gets.

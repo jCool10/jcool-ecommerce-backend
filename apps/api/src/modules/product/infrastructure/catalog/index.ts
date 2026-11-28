@@ -10,3 +10,4 @@ export * from './search/elasticsearch-catalog-search.adapter';
 export * from './search/reindex-runner';
 export * from './search/search-engine-error';
 export * from './search/search-index-bootstrap';
+export * from './sku-snapshot/sku-snapshot.publisher';

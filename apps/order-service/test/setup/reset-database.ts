@@ -1,5 +1,4 @@
 import type { Pool } from 'pg';
-import { apiInternalStub } from './api-internal-stub';
 import { inventoryServiceStub } from './inventory-service-stub';
 import { paymentServiceStub } from './payment-service-stub';
 
@@ -13,8 +12,7 @@ export async function resetDatabase(pool: Pool): Promise<void> {
     const tables = rows.map((r) => `"${r.tablename}"`).join(', ');
     await pool.query(`TRUNCATE ${tables} RESTART IDENTITY CASCADE`);
   }
-  // Carts, catalog, stock and payments live in the stubs; they go with the orders that point at them.
-  (await apiInternalStub()).reset();
+  // Stock and payments live in the stubs; they go with the orders that point at them.
   (await inventoryServiceStub()).reset();
   (await paymentServiceStub()).reset();
 }

@@ -4,7 +4,6 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { encode } from '@jcool/id-codec';
 import { LEASED_NODE_MAX } from '@jcool/id-generator';
-import { apiInternalStub } from '../setup/api-internal-stub';
 import { authHeader } from '../setup/bearer.helper';
 import { idempotencyKeyHeader } from '../setup/idempotency.helper';
 import { createTestProduct, repriceSku } from '../setup/fixtures/catalog.fixture';
@@ -56,8 +55,8 @@ describe('Order (integration, real Postgres + Redis)', () => {
     });
 
     // A live-minted id stays under 2^53 for a while yet, so the owner id is built past it explicitly:
-    // a Number() on the way to the api or into Postgres would drop digits.
-    it("keeps every digit of the caller's id on the cart read and the order it becomes", async () => {
+    // a Number() on the way into Postgres would drop digits and lose the buyer's cart.
+    it("keeps every digit of the caller's id on the cart and the order it becomes", async () => {
       const { user, accessToken } = await createTestPrincipal(app, {
         id: encode({ tsMs: Date.UTC(2030, 0, 1), nodeId: LEASED_NODE_MAX, sequence: 1 }),
       });
@@ -67,15 +66,15 @@ describe('Order (integration, real Postgres + Redis)', () => {
 
       const res = await request(server()).post('/orders').set(authHeader(accessToken)).set(idempotencyKeyHeader());
       expect(res.status).toBe(201);
+      expect(res.body.items).toEqual([expect.objectContaining({ skuId: variantId, quantity: 1 })]);
 
       expect(BigInt(user.id)).toBeGreaterThan(BigInt(Number.MAX_SAFE_INTEGER));
-      expect((await apiInternalStub()).requests('cartLines').map(({ url }) => url)).toEqual([
-        `/internal/v1/carts/${user.id}/lines`,
-      ]);
-      const owners = await pool.query<{ user_id: string; type: string }>(
-        `SELECT user_id::text, pg_typeof(user_id)::text AS type FROM orders`,
-      );
-      expect(owners.rows).toEqual([{ user_id: user.id, type: 'bigint' }]);
+      for (const table of ['carts', 'orders']) {
+        const owners = await pool.query<{ user_id: string; type: string }>(
+          `SELECT user_id::text, pg_typeof(user_id)::text AS type FROM ${table}`,
+        );
+        expect(owners.rows, table).toEqual([{ user_id: user.id, type: 'bigint' }]);
+      }
     });
 
     it('rejects checkout from an empty cart with 400', async () => {
@@ -102,18 +101,16 @@ describe('Order (integration, real Postgres + Redis)', () => {
       expect(res.body.totalAmountMinor).toBe(3_000_000_000);
     });
 
-    // The cart is the api's; checkout reads it once and never asks for it to be cleared.
     it('leaves the cart intact after checkout', async () => {
-      const { user, accessToken: token } = await createTestPrincipal(app);
+      const token = await newPrincipalToken(app);
       const { variantId } = await createTestProduct(app, { priceMinor: 100_000 });
       await seedStock(app, variantId, 5);
       await addToCart(app, token, variantId, 2);
-      const api = await apiInternalStub();
 
       await request(server()).post('/orders').set(authHeader(token)).set(idempotencyKeyHeader()).expect(201);
 
-      expect(api.calls('cartLines')).toBe(1);
-      expect(api.cartOf(user.id)).toEqual([{ skuId: variantId, quantity: 2 }]);
+      const cart = await request(server()).get('/cart').set(authHeader(token)).expect(200);
+      expect(cart.body.items).toEqual([expect.objectContaining({ skuId: variantId, quantity: 2 })]);
     });
   });
 

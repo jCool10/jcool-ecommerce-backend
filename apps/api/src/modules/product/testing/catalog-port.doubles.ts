@@ -8,8 +8,6 @@ export function fakeProductRepository(overrides: Partial<ProductRepositoryPort> 
   return {
     findManyActive: () => Promise.resolve({ items: [], total: 0 }),
     findActiveByIdOrSlug: () => Promise.resolve(null),
-    findSkuView: () => Promise.resolve(null),
-    findManySkuViews: () => Promise.resolve([]),
     ...overrides,
   };
 }

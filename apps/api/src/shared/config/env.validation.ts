@@ -269,17 +269,6 @@ export class EnvironmentVariables extends PlatformEnv {
   @Min(100)
   ID_SERVICE_TIMEOUT_MS?: number;
 
-  // Optional, like every caller token: the guard is what refuses a boot with none.
-  @IsOptional()
-  @IsString()
-  @MinLength(32)
-  INTERNAL_CALLER_TOKEN_ORDER_SERVICE?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(32)
-  INTERNAL_CALLER_TOKEN_ORDER_SERVICE_PREVIOUS?: string;
-
   // Catalog events wait on the search engine, so they outlast the default ladder.
   @IsOptional()
   @StrictInt()

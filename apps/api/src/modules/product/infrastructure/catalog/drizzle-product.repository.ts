@@ -3,7 +3,7 @@ import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, or, sql, type SQ
 import { isRoutableId } from '@jcool/id-codec';
 import { DRIZZLE, type DrizzleDB, type DrizzleTx } from '@shared/infrastructure/database';
 import { categories, prices, productImages, productVariants, products } from './schema/catalog.schema';
-import type { Product, ProductStatus } from '../../domain/catalog/entities';
+import type { Product } from '../../domain/catalog/entities';
 import type {
   FindManyActiveCriteria,
   FindManyActiveResult,
@@ -11,13 +11,7 @@ import type {
   ProductSearchState,
   ProductSearchStatePort,
 } from '../../application/catalog/ports';
-import type { SkuView } from '../../application/public/product-sku-query.port';
 import { assembleProducts } from './product-row.mapper';
-
-// Must match the schema default (prices.currency) and the admin write default: the SKU view reads
-// the price in this currency only, so a divergence silently makes every SKU read as unpriced rather
-// than erroring. Acceptable while VND is the sole currency.
-const DEFAULT_CURRENCY = 'VND';
 
 // Must stay structurally identical to ProductFlatRow; the projection is untyped, so a drift here
 // only surfaces in the mapper.
@@ -37,38 +31,6 @@ const flatColumns = {
   priceCurrency: prices.currency,
   priceAmountMinor: prices.amountMinor,
 };
-
-// `uq_prices_variant_currency` is what keeps a many-id read from fanning a SKU out into duplicate
-// rows; the left join is what keeps an unpriced SKU resolvable. Only the projection is shared below —
-// the two reads repeat the joins and the id predicate, so a change to one must be mirrored in the
-// other or `POST /cart/items` and `GET /cart` will disagree on whether a SKU exists.
-const skuViewColumns = {
-  skuId: productVariants.id,
-  productName: products.name,
-  productStatus: products.status,
-  variantArchivedAt: productVariants.archivedAt,
-  amountMinor: prices.amountMinor,
-  currency: prices.currency,
-};
-
-interface SkuViewRow {
-  skuId: string;
-  productName: string;
-  productStatus: ProductStatus;
-  variantArchivedAt: Date | null;
-  amountMinor: number | null;
-  currency: string | null;
-}
-
-function toSkuView(row: SkuViewRow): SkuView {
-  return {
-    skuId: row.skuId,
-    productName: row.productName,
-    unitPriceMinor: row.amountMinor ?? null,
-    currency: row.currency ?? DEFAULT_CURRENCY,
-    isActive: row.productStatus === 'ACTIVE' && row.variantArchivedAt === null,
-  };
-}
 
 // Escape LIKE/ILIKE wildcards so a user's `q` cannot inject `%`/`_` patterns.
 // Backslash is Postgres' default ILIKE escape char (no ESCAPE clause needed).
@@ -272,36 +234,5 @@ export class DrizzleProductRepository implements ProductRepositoryPort, ProductS
       return null;
     }
     return assembleProducts(rows, await loadImageAssetIds(this.db, [product.id]))[0] ?? null;
-  }
-
-  // Neither this read nor `findManySkuViews` filters on ACTIVE: a SKU whose product was archived
-  // after it was added still resolves, flagged isActive=false — the cart shows it, Order
-  // re-validates at checkout.
-  async findSkuView(skuId: string): Promise<SkuView | null> {
-    const [row] = await this.db
-      .select(skuViewColumns)
-      .from(productVariants)
-      .innerJoin(products, eq(productVariants.productId, products.id))
-      .leftJoin(prices, and(eq(prices.variantId, productVariants.id), eq(prices.currency, DEFAULT_CURRENCY)))
-      .where(eq(productVariants.id, skuId))
-      .limit(1);
-
-    return row ? toSkuView(row) : null;
-  }
-
-  async findManySkuViews(skuIds: string[]): Promise<SkuView[]> {
-    // An empty cart must not cost a round-trip; drizzle would otherwise emit a valid `WHERE false`.
-    if (skuIds.length === 0) {
-      return [];
-    }
-
-    const rows = await this.db
-      .select(skuViewColumns)
-      .from(productVariants)
-      .innerJoin(products, eq(productVariants.productId, products.id))
-      .leftJoin(prices, and(eq(prices.variantId, productVariants.id), eq(prices.currency, DEFAULT_CURRENCY)))
-      .where(inArray(productVariants.id, skuIds));
-
-    return rows.map(toSkuView);
   }
 }

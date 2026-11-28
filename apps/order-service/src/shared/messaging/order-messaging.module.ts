@@ -1,5 +1,6 @@
 import type { DynamicModule } from '@nestjs/common';
 import { MessagingModule } from '@jcool/messaging';
+import { CatalogModule } from '../../modules/catalog/catalog.module';
 import { OrderModule } from '../../modules/order/order.module';
 import { ID_GENERATOR } from '../identity/id-generator.port';
 import { OrderEventsAudit, OrderEventsDispatcher } from './order-events.handlers';
@@ -10,6 +11,6 @@ export const OrderMessagingModule: DynamicModule = MessagingModule.forRoot({
   queues: ORDER_CONSUMED_QUEUES.map((queue) => ({ ...queue, dispatcher: OrderEventsDispatcher })),
   idGenerator: ID_GENERATOR,
   // One-way: OrderModule reads the outbox port off the global export and never imports this module.
-  imports: [OrderModule],
+  imports: [OrderModule, CatalogModule],
   providers: [OrderEventsAudit, OrderEventsDispatcher],
 });

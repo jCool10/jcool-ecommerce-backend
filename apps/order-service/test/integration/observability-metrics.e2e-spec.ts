@@ -39,6 +39,7 @@ const OWNED = [
   'nodejs_heap_size_total_bytes',
   'orders_created_total',
   'order_value_minor',
+  'cart_operations_total',
   'checkout_sagas_open',
   'order_refunding_oldest_seconds',
   ...SAGA_ALERTED,

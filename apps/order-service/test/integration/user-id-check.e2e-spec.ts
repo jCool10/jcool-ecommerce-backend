@@ -16,6 +16,12 @@ const COLUMNS = [
         testId(),
       ]),
   },
+  {
+    column: 'carts.user_id',
+    constraint: 'ck_carts_user_id_routable',
+    insert: (pool: Pool, userId: string) =>
+      pool.query(`INSERT INTO carts (id, user_id) VALUES ($2, $1)`, [userId, testId()]),
+  },
 ];
 
 /** Raw SQL on purpose: the column type refuses these values before they reach Postgres. */

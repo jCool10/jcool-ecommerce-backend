@@ -28,6 +28,31 @@ describe('Snowflake ids (integration, real Postgres + Redis)', () => {
     for (const { id } of rows) expect(decode(id).nodeId, id).toBe(STUB_NODE_ID);
   };
 
+  it('mints the cart and its lines through the id-service', async () => {
+    const sku = await seedSellableSku(app, { onHand: 5 });
+    const { accessToken } = await createTestPrincipal(app);
+
+    await addToCart(app, accessToken, sku.variantId, 2);
+
+    await expectMintedIds('SELECT id FROM carts');
+    await expectMintedIds('SELECT id FROM cart_items');
+  });
+
+  it('answers 503 on a first add when the id service cannot mint, and creates no cart', async () => {
+    const sku = await seedSellableSku(app, { onHand: 5 });
+    const { accessToken } = await createTestPrincipal(app);
+    (await idServiceStub()).fail(503);
+
+    await request(app.getHttpServer())
+      .post('/cart/items')
+      .set(authHeader(accessToken))
+      .send({ skuId: sku.variantId, quantity: 1 })
+      .expect(503);
+
+    const { rows } = await pool.query('SELECT 1 FROM carts');
+    expect(rows).toEqual([]);
+  });
+
   it('mints the order and everything under it through the id-service', async () => {
     const sku = await seedSellableSku(app, { onHand: 5 });
     const { accessToken } = await createTestPrincipal(app);

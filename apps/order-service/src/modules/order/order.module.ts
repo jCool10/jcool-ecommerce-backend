@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClsService } from 'nestjs-cls';
-import { PinoLogger } from 'nestjs-pino';
 import { createUserServiceClient } from '@jcool/auth-verifier/session-state';
 import { durationToMs } from '@jcool/kernel';
 import { MailModule } from '@jcool/platform/mail';
 import { CircuitBreakerFactory, ResilienceModule } from '@jcool/platform/resilience';
+import { CartModule } from '../cart/cart.module';
+import { CatalogModule } from '../catalog/catalog.module';
 import {
   CancelOrderUseCase,
   CheckoutOrderUseCase,
@@ -29,9 +30,8 @@ import { ORDER_PAYMENT_PARTICIPANT } from './application/ports/order-payment-par
 import { USER_CONTACT, type UserContactPort } from './application/ports/user-contact.port';
 import { DrizzleOrderRepository } from './infrastructure/drizzle-order.repository';
 import { RemoteUserContactAdapter } from './infrastructure/user-contact.adapters';
-import { ApiInternalClient, createApiInternalClient } from './infrastructure/api-internal.http-client';
-import { CartSnapshotHttpAdapter } from './infrastructure/cart-snapshot.http-adapter';
-import { CatalogQueryHttpAdapter } from './infrastructure/catalog-query.http-adapter';
+import { CartSnapshotLocalAdapter } from './infrastructure/cart-snapshot.local-adapter';
+import { CatalogQueryReadModelAdapter } from './infrastructure/catalog-query.read-model-adapter';
 import { createInventoryServiceAdapter } from './infrastructure/order-inventory-participant.http-adapter';
 import { createPaymentServiceAdapter } from './infrastructure/order-payment-participant.http-adapter';
 import { DrizzleIdempotencyKeyRepository } from './infrastructure/drizzle-idempotency-key.repository';
@@ -55,11 +55,12 @@ import { PaymentAuthorizedHandler } from './interface/queue/payment-authorized.h
 import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.guard';
 
 /**
- * Every read or write outside this service — the api's carts and catalog, the inventory-, payment- and
- * user-service — goes over HTTP through an Order-owned adapter bound to an Order port.
+ * Cart and Catalog live in this service and are read through their published ports. Every call to
+ * the inventory-, payment- and user-service goes over HTTP through an Order-owned adapter bound to
+ * an Order port.
  */
 @Module({
-  imports: [MailModule, ResilienceModule],
+  imports: [MailModule, ResilienceModule, CartModule, CatalogModule],
   controllers: [OrderController, AdminOrderController],
   providers: [
     CheckoutOrderUseCase,
@@ -74,21 +75,8 @@ import { RequireIdempotencyKeyGuard } from './interface/require-idempotency-key.
     SweepRejectedOrdersUseCase,
     OrderQueryService,
     { provide: ORDER_REPOSITORY, useClass: DrizzleOrderRepository },
-    {
-      provide: ApiInternalClient,
-      inject: [ConfigService, CircuitBreakerFactory, ClsService, PinoLogger],
-      useFactory: createApiInternalClient,
-    },
-    {
-      provide: CART_SNAPSHOT_READER,
-      inject: [ApiInternalClient],
-      useFactory: (api: ApiInternalClient) => new CartSnapshotHttpAdapter(api),
-    },
-    {
-      provide: CATALOG_QUERY,
-      inject: [ApiInternalClient],
-      useFactory: (api: ApiInternalClient) => new CatalogQueryHttpAdapter(api),
-    },
+    { provide: CART_SNAPSHOT_READER, useClass: CartSnapshotLocalAdapter },
+    { provide: CATALOG_QUERY, useClass: CatalogQueryReadModelAdapter },
     {
       provide: ORDER_INVENTORY_PARTICIPANT,
       inject: [ConfigService, CircuitBreakerFactory, ClsService],

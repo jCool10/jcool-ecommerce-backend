@@ -27,7 +27,6 @@ const API_ENV = {
   INTERNAL_API_TOKEN: randomBytes(32).toString('hex'),
   // Nothing listens there either: no case here reaches a write.
   ID_SERVICE_URL: 'http://id-service.invalid',
-  INTERNAL_CALLER_TOKEN_ORDER_SERVICE: randomBytes(32).toString('hex'),
   STORAGE_ENDPOINT: 'http://storage.invalid:9000',
   STORAGE_BUCKET: 'system-test',
   STORAGE_ACCESS_KEY_ID: 'system-test',
@@ -45,7 +44,7 @@ const SAMPLES: { name: string; path: string; init?: RequestInit }[] = [
   { name: 'an admin route without a token', path: '/admin/products', init: { method: 'POST' } },
   {
     name: 'a CORS preflight from the allowed origin',
-    path: '/cart/items',
+    path: '/admin/products',
     init: {
       method: 'OPTIONS',
       headers: {

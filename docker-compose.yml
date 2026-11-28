@@ -174,8 +174,6 @@ services:
       INTERNAL_API_TOKEN: local-internal-api-token-not-a-secret-0000
       # Every row id is minted there, so no write succeeds without it.
       ID_SERVICE_URL: http://gateway:4000
-      # The order-service's API_SERVICE_TOKEN below: it reads carts and SKU views on /internal/v1.
-      INTERNAL_CALLER_TOKEN_ORDER_SERVICE: local-order-to-api-token-not-a-secret-000000
     command: ['node', '--import', './dist/instrumentation.js', 'dist/main.js']
     # elasticsearch is deliberately not listed: search is an optional read path the app must boot
     # and serve without.
@@ -639,7 +637,7 @@ services:
     networks:
       - jcool-net
 
-  # The gateway routes /orders and /admin/orders here; it runs the checkout saga's Temporal worker.
+  # The gateway routes /orders, /admin/orders and /cart here; it runs the checkout saga's Temporal worker.
   # Also published on loopback, for checks that bypass the edge.
   order-service:
     image: jcool-order-service:local
@@ -663,9 +661,6 @@ services:
       # Each <TARGET>_SERVICE_TOKEN is that service's INTERNAL_CALLER_TOKEN_ORDER_SERVICE above.
       USER_SERVICE_URL: http://user-service:3000
       USER_SERVICE_TOKEN: local-order-to-user-token-not-a-secret-00000
-      # The app itself, never the gateway: the gateway answers /internal with 404.
-      API_SERVICE_URL: http://app:3000
-      API_SERVICE_TOKEN: local-order-to-api-token-not-a-secret-000000
       INVENTORY_SERVICE_URL: http://inventory-service:3000
       INVENTORY_SERVICE_TOKEN: local-order-to-inventory-token-not-a-secret
       PAYMENT_SERVICE_URL: http://payment-service:3000

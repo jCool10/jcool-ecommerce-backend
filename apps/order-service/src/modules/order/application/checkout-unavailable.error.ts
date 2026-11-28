@@ -9,11 +9,3 @@ export class CheckoutUnavailableError extends Error {
     this.name = 'CheckoutUnavailableError';
   }
 }
-
-/** The cart or the catalog could not be read, so nothing was written; the same 503 + Retry-After. */
-export class CheckoutReadUnavailableError extends Error {
-  constructor(reason: string, options?: { cause?: unknown }) {
-    super(`Checkout read unavailable: ${reason}`, options);
-    this.name = 'CheckoutReadUnavailableError';
-  }
-}

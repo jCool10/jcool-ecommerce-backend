@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Owns orders, checkout idempotency and the CheckoutSaga worker; serves /orders and /admin/orders and consumes order-events",
+  "description": "Owns the cart, orders, checkout idempotency and the CheckoutSaga worker; serves /cart, /orders and /admin/orders and consumes order-events",
   "engines": {
     "node": ">=22.9"
   },

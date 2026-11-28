@@ -5,9 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisService } from '@jcool/platform/redis';
 import { DEFAULT_THROTTLER, GLOBAL_THROTTLERS } from '@jcool/platform/throttler';
 import { CircuitBreakerFactory } from '@jcool/platform/resilience';
-import { authHeader } from '../setup/bearer.helper';
+import { ADMIN_PROBE_ROUTE, createAdminProbe } from '../setup/admin-probe.helper';
 import { createTestProduct } from '../setup/fixtures/catalog.fixture';
-import { createTestPrincipal } from '../setup/fixtures/principal.fixture';
+import { createTestAdminPrincipal } from '../setup/fixtures/principal.fixture';
 import { resetCatalogCache } from '../setup/reset-cache';
 import { createTestAppWithPool } from '../setup/harness';
 import { E2E_METRICS_TOKEN, metricsAuthHeader } from '../setup/metrics.helper';
@@ -93,12 +93,13 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     const { slug } = await createTestProduct(app);
     await request(server()).get(`/products/${slug}`).expect(200);
 
-    // Throttle keys are per handler, so the product read above leaves the cart's budget whole.
-    const { accessToken } = await createTestPrincipal(app);
+    // Throttle keys are per handler, so the product read above leaves the probe's budget whole.
+    const signedIn = await createAdminProbe(app);
+    const { accessToken } = await createTestAdminPrincipal(app);
     for (let attempt = 0; attempt < IP_LIMIT; attempt++) {
-      expect((await request(server()).get('/cart').set(authHeader(accessToken))).status).toBe(200);
+      expect((await signedIn(accessToken)).status).toBe(200);
     }
-    expect((await request(server()).get('/cart').set(authHeader(accessToken))).status).toBe(429);
+    expect((await signedIn(accessToken)).status).toBe(429);
 
     const probe = app.get(CircuitBreakerFactory).create(PROBE_BREAKER);
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -106,7 +107,7 @@ describe('Resilience acceptance: cache, limiter, and breaker in one app (integra
     }
 
     const after = await scrape();
-    const limited = { tier: DEFAULT_THROTTLER, route: '/cart' };
+    const limited = { tier: DEFAULT_THROTTLER, route: ADMIN_PROBE_ROUTE };
     expect(sampleOf(after, 'catalog_cache_operations_total', { result: 'miss' })).toBeGreaterThan(
       baselineOf(before, 'catalog_cache_operations_total', { result: 'miss' }),
     );

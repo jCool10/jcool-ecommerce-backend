@@ -4,7 +4,7 @@ import type { ClsService } from 'nestjs-cls';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeConfigService } from '@jcool/testing/fake-config.service';
 import { fakePinoLogger } from '@jcool/testing/fake-pino-logger';
-import { CheckoutReadUnavailableError, CheckoutUnavailableError } from '../application/checkout-unavailable.error';
+import { CheckoutUnavailableError } from '../application/checkout-unavailable.error';
 import { AdminOrderController } from './admin-order.controller';
 import { CheckoutUnavailableFilter } from './checkout-unavailable.filter';
 import { OrderController } from './order.controller';
@@ -62,20 +62,8 @@ describe('CheckoutUnavailableFilter', () => {
     expect((fields.err.cause as Error).message).toContain('engine unavailable');
   });
 
-  it('answers the same 503 when the cart or the catalog could not be read', () => {
-    const { host, response, headers } = makeHost();
-
-    filter.catch(new CheckoutReadUnavailableError('api-internal answered 404'), host);
-
-    expect(headers.get('retry-after')).toBe('5');
-    expect(response.status).toHaveBeenCalledWith(503);
-  });
-
-  it('catches only the checkout errors, so every other fault keeps the global mapping', () => {
-    expect(Reflect.getMetadata(FILTER_CATCH_EXCEPTIONS, CheckoutUnavailableFilter)).toEqual([
-      CheckoutUnavailableError,
-      CheckoutReadUnavailableError,
-    ]);
+  it('catches only the checkout error, so every other fault keeps the global mapping', () => {
+    expect(Reflect.getMetadata(FILTER_CATCH_EXCEPTIONS, CheckoutUnavailableFilter)).toEqual([CheckoutUnavailableError]);
   });
 
   // On the controller, so it runs after the idempotency interceptor has dropped the IN_PROGRESS key.

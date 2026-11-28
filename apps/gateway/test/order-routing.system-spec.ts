@@ -15,7 +15,7 @@ const UPSTREAMS = {
   ORDER_UPSTREAM: 'order:3000',
 };
 
-// Checkout left the api; everything else under /orders and /admin/orders follows it.
+// Checkout and the cart it reads left the api; everything else under /orders and /admin/orders follows them.
 describe('gateway: order routes', () => {
   let network: StartedNetwork;
   let api: StartedTestContainer;
@@ -54,19 +54,26 @@ describe('gateway: order routes', () => {
       ['/orders/1/cancel', 'POST'],
       ['/admin/orders', 'GET'],
       ['/admin/orders/1/cancel', 'POST'],
+      ['/cart', 'GET'],
+      ['/cart', 'DELETE'],
+      ['/cart/items', 'POST'],
+      ['/cart/items/1', 'PATCH'],
+      ['/cart/items/1', 'DELETE'],
     ]) {
       expect(await upstreamOf(path, method), `${method} ${path}`).toBe('order');
     }
-    for (const path of ['/products', '/cart', '/ordersx', '/admin/ordersx', '/admin/products']) {
+    for (const path of ['/products', '/cartx', '/carts', '/ordersx', '/admin/ordersx', '/admin/products']) {
       expect(await upstreamOf(path), path).toBe('api');
     }
   });
 
-  it("keeps the api's internal read routes off the public listener", async () => {
+  it('keeps every internal path off the public listener, whatever its case', async () => {
     const before = await Promise.all([hits(api), hits(order)]);
 
-    expect((await send(gateway, '/internal/v1/carts/1/lines')).status).toBe(404);
-    expect((await send(gateway, '/internal/v1/catalog/sku-views', 'POST')).status).toBe(404);
+    for (const path of ['/internal', '/internal/v1/x', '/INTERNAL/v1/x']) {
+      expect((await send(gateway, path)).status, path).toBe(404);
+      expect((await send(gateway, path, 'POST')).status, `POST ${path}`).toBe(404);
+    }
     expect(await Promise.all([hits(api), hits(order)])).toEqual(before);
   });
 
